@@ -1,0 +1,264 @@
+"""서버/프로세스 자원 사용량 모니터링.
+
+psutil 이 설치돼 있으면 사용하고, 없으면 리눅스 /proc 파일시스템을 직접
+읽어 동작한다(아이실론을 마운트한 게이트웨이 서버처럼 추가 패키지 설치가
+어려운 환경을 고려).
+
+핵심 지표:
+  - 시스템 전체 메모리 사용률 / 스왑
+  - CPU 사용률, 1분 load average
+  - 스캐너 프로세스 RSS (디렉터리 사용량을 직접 측정하는 프로세스의 메모리)
+  - du 자식 프로세스 RSS (backend=du 일 때 실제 du 프로세스의 메모리)
+"""
+
+from __future__ import annotations
+
+import os
+import threading
+import time
+from dataclasses import dataclass, asdict
+
+from . import db as dbmod
+
+try:  # psutil 은 선택적 의존성
+    import psutil  # type: ignore
+
+    _HAVE_PSUTIL = True
+except Exception:  # pragma: no cover - 환경에 따라 다름
+    psutil = None  # type: ignore
+    _HAVE_PSUTIL = False
+
+
+PAGE_SIZE = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
+
+
+@dataclass
+class Sample:
+    ts: float = 0.0
+    mem_total: int = 0
+    mem_used: int = 0
+    mem_percent: float = 0.0
+    swap_used: int = 0
+    cpu_percent: float = 0.0
+    load1: float = 0.0
+    scanner_rss: int = 0
+    du_rss: int = 0
+    du_pid: int | None = None
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+# ----------------------------------------------------------------------------
+# /proc 기반 폴백 구현
+# ----------------------------------------------------------------------------
+
+def _read_meminfo() -> tuple[int, int, int]:
+    """(mem_total, mem_used, swap_used) 바이트 단위로 반환."""
+    info: dict[str, int] = {}
+    try:
+        with open("/proc/meminfo", "r") as fh:
+            for line in fh:
+                key, _, rest = line.partition(":")
+                parts = rest.split()
+                if parts:
+                    # 값은 보통 kB 단위
+                    info[key] = int(parts[0]) * 1024
+    except OSError:
+        return (0, 0, 0)
+    total = info.get("MemTotal", 0)
+    # MemAvailable 이 있으면 가장 정확하게 "사용 중"을 계산
+    if "MemAvailable" in info:
+        used = total - info["MemAvailable"]
+    else:
+        free = info.get("MemFree", 0) + info.get("Buffers", 0) + info.get("Cached", 0)
+        used = total - free
+    swap_used = info.get("SwapTotal", 0) - info.get("SwapFree", 0)
+    return (total, max(used, 0), max(swap_used, 0))
+
+
+def _read_proc_rss(pid: int | None) -> int:
+    """주어진 PID 의 RSS(바이트). /proc/<pid>/statm 의 두 번째 값 × 페이지 크기."""
+    if not pid:
+        return 0
+    try:
+        with open(f"/proc/{pid}/statm", "r") as fh:
+            fields = fh.readline().split()
+        if len(fields) >= 2:
+            return int(fields[1]) * PAGE_SIZE
+    except OSError:
+        return 0
+    return 0
+
+
+_prev_cpu: dict[str, float] = {}
+
+
+def _read_cpu_percent() -> float:
+    """/proc/stat 의 누적값 차분으로 전체 CPU 사용률(%)을 계산."""
+    try:
+        with open("/proc/stat", "r") as fh:
+            line = fh.readline()
+    except OSError:
+        return 0.0
+    parts = line.split()
+    if not parts or parts[0] != "cpu":
+        return 0.0
+    vals = [float(x) for x in parts[1:]]
+    idle = vals[3] + (vals[4] if len(vals) > 4 else 0.0)  # idle + iowait
+    total = sum(vals)
+    prev_total = _prev_cpu.get("total", 0.0)
+    prev_idle = _prev_cpu.get("idle", 0.0)
+    _prev_cpu["total"] = total
+    _prev_cpu["idle"] = idle
+    dt = total - prev_total
+    di = idle - prev_idle
+    if dt <= 0:
+        return 0.0
+    return max(0.0, min(100.0, (1.0 - di / dt) * 100.0))
+
+
+def _proc_alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    if _HAVE_PSUTIL:
+        try:
+            return psutil.pid_exists(int(pid))
+        except Exception:
+            return False
+    return os.path.exists(f"/proc/{pid}")
+
+
+def collect(scanner_pid: int, du_pid: int | None = None) -> Sample:
+    """현재 시점의 자원 샘플 1개를 수집한다."""
+    s = Sample(ts=time.time(), du_pid=du_pid)
+
+    if _HAVE_PSUTIL:
+        vm = psutil.virtual_memory()
+        s.mem_total = int(vm.total)
+        s.mem_used = int(vm.total - vm.available)
+        s.mem_percent = float(vm.percent)
+        try:
+            sm = psutil.swap_memory()
+            s.swap_used = int(sm.used)
+        except Exception:
+            s.swap_used = 0
+        s.cpu_percent = float(psutil.cpu_percent(interval=None))
+        try:
+            s.scanner_rss = int(psutil.Process(scanner_pid).memory_info().rss)
+        except Exception:
+            s.scanner_rss = _read_proc_rss(scanner_pid)
+        if du_pid and _proc_alive(du_pid):
+            try:
+                s.du_rss = int(psutil.Process(du_pid).memory_info().rss)
+            except Exception:
+                s.du_rss = _read_proc_rss(du_pid)
+    else:
+        total, used, swap_used = _read_meminfo()
+        s.mem_total = total
+        s.mem_used = used
+        s.mem_percent = round((used / total * 100.0), 1) if total else 0.0
+        s.swap_used = swap_used
+        s.cpu_percent = round(_read_cpu_percent(), 1)
+        s.scanner_rss = _read_proc_rss(scanner_pid)
+        if du_pid and _proc_alive(du_pid):
+            s.du_rss = _read_proc_rss(du_pid)
+
+    try:
+        s.load1 = os.getloadavg()[0]
+    except (OSError, AttributeError):
+        s.load1 = 0.0
+    return s
+
+
+class ResourceMonitor(threading.Thread):
+    """주기적으로 자원 샘플을 수집해 DB(resource_samples)에 적재하는 스레드.
+
+    backend=du 인 경우 스캐너가 현재 실행 중인 du 자식 프로세스의 PID를
+    `set_du_pid()` 로 알려주면, 그 프로세스의 RSS 를 함께 기록한다.
+    """
+
+    def __init__(
+        self,
+        db_path: str,
+        run_id: int,
+        scanner_pid: int,
+        *,
+        interval: float = 2.0,
+        stop_event: threading.Event | None = None,
+    ) -> None:
+        super().__init__(name="resource-monitor", daemon=True)
+        self.db_path = db_path
+        self.run_id = run_id
+        self.scanner_pid = scanner_pid
+        self.interval = interval
+        self.stop_event = stop_event or threading.Event()
+        self._du_pid: int | None = None
+        self._lock = threading.Lock()
+        self._written = 0
+        self.peak_scanner_rss = 0
+        self.peak_du_rss = 0
+
+    def set_du_pid(self, pid: int | None) -> None:
+        with self._lock:
+            self._du_pid = pid
+
+    def get_du_pid(self) -> int | None:
+        with self._lock:
+            return self._du_pid
+
+    def _write_sample(self, conn) -> None:
+        du_pid = self.get_du_pid()
+        sample = collect(self.scanner_pid, du_pid)
+        self.peak_scanner_rss = max(self.peak_scanner_rss, sample.scanner_rss)
+        self.peak_du_rss = max(self.peak_du_rss, sample.du_rss)
+        try:
+            conn.execute(
+                """
+                INSERT INTO resource_samples
+                    (run_id, ts, mem_total, mem_used, mem_percent,
+                     swap_used, cpu_percent, load1, scanner_rss, du_rss, du_pid)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    self.run_id, sample.ts, sample.mem_total, sample.mem_used,
+                    sample.mem_percent, sample.swap_used, sample.cpu_percent,
+                    sample.load1, sample.scanner_rss, sample.du_rss, sample.du_pid,
+                ),
+            )
+            dbmod.prune_samples(conn, self.run_id)
+            conn.commit()
+            self._written += 1
+        except Exception as _exc:
+            # 모니터링 실패가 스캔을 멈추면 안 된다.
+            if os.environ.get("ISILON_DEBUG"):
+                import sys
+                print(f"[monitor] write failed: {type(_exc).__name__}: {_exc}",
+                      file=sys.stderr)
+
+    def run(self) -> None:  # noqa: D401
+        conn = dbmod.connect(self.db_path)
+        # psutil 의 cpu_percent 는 첫 호출이 0 을 반환하므로 워밍업
+        if _HAVE_PSUTIL:
+            try:
+                psutil.cpu_percent(interval=None)
+            except Exception:
+                pass
+        try:
+            while not self.stop_event.is_set():
+                if not self.run_id:
+                    # run 이 만들어지기 전이면 촘촘히 재확인해, run_id 가 정해지는
+                    # 즉시(다음 0.05s 안에) 첫 샘플을 기록한다.
+                    self.stop_event.wait(min(0.05, self.interval))
+                    continue
+                self._write_sample(conn)
+                self.stop_event.wait(self.interval)
+        finally:
+            # 매우 짧은 스캔이라도 최소 1개의 샘플은 남긴다.
+            if self.run_id and self._written == 0:
+                self._write_sample(conn)
+            conn.close()
+
+
+def have_psutil() -> bool:
+    return _HAVE_PSUTIL

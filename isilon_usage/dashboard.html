@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Isilon 디렉터리 사용량 대시보드</title>
+<style>
+  :root {
+    --bg: #0f141b; --panel: #19212c; --panel2: #1f2937; --line: #2b3543;
+    --text: #e6edf3; --muted: #8b98a9; --accent: #4f9cff; --accent2: #38d39f;
+    --warn: #f5a623; --danger: #ff5c5c; --ok: #38d39f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      "Noto Sans KR", "Apple SD Gothic Neo", sans-serif; font-size: 14px;
+  }
+  header {
+    padding: 16px 22px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    background: linear-gradient(180deg,#1a232f,#141a23);
+  }
+  header h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  header .root { color: var(--muted); font-family: ui-monospace, Menlo, monospace;
+    font-size: 12.5px; word-break: break-all; }
+  .spacer { flex: 1; }
+  .badge { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    border: 1px solid var(--line); white-space: nowrap; }
+  .badge.discovering { background:#16344f; color:#7cc4ff; }
+  .badge.sizing { background:#163f33; color:#65e0b4; }
+  .badge.done { background:#173a2a; color:#52e0a0; }
+  .badge.paused { background:#3f3516; color:#f0c86a; }
+  .badge.error { background:#43201f; color:#ff8b8b; }
+  .wrap { padding: 18px 22px; max-width: 1320px; margin: 0 auto; }
+  .grid { display: grid; gap: 14px; }
+  .cols-3 { grid-template-columns: repeat(3, 1fr); }
+  .cols-2 { grid-template-columns: 1.3fr 1fr; }
+  @media (max-width: 980px){ .cols-3,.cols-2 { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px 18px; }
+  .card h2 { font-size: 12.5px; text-transform: uppercase; letter-spacing: .6px;
+    color: var(--muted); margin: 0 0 12px; font-weight: 700; }
+  .kv { display:flex; justify-content: space-between; align-items: baseline;
+    padding: 5px 0; border-bottom: 1px dashed #232e3b; gap: 12px; }
+  .kv:last-child { border-bottom: none; }
+  .kv .k { color: var(--muted); }
+  .kv .v { font-variant-numeric: tabular-nums; font-weight: 600; text-align:right;
+    font-family: ui-monospace, Menlo, monospace; }
+  .big { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .mono { font-family: ui-monospace, Menlo, monospace; }
+  .current {
+    font-family: ui-monospace, Menlo, monospace; font-size: 13px;
+    background:#0d1219; border:1px solid var(--line); border-radius:8px;
+    padding:10px 12px; word-break: break-all; color:#cfe3ff; min-height: 20px;
+  }
+  .bar { height: 12px; background:#0d1219; border-radius: 8px; overflow: hidden;
+    border:1px solid var(--line); }
+  .bar > span { display:block; height:100%; width:0%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    transition: width .4s ease; }
+  .bar.mem > span { background: linear-gradient(90deg,#4f9cff,#f5a623); }
+  .bar.mem.high > span { background: linear-gradient(90deg,#f5a623,#ff5c5c); }
+  .barlabel { display:flex; justify-content: space-between; margin: 0 0 6px;
+    font-size:12.5px; }
+  .barlabel b { font-variant-numeric: tabular-nums; }
+  table { width:100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align:left; padding: 7px 8px; border-bottom: 1px solid #222c38; }
+  th { color: var(--muted); font-weight:600; font-size:12px; }
+  td.num, th.num { text-align:right; font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, Menlo, monospace; }
+  td.path { font-family: ui-monospace, Menlo, monospace; color:#cfe3ff;
+    max-width: 520px; overflow:hidden; text-overflow: ellipsis; white-space: nowrap; }
+  canvas { width: 100%; height: 90px; display:block; }
+  .legend { display:flex; gap:14px; font-size:12px; color:var(--muted); margin-top:6px; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px;
+    vertical-align: middle; }
+  .controls { display:flex; gap:10px; align-items:center; font-size:12.5px; color:var(--muted); }
+  .controls button { background:var(--panel2); color:var(--text); border:1px solid var(--line);
+    border-radius:7px; padding:5px 11px; cursor:pointer; font-size:12.5px; }
+  .controls button:hover { border-color: var(--accent); }
+  .pill { font-size:11.5px; color:var(--muted); border:1px solid var(--line);
+    border-radius:999px; padding:2px 9px; }
+  .note { color: var(--warn); font-size: 12px; }
+  .err { color: var(--danger); }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>📦 Isilon 디렉터리 사용량 스캐너</h1>
+    <div class="root" id="rootPath">대상 경로 로딩 중…</div>
+  </div>
+  <div class="spacer"></div>
+  <span class="pill" id="backendPill">backend</span>
+  <span class="pill" id="psutilPill"></span>
+  <span class="badge discovering" id="statusBadge">상태</span>
+  <div class="controls">
+    <button id="refreshBtn">새로고침</button>
+    <label><input type="checkbox" id="autoChk" checked /> 자동(1.5s)</label>
+  </div>
+</header>
+
+<div class="wrap">
+  <!-- 진행 상태 -->
+  <div class="grid cols-2" style="margin-bottom:14px;">
+    <div class="card">
+      <h2>현재 진행 상황</h2>
+      <div class="sub" style="margin-bottom:6px;">지금 조사 중인 디렉터리</div>
+      <div class="current" id="currentDir">—</div>
+
+      <div style="margin-top:16px;">
+        <div class="barlabel">
+          <span>디렉터리 진행 (집계 단계) — <b id="dirCount">0 / 0</b></span>
+          <b id="dirPct">—</b>
+        </div>
+        <div class="bar"><span id="dirBar"></span></div>
+      </div>
+
+      <div style="margin-top:16px;">
+        <div class="barlabel">
+          <span>확인된 사용량 / 전체 디스크 사용량</span>
+          <b id="diskPct">0%</b>
+        </div>
+        <div class="bar"><span id="diskBar"></span></div>
+        <div class="sub" id="diskDetail">—</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>요약</h2>
+      <div class="kv"><span class="k">단계</span><span class="v" id="phaseTxt">—</span></div>
+      <div class="kv"><span class="k">탐색된 디렉터리</span><span class="v" id="discovered">0</span></div>
+      <div class="kv"><span class="k">집계 완료 디렉터리</span><span class="v" id="processed">0</span></div>
+      <div class="kv"><span class="k">총 파일 수</span><span class="v" id="totalFiles">0</span></div>
+      <div class="kv"><span class="k">최대 깊이</span><span class="v" id="maxDepth">0</span></div>
+      <div class="kv"><span class="k">오류(접근불가) 디렉터리</span><span class="v" id="errDirs">0</span></div>
+      <div class="kv"><span class="k">경과 시간</span><span class="v" id="elapsed">0s</span></div>
+      <div class="kv"><span class="k">예상 잔여(ETA)</span><span class="v" id="eta">—</span></div>
+    </div>
+  </div>
+
+  <!-- 자원 모니터링 -->
+  <div class="grid cols-3" style="margin-bottom:14px;">
+    <div class="card">
+      <h2>서버 메모리</h2>
+      <div class="big" id="memPct">0%</div>
+      <div class="sub" id="memDetail">— / —</div>
+      <div class="bar mem" style="margin-top:10px;"><span id="memBar"></span></div>
+      <canvas id="memChart" width="380" height="90" style="margin-top:12px;"></canvas>
+      <div class="legend"><span><span class="dot" style="background:#f5a623"></span>메모리 사용률(%)</span></div>
+      <div class="kv" style="margin-top:8px;"><span class="k">스왑 사용</span><span class="v" id="swapUsed">0</span></div>
+    </div>
+
+    <div class="card">
+      <h2>측정 프로세스 메모리 (du)</h2>
+      <div class="big" id="duRss">0 B</div>
+      <div class="sub" id="duRssNote">du 프로세스 RSS</div>
+      <canvas id="rssChart" width="380" height="90" style="margin-top:12px;"></canvas>
+      <div class="legend">
+        <span><span class="dot" style="background:#4f9cff"></span>스캐너 프로세스</span>
+        <span><span class="dot" style="background:#38d39f"></span>du 프로세스</span>
+      </div>
+      <div class="kv" style="margin-top:8px;"><span class="k">스캐너 RSS</span><span class="v" id="scanRss">0 B</span></div>
+      <div class="kv"><span class="k">최대(peak) du / 스캐너</span><span class="v" id="peakRss">0 B / 0 B</span></div>
+    </div>
+
+    <div class="card">
+      <h2>CPU · 디스크</h2>
+      <div class="big" id="cpuPct">0%</div>
+      <div class="sub">CPU 사용률 · load1 <span id="load1">0</span></div>
+      <div class="kv" style="margin-top:10px;"><span class="k">파일시스템 전체</span><span class="v" id="fsTotal">—</span></div>
+      <div class="kv"><span class="k">파일시스템 사용</span><span class="v" id="fsUsed">—</span></div>
+      <div class="kv"><span class="k">파일시스템 여유</span><span class="v" id="fsFree">—</span></div>
+      <div class="kv"><span class="k">스캐너 PID</span><span class="v" id="pid">—</span></div>
+    </div>
+  </div>
+
+  <!-- 상위 디렉터리 -->
+  <div class="card">
+    <h2>용량 상위 디렉터리 (실시간)</h2>
+    <table>
+      <thead><tr>
+        <th>#</th><th>경로</th><th class="num">재귀 용량</th>
+        <th class="num">직접 용량</th><th class="num">파일 수(재귀)</th>
+        <th class="num">하위디렉터리</th><th>상태</th>
+      </tr></thead>
+      <tbody id="topBody"><tr><td colspan="7" style="color:var(--muted)">로딩 중…</td></tr></tbody>
+    </table>
+    <div class="sub" id="topNote" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="sub" style="margin-top:14px; text-align:right;">
+    마지막 업데이트: <span id="lastUpd">—</span> · <span id="errLine" class="err"></span>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function fmtBytes(n) {
+  n = Number(n) || 0;
+  if (n < 1024) return n + " B";
+  const u = ["KB","MB","GB","TB","PB","EB"];
+  let i = -1;
+  do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
+  return n.toFixed(n >= 100 ? 0 : (n >= 10 ? 1 : 2)) + " " + u[i];
+}
+function fmtNum(n) { return (Number(n) || 0).toLocaleString("ko-KR"); }
+function fmtDur(s) {
+  if (s == null) return "—";
+  s = Math.floor(s);
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
+  if (h) return `${h}시간 ${m}분`;
+  if (m) return `${m}분 ${sec}초`;
+  return `${sec}초`;
+}
+
+function drawSeries(canvas, points, opts) {
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  // 격자
+  ctx.strokeStyle = "#202a36"; ctx.lineWidth = 1;
+  for (let g = 0; g <= 4; g++) {
+    const y = (H - 2) * g / 4 + 1;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+  opts.lines.forEach((line) => {
+    const vals = points.map(line.get);
+    if (!vals.length) return;
+    const max = opts.max != null ? opts.max : Math.max(1, ...vals);
+    ctx.strokeStyle = line.color; ctx.lineWidth = 1.8; ctx.beginPath();
+    vals.forEach((v, i) => {
+      const x = vals.length === 1 ? W : (W * i / (vals.length - 1));
+      const y = H - 2 - (H - 4) * Math.min(v, max) / max;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  });
+}
+
+let lastSeries = [];
+
+async function poll() {
+  try {
+    const res = await fetch("/api/status", {cache: "no-store"});
+    const data = await res.json();
+    $("errLine").textContent = "";
+    if (!data.ok) {
+      $("statusBadge").textContent = "대기 중";
+      $("currentDir").textContent = (data.reason === "no_runs")
+        ? "아직 시작된 스캔이 없습니다. `python -m isilon_usage run <경로>` 로 시작하세요."
+        : ("상태 없음: " + (data.reason || data.error || ""));
+      return;
+    }
+    render(data);
+  } catch (e) {
+    $("errLine").textContent = "API 오류: " + e;
+  }
+}
+
+function render(d) {
+  const r = d.run, p = d.progress, rs = d.resources;
+
+  $("rootPath").textContent = r.root_path;
+  $("backendPill").textContent = "backend: " + r.backend + " · " +
+    (r.size_mode === "apparent" ? "논리크기" : "디스크점유");
+  $("psutilPill").textContent = d.have_psutil ? "psutil" : "/proc 폴백";
+
+  const badge = $("statusBadge");
+  badge.className = "badge " + r.phase;
+  const phaseKo = {discovering:"디렉터리 탐색 중", sizing:"상향식 집계 중",
+                   done:"완료", paused:"일시정지", error:"오류"};
+  badge.textContent = phaseKo[r.status] || phaseKo[r.phase] || r.status;
+  $("phaseTxt").textContent = phaseKo[r.phase] || r.phase;
+
+  $("currentDir").textContent = r.current_dir || (r.status === "done" ? "✅ 스캔 완료" : "—");
+
+  // 디렉터리 진행률
+  const total = r.total_dirs || r.discovered_dirs || 0;
+  $("dirCount").textContent = fmtNum(r.processed_dirs) + " / " + fmtNum(total);
+  if (p.dir_progress_pct == null) {
+    $("dirPct").textContent = "탐색 단계";
+    $("dirBar").style.width = "0%";
+  } else {
+    $("dirPct").textContent = p.dir_progress_pct.toFixed(1) + "%";
+    $("dirBar").style.width = Math.min(100, p.dir_progress_pct) + "%";
+  }
+
+  // 디스크 사용량 확인 비율
+  const dpct = p.disk_verified_pct_of_used || 0;
+  $("diskPct").textContent = dpct.toFixed(1) + "%";
+  $("diskBar").style.width = Math.min(100, dpct) + "%";
+  $("diskDetail").textContent =
+    `확인 ${fmtBytes(r.scanned_bytes)} / 사용 ${fmtBytes(r.fs_used_bytes)} ` +
+    `(전체 ${fmtBytes(r.fs_total_bytes)} 중 ${p.disk_verified_pct_of_total.toFixed(1)}%)`;
+
+  // 요약
+  $("discovered").textContent = fmtNum(r.discovered_dirs);
+  $("processed").textContent = fmtNum(r.processed_dirs);
+  $("totalFiles").textContent = fmtNum(r.total_files);
+  $("maxDepth").textContent = fmtNum(r.max_depth);
+  $("errDirs").textContent = fmtNum(r.error_dirs);
+  $("elapsed").textContent = fmtDur(r.elapsed);
+  $("eta").textContent = p.eta_seconds == null ? "—" : fmtDur(p.eta_seconds);
+
+  // 자원
+  const L = rs.latest;
+  if (L) {
+    const memPct = L.mem_percent || 0;
+    $("memPct").textContent = memPct.toFixed(1) + "%";
+    $("memDetail").textContent = fmtBytes(L.mem_used) + " / " + fmtBytes(L.mem_total);
+    const memBar = $("memBar"); memBar.style.width = Math.min(100, memPct) + "%";
+    memBar.parentElement.classList.toggle("high", memPct >= 85);
+    $("swapUsed").textContent = fmtBytes(L.swap_used);
+
+    $("cpuPct").textContent = (L.cpu_percent || 0).toFixed(0) + "%";
+    $("load1").textContent = (L.load1 || 0).toFixed(2);
+
+    $("scanRss").textContent = fmtBytes(L.scanner_rss);
+    if (r.backend === "du") {
+      $("duRss").textContent = fmtBytes(L.du_rss);
+      $("duRssNote").textContent = L.du_pid ? ("실행 중 du PID " + L.du_pid) : "현재 du 실행 안 함";
+    } else {
+      $("duRss").textContent = fmtBytes(L.scanner_rss);
+      $("duRssNote").textContent = "native 백엔드 — 스캐너 프로세스가 직접 측정(별도 du 없음)";
+    }
+  }
+  $("peakRss").textContent = fmtBytes(rs.peak_du_rss) + " / " + fmtBytes(rs.peak_scanner_rss);
+
+  // 파일시스템
+  $("fsTotal").textContent = fmtBytes(r.fs_total_bytes);
+  $("fsUsed").textContent = fmtBytes(r.fs_used_bytes);
+  $("fsFree").textContent = fmtBytes(r.fs_free_bytes);
+  $("pid").textContent = r.scanner_pid || "—";
+
+  // 차트
+  lastSeries = rs.series || [];
+  drawSeries($("memChart"), lastSeries,
+    {max: 100, lines: [{get: s => s.mem_percent || 0, color: "#f5a623"}]});
+  drawSeries($("rssChart"), lastSeries,
+    {lines: [
+      {get: s => s.scanner_rss || 0, color: "#4f9cff"},
+      {get: s => s.du_rss || 0, color: "#38d39f"},
+    ]});
+
+  // 상위 디렉터리
+  const tb = $("topBody");
+  if (!d.top_dirs || !d.top_dirs.length) {
+    tb.innerHTML = '<tr><td colspan="7" style="color:var(--muted)">아직 집계된 디렉터리가 없습니다…</td></tr>';
+  } else {
+    const statusKo = {pending:"대기", discovered:"탐색됨", sizing:"집계중", done:"완료", error:"오류"};
+    tb.innerHTML = d.top_dirs.map((t, i) => {
+      const sz = t.total_bytes > 0 ? t.total_bytes : t.own_bytes;
+      return `<tr>
+        <td class="num">${i+1}</td>
+        <td class="path" title="${t.path}">${t.path}</td>
+        <td class="num">${fmtBytes(sz)}</td>
+        <td class="num">${fmtBytes(t.own_bytes)}</td>
+        <td class="num">${fmtNum(t.total_files || t.file_count)}</td>
+        <td class="num">${fmtNum(t.subdir_count)}</td>
+        <td>${statusKo[t.status] || t.status}</td>
+      </tr>`;
+    }).join("");
+  }
+  $("topNote").textContent = (r.phase === "discovering")
+    ? "탐색 단계에서는 '직접 용량' 기준으로 정렬되며, 집계 후 '재귀 용량' 기준으로 바뀝니다."
+    : "재귀 용량(하위 포함) 기준 정렬입니다.";
+
+  $("lastUpd").textContent = new Date().toLocaleTimeString("ko-KR");
+}
+
+let timer = null;
+function schedule() {
+  if (timer) clearInterval(timer);
+  if ($("autoChk").checked) timer = setInterval(poll, 1500);
+}
+$("refreshBtn").addEventListener("click", poll);
+$("autoChk").addEventListener("change", schedule);
+poll(); schedule();
+</script>
+</body>
+</html>

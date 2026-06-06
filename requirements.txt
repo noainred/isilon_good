@@ -1,0 +1,6 @@
+# isilon_usage 는 표준 라이브러리만으로도 동작합니다.
+# (웹서버: http.server, DB: sqlite3, 자원수집: /proc 폴백)
+#
+# psutil 이 설치돼 있으면 더 정확하고 풍부한 자원 지표를 사용합니다.
+# 설치가 어려운 폐쇄망/제한된 서버라면 설치하지 않아도 됩니다(자동으로 /proc 사용).
+psutil>=5.9; python_version >= "3.8"
