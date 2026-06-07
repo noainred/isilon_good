@@ -265,6 +265,15 @@ tools/make_tree.py   tests/   docs/USER_GUIDE.md   README.md   CHANGELOG.md
   열 때 누락 컬럼을 자동 보강합니다.
 - **릴리즈**: 변경 이력은 [CHANGELOG.md](../CHANGELOG.md), 릴리즈 태그는 `v<버전>`
   (예: `v1.0.0`).
+- **자동 릴리즈**: `v*` 태그를 push 하면 GitHub Actions(`.github/workflows/release.yml`)가
+  테스트를 돌린 뒤 CHANGELOG 의 해당 버전 내용을 릴리즈 노트로 자동 발행합니다.
+  ```bash
+  # 새 버전 낼 때
+  # 1) __init__.py 의 __version__ 변경, CHANGELOG.md 에 항목 추가
+  # 2) 태그 push → 릴리즈 자동 생성
+  git tag -a v1.0.1 -m "isilon_usage 1.0.1"
+  git push origin v1.0.1
+  ```
 
 ---
 

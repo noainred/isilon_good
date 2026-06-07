@@ -66,6 +66,10 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
   `GET /api/browse`, `GET /api/mounts`,
   `POST /api/scan/start`, `POST /api/scan/stop`.
 
+**릴리즈 자동화 (CI)**
+- `.github/workflows/release.yml`: `v*` 태그를 push 하면 테스트를 실행한 뒤
+  CHANGELOG 의 해당 버전 섹션을 릴리즈 노트로 추출해 GitHub 릴리즈를 자동 생성.
+
 **문서/테스트**
 - 사용 설명서(`docs/USER_GUIDE.md`), README, 설치 가이드.
 - 정확성 테스트(`tests/test_scanner.py`) — native/du 결과가 시스템 `du` 와 일치.
