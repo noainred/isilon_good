@@ -80,6 +80,17 @@
   .controls button { background:var(--panel2); color:var(--text); border:1px solid var(--line);
     border-radius:7px; padding:5px 11px; cursor:pointer; font-size:12.5px; }
   .controls button:hover { border-color: var(--accent); }
+  button { background:var(--panel2); color:var(--text); border:1px solid var(--line);
+    border-radius:7px; padding:6px 11px; cursor:pointer; font-size:12.5px; }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .optsel { background:var(--panel2); color:var(--text); border:1px solid var(--line);
+    border-radius:7px; padding:8px 10px; font-size:13px; }
+  .diritem { display:flex; justify-content:space-between; gap:10px; padding:5px 8px;
+    border-radius:6px; cursor:pointer; font-family: ui-monospace, Menlo, monospace;
+    font-size:12.5px; color:#cfe3ff; }
+  .diritem:hover { background:#16202c; }
+  .stopbtn { background:#3a1c1c; border-color:#5a2a2a; color:#ff9b9b; padding:2px 8px; font-size:11.5px; }
   .pill { font-size:11.5px; color:var(--muted); border:1px solid var(--line);
     border-radius:999px; padding:2px 9px; }
   .note { color: var(--warn); font-size: 12px; }
@@ -119,6 +130,68 @@
       </tr></thead>
       <tbody id="ovBody"><tr><td colspan="7" style="color:var(--muted)">로딩 중…</td></tr></tbody>
     </table>
+  </div>
+
+  <!-- 새 스캔 시작 (웹에서 디렉터리 지정) -->
+  <div class="card" id="startCard" style="margin-bottom:14px;">
+    <h2>새 스캔 시작 — 조사할 디렉터리 지정</h2>
+    <div class="sub" id="scanDisabledMsg" style="display:none; color:var(--warn);">
+      이 서버는 웹 스캔이 비활성화되어 있습니다. <code>serve</code> 또는 <code>run</code> 으로 실행하세요.
+    </div>
+
+    <div id="startForm">
+      <div class="sub" style="margin-bottom:6px;">마운트 빠른 선택 (네트워크 파일시스템 우선)</div>
+      <div id="mountPicks" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+        <span class="sub">로딩 중…</span>
+      </div>
+
+      <div class="sub" style="margin-bottom:6px;">폴더 탐색 — 클릭해서 들어가고, “이 디렉터리 선택”으로 지정</div>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
+        <button id="browseUp" title="상위 폴더">⬆ 위로</button>
+        <input id="browsePath" class="mono"
+               style="flex:1; min-width:280px; background:#0d1219; color:#cfe3ff; border:1px solid var(--line); border-radius:7px; padding:7px 10px;"
+               placeholder="/mnt/isilon/ifs" />
+        <button id="browseGo">탐색</button>
+        <button id="browsePick" style="border-color:var(--accent2);">이 디렉터리 선택 ↓</button>
+      </div>
+      <div id="browseList"
+           style="max-height:220px; overflow:auto; border:1px solid var(--line); border-radius:8px; background:#0d1219; padding:6px; margin-bottom:8px;">
+        <span class="sub">상단에 경로를 입력하고 “탐색”을 누르세요.</span>
+      </div>
+      <div class="sub err" id="browseErr"></div>
+
+      <hr style="border:none; border-top:1px solid var(--line); margin:14px 0;" />
+
+      <div style="display:flex; gap:14px; align-items:flex-end; flex-wrap:wrap;">
+        <div style="flex:1; min-width:300px;">
+          <div class="sub" style="margin-bottom:4px;">스캔할 디렉터리</div>
+          <input id="scanPath" class="mono"
+                 style="width:100%; background:#0d1219; color:#cfe3ff; border:1px solid var(--accent); border-radius:7px; padding:9px 11px; font-size:14px;"
+                 placeholder="여기에 경로를 입력하거나 위에서 선택" />
+        </div>
+        <div>
+          <div class="sub" style="margin-bottom:4px;">백엔드</div>
+          <select id="optBackend" class="optsel">
+            <option value="native">native (빠름·저메모리)</option>
+            <option value="du">du (du 프로세스 메모리 표시)</option>
+          </select>
+        </div>
+        <div>
+          <div class="sub" style="margin-bottom:4px;">용량 기준</div>
+          <select id="optSize" class="optsel">
+            <option value="disk">디스크 점유(du 기본)</option>
+            <option value="apparent">논리 크기</option>
+          </select>
+        </div>
+        <label class="sub" style="display:flex; align-items:center; gap:6px; padding-bottom:9px;">
+          <input type="checkbox" id="optOFS" /> 한 파일시스템(-x)
+        </label>
+        <button id="startBtn" style="border-color:var(--accent2); color:#cfe; font-weight:700; padding:9px 16px;">
+          ▶ 이 디렉터리 스캔 시작
+        </button>
+      </div>
+      <div id="startMsg" class="sub" style="margin-top:10px;"></div>
+    </div>
   </div>
 
   <!-- 스캔 선택 -->
@@ -269,7 +342,106 @@ function drawSeries(canvas, points, opts) {
 let lastSeries = [];
 let selectedScan = null;   // null → 진행중/최신 스캔 자동 추적
 let userPicked = false;    // 사용자가 직접 고르면 자동 추적 중지
+let runningSet = new Set();
+let canScan = false;
+let mountBases = [];
+let mountsLoaded = false;
 const statusKo = {discovering:"탐색중", sizing:"집계중", done:"완료", paused:"일시정지", error:"오류"};
+
+// ---- 마운트 빠른 선택 ----
+async function loadMounts() {
+  try {
+    const j = await (await fetch("/api/mounts", {cache:"no-store"})).json();
+    const box = $("mountPicks");
+    const picks = [];
+    (j.mount_bases || []).forEach(b => picks.push({label: "★ " + b, path: b}));
+    (j.mounts || []).forEach(m => {
+      const tag = m.is_network ? `[${m.fstype}] ` : "";
+      picks.push({label: tag + m.mountpoint, path: m.mountpoint});
+    });
+    if (!picks.length) { box.innerHTML = '<span class="sub">표시할 마운트가 없습니다.</span>'; return; }
+    box.innerHTML = "";
+    picks.forEach(p => {
+      const b = document.createElement("button");
+      b.className = "mono"; b.textContent = p.label; b.title = p.path;
+      b.addEventListener("click", () => { doBrowse(p.path); });
+      box.appendChild(b);
+    });
+  } catch (e) {
+    $("mountPicks").innerHTML = '<span class="sub err">마운트 조회 실패: ' + e + '</span>';
+  }
+}
+
+// ---- 폴더 탐색 ----
+async function doBrowse(path) {
+  $("browseErr").textContent = "";
+  try {
+    const url = "/api/browse" + (path ? ("?path=" + encodeURIComponent(path)) : "");
+    const j = await (await fetch(url, {cache:"no-store"})).json();
+    if (!j.ok) { $("browseErr").textContent = "탐색 실패: " + (j.reason || j.error || ""); return; }
+    $("browsePath").value = j.path;
+    $("browseUp").dataset.parent = j.parent || "/";
+    const list = $("browseList");
+    const items = [];
+    (j.dirs || []).forEach(d => {
+      items.push(`<div class="diritem" data-go="${encodeURIComponent(d.path)}">
+        <span>📁 ${d.name}</span><span class="sub">선택 ▶</span></div>`);
+    });
+    list.innerHTML = items.length ? items.join("")
+      : '<span class="sub">하위 디렉터리가 없습니다.</span>';
+    list.querySelectorAll(".diritem").forEach(el => {
+      const p = decodeURIComponent(el.dataset.go);
+      el.addEventListener("click", () => doBrowse(p));            // 들어가기
+      el.addEventListener("dblclick", () => { $("scanPath").value = p; });
+    });
+    if (j.error) $("browseErr").textContent = "일부 접근 불가: " + j.error;
+  } catch (e) {
+    $("browseErr").textContent = "탐색 오류: " + e;
+  }
+}
+
+// ---- 스캔 시작 / 중지 ----
+async function startScan() {
+  const path = $("scanPath").value.trim();
+  if (!path) { $("startMsg").innerHTML = '<span class="err">경로를 입력/선택하세요.</span>'; return; }
+  $("startBtn").disabled = true;
+  $("startMsg").textContent = "시작 요청 중…";
+  try {
+    const res = await fetch("/api/scan/start", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        path,
+        backend: $("optBackend").value,
+        size_mode: $("optSize").value,
+        one_file_system: $("optOFS").checked,
+      }),
+    });
+    const j = await res.json();
+    if (j.ok) {
+      $("startMsg").innerHTML = `<span style="color:var(--ok)">✓ 스캔 #${j.scan_id} 시작됨: ${j.root_path}</span>`;
+      selectedScan = j.scan_id; userPicked = true;
+      poll();
+    } else {
+      $("startMsg").innerHTML = '<span class="err">시작 실패: ' + (j.reason || j.error || "") + '</span>';
+    }
+  } catch (e) {
+    $("startMsg").innerHTML = '<span class="err">요청 오류: ' + e + '</span>';
+  } finally {
+    $("startBtn").disabled = false;
+  }
+}
+
+async function stopScan(id) {
+  if (!confirm("스캔 #" + id + " 을(를) 중지할까요?")) return;
+  try {
+    const j = await (await fetch("/api/scan/stop", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({scan_id: id}),
+    })).json();
+    if (!j.ok) alert("중지 실패: " + (j.reason || j.error || ""));
+    poll();
+  } catch (e) { alert("중지 오류: " + e); }
+}
 
 function renderOverview(j) {
   const o = j.overall || {};
@@ -278,6 +450,13 @@ function renderOverview(j) {
   $("ovScans").textContent = fmtNum(o.scan_count);
   $("ovActive").textContent = fmtNum(o.active_scans);
 
+  // 웹 스캔 가능 여부 / 실행 중 스캔 / 허용 경로
+  runningSet = new Set(j.running || []);
+  canScan = !!j.can_scan;
+  mountBases = j.mount_bases || [];
+  $("scanDisabledMsg").style.display = canScan ? "none" : "block";
+  $("startForm").style.display = canScan ? "block" : "none";
+
   const body = $("ovBody");
   const roots = o.roots || [];
   if (!roots.length) {
@@ -285,6 +464,9 @@ function renderOverview(j) {
   } else {
     body.innerHTML = roots.map(r => {
       const pct = r.fs_used_bytes ? (r.scanned_bytes / r.fs_used_bytes * 100) : 0;
+      const running = runningSet.has(r.scan_id);
+      const act = `<a href="#" class="goScan" data-scan="${r.scan_id}">#${r.scan_id}</a>` +
+        (running ? ` <button class="stopbtn" data-stop="${r.scan_id}">중지</button>` : "");
       return `<tr>
         <td class="path" title="${r.root_path}">${r.root_path}</td>
         <td>${r.hostname || "—"}</td>
@@ -292,11 +474,13 @@ function renderOverview(j) {
         <td class="num">${fmtBytes(r.fs_used_bytes)}</td>
         <td class="num">${pct.toFixed(1)}%</td>
         <td>${statusKo[r.status] || r.status}</td>
-        <td><a href="#" class="goScan" data-scan="${r.scan_id}">#${r.scan_id}</a></td>
+        <td>${act}</td>
       </tr>`;
     }).join("");
     body.querySelectorAll("a.goScan").forEach(a =>
       a.addEventListener("click", (e) => { e.preventDefault(); selectScan(parseInt(a.dataset.scan)); }));
+    body.querySelectorAll("button[data-stop]").forEach(b =>
+      b.addEventListener("click", () => stopScan(parseInt(b.dataset.stop))));
   }
 
   // 스캔 선택기 채우기
@@ -470,6 +654,14 @@ $("scanSelect").addEventListener("change", () => {
   userPicked = true;
   poll();
 });
+// 새 스캔 시작 카드 컨트롤
+$("browseGo").addEventListener("click", () => doBrowse($("browsePath").value.trim()));
+$("browsePath").addEventListener("keydown", (e) => { if (e.key === "Enter") doBrowse($("browsePath").value.trim()); });
+$("browseUp").addEventListener("click", () => doBrowse($("browseUp").dataset.parent || "/"));
+$("browsePick").addEventListener("click", () => { $("scanPath").value = $("browsePath").value.trim(); });
+$("startBtn").addEventListener("click", startScan);
+
+loadMounts();
 poll(); schedule();
 </script>
 </body>

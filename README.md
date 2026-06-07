@@ -73,14 +73,39 @@ pip install -r requirements.txt   # psutil (선택)
 
 ## 사용법
 
-### 1) 스캔 + 대시보드 동시 실행 (권장)
+> **권장 시나리오 — 아이실론을 다른 서버에 마운트해서 사용**
+> 아이실론에서 직접 돌리지 않고, `/ifs` 를 다른 리눅스 서버에 NFS/SMB 로 마운트한
+> 뒤 그 서버에서 이 도구를 띄웁니다. **조사할 디렉터리는 웹페이지에서 직접 골라
+> 시작**할 수 있습니다(아래 “웹에서 디렉터리 지정해 스캔하기” 참고).
+>
+> ```bash
+> # 마운트 예: mount -t nfs isilon:/ifs /mnt/isilon
+> python3 -m isilon_usage serve --data-dir /var/lib/isilon_usage \
+>         --mount-base /mnt/isilon --port 8765
+> # 브라우저 http://<서버>:8765/ → 폴더 탐색으로 디렉터리 선택 → “스캔 시작”
+> ```
+
+### 0) 웹에서 디렉터리 지정해 스캔하기 (마운트 사용 시 권장)
 
 ```bash
-python3 -m isilon_usage run /ifs/data --port 8765
+python3 -m isilon_usage serve --data-dir /var/lib/isilon_usage --mount-base /mnt/isilon
 ```
 
-- 백그라운드 스레드에서 스캔이 돌고, 같은 프로세스에서 대시보드 웹서버가 뜹니다.
-- 브라우저에서 `http://<서버>:8765/` 접속.
+- 대시보드의 **「새 스캔 시작」** 카드에서:
+  - **마운트 빠른 선택**: 서버에 붙은 마운트(NFS/SMB 등)를 버튼으로 바로 선택
+  - **폴더 탐색**: 디렉터리를 클릭해 들어가며 원하는 위치를 찾고 “이 디렉터리 선택”
+  - 백엔드(native/du)·용량 기준·한 파일시스템 옵션을 고른 뒤 **“스캔 시작”**
+- 시작한 스캔은 관리 개요에 바로 나타나고, **진행 중 스캔은 “중지” 버튼**으로 멈출 수 있습니다.
+- `--mount-base` 로 **웹에서 스캔 가능한 경로를 제한**합니다(여러 번 지정 가능).
+  지정하지 않으면 어떤 경로든 허용되므로, 신뢰망이 아니면 반드시 제한하세요.
+
+### 1) 초기 경로를 바로 주고 시작 (CLI + 대시보드)
+
+```bash
+python3 -m isilon_usage run /mnt/isilon/ifs/data --port 8765
+```
+
+- 지정한 경로 스캔을 즉시 시작하고 대시보드가 뜹니다. 이후 웹에서 다른 디렉터리도 추가로 스캔할 수 있습니다.
 - 중지: `Ctrl+C` (진행 상황은 DB 에 남아 있어 나중에 `serve` 로 다시 볼 수 있음).
 
 자주 쓰는 옵션:
@@ -96,19 +121,13 @@ python3 -m isilon_usage run /ifs/data --size-mode apparent --one-file-system
 python3 -m isilon_usage run /ifs/data --data-dir /var/lib/isilon_usage
 ```
 
-### 2) 스캔만 (대시보드 없이)
+### 2) 스캔만 (대시보드 없이, CLI 배치용)
 
 ```bash
 python3 -m isilon_usage scan /ifs/data --data-dir /var/lib/isilon_usage
 ```
 
-### 3) 대시보드만 (이미 만들어진 데이터 폴더를 읽기)
-
-```bash
-python3 -m isilon_usage serve --data-dir /var/lib/isilon_usage --port 8765
-```
-
-### 4) 콘솔에서 전체 관리 개요 + 상태 확인
+### 3) 콘솔에서 전체 관리 개요 + 상태 확인
 
 ```bash
 python3 -m isilon_usage status --data-dir /var/lib/isilon_usage
@@ -146,8 +165,11 @@ python3 -m isilon_usage status --data-dir /var/lib/isilon_usage --scan 3   # 특
 
 ## 대시보드에 표시되는 것
 
-- **전체 용량 관리 개요(상단)** — 총 조사 용량(루트별 최신 합계), 관리 중 루트 수,
-  전체/진행중 스캔 수, 루트별 최신 스캔 표(조사 용량·디스크 사용·확인%·상태).
+- **새 스캔 시작(상단)** — 마운트 빠른 선택 + 폴더 탐색으로 조사할 디렉터리를
+  웹에서 고르고, 백엔드/용량기준/옵션을 선택해 바로 스캔을 시작·중지합니다.
+- **전체 용량 관리 개요** — 총 조사 용량(루트별 최신 합계), 관리 중 루트 수,
+  전체/진행중 스캔 수, 루트별 최신 스캔 표(조사 용량·디스크 사용·확인%·상태,
+  진행 중이면 “중지” 버튼).
 - **스캔 선택기** — 등록된 스캔 중 하나를 골라 아래 상세를 봅니다(기본은 진행중/
   최신 스캔을 자동 추적).
 - **현재 진행 상황**
@@ -227,3 +249,8 @@ python3 tests/test_scanner.py
   특별히 시스템 `du` 의 메모리를 관찰하려는 목적이 아니면 `native` 를 권장합니다.
 - 대시보드는 인증이 없습니다. 신뢰된 내부망에서 쓰거나 `--host 127.0.0.1` 로
   바인딩한 뒤 SSH 터널 등으로 접근하세요.
+- **웹에서 스캔을 시작**할 수 있으므로(읽기 전용이지만 자원을 쓰는 작업),
+  반드시 `--mount-base` 로 스캔 가능한 경로를 마운트 지점으로 제한하세요.
+  `--mount-base` 를 주지 않으면 서버 계정이 읽을 수 있는 어떤 경로든 스캔할 수
+  있습니다. 폴더 탐색기는 디렉터리 이름만 나열하며 파일 내용은 읽지 않습니다.
+- 스캔 프로세스는 마운트를 읽을 수 있는 계정 권한으로 실행하세요(NFS/SMB 권한).

@@ -80,46 +80,48 @@ def _prepare_run(args, path: str):
     return data_dir, db_path, manager_db, scan_id
 
 
-def cmd_run(args: argparse.Namespace) -> int:
-    path = os.path.abspath(args.path)
-    if not os.path.isdir(path):
-        print(f"오류: 디렉터리가 아닙니다: {path}", file=sys.stderr)
-        return 2
+def _run_server(args, *, initial_path: str | None) -> int:
+    """serve/run 공통: 웹 스캔 가능한 대시보드 서버를 띄운다.
 
-    data_dir, db_path, manager_db, scan_id = _prepare_run(args, path)
-    stop = threading.Event()
+    initial_path 가 주어지면(=run) 그 경로 스캔을 즉시 시작한다. 어느 경우든
+    웹페이지에서 디렉터리를 지정해 추가 스캔을 시작/중지할 수 있다.
+    """
+    data_dir = os.path.abspath(args.data_dir)
+    mount_bases = [os.path.abspath(b) for b in (getattr(args, "mount_base", None) or [])]
 
-    def scan_worker():
-        try:
-            run_scan(
-                db_path, path,
-                backend=args.backend, size_mode=args.size_mode,
-                one_file_system=args.one_file_system,
-                batch_size=args.batch_size, sample_interval=args.sample_interval,
-                stop_event=stop, with_monitor=True,
-                manager_db=manager_db, manager_scan_id=scan_id,
-            )
-        except Exception as exc:  # 스캔 실패가 서버까지 죽이지 않게
-            print(f"[scan] 오류: {exc}", file=sys.stderr)
-
-    t = threading.Thread(target=scan_worker, name="scanner", daemon=True)
-    t.start()
-
-    httpd = serve(data_dir, host=args.host, port=args.port)
+    httpd = serve(
+        data_dir, host=args.host, port=args.port,
+        mount_bases=mount_bases, enable_scan=True,
+        sample_interval=args.sample_interval, batch_size=args.batch_size,
+    )
     url = _dashboard_url(args.host, args.port)
+
     print("=" * 64)
-    print(f"  Isilon 사용량 스캔 시작: {path}  (scan #{scan_id})")
-    print(f"  backend={args.backend}  size-mode={args.size_mode}  "
-          f"psutil={'있음' if monmod.have_psutil() else '없음(/proc 폴백)'}")
+    print(f"  Isilon 사용량 대시보드 (웹에서 디렉터리 지정 스캔 가능)")
     print(f"  대시보드:  {url}")
-    print(f"  관리 DB:   {manager_db}")
-    print(f"  이번 DB:   {db_path}")
+    print(f"  데이터:    {data_dir}  (manager.db + scans/)")
+    if mount_bases:
+        print(f"  허용 경로: {', '.join(mount_bases)}")
+    else:
+        print(f"  허용 경로: (제한 없음 — --mount-base 로 제한 권장)")
+    print(f"  psutil:    {'있음' if monmod.have_psutil() else '없음(/proc 폴백)'}")
+
+    if initial_path:
+        res = httpd.controller.start_scan(
+            initial_path, backend=args.backend, size_mode=args.size_mode,
+            one_file_system=args.one_file_system,
+        )
+        if res.get("ok"):
+            print(f"  초기 스캔: {initial_path}  (scan #{res['scan_id']})")
+        else:
+            print(f"  초기 스캔 실패: {res.get('reason')}", file=sys.stderr)
     print("  중지하려면 Ctrl+C")
     print("=" * 64)
 
     def handle_sigint(signum, frame):
         print("\n중지 신호 수신 — 정리 중…", file=sys.stderr)
-        stop.set()
+        if httpd.controller:
+            httpd.controller.stop_all()
         threading.Thread(target=httpd.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGINT, handle_sigint)
@@ -128,11 +130,19 @@ def cmd_run(args: argparse.Namespace) -> int:
     try:
         httpd.serve_forever()
     finally:
-        stop.set()
-        t.join(timeout=10)
+        if httpd.controller:
+            httpd.controller.stop_all()
         httpd.server_close()
     print("종료되었습니다.")
     return 0
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    path = os.path.abspath(args.path)
+    if not os.path.isdir(path):
+        print(f"오류: 디렉터리가 아닙니다: {path}", file=sys.stderr)
+        return 2
+    return _run_server(args, initial_path=path)
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
@@ -168,23 +178,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
-    data_dir = os.path.abspath(args.data_dir)
-    httpd = serve(data_dir, host=args.host, port=args.port)
-    url = _dashboard_url(args.host, args.port)
-    print(f"대시보드 서버 실행: {url}  (data-dir: {data_dir})")
-    print("중지하려면 Ctrl+C")
-
-    def handle_sigint(signum, frame):
-        threading.Thread(target=httpd.shutdown, daemon=True).start()
-
-    signal.signal(signal.SIGINT, handle_sigint)
-    signal.signal(signal.SIGTERM, handle_sigint)
-    try:
-        httpd.serve_forever()
-    finally:
-        httpd.server_close()
-    print("\n종료되었습니다.")
-    return 0
+    # serve 는 초기 스캔 없이 대시보드만 띄우되, 웹에서 디렉터리를 지정해 스캔할 수 있다.
+    return _run_server(args, initial_path=None)
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -266,21 +261,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    pr = sub.add_parser("run", help="스캔 + 대시보드 동시 실행(권장)")
+    pr = sub.add_parser("run", help="초기 스캔 + 대시보드 실행(웹에서 추가 스캔도 가능)")
     pr.add_argument("path", help="조사할 루트 디렉터리")
     _add_scan_opts(pr)
+    pr.add_argument("--mount-base", action="append", default=[],
+                    help="웹에서 스캔을 허용할 경로(여러 번 지정 가능). 예: 마운트 지점")
     pr.add_argument("--host", default="0.0.0.0")
     pr.add_argument("--port", type=int, default=8765)
     pr.set_defaults(func=cmd_run)
 
-    ps = sub.add_parser("scan", help="스캔만 수행")
+    ps = sub.add_parser("scan", help="스캔만 수행(대시보드 없이)")
     ps.add_argument("path", help="조사할 루트 디렉터리")
     _add_scan_opts(ps)
     ps.set_defaults(func=cmd_scan)
 
-    pv = sub.add_parser("serve", help="대시보드 웹서버만 실행")
+    pv = sub.add_parser("serve", help="대시보드 실행 + 웹에서 디렉터리 지정 스캔(권장)")
     pv.add_argument("--data-dir", default=DEFAULT_DATA_DIR,
                     help="manager.db + scans/ 상위 폴더 (기본: %(default)s)")
+    pv.add_argument("--mount-base", action="append", default=[],
+                    help="웹에서 스캔을 허용할 경로(여러 번 지정 가능). 예: /mnt/isilon")
+    pv.add_argument("--backend", choices=["native", "du"], default="native",
+                    help="웹 스캔 기본 백엔드")
+    pv.add_argument("--size-mode", choices=["disk", "apparent"], default="disk")
+    pv.add_argument("--one-file-system", "-x", action="store_true")
+    pv.add_argument("--batch-size", type=int, default=500)
+    pv.add_argument("--sample-interval", type=float, default=2.0)
     pv.add_argument("--host", default="0.0.0.0")
     pv.add_argument("--port", type=int, default=8765)
     pv.set_defaults(func=cmd_serve)
