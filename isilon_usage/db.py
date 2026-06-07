@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS scan_runs (
     fs_free_bytes   INTEGER NOT NULL DEFAULT 0,
     scanner_pid     INTEGER,
     hostname        TEXT,
+    app_version     TEXT,
     error           TEXT
 );
 
@@ -104,14 +105,27 @@ def connect(db_path: str, *, timeout: float = 30.0) -> sqlite3.Connection:
     return conn
 
 
+def ensure_column(conn, table: str, column: str, decl: str) -> None:
+    """테이블에 컬럼이 없으면 추가한다(구버전 DB 업그레이드용 간단 마이그레이션)."""
+    cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
 def init_db(db_path: str) -> None:
-    """스키마를 생성(존재하면 무시)한다."""
+    """스키마를 생성(존재하면 무시)하고 스키마 버전을 기록한다."""
+    from . import SCHEMA_VERSION
+
     parent = os.path.dirname(os.path.abspath(db_path))
     if parent:
         os.makedirs(parent, exist_ok=True)
     conn = connect(db_path)
     try:
         conn.executescript(SCHEMA)
+        # 구버전 DB 호환: 누락 컬럼 보강
+        ensure_column(conn, "scan_runs", "hostname", "TEXT")
+        ensure_column(conn, "scan_runs", "app_version", "TEXT")
+        conn.execute(f"PRAGMA user_version={int(SCHEMA_VERSION)}")
         conn.commit()
     finally:
         conn.close()
@@ -126,6 +140,8 @@ def create_run(
     scanner_pid: int,
 ) -> int:
     """새 스캔 실행 레코드를 만들고 run_id 를 돌려준다."""
+    from . import __version__
+
     now = time.time()
     try:
         hostname = socket.gethostname()
@@ -135,10 +151,10 @@ def create_run(
         """
         INSERT INTO scan_runs
             (root_path, status, phase, backend, size_mode,
-             started_at, updated_at, scanner_pid, hostname)
-        VALUES (?, 'discovering', 'discovering', ?, ?, ?, ?, ?, ?)
+             started_at, updated_at, scanner_pid, hostname, app_version)
+        VALUES (?, 'discovering', 'discovering', ?, ?, ?, ?, ?, ?, ?)
         """,
-        (root_path, backend, size_mode, now, now, scanner_pid, hostname),
+        (root_path, backend, size_mode, now, now, scanner_pid, hostname, __version__),
     )
     conn.commit()
     return int(cur.lastrowid)

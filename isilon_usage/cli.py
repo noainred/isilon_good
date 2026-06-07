@@ -21,6 +21,7 @@ import sys
 import threading
 import time
 
+from . import __version__, SCHEMA_VERSION
 from . import db as dbmod
 from . import monitor as monmod
 from . import manager as mgrmod
@@ -253,12 +254,24 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_version(args: argparse.Namespace) -> int:
+    import platform
+    print(f"isilon_usage {__version__}")
+    print(f"  스키마 버전 : {SCHEMA_VERSION}")
+    print(f"  Python      : {platform.python_version()} ({sys.executable})")
+    print(f"  플랫폼      : {platform.system()} {platform.release()}")
+    print(f"  자원 수집   : {'psutil' if monmod.have_psutil() else '/proc 폴백'}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="isilon_usage",
         description="아이실론 등 초대용량 NAS 의 디렉터리별 사용량을 메모리 최소로 "
                     "조사하고 웹 대시보드로 진행 상황을 보여주는 도구.",
     )
+    p.add_argument("--version", action="version",
+                   version=f"isilon_usage {__version__} (schema {SCHEMA_VERSION})")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pr = sub.add_parser("run", help="초기 스캔 + 대시보드 실행(웹에서 추가 스캔도 가능)")
@@ -296,6 +309,9 @@ def build_parser() -> argparse.ArgumentParser:
     pst.add_argument("--scan", type=int, default=None,
                      help="상세를 볼 scan id(기본: 진행중/최신 스캔)")
     pst.set_defaults(func=cmd_status)
+
+    pvr = sub.add_parser("version", help="버전/환경 정보 출력")
+    pvr.set_defaults(func=cmd_version)
 
     return p
 

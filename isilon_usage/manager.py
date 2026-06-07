@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS scans (
     fs_used_bytes   INTEGER NOT NULL DEFAULT 0,
     fs_free_bytes   INTEGER NOT NULL DEFAULT 0,
     current_dir     TEXT,
+    app_version     TEXT,
     note            TEXT,
     error           TEXT
 );
@@ -70,11 +71,15 @@ def scans_dir(data_dir: str) -> str:
 
 def init_manager(data_dir: str) -> str:
     """data-dir 레이아웃과 manager.db 를 준비하고 manager.db 경로를 반환."""
+    from . import SCHEMA_VERSION
+
     os.makedirs(scans_dir(data_dir), exist_ok=True)
     mpath = manager_db_path(data_dir)
     conn = dbmod.connect(mpath)
     try:
         conn.executescript(MANAGER_SCHEMA)
+        dbmod.ensure_column(conn, "scans", "app_version", "TEXT")
+        conn.execute(f"PRAGMA user_version={int(SCHEMA_VERSION)}")
         conn.commit()
     finally:
         conn.close()
@@ -101,6 +106,8 @@ def register_scan(
     size_mode: str,
 ) -> int:
     """새 스캔을 관리 DB 에 등록하고 manager 측 scan_id 를 반환."""
+    from . import __version__
+
     conn = dbmod.connect(manager_db_path(data_dir))
     try:
         now = time.time()
@@ -112,11 +119,11 @@ def register_scan(
             """
             INSERT INTO scans
                 (db_path, db_filename, root_path, hostname, backend, size_mode,
-                 status, phase, started_at, updated_at)
-            VALUES (?,?,?,?,?,?,'discovering','discovering',?,?)
+                 status, phase, started_at, updated_at, app_version)
+            VALUES (?,?,?,?,?,?,'discovering','discovering',?,?,?)
             """,
             (os.path.abspath(db_path), os.path.basename(db_path), root_path,
-             host, backend, size_mode, now, now),
+             host, backend, size_mode, now, now, __version__),
         )
         conn.commit()
         return int(cur.lastrowid)

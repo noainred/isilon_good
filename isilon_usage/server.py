@@ -21,6 +21,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
+from . import __version__
 from . import db as dbmod
 from . import monitor as monmod
 from . import manager as mgrmod
@@ -128,6 +129,7 @@ def build_status(conn, run_id: int | None, *, samples: int = 150, top: int = 20)
     return {
         "ok": True,
         "run_id": run_id,
+        "version": __version__,
         "have_psutil": monmod.have_psutil(),
         "server_time": now,
         "run": {
@@ -428,6 +430,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 ctrl = self.controller
                 self._send_json({
                     "ok": True,
+                    "version": __version__,
                     "overall": mgrmod.overall_capacity(mconn),
                     "scans": mgrmod.list_scans(mconn),
                     "running": ctrl.running_ids() if ctrl else [],

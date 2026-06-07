@@ -105,6 +105,7 @@
     <div class="root" id="rootPath">대상 경로 로딩 중…</div>
   </div>
   <div class="spacer"></div>
+  <span class="pill" id="verPill" title="앱 버전">v–</span>
   <span class="pill" id="backendPill">backend</span>
   <span class="pill" id="psutilPill"></span>
   <span class="badge discovering" id="statusBadge">상태</span>
@@ -444,6 +445,7 @@ async function stopScan(id) {
 }
 
 function renderOverview(j) {
+  if (j.version) $("verPill").textContent = "v" + j.version;
   const o = j.overall || {};
   $("ovTotal").textContent = fmtBytes(o.total_scanned_bytes);
   $("ovRoots").textContent = fmtNum(o.root_count);
