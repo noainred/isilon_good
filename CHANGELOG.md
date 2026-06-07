@@ -67,6 +67,8 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
   `POST /api/scan/start`, `POST /api/scan/stop`.
 
 **릴리즈 자동화 (CI)**
+- `.github/workflows/ci.yml`: 브랜치 push/PR 마다 Python 3.8/3.11/3.13 에서
+  컴파일·CLI·테스트와 대시보드 JS 문법을 검증.
 - `.github/workflows/release.yml`: `v*` 태그를 push 하면 테스트를 실행한 뒤
   CHANGELOG 의 해당 버전 섹션을 릴리즈 노트로 추출해 GitHub 릴리즈를 자동 생성.
 
