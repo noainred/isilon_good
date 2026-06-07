@@ -203,7 +203,9 @@
   <!-- 스캔 선택 -->
   <div class="card" style="margin-bottom:14px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
     <b>상세 보기 스캔</b>
-    <select id="scanSelect" style="background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:6px 10px; font-size:13px; min-width:340px;"></select>
+    <select id="scanSelect" style="background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:6px 10px; font-size:13px; min-width:300px;"></select>
+    <button id="exportCsv" title="CSV 내보내기">⬇ CSV</button>
+    <button id="exportJson" title="JSON 내보내기">⬇ JSON</button>
     <span class="sub" id="scanDbInfo"></span>
   </div>
 
@@ -245,11 +247,35 @@
         <label>대시보드 새로고침(ms)
           <input id="setRefresh" type="number" min="500" max="600000" step="100" class="setinput" />
         </label>
+        <label>stat 동시 처리 스레드(NFS 가속)
+          <input id="setWorkers" type="number" min="1" max="64" class="setinput" />
+        </label>
+        <label>루트별 보관 스캔 수(0=무제한)
+          <input id="setRetention" type="number" min="0" max="100000" class="setinput" />
+        </label>
       </div>
+      <label style="display:block; margin-top:12px;">완료/오류 알림 웹훅 URL(Slack 등, 비우면 안 함)
+        <input id="setWebhook" type="text" class="setinput mono" style="width:100%;"
+               placeholder="https://hooks.slack.com/services/..." />
+      </label>
       <label style="display:block; margin-top:12px;">웹에서 스캔 허용 경로(mount_bases) — 한 줄에 하나, 비우면 전체 허용
         <textarea id="setMounts" rows="3" class="setinput mono" style="width:100%; resize:vertical;"
                   placeholder="/mnt/isilon"></textarea>
       </label>
+
+      <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
+        <div class="sub" style="margin-bottom:6px;">예약 스캔(반복) — 지정 간격마다 자동 스캔</div>
+        <table><thead><tr><th>경로</th><th class="num">주기(분)</th><th>백엔드</th><th>사용</th><th></th></tr></thead>
+          <tbody id="schedBody"><tr><td colspan="5" class="sub">예약 없음</td></tr></tbody></table>
+        <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; align-items:center;">
+          <input id="schPath" class="setinput mono" style="flex:1; min-width:200px;" placeholder="/mnt/isilon/ifs" />
+          <input id="schEvery" type="number" min="1" class="setinput" style="width:90px;" value="60" title="주기(분)" />
+          <select id="schBackend" class="optsel"><option value="native">native</option><option value="du">du</option></select>
+          <button id="schAdd">예약 추가</button>
+        </div>
+        <div class="sub">추가/삭제 후 아래 “설정 저장”을 눌러야 반영됩니다.</div>
+      </div>
+
       <div style="display:flex; gap:12px; align-items:center; margin-top:12px; flex-wrap:wrap;">
         <button id="saveSettingsBtn" style="border-color:var(--accent2); color:#cfe; font-weight:700; padding:8px 16px;">설정 저장</button>
         <button id="reloadSettingsBtn">되돌리기(다시 불러오기)</button>
@@ -347,6 +373,48 @@
     <div class="sub" id="topNote" style="margin-top:8px;"></div>
   </div>
 
+  <!-- 디렉터리 탐색(드릴다운) + 검색 -->
+  <div class="card" style="margin-top:14px;">
+    <h2>디렉터리 탐색 (드릴다운) · 검색</h2>
+    <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; align-items:center;">
+      <button id="treeRoot">🏠 루트</button>
+      <span id="treeCrumb" class="sub mono" style="flex:1; word-break:break-all;">—</span>
+      <input id="treeSearch" class="mono" style="background:#0d1219; color:#cfe3ff; border:1px solid var(--line); border-radius:7px; padding:6px 10px; min-width:200px;" placeholder="경로 검색 후 Enter" />
+    </div>
+    <table>
+      <thead><tr><th>디렉터리</th><th class="num">재귀 용량</th><th class="num">비중</th><th class="num">파일(재귀)</th><th class="num">하위</th><th></th></tr></thead>
+      <tbody id="treeBody"><tr><td colspan="6" class="sub">스캔을 선택하면 표시됩니다…</td></tr></tbody>
+    </table>
+    <div class="sub" id="treeNote" style="margin-top:6px;"></div>
+  </div>
+
+  <!-- 용량 추세 · 스캔 비교 -->
+  <div class="grid cols-2" style="margin-top:14px;">
+    <div class="card">
+      <h2>용량 추세 (선택 스캔의 루트)</h2>
+      <canvas id="trendChart" width="560" height="120"></canvas>
+      <div class="sub" id="trendNote" style="margin-top:6px;">같은 루트의 과거 스캔별 조사 용량</div>
+    </div>
+    <div class="card">
+      <h2>스캔 비교 (diff)</h2>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+        <span class="sub">기준</span><select id="diffBase" class="optsel"></select>
+        <span class="sub">→ 대상</span><select id="diffTarget" class="optsel"></select>
+        <button id="diffRun">비교</button>
+      </div>
+      <div class="sub" id="diffSummary"></div>
+      <table><thead><tr><th>디렉터리</th><th class="num">변화량</th></tr></thead>
+        <tbody id="diffBody"><tr><td colspan="2" class="sub">같은 루트의 두 스캔을 골라 비교하세요.</td></tr></tbody></table>
+    </div>
+  </div>
+
+  <!-- 오류 디렉터리 -->
+  <details class="card" id="errCard" style="margin-top:14px;">
+    <summary style="cursor:pointer; font-size:12.5px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); font-weight:700;">접근 불가(오류) 디렉터리 <span id="errCount">0</span>건</summary>
+    <table style="margin-top:10px;"><thead><tr><th>경로</th><th>오류</th></tr></thead>
+      <tbody id="errBody"></tbody></table>
+  </details>
+
   <div class="sub" style="margin-top:14px; text-align:right;">
     마지막 업데이트: <span id="lastUpd">—</span> · <span id="errLine" class="err"></span>
   </div>
@@ -406,6 +474,8 @@ let mountBases = [];
 let mountsLoaded = false;
 let refreshMs = 1500;
 let settingsLoaded = false;
+let currentRoot = null;
+let lastDetailScan = null;
 const statusKo = {discovering:"탐색중", sizing:"집계중", done:"완료", paused:"일시정지", error:"오류"};
 
 // ---- 설정 보기/수정 ----
@@ -421,7 +491,12 @@ async function loadSettings() {
     $("setSample").value = s.sample_interval;
     $("setTopN").value = s.top_n;
     $("setRefresh").value = s.refresh_ms;
+    $("setWorkers").value = s.scan_workers;
+    $("setRetention").value = s.retention_per_root;
+    $("setWebhook").value = s.notify_webhook || "";
     $("setMounts").value = (s.mount_bases || []).join("\n");
+    schedules = (s.schedules || []).map(x => ({...x}));
+    renderSchedules();
 
     // 첫 로드 시 "새 스캔 시작" 폼 기본값을 설정값으로 채움
     if (!settingsLoaded) {
@@ -439,7 +514,8 @@ async function loadSettings() {
     // 편집 가능 여부
     $("settingsLockMsg").style.display = j.locked ? "block" : "none";
     ["setBackend","setSize","setOFS","setBatch","setSample","setTopN","setRefresh",
-     "setMounts","saveSettingsBtn"].forEach(id => { $(id).disabled = !j.editable; });
+     "setWorkers","setRetention","setWebhook","setMounts","saveSettingsBtn",
+     "schPath","schEvery","schBackend","schAdd"].forEach(id => { $(id).disabled = !j.editable; });
     // 서버 정보(읽기 전용)
     const sv = j.server || {};
     $("serverInfo").innerHTML =
@@ -460,7 +536,11 @@ async function saveSettings() {
     sample_interval: parseFloat($("setSample").value),
     top_n: parseInt($("setTopN").value),
     refresh_ms: parseInt($("setRefresh").value),
+    scan_workers: parseInt($("setWorkers").value),
+    retention_per_root: parseInt($("setRetention").value),
+    notify_webhook: $("setWebhook").value.trim(),
     mount_bases: $("setMounts").value.split("\n").map(x => x.trim()).filter(Boolean),
+    schedules: schedules,
   };
   $("saveSettingsBtn").disabled = true;
   $("settingsMsg").textContent = "저장 중…";
@@ -578,8 +658,143 @@ async function stopScan(id) {
   } catch (e) { alert("중지 오류: " + e); }
 }
 
+async function scanAction(action, id) {
+  try {
+    const j = await (await fetch("/api/scan/" + action, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({scan_id: id}),
+    })).json();
+    if (!j.ok) alert("실패: " + (j.reason || j.error || ""));
+    else if (action === "resume") { selectedScan = id; userPicked = true; }
+    poll();
+  } catch (e) { alert("오류: " + e); }
+}
+
+// ---- 디렉터리 드릴다운 트리 ----
+let treeStack = [];   // [{id, name}] 브레드크럼 (id=null 은 루트 레벨)
+async function loadTree(parentId, crumb) {
+  if (selectedScan == null) return;
+  treeStack = crumb || [];
+  try {
+    const url = "/api/children?scan=" + selectedScan +
+      (parentId != null ? "&parent=" + parentId : "");
+    const j = await (await fetch(url, {cache: "no-store"})).json();
+    renderTree(j.children || []);
+  } catch (e) { $("treeBody").innerHTML = '<tr><td colspan="6" class="err">' + e + '</td></tr>'; }
+}
+function renderTree(rows) {
+  $("treeCrumb").textContent = treeStack.length
+    ? "📂 " + treeStack.map(c => c.name).join(" / ") : "(루트)";
+  const tb = $("treeBody");
+  if (!rows.length) { tb.innerHTML = '<tr><td colspan="6" class="sub">하위 디렉터리가 없거나 아직 집계 전입니다.</td></tr>'; return; }
+  const parentTotal = rows.reduce((a, r) => a + (r.total_bytes || r.own_bytes || 0), 0) || 1;
+  tb.innerHTML = rows.map(r => {
+    const sz = r.total_bytes > 0 ? r.total_bytes : r.own_bytes;
+    const pct = (sz / parentTotal * 100);
+    const canDesc = r.subdir_count > 0;
+    const name = canDesc
+      ? `<a href="#" class="tdesc" data-id="${r.id}" data-name="${r.name}">📁 ${r.name}</a>`
+      : `📄 ${r.name}`;
+    return `<tr><td class="mono" style="max-width:520px; overflow:hidden; text-overflow:ellipsis;">${name}</td>
+      <td class="num">${fmtBytes(sz)}</td>
+      <td class="num">${pct.toFixed(1)}%</td>
+      <td class="num">${fmtNum(r.total_files || r.file_count)}</td>
+      <td class="num">${fmtNum(r.subdir_count)}</td>
+      <td><a href="#" class="tdescbtn" data-id="${r.id}" data-name="${r.name}" ${canDesc ? "" : 'style="display:none"'}>열기 ▶</a></td></tr>`;
+  }).join("");
+  tb.querySelectorAll("a.tdesc, a.tdescbtn").forEach(a => a.addEventListener("click", (e) => {
+    e.preventDefault();
+    loadTree(parseInt(a.dataset.id), treeStack.concat([{id: parseInt(a.dataset.id), name: a.dataset.name}]));
+  }));
+}
+async function treeSearch(q) {
+  if (selectedScan == null || !q) return;
+  try {
+    const j = await (await fetch("/api/search?scan=" + selectedScan + "&q=" + encodeURIComponent(q), {cache: "no-store"})).json();
+    const rows = j.results || [];
+    $("treeCrumb").textContent = `🔎 "${q}" 검색 ${rows.length}건`;
+    const tb = $("treeBody");
+    tb.innerHTML = rows.length ? rows.map(r => {
+      const sz = r.total_bytes > 0 ? r.total_bytes : r.own_bytes;
+      return `<tr><td class="mono" style="max-width:560px; overflow:hidden; text-overflow:ellipsis;" title="${r.path}">
+        <a href="#" class="tdesc" data-id="${r.id}" data-name="${r.path}">${r.path}</a></td>
+        <td class="num">${fmtBytes(sz)}</td><td class="num">—</td>
+        <td class="num">${fmtNum(r.total_files || r.file_count)}</td>
+        <td class="num">${fmtNum(r.subdir_count)}</td><td></td></tr>`;
+    }).join("") : '<tr><td colspan="6" class="sub">결과 없음</td></tr>';
+    tb.querySelectorAll("a.tdesc").forEach(a => a.addEventListener("click", (e) => {
+      e.preventDefault();
+      loadTree(parseInt(a.dataset.id), [{id: parseInt(a.dataset.id), name: a.dataset.name}]);
+    }));
+  } catch (e) { /* ignore */ }
+}
+
+// ---- 용량 추세 + 스캔 비교 ----
+let allScans = [];
+function drawTrend(rootPath) {
+  const pts = allScans.filter(s => s.root_path === rootPath && s.scanned_bytes != null)
+    .sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
+  drawSeries($("trendChart"), pts, {lines: [{get: s => s.scanned_bytes || 0, color: "#38d39f"}]});
+  $("trendNote").textContent = pts.length
+    ? `${rootPath} — ${pts.length}회 스캔, 최신 ${fmtBytes(pts[pts.length-1].scanned_bytes)}`
+    : "같은 루트의 과거 스캔이 없습니다.";
+}
+function populateDiff(rootPath) {
+  const opts = allScans.filter(s => s.root_path === rootPath)
+    .map(s => `<option value="${s.id}">#${s.id} · ${s.started_at ? new Date(s.started_at*1000).toLocaleString("ko-KR") : ""}</option>`).join("");
+  $("diffBase").innerHTML = opts; $("diffTarget").innerHTML = opts;
+  const ids = allScans.filter(s => s.root_path === rootPath).map(s => s.id);
+  if (ids.length >= 2) { $("diffBase").value = ids[1]; $("diffTarget").value = ids[0]; }
+}
+async function runDiff() {
+  const base = $("diffBase").value, target = $("diffTarget").value;
+  if (!base || !target) return;
+  $("diffSummary").textContent = "비교 중…";
+  try {
+    const j = await (await fetch(`/api/diff?base=${base}&target=${target}`, {cache:"no-store"})).json();
+    if (!j.ok) { $("diffSummary").innerHTML = '<span class="err">' + (j.reason||"") + '</span>'; return; }
+    const sign = j.total_delta >= 0 ? "+" : "−";
+    $("diffSummary").innerHTML = `전체 변화: <b>${sign}${fmtBytes(Math.abs(j.total_delta))}</b>`;
+    $("diffBody").innerHTML = (j.rows||[]).filter(r=>r.delta!==0).slice(0,30).map(r => {
+      const up = r.delta >= 0;
+      return `<tr><td class="mono" title="${r.path}" style="max-width:360px; overflow:hidden; text-overflow:ellipsis;">${r.path}</td>
+        <td class="num" style="color:${up?'#ff8b8b':'#65e0b4'}">${up?'+':'−'}${fmtBytes(Math.abs(r.delta))}</td></tr>`;
+    }).join("") || '<tr><td colspan="2" class="sub">변화 없음</td></tr>';
+  } catch (e) { $("diffSummary").innerHTML = '<span class="err">'+e+'</span>'; }
+}
+
+// ---- 오류 디렉터리 ----
+async function loadErrors() {
+  if (selectedScan == null) return;
+  try {
+    const j = await (await fetch("/api/errors?scan=" + selectedScan, {cache:"no-store"})).json();
+    const errs = j.errors || [];
+    $("errCount").textContent = errs.length;
+    $("errBody").innerHTML = errs.length ? errs.map(e =>
+      `<tr><td class="mono" style="max-width:520px; overflow:hidden; text-overflow:ellipsis;" title="${e.path}">${e.path}</td><td class="sub">${e.error||""}</td></tr>`
+    ).join("") : '<tr><td colspan="2" class="sub">오류 없음</td></tr>';
+  } catch (e) { /* ignore */ }
+}
+
+// ---- 예약 스캔 편집 ----
+let schedules = [];
+function renderSchedules() {
+  const tb = $("schedBody");
+  if (!schedules.length) { tb.innerHTML = '<tr><td colspan="5" class="sub">예약 없음</td></tr>'; return; }
+  tb.innerHTML = schedules.map((s, i) =>
+    `<tr><td class="mono" style="max-width:280px; overflow:hidden; text-overflow:ellipsis;" title="${s.path}">${s.path}</td>
+     <td class="num">${s.every_minutes}</td><td>${s.backend}</td>
+     <td>${s.enabled ? "✓" : "✕"}</td>
+     <td><button class="stopbtn" data-schdel="${i}">✕</button></td></tr>`
+  ).join("");
+  tb.querySelectorAll("button[data-schdel]").forEach(b => b.addEventListener("click", () => {
+    schedules.splice(parseInt(b.dataset.schdel), 1); renderSchedules();
+  }));
+}
+
 function renderOverview(j) {
   if (j.version) $("verPill").textContent = "v" + j.version;
+  allScans = j.scans || [];
   const o = j.overall || {};
   $("ovTotal").textContent = fmtBytes(o.total_scanned_bytes);
   $("ovRoots").textContent = fmtNum(o.root_count);
@@ -601,8 +816,12 @@ function renderOverview(j) {
     body.innerHTML = roots.map(r => {
       const pct = r.fs_used_bytes ? (r.scanned_bytes / r.fs_used_bytes * 100) : 0;
       const running = runningSet.has(r.scan_id);
-      const act = `<a href="#" class="goScan" data-scan="${r.scan_id}">#${r.scan_id}</a>` +
-        (running ? ` <button class="stopbtn" data-stop="${r.scan_id}">중지</button>` : "");
+      let act = `<a href="#" class="goScan" data-scan="${r.scan_id}">#${r.scan_id}</a>`;
+      if (running) act += ` <button class="stopbtn" data-stop="${r.scan_id}">중지</button>`;
+      else {
+        if (r.status === "paused") act += ` <button data-resume="${r.scan_id}" style="padding:2px 8px; font-size:11.5px;">재개</button>`;
+        act += ` <button class="stopbtn" data-del="${r.scan_id}" title="삭제">✕</button>`;
+      }
       return `<tr>
         <td class="path" title="${r.root_path}">${r.root_path}</td>
         <td>${r.hostname || "—"}</td>
@@ -617,6 +836,13 @@ function renderOverview(j) {
       a.addEventListener("click", (e) => { e.preventDefault(); selectScan(parseInt(a.dataset.scan)); }));
     body.querySelectorAll("button[data-stop]").forEach(b =>
       b.addEventListener("click", () => stopScan(parseInt(b.dataset.stop))));
+    body.querySelectorAll("button[data-resume]").forEach(b =>
+      b.addEventListener("click", () => scanAction("resume", parseInt(b.dataset.resume))));
+    body.querySelectorAll("button[data-del]").forEach(b =>
+      b.addEventListener("click", () => {
+        if (confirm("스캔 #" + b.dataset.del + " 을(를) 삭제할까요? (per-run DB 파일도 삭제)"))
+          scanAction("delete", parseInt(b.dataset.del));
+      }));
   }
 
   // 스캔 선택기 채우기
@@ -775,6 +1001,17 @@ function render(d) {
     ? "탐색 단계에서는 '직접 용량' 기준으로 정렬되며, 집계 후 '재귀 용량' 기준으로 바뀝니다."
     : "재귀 용량(하위 포함) 기준 정렬입니다.";
 
+  // 드릴다운/추세/오류: 선택 스캔이 바뀌면 새로 로드, 추세는 매번 갱신
+  currentRoot = r.root_path;
+  drawTrend(currentRoot);
+  if (d.scan_id !== lastDetailScan) {
+    lastDetailScan = d.scan_id;
+    treeStack = [];
+    loadTree(null, []);
+    loadErrors();
+    populateDiff(currentRoot);
+  }
+
   $("lastUpd").textContent = new Date().toLocaleTimeString("ko-KR");
 }
 
@@ -799,6 +1036,23 @@ $("startBtn").addEventListener("click", startScan);
 // 설정 카드
 $("saveSettingsBtn").addEventListener("click", saveSettings);
 $("reloadSettingsBtn").addEventListener("click", loadSettings);
+// 드릴다운 트리 / 검색
+$("treeRoot").addEventListener("click", () => { treeStack = []; loadTree(null, []); });
+$("treeSearch").addEventListener("keydown", (e) => { if (e.key === "Enter") treeSearch($("treeSearch").value.trim()); });
+// 스캔 비교
+$("diffRun").addEventListener("click", runDiff);
+// 내보내기
+$("exportCsv").addEventListener("click", () => { if (selectedScan != null) location.href = "/api/export?scan=" + selectedScan + "&format=csv"; });
+$("exportJson").addEventListener("click", () => { if (selectedScan != null) location.href = "/api/export?scan=" + selectedScan + "&format=json"; });
+// 예약 추가
+$("schAdd").addEventListener("click", () => {
+  const path = $("schPath").value.trim();
+  if (!path) { alert("경로를 입력하세요."); return; }
+  schedules.push({path, every_minutes: Math.max(1, parseInt($("schEvery").value) || 60),
+                  backend: $("schBackend").value, size_mode: "disk",
+                  one_file_system: false, enabled: true, last_run: 0});
+  $("schPath").value = ""; renderSchedules();
+});
 
 loadMounts();
 loadSettings();

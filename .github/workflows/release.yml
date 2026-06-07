@@ -26,6 +26,7 @@ jobs:
         run: |
           python tests/test_scanner.py
           python tests/test_manager.py
+          python tests/test_server.py
 
       - name: 버전/릴리즈 노트 추출
         id: notes

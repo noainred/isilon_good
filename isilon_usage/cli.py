@@ -48,6 +48,8 @@ def _add_scan_opts(p: argparse.ArgumentParser) -> None:
                    help="다른 파일시스템으로 넘어가지 않음(du -x 와 동일)")
     p.add_argument("--batch-size", type=int, default=500,
                    help="DB 커밋 배치 크기 (기본: %(default)s)")
+    p.add_argument("--workers", type=int, default=1,
+                   help="파일 stat 동시 처리 스레드 수(NFS 가속, 기본: %(default)s)")
     p.add_argument("--sample-interval", type=float, default=2.0,
                    help="자원 샘플링 주기(초) (기본: %(default)s)")
 
@@ -97,6 +99,7 @@ def _run_server(args, *, initial_path: str | None) -> int:
         "default_size_mode": args.size_mode,
         "default_one_file_system": args.one_file_system,
         "batch_size": args.batch_size,
+        "scan_workers": getattr(args, "workers", 1),
         "sample_interval": args.sample_interval,
         "mount_bases": mount_bases,
     }
@@ -185,12 +188,58 @@ def cmd_scan(args: argparse.Namespace) -> int:
         db_path, path,
         backend=args.backend, size_mode=args.size_mode,
         one_file_system=args.one_file_system,
-        batch_size=args.batch_size, sample_interval=args.sample_interval,
+        batch_size=args.batch_size, workers=args.workers,
+        sample_interval=args.sample_interval,
         stop_event=stop, with_monitor=True,
         manager_db=manager_db, manager_scan_id=scan_id,
     )
     print(f"완료(scan #{scan_id}). 소요 {time.time()-t0:.1f}s. "
           f"대시보드로 보려면: python -m isilon_usage serve --data-dir {data_dir}")
+    return 0
+
+
+def cmd_prune(args: argparse.Namespace) -> int:
+    data_dir = os.path.abspath(args.data_dir)
+    if not os.path.exists(mgrmod.manager_db_path(data_dir)):
+        print(f"관리 DB 가 없습니다: {data_dir}", file=sys.stderr)
+        return 2
+    if not args.keep_per_root and not args.older_than_days:
+        print("--keep-per-root 또는 --older-than-days 중 하나는 지정하세요.", file=sys.stderr)
+        return 2
+    res = mgrmod.prune_scans(data_dir, keep_per_root=args.keep_per_root,
+                             older_than_days=args.older_than_days)
+    print(f"삭제된 스캔 {res['count']}개: {res['deleted']}")
+    return 0
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    data_dir = os.path.abspath(args.data_dir)
+    mconn = dbmod.connect(mgrmod.manager_db_path(data_dir))
+    try:
+        row = mgrmod.get_scan(mconn, args.scan)
+    finally:
+        mconn.close()
+    if row is None:
+        print(f"scan #{args.scan} 없음", file=sys.stderr)
+        return 2
+    if not os.path.exists(row["db_path"]):
+        print("per-run DB 가 없어 재개할 수 없습니다.", file=sys.stderr)
+        return 2
+    s = setmod.load(data_dir)
+    stop = threading.Event()
+    signal.signal(signal.SIGINT, lambda *a: stop.set())
+    signal.signal(signal.SIGTERM, lambda *a: stop.set())
+    print(f"재개: scan #{args.scan}  {row['root_path']}")
+    t0 = time.time()
+    run_scan(
+        row["db_path"], row["root_path"],
+        backend=row["backend"], size_mode=row["size_mode"],
+        batch_size=s["batch_size"], workers=s["scan_workers"],
+        sample_interval=s["sample_interval"], resume=True,
+        stop_event=stop, with_monitor=True,
+        manager_db=mgrmod.manager_db_path(data_dir), manager_scan_id=args.scan,
+    )
+    print(f"완료(scan #{args.scan}). 소요 {time.time()-t0:.1f}s.")
     return 0
 
 
@@ -318,6 +367,8 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("--size-mode", choices=["disk", "apparent"], default="disk")
     pv.add_argument("--one-file-system", "-x", action="store_true")
     pv.add_argument("--batch-size", type=int, default=500)
+    pv.add_argument("--workers", type=int, default=1,
+                    help="파일 stat 동시 처리 스레드 수(웹 스캔 기본값)")
     pv.add_argument("--sample-interval", type=float, default=2.0)
     pv.add_argument("--lock-settings", action="store_true",
                     help="웹에서 설정 편집을 막음(읽기 전용)")
@@ -333,6 +384,19 @@ def build_parser() -> argparse.ArgumentParser:
     pst.add_argument("--scan", type=int, default=None,
                      help="상세를 볼 scan id(기본: 진행중/최신 스캔)")
     pst.set_defaults(func=cmd_status)
+
+    ppr = sub.add_parser("prune", help="오래된 스캔 정리(per-run DB 삭제)")
+    ppr.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
+    ppr.add_argument("--keep-per-root", type=int, default=None,
+                     help="루트별로 최신 N개만 보관")
+    ppr.add_argument("--older-than-days", type=float, default=None,
+                     help="N일보다 오래된 완료/오류 스캔 삭제")
+    ppr.set_defaults(func=cmd_prune)
+
+    prs = sub.add_parser("resume", help="중단된 스캔 이어하기")
+    prs.add_argument("scan", type=int, help="재개할 scan id")
+    prs.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
+    prs.set_defaults(func=cmd_resume)
 
     pvr = sub.add_parser("version", help="버전/환경 정보 출력")
     pvr.set_defaults(func=cmd_version)

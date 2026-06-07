@@ -1,6 +1,6 @@
 # Isilon 디렉터리 사용량 스캐너
 
-**버전 1.0.0** · [사용 설명서](docs/USER_GUIDE.md) · [변경 이력](CHANGELOG.md)
+**버전 1.1.0** · [사용 설명서](docs/USER_GUIDE.md) · [변경 이력](CHANGELOG.md)
 
 아이실론(Isilon)처럼 **한 디렉터리에 수천만 개의 파일**이 있는 초대용량 NAS
 에서, 트리 전체에 `du` 를 한 번에 돌리면 메모리를 너무 많이 써서 프로세스가
@@ -10,6 +10,11 @@
 
 표준 라이브러리만으로 동작하므로(웹서버·DB·자원수집 모두 내장), 패키지 설치가
 제한된 폐쇄망 서버에도 그대로 올려서 쓸 수 있습니다.
+
+주요 기능: 메모리 최소 스캔(native/du) · **하드링크 중복 제거**(du와 일치) ·
+**stat 동시 처리**(NFS 가속) · 실행별 DB + 관리 DB · **웹에서 디렉터리 지정 스캔/중지/재개** ·
+**드릴다운 트리 + 검색** · **용량 추세·스캔 비교(diff)** · **CSV/JSON 내보내기** ·
+**보존 정책·예약 스캔·완료 웹훅 알림** · **모든 설정 웹 편집** · 자원(메모리/du) 모니터링.
 
 > 처음 설치/운영은 **[사용 설명서(docs/USER_GUIDE.md)](docs/USER_GUIDE.md)** 를,
 > 버전별 변경점은 **[CHANGELOG.md](CHANGELOG.md)** 를 보세요.
@@ -73,6 +78,22 @@ python3 -m isilon_usage --help
 
 ```bash
 pip install -r requirements.txt   # psutil (선택)
+```
+
+### 패키지로 설치(콘솔 명령 `isilon-usage`)
+
+```bash
+pip install .            # 또는  pip install .[monitor]  (psutil 포함)
+isilon-usage --version
+isilon-usage serve --data-dir /var/lib/isilon_usage --mount-base /mnt/isilon
+```
+
+### Docker
+
+```bash
+docker build -t isilon-usage .
+docker run -d -p 8765:8765 -v /mnt/isilon:/mnt/isilon:ro -v isilon_data:/data \
+    isilon-usage serve --data-dir /data --mount-base /mnt/isilon --host 0.0.0.0 --port 8765
 ```
 
 ---

@@ -37,6 +37,11 @@ def _make_tree(root: str) -> None:
     d2 = os.path.join(root, "sub2")
     os.makedirs(d2, exist_ok=True)
     _write(os.path.join(d2, "f.bin"), 100)
+    # 하드링크: sub1/c.bin 을 sub2/c_link.bin 에 하드링크(용량은 1번만 세야 함)
+    try:
+        os.link(os.path.join(d1, "c.bin"), os.path.join(d2, "c_link.bin"))
+    except OSError:
+        pass
 
 
 def _write(path: str, size: int) -> None:
@@ -45,9 +50,14 @@ def _write(path: str, size: int) -> None:
 
 
 def _expected_disk_bytes(root: str) -> tuple[int, int]:
-    """os.walk 로 (총 디스크바이트, 총 파일수) 계산. 디렉터리 inode 블록 포함."""
+    """os.walk 로 (총 디스크바이트, 총 파일수) 계산.
+
+    du 와 동일하게 하드링크(st_nlink>1)는 (st_dev,st_ino)로 1회만 용량 계산.
+    파일 수는 디렉터리 엔트리(이름) 기준으로 모두 센다.
+    """
     total = 0
     files = 0
+    seen = set()
     for dirpath, dirnames, filenames in os.walk(root):
         st = os.stat(dirpath)
         total += st.st_blocks * BLOCK_UNIT
@@ -57,12 +67,17 @@ def _expected_disk_bytes(root: str) -> tuple[int, int]:
                 fst = os.lstat(fp)
             except OSError:
                 continue
-            total += fst.st_blocks * BLOCK_UNIT
             files += 1
+            if fst.st_nlink > 1:
+                key = (fst.st_dev, fst.st_ino)
+                if key in seen:
+                    continue
+                seen.add(key)
+            total += fst.st_blocks * BLOCK_UNIT
     return total, files
 
 
-def run_case(backend: str) -> None:
+def run_case(backend: str, workers: int = 1) -> None:
     tmp = tempfile.mkdtemp(prefix="isilon_test_")
     try:
         root = os.path.join(tmp, "data")
@@ -70,7 +85,7 @@ def run_case(backend: str) -> None:
         db_path = os.path.join(tmp, "scan.db")
         dbmod.init_db(db_path)
 
-        scanner = Scanner(db_path, root, backend=backend, batch_size=2)
+        scanner = Scanner(db_path, root, backend=backend, batch_size=2, workers=workers)
         run_id = scanner.run()
 
         conn = dbmod.connect(db_path)
@@ -110,7 +125,7 @@ def run_case(backend: str) -> None:
             ).fetchone()["c"]
             assert pending == 0, f"미완료 디렉터리 {pending}개"
 
-            print(f"[{backend}] OK  total_bytes={root_row['total_bytes']} "
+            print(f"[{backend} workers={workers}] OK  total_bytes={root_row['total_bytes']} "
                   f"files={root_row['total_files']} dirs={ndirs}")
         finally:
             conn.close()
@@ -118,12 +133,47 @@ def run_case(backend: str) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def run_permission_case() -> None:
+    """접근 불가 디렉터리가 있어도 스캔이 멈추지 않고 오류로 집계되는지."""
+    tmp = tempfile.mkdtemp(prefix="isilon_perm_")
+    try:
+        root = os.path.join(tmp, "data")
+        os.makedirs(os.path.join(root, "ok"), exist_ok=True)
+        _write(os.path.join(root, "ok", "f.bin"), 1000)
+        denied = os.path.join(root, "denied")
+        os.makedirs(denied, exist_ok=True)
+        _write(os.path.join(denied, "secret.bin"), 1000)
+        os.chmod(denied, 0o000)
+
+        db_path = os.path.join(tmp, "scan.db")
+        dbmod.init_db(db_path)
+        run_id = Scanner(db_path, root, batch_size=2).run()
+
+        conn = dbmod.connect(db_path)
+        try:
+            run = dbmod.get_run(conn, run_id)
+            assert run["status"] == "done", run["status"]  # 멈추지 않고 완료
+            err = run["error_dirs"]
+            if os.geteuid() == 0:
+                print(f"[permission] OK (root — 권한 우회, error_dirs={err}, 크래시 없음)")
+            else:
+                assert err >= 1, f"오류 디렉터리가 잡히지 않음 (error_dirs={err})"
+                print(f"[permission] OK  error_dirs={err}")
+        finally:
+            conn.close()
+            os.chmod(denied, 0o755)  # 정리 위해 권한 복구
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main() -> int:
     run_case("native")
+    run_case("native", workers=4)   # stat 동시 처리해도 결과 동일해야 함
     if shutil.which("du"):
         run_case("du")
     else:
         print("[du] 건너뜀 (du 명령 없음)")
+    run_permission_case()
     print("모든 테스트 통과 ✅")
     return 0
 

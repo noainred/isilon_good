@@ -13,6 +13,37 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.1.0] - 2026-06-07
+
+정확도·성능·관리 기능을 대폭 보강. DB 스키마 변경 없음(스키마 버전 1 유지).
+
+### 추가됨 (Added)
+- **하드링크 중복 제거**: native 백엔드가 `(st_dev, st_ino)` 로 하드링크를 1회만
+  계산해 `du` 와 용량이 일치(스냅샷/하드링크 많은 NAS 정확도 향상).
+- **stat 동시 처리(`scan_workers`)**: 디렉터리 내 파일 stat 을 스레드풀로 묶어
+  처리해 NFS 대용량 스캔을 가속(청크 스트리밍으로 메모리는 그대로 최소).
+- **디렉터리 드릴다운 + 검색**: 대시보드에서 디렉터리를 클릭해 하위로 파고드는
+  트리 탐색과 경로 검색(`/api/children`, `/api/search`).
+- **용량 추세 · 스캔 비교(diff)**: 루트별 조사 용량 추이 그래프와 두 스캔의
+  디렉터리별 증감 비교(`/api/diff`).
+- **오류 디렉터리 목록**: 접근 불가 디렉터리 목록/사유 표시(`/api/errors`).
+- **보존 정책 / 정리**: 루트별 보관 수 또는 기간으로 오래된 스캔 자동/수동 정리
+  (`retention_per_root` 설정, `/api/prune`, `prune` CLI, 스캔 삭제 `/api/scan/delete`).
+- **완료 알림(웹훅)**: 스캔 완료/오류 시 웹훅(Slack 등) POST(`notify_webhook`).
+- **예약 스캔(스케줄러)**: 경로별 주기 반복 스캔(`schedules` 설정 + 대시보드 편집기).
+- **결과 내보내기**: 디렉터리 집계를 CSV/JSON 으로 스트리밍 다운로드(`/api/export`).
+- **재개(resume)**: 중단된 스캔을 이어서 진행(`/api/scan/resume`, `resume` CLI).
+- **패키징**: `pyproject.toml`(콘솔 스크립트 `isilon-usage`, 동적 버전, dashboard.html
+  포함) + `Dockerfile`. `pip install .[monitor]` 로 설치 가능.
+- **테스트/CI 강화**: 서버 API 통합 테스트(`tests/test_server.py`), 하드링크·권한
+  거부 테스트, CI 에 ruff 린트 + 다중 Python 버전 + 서버 테스트 추가.
+
+### 수정됨 (Fixed)
+- 같은 루트를 같은 초에 두 번 스캔하면 per-run DB 파일명이 충돌해 두 스캔이 같은
+  DB 를 공유하던 문제 수정(파일명에 고유 토큰 추가).
+
+---
+
 ## [1.0.0] - 2026-06-07
 
 초대용량 NAS(아이실론 등)의 디렉터리별 사용량을 **메모리 최소로** 조사하고,
@@ -87,4 +118,5 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 - "확인된 사용량"은 하드링크/스파스 파일/블록 정렬 등으로 디스크 사용량과 정확히
   일치하지 않을 수 있습니다.
 
+[1.1.0]: https://github.com/noainred/isilon_good/releases/tag/v1.1.0
 [1.0.0]: https://github.com/noainred/isilon_good/releases/tag/v1.0.0

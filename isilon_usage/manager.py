@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 import socket
 import time
 
@@ -87,12 +88,16 @@ def init_manager(data_dir: str) -> str:
 
 
 def make_run_db_path(data_dir: str, root_path: str) -> str:
-    """루트 경로 + 현재 시각으로 per-run DB 파일 경로를 생성."""
+    """루트 경로 + 현재 시각 + 고유 토큰으로 per-run DB 파일 경로를 생성.
+
+    같은 루트를 같은 초에 두 번 시작해도 파일명이 충돌하지 않도록 짧은 난수
+    토큰을 붙인다(충돌 시 두 스캔이 같은 DB 를 공유하는 문제 방지).
+    """
     base = re.sub(r"[^A-Za-z0-9._-]+", "_", root_path.strip("/")) or "root"
     base = base[-60:].strip("_") or "root"
     ts = time.strftime("%Y%m%d-%H%M%S")
-    fname = f"scan_{ts}_{base}.db"
-    return os.path.join(scans_dir(data_dir), fname)
+    token = secrets.token_hex(3)
+    return os.path.join(scans_dir(data_dir), f"scan_{ts}_{token}_{base}.db")
 
 
 # ---------------------------------------------------------------- CRUD
@@ -162,6 +167,74 @@ def pick_default_scan(conn) -> int | None:
         return int(row["id"])
     row = conn.execute("SELECT id FROM scans ORDER BY id DESC LIMIT 1").fetchone()
     return int(row["id"]) if row else None
+
+
+def scans_for_root(conn, root_path: str) -> list:
+    """특정 루트의 모든 스캔(오래된→최신). 용량 추세 그래프용."""
+    rows = conn.execute(
+        "SELECT * FROM scans WHERE root_path=? ORDER BY id ASC", (root_path,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_scan(data_dir: str, scan_id: int) -> dict:
+    """스캔의 per-run DB 파일과 관리 DB 행을 삭제한다."""
+    conn = dbmod.connect(manager_db_path(data_dir))
+    try:
+        row = get_scan(conn, scan_id)
+        if row is None:
+            return {"ok": False, "reason": "없는 scan"}
+        db_path = row["db_path"]
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(db_path + suffix)
+            except OSError:
+                pass
+        conn.execute("DELETE FROM scans WHERE id=?", (scan_id,))
+        conn.commit()
+        return {"ok": True, "scan_id": scan_id}
+    finally:
+        conn.close()
+
+
+def prune_scans(data_dir: str, *, keep_per_root: int | None = None,
+                older_than_days: float | None = None,
+                running_ids=None) -> dict:
+    """오래된 스캔을 정리한다.
+
+    keep_per_root: 루트별로 최신 N개만 남기고 나머지 삭제.
+    older_than_days: 그보다 오래된(완료/오류) 스캔 삭제.
+    실행 중(running_ids)인 스캔은 건너뛴다.
+    """
+    running = set(running_ids or [])
+    conn = dbmod.connect(manager_db_path(data_dir))
+    try:
+        rows = conn.execute("SELECT * FROM scans ORDER BY id DESC").fetchall()
+    finally:
+        conn.close()
+
+    to_delete = set()
+    if keep_per_root and keep_per_root > 0:
+        seen: dict[str, int] = {}
+        for r in rows:
+            rp = r["root_path"]
+            seen[rp] = seen.get(rp, 0) + 1
+            if seen[rp] > keep_per_root:
+                to_delete.add(r["id"])
+    if older_than_days and older_than_days > 0:
+        cutoff = time.time() - older_than_days * 86400
+        for r in rows:
+            ts = r["finished_at"] or r["started_at"] or 0
+            if ts and ts < cutoff and r["status"] in ("done", "error", "paused"):
+                to_delete.add(r["id"])
+
+    deleted = []
+    for sid in to_delete:
+        if sid in running:
+            continue
+        if delete_scan(data_dir, sid).get("ok"):
+            deleted.append(sid)
+    return {"ok": True, "deleted": deleted, "count": len(deleted)}
 
 
 def overall_capacity(conn) -> dict:

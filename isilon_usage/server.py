@@ -39,6 +39,15 @@ def _safe_pct(num: float, den: float) -> float:
     return round(num / den * 100.0, 2)
 
 
+def _human_bytes(n) -> str:
+    n = float(n or 0)
+    for u in ["B", "KB", "MB", "GB", "TB", "PB"]:
+        if n < 1024 or u == "PB":
+            return f"{int(n)} B" if u == "B" else f"{n:.1f} {u}"
+        n /= 1024
+    return f"{n:.1f} PB"
+
+
 def build_status(conn, run_id: int | None, *, samples: int = 150, top: int = 20) -> dict:
     """대시보드가 한 번의 폴링으로 쓸 수 있는 통합 상태 객체를 만든다."""
     if run_id is None:
@@ -194,6 +203,77 @@ def list_children(conn, run_id: int, parent_id: int | None, *, limit: int = 200)
     return {"ok": True, "children": [dict(r) for r in rows]}
 
 
+def search_dirs(pconn, run_id: int, q: str, *, limit: int = 200) -> dict:
+    rows = pconn.execute(
+        """SELECT id, path, name, depth, file_count, subdir_count,
+                  own_bytes, total_bytes, total_files, status
+           FROM directories WHERE run_id=? AND path LIKE ? ESCAPE '\\'
+           ORDER BY total_bytes DESC LIMIT ?""",
+        (run_id, "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%", limit),
+    ).fetchall()
+    return {"ok": True, "results": [dict(r) for r in rows]}
+
+
+def list_errors(pconn, run_id: int, *, limit: int = 1000) -> dict:
+    rows = pconn.execute(
+        """SELECT path, error, depth FROM directories
+           WHERE run_id=? AND error IS NOT NULL ORDER BY path LIMIT ?""",
+        (run_id, limit),
+    ).fetchall()
+    return {"ok": True, "errors": [dict(r) for r in rows]}
+
+
+def diff_scans(data_dir: str, base_id: int, target_id: int, *,
+               limit: int = 100, max_depth: int | None = None) -> dict:
+    """두 스캔(같은/다른 per-run DB)의 디렉터리별 재귀 용량 변화를 비교한다."""
+    mconn = dbmod.connect(mgrmod.manager_db_path(data_dir))
+    try:
+        base = mgrmod.get_scan(mconn, base_id)
+        target = mgrmod.get_scan(mconn, target_id)
+    finally:
+        mconn.close()
+    if not base or not target:
+        return {"ok": False, "reason": "scan 을 찾을 수 없습니다."}
+    if not (os.path.exists(base["db_path"]) and os.path.exists(target["db_path"])):
+        return {"ok": False, "reason": "per-run DB 가 없습니다."}
+
+    conn = dbmod.connect(":memory:")
+    try:
+        conn.execute("ATTACH DATABASE ? AS a", (base["db_path"],))
+        conn.execute("ATTACH DATABASE ? AS b", (target["db_path"],))
+        a_run = conn.execute("SELECT MAX(id) AS i FROM a.scan_runs").fetchone()["i"]
+        b_run = conn.execute("SELECT MAX(id) AS i FROM b.scan_runs").fetchone()["i"]
+        depth_a = f"AND depth<={int(max_depth)}" if max_depth is not None else ""
+        depth_b = depth_a
+        rows = conn.execute(
+            f"""
+            SELECT path, SUM(ab) AS ab, SUM(bb) AS bb FROM (
+                SELECT path, total_bytes AS ab, 0 AS bb
+                  FROM a.directories WHERE run_id=? {depth_a}
+                UNION ALL
+                SELECT path, 0 AS ab, total_bytes AS bb
+                  FROM b.directories WHERE run_id=? {depth_b}
+            ) GROUP BY path
+            ORDER BY ABS(SUM(bb)-SUM(ab)) DESC LIMIT ?
+            """,
+            (a_run, b_run, limit),
+        ).fetchall()
+        result = [{"path": r["path"], "base_bytes": int(r["ab"]),
+                   "target_bytes": int(r["bb"]),
+                   "delta": int(r["bb"]) - int(r["ab"])} for r in rows]
+        return {
+            "ok": True,
+            "base": {"scan_id": base_id, "scanned_bytes": base["scanned_bytes"],
+                     "started_at": base["started_at"]},
+            "target": {"scan_id": target_id, "scanned_bytes": target["scanned_bytes"],
+                       "started_at": target["started_at"]},
+            "total_delta": (target["scanned_bytes"] or 0) - (base["scanned_bytes"] or 0),
+            "rows": result,
+        }
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # 마운트 목록 / 폴더 탐색 (웹에서 스캔할 디렉터리를 고르기 위함)
 # ---------------------------------------------------------------------------
@@ -337,6 +417,14 @@ class ScanController:
             self.data_dir, root_path=path, db_path=db_path,
             backend=backend, size_mode=size_mode,
         )
+        self._launch(scan_id, db_path, path, backend, size_mode,
+                     one_file_system, resume=False)
+        return {"ok": True, "scan_id": scan_id, "db_path": db_path,
+                "root_path": path, "backend": backend, "size_mode": size_mode}
+
+    def _launch(self, scan_id, db_path, path, backend, size_mode,
+                one_file_system, *, resume: bool) -> None:
+        """워커 스레드에서 스캔을 실행하고, 끝나면 알림/보존 정리를 수행한다."""
         stop = threading.Event()
 
         def worker():
@@ -345,8 +433,8 @@ class ScanController:
                     db_path, path,
                     backend=backend, size_mode=size_mode,
                     one_file_system=one_file_system,
-                    batch_size=self.batch_size,
-                    sample_interval=self.sample_interval,
+                    batch_size=self.batch_size, workers=self.workers,
+                    resume=resume, sample_interval=self.sample_interval,
                     stop_event=stop, with_monitor=True,
                     manager_db=mgrmod.manager_db_path(self.data_dir),
                     manager_scan_id=scan_id,
@@ -363,13 +451,75 @@ class ScanController:
             finally:
                 with self._lock:
                     self._scans.pop(scan_id, None)
+                self._on_scan_finished(scan_id)
 
         t = threading.Thread(target=worker, name=f"scan-{scan_id}", daemon=True)
         with self._lock:
-            self._scans[scan_id] = {"stop": stop, "thread": t}
+            self._scans[scan_id] = {"stop": stop, "thread": t, "path": path}
         t.start()
-        return {"ok": True, "scan_id": scan_id, "db_path": db_path,
-                "root_path": path, "backend": backend, "size_mode": size_mode}
+
+    @property
+    def workers(self) -> int:
+        return int(self.settings.get("scan_workers", 1))
+
+    def _on_scan_finished(self, scan_id: int) -> None:
+        """스캔 종료 후: 웹훅 알림 + 보존(retention) 자동 정리."""
+        try:
+            mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+            try:
+                row = mgrmod.get_scan(mconn, scan_id)
+            finally:
+                mconn.close()
+            if row is None:
+                return
+            webhook = self.settings.get("notify_webhook", "")
+            if webhook:
+                from . import notify as notifymod
+                notifymod.send(webhook, {
+                    "event": "scan_finished",
+                    "scan_id": scan_id,
+                    "root_path": row["root_path"],
+                    "status": row["status"],
+                    "total_dirs": row["total_dirs"],
+                    "total_files": row["total_files"],
+                    "scanned_bytes": row["scanned_bytes"],
+                    "scanned_human": _human_bytes(row["scanned_bytes"]),
+                    "hostname": row["hostname"],
+                })
+            keep = int(self.settings.get("retention_per_root", 0))
+            if keep > 0 and row["status"] in ("done", "error"):
+                mgrmod.prune_scans(self.data_dir, keep_per_root=keep,
+                                   running_ids=self.running_ids())
+        except Exception:
+            pass
+
+    # ----- 재개 -----
+    def resume_scan(self, scan_id: int) -> dict:
+        if scan_id in self.running_ids():
+            return {"ok": False, "reason": "이미 실행 중입니다."}
+        mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+        try:
+            row = mgrmod.get_scan(mconn, scan_id)
+        finally:
+            mconn.close()
+        if row is None:
+            return {"ok": False, "reason": "없는 scan"}
+        if not os.path.exists(row["db_path"]):
+            return {"ok": False, "reason": "per-run DB 가 없어 재개할 수 없습니다."}
+        self._launch(scan_id, row["db_path"], row["root_path"], row["backend"],
+                     row["size_mode"], False, resume=True)
+        return {"ok": True, "scan_id": scan_id}
+
+    # ----- 삭제 / 정리 -----
+    def delete_scan(self, scan_id: int) -> dict:
+        if scan_id in self.running_ids():
+            return {"ok": False, "reason": "실행 중인 스캔은 삭제할 수 없습니다(먼저 중지)."}
+        return mgrmod.delete_scan(self.data_dir, scan_id)
+
+    def prune(self, *, keep_per_root=None, older_than_days=None) -> dict:
+        return mgrmod.prune_scans(
+            self.data_dir, keep_per_root=keep_per_root,
+            older_than_days=older_than_days, running_ids=self.running_ids())
 
     # ----- 중지 -----
     def stop_scan(self, scan_id: int) -> dict:
@@ -384,7 +534,57 @@ class ScanController:
         with self._lock:
             return sorted(self._scans.keys())
 
+    def running_paths(self) -> set:
+        with self._lock:
+            return {rec.get("path") for rec in self._scans.values()}
+
+    # ----- 예약 스캔 스케줄러 -----
+    def start_scheduler(self) -> None:
+        self._sched_stop = threading.Event()
+        self._sched_thread = threading.Thread(
+            target=self._scheduler_loop, name="scheduler", daemon=True)
+        self._sched_thread.start()
+
+    def _scheduler_loop(self) -> None:
+        while not self._sched_stop.wait(20):
+            try:
+                self._check_schedules()
+            except Exception:
+                pass
+
+    def _check_schedules(self) -> None:
+        schedules = self.settings.get("schedules", [])
+        if not schedules:
+            return
+        now = time.time()
+        running_paths = self.running_paths()
+        changed = False
+        for sc in schedules:
+            if not sc.get("enabled", True):
+                continue
+            due = (now - float(sc.get("last_run", 0))) >= sc["every_minutes"] * 60
+            if not due:
+                continue
+            path = sc["path"]
+            if path in running_paths:
+                continue
+            ok, _ = self.path_allowed(path)
+            if not ok:
+                continue
+            res = self.start_scan(path, backend=sc.get("backend"),
+                                  size_mode=sc.get("size_mode"),
+                                  one_file_system=sc.get("one_file_system"))
+            if res.get("ok"):
+                sc["last_run"] = now
+                changed = True
+        if changed:
+            # last_run 갱신을 settings.json 에 반영
+            self.settings = setmod.save(self.data_dir, self.settings)
+
     def stop_all(self):
+        sched_stop = getattr(self, "_sched_stop", None)
+        if sched_stop is not None:
+            sched_stop.set()
         with self._lock:
             recs = list(self._scans.values())
         for rec in recs:
@@ -551,11 +751,88 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     pconn.close()
                 return
 
+            if path in ("/api/search", "/api/errors"):
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
+                if row is None or not os.path.exists(row["db_path"]):
+                    self._send_json({"ok": True, "results": [], "errors": []})
+                    return
+                pconn = dbmod.connect(row["db_path"])
+                try:
+                    run_id = dbmod.latest_run_id(pconn)
+                    if path == "/api/search":
+                        q = (qs.get("q", [""])[0] or "").strip()
+                        self._send_json(search_dirs(pconn, run_id, q) if q
+                                        else {"ok": True, "results": []})
+                    else:
+                        self._send_json(list_errors(pconn, run_id))
+                finally:
+                    pconn.close()
+                return
+
+            if path == "/api/diff":
+                base = self._query_int(qs, "base")
+                target = self._query_int(qs, "target")
+                if base is None or target is None:
+                    self._send_json({"ok": False, "reason": "base/target 필요"}, status=400)
+                    return
+                self._send_json(diff_scans(self.data_dir, base, target,
+                                           max_depth=self._query_int(qs, "max_depth")))
+                return
+
+            if path == "/api/export":
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
+                if row is None or not os.path.exists(row["db_path"]):
+                    self._send_json({"ok": False, "reason": "no_runs"}, status=404)
+                    return
+                self._export(row, fmt=(qs.get("format", ["csv"])[0]))
+                return
+
             self._send_json({"ok": False, "reason": "unknown_endpoint"}, status=404)
         except Exception as exc:  # API 오류가 서버를 죽이지 않도록
             self._send_json({"ok": False, "error": str(exc)}, status=500)
         finally:
             mconn.close()
+
+    def _export(self, row, *, fmt: str = "csv") -> None:
+        """선택한 스캔의 디렉터리 집계를 CSV/JSON 으로 스트리밍 다운로드.
+
+        커서로 한 행씩 흘려보내 대용량에서도 메모리를 적게 쓴다.
+        """
+        pconn = dbmod.connect(row["db_path"])
+        try:
+            run_id = dbmod.latest_run_id(pconn)
+            cur = pconn.execute(
+                """SELECT path, depth, file_count, subdir_count, own_bytes,
+                          total_bytes, total_files, status
+                   FROM directories WHERE run_id=? ORDER BY total_bytes DESC""",
+                (run_id,),
+            )
+            base = f"scan{row['id']}_{os.path.basename(row['db_filename'])}"
+            if fmt == "json":
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Disposition", f'attachment; filename="{base}.json"')
+                self.end_headers()
+                self.wfile.write(b'{"directories":[')
+                first = True
+                for r in cur:
+                    chunk = ("" if first else ",") + json.dumps(dict(r), ensure_ascii=False)
+                    first = False
+                    self.wfile.write(chunk.encode("utf-8"))
+                self.wfile.write(b"]}")
+            else:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/csv; charset=utf-8")
+                self.send_header("Content-Disposition", f'attachment; filename="{base}.csv"')
+                self.end_headers()
+                self.wfile.write("﻿".encode("utf-8"))  # 엑셀 한글용 BOM
+                self.wfile.write(b"path,depth,file_count,subdir_count,own_bytes,total_bytes,total_files,status\n")
+                for r in cur:
+                    p = '"' + str(r["path"]).replace('"', '""') + '"'
+                    line = f'{p},{r["depth"]},{r["file_count"]},{r["subdir_count"]},{r["own_bytes"]},{r["total_bytes"]},{r["total_files"]},{r["status"]}\n'
+                    self.wfile.write(line.encode("utf-8"))
+        finally:
+            pconn.close()
 
     def _read_json_body(self) -> dict:
         try:
@@ -596,14 +873,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(result, status=200 if result.get("ok") else 400)
                 return
 
-            if path == "/api/scan/stop":
-                scan_id = body.get("scan_id")
+            if path in ("/api/scan/stop", "/api/scan/resume", "/api/scan/delete"):
                 try:
-                    scan_id = int(scan_id)
+                    scan_id = int(body.get("scan_id"))
                 except (TypeError, ValueError):
                     self._send_json({"ok": False, "reason": "scan_id 필요"}, status=400)
                     return
-                self._send_json(self.controller.stop_scan(scan_id))
+                if path == "/api/scan/stop":
+                    res = self.controller.stop_scan(scan_id)
+                elif path == "/api/scan/resume":
+                    res = self.controller.resume_scan(scan_id)
+                else:
+                    res = self.controller.delete_scan(scan_id)
+                self._send_json(res, status=200 if res.get("ok") else 400)
+                return
+
+            if path == "/api/prune":
+                res = self.controller.prune(
+                    keep_per_root=body.get("keep_per_root"),
+                    older_than_days=body.get("older_than_days"))
+                self._send_json(res)
                 return
 
             if path == "/api/settings":
@@ -633,6 +922,8 @@ def serve(data_dir: str, host: str = "0.0.0.0", port: int = 8765, *,
         setmod.seed_if_absent(data_dir, initial_settings)
     controller = (ScanController(data_dir, lock_settings=lock_settings)
                   if enable_scan else None)
+    if controller is not None:
+        controller.start_scheduler()   # 예약 스캔 스케줄러 시작
     handler = type("BoundHandler", (DashboardHandler,),
                    {"data_dir": data_dir, "controller": controller,
                     "bound_host": host, "bound_port": port})

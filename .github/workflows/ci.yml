@@ -38,6 +38,18 @@ jobs:
         run: |
           python tests/test_scanner.py
           python tests/test_manager.py
+          python tests/test_server.py
+
+  lint:
+    name: 린트 (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install ruff
+      - run: ruff check isilon_usage/ tools/ tests/
 
   dashboard-js:
     name: 대시보드 JS 문법

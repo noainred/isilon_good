@@ -23,6 +23,10 @@ DEFAULTS: dict = {
     "mount_bases": [],                  # 웹에서 스캔 허용할 경로 목록(빈 목록=전체 허용)
     "top_n": 20,                        # 상위 디렉터리 표시 개수
     "refresh_ms": 1500,                 # 대시보드 자동 새로고침 주기(ms)
+    "scan_workers": 1,                  # 파일 stat 동시 처리 스레드 수(NFS 가속)
+    "retention_per_root": 0,            # 루트별 보관 스캔 수(0=무제한). 완료 시 자동 정리
+    "notify_webhook": "",               # 스캔 완료/오류 시 POST 할 웹훅 URL(빈값=사용 안 함)
+    "schedules": [],                    # 예약 스캔 목록(아래 _sanitize_schedules 참고)
 }
 
 EDITABLE_KEYS = set(DEFAULTS.keys())
@@ -61,12 +65,56 @@ def sanitize(raw: dict) -> dict:
     s["sample_interval"] = _float(s["sample_interval"], 0.2, 60.0, 2.0)
     s["top_n"] = _int(s["top_n"], 1, 500, 20)
     s["refresh_ms"] = _int(s["refresh_ms"], 500, 600_000, 1500)
+    s["scan_workers"] = _int(s["scan_workers"], 1, 64, 1)
+    s["retention_per_root"] = _int(s["retention_per_root"], 0, 100_000, 0)
+    s["notify_webhook"] = str(s.get("notify_webhook") or "").strip()
 
     mb = s.get("mount_bases") or []
     if isinstance(mb, str):
         mb = mb.replace(",", "\n").splitlines()
     s["mount_bases"] = [os.path.abspath(x.strip()) for x in mb if str(x).strip()]
+
+    s["schedules"] = _sanitize_schedules(s.get("schedules"))
     return s
+
+
+def _sanitize_schedules(raw) -> list:
+    """예약 스캔 목록 보정. 각 항목:
+    {path, every_minutes, backend, size_mode, one_file_system, enabled, last_run}
+    """
+    out = []
+    if not isinstance(raw, list):
+        return out
+    for it in raw:
+        if not isinstance(it, dict):
+            continue
+        path = str(it.get("path") or "").strip()
+        if not path:
+            continue
+        try:
+            every = max(1, int(it.get("every_minutes", 60)))
+        except (TypeError, ValueError):
+            every = 60
+        backend = it.get("backend", "native")
+        if backend not in ("native", "du"):
+            backend = "native"
+        size_mode = it.get("size_mode", "disk")
+        if size_mode not in ("disk", "apparent"):
+            size_mode = "disk"
+        try:
+            last_run = float(it.get("last_run", 0) or 0)
+        except (TypeError, ValueError):
+            last_run = 0.0
+        out.append({
+            "path": os.path.abspath(path),
+            "every_minutes": every,
+            "backend": backend,
+            "size_mode": size_mode,
+            "one_file_system": bool(it.get("one_file_system", False)),
+            "enabled": bool(it.get("enabled", True)),
+            "last_run": last_run,
+        })
+    return out
 
 
 def load(data_dir: str) -> dict:

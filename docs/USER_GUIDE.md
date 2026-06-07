@@ -173,6 +173,15 @@ python3 -m isilon_usage run /tmp/demo --mount-base /tmp --port 8765
 ### 5.6 용량 상위 디렉터리
 - 재귀 용량(하위 포함) 기준 상위 디렉터리 표(실시간).
 
+### 5.6.1 디렉터리 탐색(드릴다운) · 검색 · 추세 · 비교 · 내보내기
+- **드릴다운**: 디렉터리를 클릭해 하위로 파고들며 비중(%)을 확인. “🏠 루트”로 복귀.
+- **검색**: 경로 일부로 디렉터리 검색 후 그 위치로 이동.
+- **추세**: 선택 스캔의 루트에 대한 과거 스캔별 조사 용량 그래프.
+- **비교(diff)**: 같은 루트의 두 스캔을 골라 어느 디렉터리가 늘고/줄었는지 확인.
+- **내보내기**: 상세 스캔을 CSV/JSON 으로 다운로드(대용량도 스트리밍).
+- **오류 디렉터리**: 접근 불가 디렉터리 목록/사유.
+- **재개/삭제**: 관리 표에서 일시정지된 스캔 “재개”, 스캔 “✕” 삭제(per-run DB 포함).
+
 ### 5.7 설정 (웹에서 모든 설정 수정)
 화면의 **「⚙ 설정」** 카드를 펼치면 모든 런타임 설정을 보고 수정할 수 있습니다.
 저장하면 `<data-dir>/settings.json` 에 기록되어 **재시작해도 유지**됩니다.
@@ -186,6 +195,10 @@ python3 -m isilon_usage run /tmp/demo --mount-base /tmp --port 8765
 | 자원 샘플링 주기(초) | 메모리/CPU 샘플 간격 |
 | 상위 디렉터리 표시 개수 | 상위 표/그래프 항목 수 |
 | 대시보드 새로고침(ms) | 자동 새로고침 주기 |
+| stat 동시 처리 스레드 | 파일 stat 을 동시에 처리(NFS 대용량 가속, 1=순차) |
+| 루트별 보관 스캔 수 | 0=무제한. 완료 시 루트별로 최신 N개만 남기고 자동 정리 |
+| 완료/오류 알림 웹훅 URL | 스캔 종료 시 POST(Slack 등). 비우면 사용 안 함 |
+| 예약 스캔 | 경로별 주기(분) 반복 스캔. 추가/삭제 후 저장 |
 | 허용 경로(mount_bases) | 웹에서 스캔 허용 경로(한 줄에 하나, 비우면 전체 허용) |
 
 - **즉시 반영**: 저장하면 다음 스캔/조회부터 바로 적용됩니다(허용 경로·상위 개수
@@ -214,6 +227,7 @@ python3 -m isilon_usage <명령> [옵션]
 | `--size-mode disk\|apparent` | `disk` | 용량 기준 |
 | `--one-file-system`, `-x` | 꺼짐 | 마운트 경계 넘지 않음 |
 | `--batch-size N` | `500` | DB 커밋 배치 크기 |
+| `--workers N` | `1` | 파일 stat 동시 처리 스레드(NFS 가속) |
 | `--sample-interval S` | `2.0` | 자원 샘플링 주기(초) |
 
 ### `run <path>` — 초기 스캔 + 대시보드
@@ -245,11 +259,25 @@ python3 -m isilon_usage status --data-dir /var/lib/isilon_usage
 python3 -m isilon_usage status --data-dir /var/lib/isilon_usage --scan 3
 ```
 
+### `prune` — 오래된 스캔 정리
+```bash
+python3 -m isilon_usage prune --data-dir DIR --keep-per-root 5
+python3 -m isilon_usage prune --data-dir DIR --older-than-days 30
+```
+
+### `resume` — 중단된 스캔 이어하기
+```bash
+python3 -m isilon_usage resume <scan_id> --data-dir DIR
+```
+
 ### `version` / `--version` — 버전·환경 정보
 ```bash
 python3 -m isilon_usage version
 python3 -m isilon_usage --version
 ```
+
+> 패키지로 설치(`pip install .`)하면 `python3 -m isilon_usage` 대신 `isilon-usage`
+> 명령을 쓸 수 있습니다.
 
 ### HTTP API (대시보드가 사용)
 | 메서드/경로 | 설명 |
@@ -263,6 +291,13 @@ python3 -m isilon_usage --version
 | `POST /api/scan/stop` | `{scan_id}` 스캔 중지 |
 | `GET /api/settings` | 현재 설정 + 서버 정보(읽기 전용 포함) |
 | `POST /api/settings` | `{settings:{...}}` 로 설정 저장(잠금 시 403) |
+| `GET /api/search?scan=&q=` | 경로 검색 |
+| `GET /api/errors?scan=` | 접근 불가 디렉터리 목록 |
+| `GET /api/diff?base=&target=` | 두 스캔 디렉터리별 증감 비교 |
+| `GET /api/export?scan=&format=csv\|json` | 결과 내보내기(스트리밍) |
+| `POST /api/scan/resume` | `{scan_id}` 중단 스캔 재개 |
+| `POST /api/scan/delete` | `{scan_id}` 스캔 삭제(per-run DB 포함) |
+| `POST /api/prune` | `{keep_per_root}` 또는 `{older_than_days}` 정리 |
 
 ---
 

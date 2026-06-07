@@ -38,6 +38,7 @@ import shutil
 import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from . import db as dbmod
 from .monitor import ResourceMonitor
@@ -46,6 +47,10 @@ from .monitor import ResourceMonitor
 # 디스크 블록 크기(바이트). du 는 512B 블록 수(st_blocks)로 실제 점유 용량을
 # 계산한다. apparent-size 모드에서는 st_size(논리 크기)를 쓴다.
 BLOCK_UNIT = 512
+
+# 한 디렉터리의 파일 stat 을 묶어서(동시에) 처리하는 청크 크기. 한 디렉터리에
+# 수천만 파일이 있어도 메모리가 이 청크만큼만 쓰이도록 스트리밍 처리한다.
+STAT_CHUNK = 2000
 
 
 def _entry_bytes(stat_result, size_mode: str) -> int:
@@ -69,6 +74,8 @@ class Scanner:
         size_mode: str = "disk",
         one_file_system: bool = False,
         batch_size: int = 500,
+        workers: int = 1,
+        resume: bool = False,
         stop_event: threading.Event | None = None,
         monitor: ResourceMonitor | None = None,
         manager_db: str | None = None,
@@ -81,6 +88,8 @@ class Scanner:
         self.size_mode = size_mode
         self.one_file_system = one_file_system
         self.batch_size = batch_size
+        self.workers = max(1, int(workers))
+        self.resume = resume
         self.stop_event = stop_event or threading.Event()
         self.monitor = monitor
         self.manager_db = manager_db
@@ -89,6 +98,8 @@ class Scanner:
 
         self.run_id: int | None = None
         self._root_dev: int | None = None
+        self._seen_inodes: set = set()   # 하드링크(st_nlink>1) 중복 제거용
+        self._pool: ThreadPoolExecutor | None = None
         self._last_progress = 0.0
         self._mgr_conn = None
         self._phase = "discovering"
@@ -184,13 +195,20 @@ class Scanner:
         try:
             total, used, free = self._statvfs()
             self._fs_total, self._fs_used, self._fs_free = total, used, free
-            self.run_id = dbmod.create_run(
-                conn,
-                self.root_path,
-                backend=self.backend,
-                size_mode=self.size_mode,
-                scanner_pid=os.getpid(),
-            )
+
+            existing = dbmod.latest_run_id(conn) if self.resume else None
+            if existing:
+                # 중단된 스캔 이어하기: 기존 run 과 진행 카운터를 복원
+                self.run_id = existing
+                self._load_progress(conn)
+                dbmod.update_run(conn, self.run_id, scanner_pid=os.getpid())
+            else:
+                self.resume = False
+                self.run_id = dbmod.create_run(
+                    conn, self.root_path,
+                    backend=self.backend, size_mode=self.size_mode,
+                    scanner_pid=os.getpid(),
+                )
             dbmod.update_run(
                 conn, self.run_id,
                 fs_total_bytes=total, fs_used_bytes=used, fs_free_bytes=free,
@@ -199,6 +217,9 @@ class Scanner:
             self._update_manager()  # fs 용량 등 초기 요약 반영
             if self.monitor is not None:
                 self.monitor.run_id = self.run_id
+
+            if self.workers > 1:
+                self._pool = ThreadPoolExecutor(max_workers=self.workers)
 
             try:
                 self._root_dev = os.stat(self.root_path).st_dev
@@ -243,12 +264,45 @@ class Scanner:
                 pass
             raise
         finally:
+            if self._pool is not None:
+                self._pool.shutdown(wait=True)
+                self._pool = None
             conn.close()
             if self._mgr_conn is not None:
                 try:
                     self._mgr_conn.close()
                 except Exception:
                     pass
+
+    def _load_progress(self, conn) -> None:
+        """재개 시 기존 per-run DB 에서 진행 카운터를 복원한다."""
+        row = conn.execute(
+            """SELECT
+                 COALESCE(SUM(CASE WHEN status!='pending' THEN 1 ELSE 0 END),0) AS disc,
+                 COALESCE(SUM(CASE WHEN status='done' THEN 1 ELSE 0 END),0)     AS done,
+                 COALESCE(SUM(own_bytes),0)  AS b,
+                 COALESCE(SUM(file_count),0) AS f,
+                 COALESCE(SUM(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END),0) AS e
+               FROM directories WHERE run_id=?""",
+            (self.run_id,),
+        ).fetchone()
+        self._discovered = int(row["disc"])
+        self._processed = int(row["done"])
+        self._scanned_bytes = int(row["b"])
+        self._total_files = int(row["f"])
+        self._error_dirs = int(row["e"])
+
+    def _safe_stat(self, entry):
+        try:
+            return entry.stat(follow_symlinks=False)
+        except OSError:
+            return None
+
+    def _stat_many(self, entries: list):
+        """파일 엔트리 목록을 stat 한다(workers>1 이면 스레드풀로 동시 처리)."""
+        if self._pool is not None and len(entries) > 1:
+            return list(self._pool.map(self._safe_stat, entries))
+        return [self._safe_stat(e) for e in entries]
 
     def _finish(self, conn, status: str) -> None:
         # 총 디렉터리 수가 아직 0 이면 탐색 수치로 맞춘다.
@@ -300,6 +354,7 @@ class Scanner:
             # 탐색이 끝나면 총 디렉터리 수가 확정된다.
             dbmod.update_run(conn, self.run_id, total_dirs=self._discovered)
             conn.commit()
+            self._seen_inodes.clear()  # 집계 단계에선 불필요 — 메모리 회수
         finally:
             read_conn.close()
 
@@ -309,6 +364,26 @@ class Scanner:
         subdir_count = 0
         children: list[tuple] = []
         err: str | None = None
+
+        file_chunk: list = []
+
+        def flush_files():
+            # 청크를 (필요시 동시에) stat 한 뒤 용량/개수에 반영. 하드링크는
+            # (st_dev, st_ino) 로 1회만 계산(du 와 동일).
+            nonlocal own_bytes, file_count
+            if not file_chunk:
+                return
+            for st in self._stat_many(file_chunk):
+                if st is None:
+                    continue
+                file_count += 1
+                if st.st_nlink > 1:
+                    key = (st.st_dev, st.st_ino)
+                    if key in self._seen_inodes:
+                        continue  # 하드링크 중복 — 용량은 한 번만
+                    self._seen_inodes.add(key)
+                own_bytes += _entry_bytes(st, self.size_mode)
+            file_chunk.clear()
 
         try:
             with os.scandir(path) as it:
@@ -332,13 +407,10 @@ class Scanner:
                             (self.run_id, dir_id, entry.path, entry.name, depth + 1)
                         )
                     else:
-                        try:
-                            st = entry.stat(follow_symlinks=False)
-                            own_bytes += _entry_bytes(st, self.size_mode)
-                            file_count += 1
-                        except OSError:
-                            # 접근 불가 파일은 건너뛴다.
-                            continue
+                        file_chunk.append(entry)
+                        if len(file_chunk) >= STAT_CHUNK:
+                            flush_files()
+            flush_files()  # 남은 청크 처리
         except OSError as exc:
             err = f"{type(exc).__name__}: {exc}"
             self._error_dirs += 1
@@ -506,6 +578,8 @@ def run_scan(
     size_mode: str = "disk",
     one_file_system: bool = False,
     batch_size: int = 500,
+    workers: int = 1,
+    resume: bool = False,
     sample_interval: float = 2.0,
     stop_event: threading.Event | None = None,
     with_monitor: bool = True,
@@ -534,6 +608,7 @@ def run_scan(
         db_path, root_path,
         backend=backend, size_mode=size_mode,
         one_file_system=one_file_system, batch_size=batch_size,
+        workers=workers, resume=resume,
         stop_event=stop_event, monitor=monitor,
         manager_db=manager_db, manager_scan_id=manager_scan_id,
     )
