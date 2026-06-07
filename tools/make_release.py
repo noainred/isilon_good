@@ -13,10 +13,13 @@ download/ 아래에 다음을 생성한다(버전은 isilon_usage.__version__ �
 
 from __future__ import annotations
 
+import gzip
 import os
-import shutil
 import sys
+import tarfile
 import tempfile
+import shutil
+import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -27,8 +30,48 @@ INCLUDE_FILES = ["README.md", "CHANGELOG.md", "requirements.txt",
                  "pyproject.toml", "Dockerfile"]
 INCLUDE_DIRS = ["docs", "tools"]   # isilon_usage 패키지는 아래에서 별도 처리
 
+# 재현 가능한(결정적) 압축을 위한 고정 타임스탬프 — 내용이 같으면 바이트도 동일.
+_FIXED_DT = (2020, 1, 1, 0, 0, 0)
+_FIXED_EPOCH = 1577836800
 
-def build() -> list[str]:
+
+def _collect(stage: str, name: str):
+    files = []
+    base = os.path.join(stage, name)
+    for root, dirs, fs in os.walk(base):
+        dirs.sort()
+        for f in sorted(fs):
+            full = os.path.join(root, f)
+            files.append((full, os.path.relpath(full, stage)))
+    return files
+
+
+def _make_targz(path: str, files) -> str:
+    with open(path, "wb") as raw:
+        with gzip.GzipFile(filename="", fileobj=raw, mode="wb", mtime=0) as gz:
+            with tarfile.open(fileobj=gz, mode="w") as tar:
+                for full, arc in files:
+                    ti = tar.gettarinfo(full, arcname=arc)
+                    ti.mtime = _FIXED_EPOCH
+                    ti.uid = ti.gid = 0
+                    ti.uname = ti.gname = ""
+                    with open(full, "rb") as fh:
+                        tar.addfile(ti, fh)
+    return path
+
+
+def _make_zip(path: str, files) -> str:
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for full, arc in files:
+            zi = zipfile.ZipInfo(arc, date_time=_FIXED_DT)
+            zi.compress_type = zipfile.ZIP_DEFLATED
+            zi.external_attr = 0o644 << 16
+            with open(full, "rb") as fh:
+                z.writestr(zi, fh.read())
+    return path
+
+
+def build() -> list:
     name = f"isilon_usage-{__version__}"
     stage = tempfile.mkdtemp(prefix="isilon_rel_")
     dest = os.path.join(stage, name)
@@ -52,10 +95,10 @@ def build() -> list[str]:
 
     out_dir = os.path.join(ROOT, "download")
     os.makedirs(out_dir, exist_ok=True)
-    base = os.path.join(out_dir, name)
+    files = _collect(stage, name)
     made = [
-        shutil.make_archive(base, "gztar", root_dir=stage, base_dir=name),
-        shutil.make_archive(base, "zip", root_dir=stage, base_dir=name),
+        _make_targz(os.path.join(out_dir, f"{name}.tar.gz"), files),
+        _make_zip(os.path.join(out_dir, f"{name}.zip"), files),
     ]
     shutil.rmtree(stage, ignore_errors=True)
     return made
