@@ -86,6 +86,11 @@
   button:disabled { opacity:.5; cursor:not-allowed; }
   .optsel { background:var(--panel2); color:var(--text); border:1px solid var(--line);
     border-radius:7px; padding:8px 10px; font-size:13px; }
+  .setgrid { display:grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap:12px; }
+  #settingsCard label { display:flex; flex-direction:column; gap:5px; font-size:12.5px; color:var(--muted); }
+  .setinput { background:var(--panel2); color:var(--text); border:1px solid var(--line);
+    border-radius:7px; padding:8px 10px; font-size:13px; }
+  #settingsCard input:disabled, #settingsCard select:disabled, #settingsCard textarea:disabled { opacity:.5; }
   .diritem { display:flex; justify-content:space-between; gap:10px; padding:5px 8px;
     border-radius:6px; cursor:pointer; font-family: ui-monospace, Menlo, monospace;
     font-size:12.5px; color:#cfe3ff; }
@@ -111,7 +116,7 @@
   <span class="badge discovering" id="statusBadge">상태</span>
   <div class="controls">
     <button id="refreshBtn">새로고침</button>
-    <label><input type="checkbox" id="autoChk" checked /> 자동(1.5s)</label>
+    <label><input type="checkbox" id="autoChk" checked /> <span id="autoLabel">자동(1.5s)</span></label>
   </div>
 </header>
 
@@ -201,6 +206,58 @@
     <select id="scanSelect" style="background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:6px 10px; font-size:13px; min-width:340px;"></select>
     <span class="sub" id="scanDbInfo"></span>
   </div>
+
+  <!-- 설정 (웹에서 모든 설정 수정) -->
+  <details class="card" id="settingsCard" style="margin-bottom:14px;">
+    <summary style="cursor:pointer; font-size:12.5px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); font-weight:700;">⚙ 설정 — 웹에서 모든 설정 보기/수정</summary>
+    <div style="margin-top:14px;">
+      <div class="sub err" id="settingsLockMsg" style="display:none; margin-bottom:8px;">
+        설정이 잠겨 있습니다(--lock-settings). 읽기 전용입니다.
+      </div>
+      <div class="setgrid">
+        <label>기본 백엔드
+          <select id="setBackend" class="optsel">
+            <option value="native">native (빠름·저메모리)</option>
+            <option value="du">du (du 프로세스 메모리 표시)</option>
+          </select>
+        </label>
+        <label>기본 용량 기준
+          <select id="setSize" class="optsel">
+            <option value="disk">디스크 점유(du 기본)</option>
+            <option value="apparent">논리 크기</option>
+          </select>
+        </label>
+        <label>기본 한 파일시스템(-x)
+          <select id="setOFS" class="optsel">
+            <option value="false">사용 안 함</option>
+            <option value="true">사용</option>
+          </select>
+        </label>
+        <label>커밋 배치 크기
+          <input id="setBatch" type="number" min="1" max="1000000" class="setinput" />
+        </label>
+        <label>자원 샘플링 주기(초)
+          <input id="setSample" type="number" min="0.2" max="60" step="0.1" class="setinput" />
+        </label>
+        <label>상위 디렉터리 표시 개수
+          <input id="setTopN" type="number" min="1" max="500" class="setinput" />
+        </label>
+        <label>대시보드 새로고침(ms)
+          <input id="setRefresh" type="number" min="500" max="600000" step="100" class="setinput" />
+        </label>
+      </div>
+      <label style="display:block; margin-top:12px;">웹에서 스캔 허용 경로(mount_bases) — 한 줄에 하나, 비우면 전체 허용
+        <textarea id="setMounts" rows="3" class="setinput mono" style="width:100%; resize:vertical;"
+                  placeholder="/mnt/isilon"></textarea>
+      </label>
+      <div style="display:flex; gap:12px; align-items:center; margin-top:12px; flex-wrap:wrap;">
+        <button id="saveSettingsBtn" style="border-color:var(--accent2); color:#cfe; font-weight:700; padding:8px 16px;">설정 저장</button>
+        <button id="reloadSettingsBtn">되돌리기(다시 불러오기)</button>
+        <span class="sub" id="settingsMsg"></span>
+      </div>
+      <div class="sub" id="serverInfo" style="margin-top:12px; border-top:1px solid var(--line); padding-top:10px;"></div>
+    </div>
+  </details>
 
   <!-- 진행 상태 -->
   <div class="grid cols-2" style="margin-bottom:14px;">
@@ -347,7 +404,84 @@ let runningSet = new Set();
 let canScan = false;
 let mountBases = [];
 let mountsLoaded = false;
+let refreshMs = 1500;
+let settingsLoaded = false;
 const statusKo = {discovering:"탐색중", sizing:"집계중", done:"완료", paused:"일시정지", error:"오류"};
+
+// ---- 설정 보기/수정 ----
+async function loadSettings() {
+  try {
+    const j = await (await fetch("/api/settings", {cache:"no-store"})).json();
+    if (!j.ok) return;
+    const s = j.settings;
+    $("setBackend").value = s.default_backend;
+    $("setSize").value = s.default_size_mode;
+    $("setOFS").value = String(s.default_one_file_system);
+    $("setBatch").value = s.batch_size;
+    $("setSample").value = s.sample_interval;
+    $("setTopN").value = s.top_n;
+    $("setRefresh").value = s.refresh_ms;
+    $("setMounts").value = (s.mount_bases || []).join("\n");
+
+    // 첫 로드 시 "새 스캔 시작" 폼 기본값을 설정값으로 채움
+    if (!settingsLoaded) {
+      $("optBackend").value = s.default_backend;
+      $("optSize").value = s.default_size_mode;
+      $("optOFS").checked = !!s.default_one_file_system;
+    }
+    // 새로고침 주기 반영
+    if (s.refresh_ms && s.refresh_ms !== refreshMs) {
+      refreshMs = s.refresh_ms;
+      const sec = refreshMs / 1000;
+      $("autoLabel").textContent = `자동(${(refreshMs % 1000) ? sec.toFixed(1) : sec.toFixed(0)}s)`;
+      schedule();
+    }
+    // 편집 가능 여부
+    $("settingsLockMsg").style.display = j.locked ? "block" : "none";
+    ["setBackend","setSize","setOFS","setBatch","setSample","setTopN","setRefresh",
+     "setMounts","saveSettingsBtn"].forEach(id => { $(id).disabled = !j.editable; });
+    // 서버 정보(읽기 전용)
+    const sv = j.server || {};
+    $("serverInfo").innerHTML =
+      `서버: <b>v${sv.version}</b> · 데이터 <span class="mono">${sv.data_dir}</span>` +
+      ` · 바인딩 ${sv.host}:${sv.port} · 자원수집 ${sv.have_psutil ? "psutil" : "/proc 폴백"}` +
+      ` · 설정 ${j.locked ? "잠김" : "편집가능"}` +
+      ` <span class="sub">(host·port·data-dir 는 실행 시 고정이라 읽기 전용)</span>`;
+    settingsLoaded = true;
+  } catch (e) { /* 무시 */ }
+}
+
+async function saveSettings() {
+  const payload = {
+    default_backend: $("setBackend").value,
+    default_size_mode: $("setSize").value,
+    default_one_file_system: $("setOFS").value === "true",
+    batch_size: parseInt($("setBatch").value),
+    sample_interval: parseFloat($("setSample").value),
+    top_n: parseInt($("setTopN").value),
+    refresh_ms: parseInt($("setRefresh").value),
+    mount_bases: $("setMounts").value.split("\n").map(x => x.trim()).filter(Boolean),
+  };
+  $("saveSettingsBtn").disabled = true;
+  $("settingsMsg").textContent = "저장 중…";
+  try {
+    const j = await (await fetch("/api/settings", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({settings: payload}),
+    })).json();
+    if (j.ok) {
+      $("settingsMsg").innerHTML = '<span style="color:var(--ok)">✓ 저장됨(값은 보정될 수 있음)</span>';
+      await loadSettings();   // 저장된(보정된) 값으로 다시 채우고 적용
+      poll();
+    } else {
+      $("settingsMsg").innerHTML = '<span class="err">저장 실패: ' + (j.reason || j.error || "") + '</span>';
+    }
+  } catch (e) {
+    $("settingsMsg").innerHTML = '<span class="err">오류: ' + e + '</span>';
+  } finally {
+    if (!$("setBackend").disabled) $("saveSettingsBtn").disabled = false;
+  }
+}
 
 // ---- 마운트 빠른 선택 ----
 async function loadMounts() {
@@ -647,7 +781,7 @@ function render(d) {
 let timer = null;
 function schedule() {
   if (timer) clearInterval(timer);
-  if ($("autoChk").checked) timer = setInterval(poll, 1500);
+  if ($("autoChk").checked) timer = setInterval(poll, refreshMs);
 }
 $("refreshBtn").addEventListener("click", poll);
 $("autoChk").addEventListener("change", schedule);
@@ -662,8 +796,12 @@ $("browsePath").addEventListener("keydown", (e) => { if (e.key === "Enter") doBr
 $("browseUp").addEventListener("click", () => doBrowse($("browseUp").dataset.parent || "/"));
 $("browsePick").addEventListener("click", () => { $("scanPath").value = $("browsePath").value.trim(); });
 $("startBtn").addEventListener("click", startScan);
+// 설정 카드
+$("saveSettingsBtn").addEventListener("click", saveSettings);
+$("reloadSettingsBtn").addEventListener("click", loadSettings);
 
 loadMounts();
+loadSettings();
 poll(); schedule();
 </script>
 </body>

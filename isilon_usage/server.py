@@ -25,6 +25,7 @@ from . import __version__
 from . import db as dbmod
 from . import monitor as monmod
 from . import manager as mgrmod
+from . import settings as setmod
 from .scanner import run_scan
 
 
@@ -261,18 +262,39 @@ def browse_dir(path: str | None) -> dict:
 class ScanController:
     """웹에서 시작/중지하는 스캔을 관리한다(서버 프로세스 안에서 스레드로 실행).
 
-    mount_bases 가 지정되면, 그 경로(들) 아래의 디렉터리만 웹에서 스캔할 수 있다.
-    지정하지 않으면(빈 목록) 어떤 디렉터리든 허용한다.
+    설정(mount_bases, 기본 백엔드, 배치 크기, 샘플링 주기 등)은 settings.py 가
+    `<data-dir>/settings.json` 에 보관하며 대시보드에서 수정한다.
+    mount_bases 가 비어 있으면 어떤 디렉터리든 스캔 허용.
     """
 
-    def __init__(self, data_dir: str, *, mount_bases=None, sample_interval: float = 2.0,
-                 batch_size: int = 500):
+    def __init__(self, data_dir: str, *, lock_settings: bool = False):
         self.data_dir = data_dir
-        self.mount_bases = [os.path.abspath(b) for b in (mount_bases or [])]
-        self.sample_interval = sample_interval
-        self.batch_size = batch_size
+        self.lock_settings = lock_settings
+        self.settings = setmod.load(data_dir)
         self._scans: dict[int, dict] = {}   # manager scan_id -> {stop, thread}
         self._lock = threading.Lock()
+
+    # 설정에서 파생되는 값들(편집되면 즉시 반영)
+    @property
+    def mount_bases(self):
+        return self.settings.get("mount_bases", [])
+
+    @property
+    def sample_interval(self) -> float:
+        return float(self.settings.get("sample_interval", 2.0))
+
+    @property
+    def batch_size(self) -> int:
+        return int(self.settings.get("batch_size", 500))
+
+    def update_settings(self, new: dict) -> dict:
+        """설정을 저장하고 갱신된 설정을 반환한다(잠겨 있으면 거부)."""
+        if self.lock_settings:
+            return {"ok": False, "reason": "설정이 잠겨 있습니다(--lock-settings)."}
+        merged = dict(self.settings)
+        merged.update({k: v for k, v in (new or {}).items() if k in setmod.EDITABLE_KEYS})
+        self.settings = setmod.save(self.data_dir, merged)
+        return {"ok": True, "settings": self.settings}
 
     # ----- 경로 허용 검사 -----
     def path_allowed(self, path: str):
@@ -291,12 +313,19 @@ class ScanController:
         return True, None
 
     # ----- 시작 -----
-    def start_scan(self, path: str, *, backend="native", size_mode="disk",
-                   one_file_system=False) -> dict:
+    def start_scan(self, path: str, *, backend=None, size_mode=None,
+                   one_file_system=None) -> dict:
         path = os.path.abspath(path)
         ok, reason = self.path_allowed(path)
         if not ok:
             return {"ok": False, "reason": reason}
+        # 지정하지 않은 옵션은 설정의 기본값을 사용
+        if backend is None:
+            backend = self.settings.get("default_backend", "native")
+        if size_mode is None:
+            size_mode = self.settings.get("default_size_mode", "disk")
+        if one_file_system is None:
+            one_file_system = bool(self.settings.get("default_one_file_system", False))
         if backend not in ("native", "du"):
             backend = "native"
         if size_mode not in ("disk", "apparent"):
@@ -411,6 +440,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return None, None
         return int(row["id"]), row
 
+    def _current_settings(self) -> dict:
+        if self.controller is not None:
+            return self.controller.settings
+        return setmod.load(self.data_dir)
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
@@ -448,6 +482,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 })
                 return
 
+            if path == "/api/settings":
+                self._send_json({
+                    "ok": True,
+                    "settings": self._current_settings(),
+                    "editable": (self.controller is not None
+                                 and not self.controller.lock_settings),
+                    "locked": bool(self.controller and self.controller.lock_settings),
+                    "server": {
+                        "version": __version__,
+                        "data_dir": os.path.abspath(self.data_dir),
+                        "host": getattr(self, "bound_host", None),
+                        "port": getattr(self, "bound_port", None),
+                        "have_psutil": monmod.have_psutil(),
+                        "can_scan": self.controller is not None,
+                    },
+                })
+                return
+
             if path == "/api/browse":
                 qpath = qs.get("path", [""])[0]
                 if not qpath and self.controller and self.controller.mount_bases:
@@ -469,7 +521,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     return
                 pconn = dbmod.connect(db_path)
                 try:
-                    payload = build_status(pconn, None)
+                    top_n = int(self._current_settings().get("top_n", 20))
+                    payload = build_status(pconn, None, top=top_n)
                 finally:
                     pconn.close()
                 payload["scan_id"] = scan_id
@@ -533,11 +586,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._send_json({"ok": False, "reason": "경로를 입력하세요."},
                                     status=400)
                     return
+                ofs = body.get("one_file_system")
                 result = self.controller.start_scan(
                     target,
-                    backend=body.get("backend", "native"),
-                    size_mode=body.get("size_mode", "disk"),
-                    one_file_system=bool(body.get("one_file_system", False)),
+                    backend=body.get("backend"),       # None 이면 설정 기본값 사용
+                    size_mode=body.get("size_mode"),
+                    one_file_system=None if ofs is None else bool(ofs),
                 )
                 self._send_json(result, status=200 if result.get("ok") else 400)
                 return
@@ -552,27 +606,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(self.controller.stop_scan(scan_id))
                 return
 
+            if path == "/api/settings":
+                result = self.controller.update_settings(body.get("settings") or body)
+                self._send_json(result, status=200 if result.get("ok") else 403)
+                return
+
             self._send_json({"ok": False, "reason": "unknown_endpoint"}, status=404)
         except Exception as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=500)
 
 
 def serve(data_dir: str, host: str = "0.0.0.0", port: int = 8765, *,
-          mount_bases=None, enable_scan: bool = True,
-          sample_interval: float = 2.0, batch_size: int = 500) -> ThreadingHTTPServer:
+          initial_settings=None, enable_scan: bool = True,
+          lock_settings: bool = False) -> ThreadingHTTPServer:
     """대시보드 HTTP 서버를 만들고 반환한다(호출 측에서 serve_forever).
 
     data_dir 아래의 manager.db(전체 관리)와 scans/ 의 per-run DB(상세)를 읽는다.
-    enable_scan=True 이면 웹에서 스캔을 시작/중지할 수 있고, mount_bases 로
-    스캔 허용 경로를 제한할 수 있다. httpd.controller 로 컨트롤러에 접근한다.
+    enable_scan=True 이면 웹에서 스캔을 시작/중지할 수 있다.
+    initial_settings(CLI 플래그 등)는 settings.json 이 아직 없을 때만 초기값으로
+    저장되며, 이후에는 대시보드에서 편집한 settings.json 이 우선한다.
+    lock_settings=True 이면 웹에서 설정 편집을 막는다.
+    httpd.controller 로 컨트롤러에 접근한다.
     """
     mgrmod.init_manager(data_dir)
-    controller = (ScanController(data_dir, mount_bases=mount_bases,
-                                 sample_interval=sample_interval,
-                                 batch_size=batch_size)
+    if initial_settings:
+        setmod.seed_if_absent(data_dir, initial_settings)
+    controller = (ScanController(data_dir, lock_settings=lock_settings)
                   if enable_scan else None)
     handler = type("BoundHandler", (DashboardHandler,),
-                   {"data_dir": data_dir, "controller": controller})
+                   {"data_dir": data_dir, "controller": controller,
+                    "bound_host": host, "bound_port": port})
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.controller = controller  # run 모드에서 초기 스캔 시작/정리에 사용
     return httpd

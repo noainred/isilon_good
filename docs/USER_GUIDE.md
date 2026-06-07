@@ -173,6 +173,30 @@ python3 -m isilon_usage run /tmp/demo --mount-base /tmp --port 8765
 ### 5.6 용량 상위 디렉터리
 - 재귀 용량(하위 포함) 기준 상위 디렉터리 표(실시간).
 
+### 5.7 설정 (웹에서 모든 설정 수정)
+화면의 **「⚙ 설정」** 카드를 펼치면 모든 런타임 설정을 보고 수정할 수 있습니다.
+저장하면 `<data-dir>/settings.json` 에 기록되어 **재시작해도 유지**됩니다.
+
+| 설정 | 설명 |
+|------|------|
+| 기본 백엔드 | 새 스캔의 기본 백엔드(native/du) |
+| 기본 용량 기준 | disk/apparent |
+| 기본 한 파일시스템 | 새 스캔의 기본 `-x` 여부 |
+| 커밋 배치 크기 | DB 커밋 묶음 크기 |
+| 자원 샘플링 주기(초) | 메모리/CPU 샘플 간격 |
+| 상위 디렉터리 표시 개수 | 상위 표/그래프 항목 수 |
+| 대시보드 새로고침(ms) | 자동 새로고침 주기 |
+| 허용 경로(mount_bases) | 웹에서 스캔 허용 경로(한 줄에 하나, 비우면 전체 허용) |
+
+- **즉시 반영**: 저장하면 다음 스캔/조회부터 바로 적용됩니다(허용 경로·상위 개수
+  등). 잘못된 값은 자동으로 허용 범위로 보정됩니다.
+- host·port·data-dir 는 실행 시 고정이라 **읽기 전용**으로만 표시됩니다.
+- 서버를 `--lock-settings` 로 띄우면 웹에서 설정 편집이 **잠깁니다**(읽기 전용).
+- `--reset-settings` 로 띄우면 기존 `settings.json` 을 현재 CLI 옵션 값으로 덮어씁니다.
+
+> 보안: 허용 경로(mount_bases)도 웹에서 바꿀 수 있으므로(신뢰망 전제), 외부에
+> 노출되는 환경이라면 `--lock-settings` 로 잠그고 SSH 터널 등으로만 접근하세요.
+
 ---
 
 ## 6. 명령행(CLI) 레퍼런스
@@ -198,9 +222,13 @@ python3 -m isilon_usage <명령> [옵션]
 python3 -m isilon_usage run /mnt/isilon/ifs --mount-base /mnt/isilon --port 8765
 ```
 
-### `serve` — 대시보드 + 웹 스캔(권장)
+### `serve` — 대시보드 + 웹 스캔 + 설정 편집(권장)
 옵션: `--data-dir`, `--mount-base PATH`(반복), `--backend`, `--size-mode`,
-`--one-file-system`, `--batch-size`, `--sample-interval`, `--host`, `--port`.
+`--one-file-system`, `--batch-size`, `--sample-interval`,
+`--lock-settings`(웹 설정 잠금), `--reset-settings`(settings.json 을 CLI 값으로 덮어씀),
+`--host`, `--port`.
+CLI 옵션은 `settings.json` 이 없을 때 초기값으로만 쓰이고, 이후에는 웹에서 편집한
+설정이 우선합니다.
 ```bash
 python3 -m isilon_usage serve --data-dir /var/lib/isilon_usage --mount-base /mnt/isilon
 ```
@@ -233,6 +261,8 @@ python3 -m isilon_usage --version
 | `GET /api/mounts` | 마운트 목록 |
 | `POST /api/scan/start` | `{path,backend,size_mode,one_file_system}` 로 스캔 시작 |
 | `POST /api/scan/stop` | `{scan_id}` 스캔 중지 |
+| `GET /api/settings` | 현재 설정 + 서버 정보(읽기 전용 포함) |
+| `POST /api/settings` | `{settings:{...}}` 로 설정 저장(잠금 시 403) |
 
 ---
 
@@ -241,6 +271,7 @@ python3 -m isilon_usage --version
 ```
 <data-dir>/                  (기본 ./isilon_data, --data-dir 로 변경)
 ├── manager.db              관리 DB — 모든 스캔 요약 + 전체 용량 집계
+├── settings.json           웹에서 편집하는 런타임 설정(재시작에도 유지)
 └── scans/
     ├── scan_20260607-010259_mnt_isilon_ifs.db   실행 #1 상세
     └── ...

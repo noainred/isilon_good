@@ -25,6 +25,7 @@ from . import __version__, SCHEMA_VERSION
 from . import db as dbmod
 from . import monitor as monmod
 from . import manager as mgrmod
+from . import settings as setmod
 from .scanner import run_scan
 from .server import serve, build_status
 
@@ -90,21 +91,36 @@ def _run_server(args, *, initial_path: str | None) -> int:
     data_dir = os.path.abspath(args.data_dir)
     mount_bases = [os.path.abspath(b) for b in (getattr(args, "mount_base", None) or [])]
 
+    # CLI 플래그 → 초기 설정(settings.json 이 없을 때만 적용; 이후엔 웹 편집값 우선)
+    initial_settings = {
+        "default_backend": args.backend,
+        "default_size_mode": args.size_mode,
+        "default_one_file_system": args.one_file_system,
+        "batch_size": args.batch_size,
+        "sample_interval": args.sample_interval,
+        "mount_bases": mount_bases,
+    }
+    if getattr(args, "reset_settings", False):
+        mgrmod.init_manager(data_dir)
+        setmod.save(data_dir, initial_settings)   # 기존 settings.json 을 CLI 값으로 덮어씀
+
     httpd = serve(
         data_dir, host=args.host, port=args.port,
-        mount_bases=mount_bases, enable_scan=True,
-        sample_interval=args.sample_interval, batch_size=args.batch_size,
+        initial_settings=initial_settings, enable_scan=True,
+        lock_settings=getattr(args, "lock_settings", False),
     )
+    cur = httpd.controller.settings
     url = _dashboard_url(args.host, args.port)
 
     print("=" * 64)
-    print(f"  Isilon 사용량 대시보드 (웹에서 디렉터리 지정 스캔 가능)")
+    print(f"  Isilon 사용량 대시보드 (웹에서 디렉터리 지정 스캔 + 설정 편집)")
     print(f"  대시보드:  {url}")
-    print(f"  데이터:    {data_dir}  (manager.db + scans/)")
-    if mount_bases:
-        print(f"  허용 경로: {', '.join(mount_bases)}")
+    print(f"  데이터:    {data_dir}  (manager.db + scans/ + settings.json)")
+    if cur.get("mount_bases"):
+        print(f"  허용 경로: {', '.join(cur['mount_bases'])}")
     else:
-        print(f"  허용 경로: (제한 없음 — --mount-base 로 제한 권장)")
+        print(f"  허용 경로: (제한 없음 — 설정에서 mount_bases 지정 권장)")
+    print(f"  설정 편집: {'잠김(--lock-settings)' if getattr(args,'lock_settings',False) else '웹에서 가능'}")
     print(f"  psutil:    {'있음' if monmod.have_psutil() else '없음(/proc 폴백)'}")
 
     if initial_path:
@@ -279,6 +295,10 @@ def build_parser() -> argparse.ArgumentParser:
     _add_scan_opts(pr)
     pr.add_argument("--mount-base", action="append", default=[],
                     help="웹에서 스캔을 허용할 경로(여러 번 지정 가능). 예: 마운트 지점")
+    pr.add_argument("--lock-settings", action="store_true",
+                    help="웹에서 설정 편집을 막음(읽기 전용)")
+    pr.add_argument("--reset-settings", action="store_true",
+                    help="기존 settings.json 을 현재 CLI 옵션 값으로 덮어씀")
     pr.add_argument("--host", default="0.0.0.0")
     pr.add_argument("--port", type=int, default=8765)
     pr.set_defaults(func=cmd_run)
@@ -299,6 +319,10 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("--one-file-system", "-x", action="store_true")
     pv.add_argument("--batch-size", type=int, default=500)
     pv.add_argument("--sample-interval", type=float, default=2.0)
+    pv.add_argument("--lock-settings", action="store_true",
+                    help="웹에서 설정 편집을 막음(읽기 전용)")
+    pv.add_argument("--reset-settings", action="store_true",
+                    help="기존 settings.json 을 현재 CLI 옵션 값으로 덮어씀")
     pv.add_argument("--host", default="0.0.0.0")
     pv.add_argument("--port", type=int, default=8765)
     pv.set_defaults(func=cmd_serve)

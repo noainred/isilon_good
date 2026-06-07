@@ -1,0 +1,105 @@
+"""웹에서 보고 수정하는 런타임 설정.
+
+설정은 `<data-dir>/settings.json` 에 저장되어 서버를 재시작해도 유지된다.
+대시보드의 "설정" 카드(GET/POST /api/settings)에서 편집한다.
+
+여기 담는 것은 "런타임에 바꿔도 되는" 설정들이다. host/port/data-dir 처럼
+서버 구동에 고정되는 값은 읽기 전용 정보로만 보여준다.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+
+
+# 키: (기본값) — 새 설정 항목을 추가하면 여기에 등록한다.
+DEFAULTS: dict = {
+    "default_backend": "native",        # 새 스캔 기본 백엔드(native/du)
+    "default_size_mode": "disk",        # 기본 용량 기준(disk/apparent)
+    "default_one_file_system": False,   # 기본 -x(한 파일시스템)
+    "batch_size": 500,                  # DB 커밋 배치 크기
+    "sample_interval": 2.0,             # 자원 샘플링 주기(초)
+    "mount_bases": [],                  # 웹에서 스캔 허용할 경로 목록(빈 목록=전체 허용)
+    "top_n": 20,                        # 상위 디렉터리 표시 개수
+    "refresh_ms": 1500,                 # 대시보드 자동 새로고침 주기(ms)
+}
+
+EDITABLE_KEYS = set(DEFAULTS.keys())
+
+
+def settings_path(data_dir: str) -> str:
+    return os.path.join(data_dir, "settings.json")
+
+
+def sanitize(raw: dict) -> dict:
+    """알 수 없는 키 제거 + 타입/범위 보정."""
+    s = dict(DEFAULTS)
+    for k, v in (raw or {}).items():
+        if k in DEFAULTS:
+            s[k] = v
+
+    if s["default_backend"] not in ("native", "du"):
+        s["default_backend"] = "native"
+    if s["default_size_mode"] not in ("disk", "apparent"):
+        s["default_size_mode"] = "disk"
+    s["default_one_file_system"] = bool(s["default_one_file_system"])
+
+    def _int(v, lo, hi, dflt):
+        try:
+            return max(lo, min(hi, int(v)))
+        except (TypeError, ValueError):
+            return dflt
+
+    def _float(v, lo, hi, dflt):
+        try:
+            return max(lo, min(hi, float(v)))
+        except (TypeError, ValueError):
+            return dflt
+
+    s["batch_size"] = _int(s["batch_size"], 1, 1_000_000, 500)
+    s["sample_interval"] = _float(s["sample_interval"], 0.2, 60.0, 2.0)
+    s["top_n"] = _int(s["top_n"], 1, 500, 20)
+    s["refresh_ms"] = _int(s["refresh_ms"], 500, 600_000, 1500)
+
+    mb = s.get("mount_bases") or []
+    if isinstance(mb, str):
+        mb = mb.replace(",", "\n").splitlines()
+    s["mount_bases"] = [os.path.abspath(x.strip()) for x in mb if str(x).strip()]
+    return s
+
+
+def load(data_dir: str) -> dict:
+    """설정을 읽는다(파일이 없거나 깨졌으면 기본값)."""
+    s = dict(DEFAULTS)
+    try:
+        with open(settings_path(data_dir), "r", encoding="utf-8") as fh:
+            s.update(json.load(fh))
+    except (OSError, ValueError):
+        pass
+    return sanitize(s)
+
+
+def save(data_dir: str, raw: dict) -> dict:
+    """설정을 보정해 원자적으로 저장하고, 저장된 값을 반환한다."""
+    s = sanitize(raw)
+    os.makedirs(data_dir, exist_ok=True)
+    path = settings_path(data_dir)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(s, fh, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+    return s
+
+
+def seed_if_absent(data_dir: str, initial: dict) -> dict:
+    """settings.json 이 없을 때만 CLI 등에서 받은 초기값으로 생성한다.
+
+    이미 있으면 기존 파일(웹에서 편집한 값)을 그대로 둔다.
+    """
+    os.makedirs(data_dir, exist_ok=True)
+    if os.path.exists(settings_path(data_dir)):
+        return load(data_dir)
+    base = dict(DEFAULTS)
+    base.update({k: v for k, v in (initial or {}).items() if k in DEFAULTS})
+    return save(data_dir, base)
