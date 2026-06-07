@@ -23,15 +23,20 @@ import time
 
 from . import db as dbmod
 from . import monitor as monmod
+from . import manager as mgrmod
 from .scanner import run_scan
 from .server import serve, build_status
 
 
-DEFAULT_DB = "isilon_scan.db"
+DEFAULT_DATA_DIR = mgrmod.DEFAULT_DATA_DIR
 
 
 def _add_scan_opts(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--db", default=DEFAULT_DB, help="SQLite DB 경로 (기본: %(default)s)")
+    p.add_argument("--data-dir", default=DEFAULT_DATA_DIR,
+                   help="관리 DB(manager.db)와 per-run DB(scans/)를 둘 상위 폴더 "
+                        "(기본: %(default)s). 실행마다 scans/ 아래에 새 DB 가 생긴다.")
+    p.add_argument("--db", default=None,
+                   help="이 실행의 per-run DB 경로를 직접 지정(기본: data-dir/scans 아래 자동 생성)")
     p.add_argument("--backend", choices=["native", "du"], default="native",
                    help="용량 측정 방식. native=내장(빠름·저메모리, 기본), "
                         "du=디렉터리마다 시스템 du 실행(du 프로세스 메모리 표시)")
@@ -59,23 +64,40 @@ def _dashboard_url(host: str, port: int) -> str:
     return f"http://{shown}:{port}/"
 
 
+def _prepare_run(args, path: str):
+    """data-dir 준비 → per-run DB 경로 결정 → 관리 DB 에 등록.
+
+    반환: (data_dir, per_run_db_path, manager_db_path, manager_scan_id)
+    """
+    data_dir = os.path.abspath(args.data_dir)
+    mgrmod.init_manager(data_dir)
+    db_path = os.path.abspath(args.db) if args.db else mgrmod.make_run_db_path(data_dir, path)
+    manager_db = mgrmod.manager_db_path(data_dir)
+    scan_id = mgrmod.register_scan(
+        data_dir, root_path=path, db_path=db_path,
+        backend=args.backend, size_mode=args.size_mode,
+    )
+    return data_dir, db_path, manager_db, scan_id
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     path = os.path.abspath(args.path)
     if not os.path.isdir(path):
         print(f"오류: 디렉터리가 아닙니다: {path}", file=sys.stderr)
         return 2
 
-    dbmod.init_db(args.db)
+    data_dir, db_path, manager_db, scan_id = _prepare_run(args, path)
     stop = threading.Event()
 
     def scan_worker():
         try:
             run_scan(
-                args.db, path,
+                db_path, path,
                 backend=args.backend, size_mode=args.size_mode,
                 one_file_system=args.one_file_system,
                 batch_size=args.batch_size, sample_interval=args.sample_interval,
                 stop_event=stop, with_monitor=True,
+                manager_db=manager_db, manager_scan_id=scan_id,
             )
         except Exception as exc:  # 스캔 실패가 서버까지 죽이지 않게
             print(f"[scan] 오류: {exc}", file=sys.stderr)
@@ -83,14 +105,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     t = threading.Thread(target=scan_worker, name="scanner", daemon=True)
     t.start()
 
-    httpd = serve(args.db, host=args.host, port=args.port)
+    httpd = serve(data_dir, host=args.host, port=args.port)
     url = _dashboard_url(args.host, args.port)
     print("=" * 64)
-    print(f"  Isilon 사용량 스캔 시작: {path}")
+    print(f"  Isilon 사용량 스캔 시작: {path}  (scan #{scan_id})")
     print(f"  backend={args.backend}  size-mode={args.size_mode}  "
           f"psutil={'있음' if monmod.have_psutil() else '없음(/proc 폴백)'}")
     print(f"  대시보드:  {url}")
-    print(f"  DB:        {os.path.abspath(args.db)}")
+    print(f"  관리 DB:   {manager_db}")
+    print(f"  이번 DB:   {db_path}")
     print("  중지하려면 Ctrl+C")
     print("=" * 64)
 
@@ -127,25 +150,28 @@ def cmd_scan(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGINT, handle_sigint)
     signal.signal(signal.SIGTERM, handle_sigint)
 
-    print(f"스캔 시작: {path} (backend={args.backend})")
+    data_dir, db_path, manager_db, scan_id = _prepare_run(args, path)
+    print(f"스캔 시작: {path} (scan #{scan_id}, backend={args.backend})")
+    print(f"  이번 DB: {db_path}")
     t0 = time.time()
-    run_id = run_scan(
-        args.db, path,
+    run_scan(
+        db_path, path,
         backend=args.backend, size_mode=args.size_mode,
         one_file_system=args.one_file_system,
         batch_size=args.batch_size, sample_interval=args.sample_interval,
         stop_event=stop, with_monitor=True,
+        manager_db=manager_db, manager_scan_id=scan_id,
     )
-    print(f"완료(run_id={run_id}). 소요 {time.time()-t0:.1f}s. "
-          f"대시보드로 보려면: python -m isilon_usage serve --db {args.db}")
+    print(f"완료(scan #{scan_id}). 소요 {time.time()-t0:.1f}s. "
+          f"대시보드로 보려면: python -m isilon_usage serve --data-dir {data_dir}")
     return 0
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
-    dbmod.init_db(args.db)
-    httpd = serve(args.db, host=args.host, port=args.port)
+    data_dir = os.path.abspath(args.data_dir)
+    httpd = serve(data_dir, host=args.host, port=args.port)
     url = _dashboard_url(args.host, args.port)
-    print(f"대시보드 서버 실행: {url}  (DB: {os.path.abspath(args.db)})")
+    print(f"대시보드 서버 실행: {url}  (data-dir: {data_dir})")
     print("중지하려면 Ctrl+C")
 
     def handle_sigint(signum, frame):
@@ -162,37 +188,73 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    if not os.path.exists(args.db):
-        print(f"DB 가 없습니다: {args.db}", file=sys.stderr)
+    data_dir = os.path.abspath(args.data_dir)
+    manager_db = mgrmod.manager_db_path(data_dir)
+    if not os.path.exists(manager_db):
+        print(f"관리 DB 가 없습니다: {manager_db}", file=sys.stderr)
         return 2
-    conn = dbmod.connect(args.db)
+    mconn = dbmod.connect(manager_db)
+    try:
+        overall = mgrmod.overall_capacity(mconn)
+        # ── 전체 용량 관리 개요 ──────────────────────────────────────
+        print("=" * 70)
+        print("전체 용량 관리 개요")
+        print(f"  등록된 스캔 : {overall['scan_count']}개  "
+              f"(루트 {overall['root_count']}개, 진행중 {overall['active_scans']}개)")
+        print(f"  총 조사 용량: {_human(overall['total_scanned_bytes'])} "
+              f"(루트별 최신 스캔 합계)")
+        if overall["roots"]:
+            print("  루트별 최신:")
+            for r in overall["roots"]:
+                pct = (r["scanned_bytes"] / r["fs_used_bytes"] * 100.0) if r["fs_used_bytes"] else 0
+                print(f"    - {_human(r['scanned_bytes']):>10}  "
+                      f"({pct:4.1f}% of used)  [{r['status']}]  {r['root_path']}")
+        print("=" * 70)
+
+        # ── 특정/최신 스캔 상세 ─────────────────────────────────────
+        scan_id = getattr(args, "scan", None) or mgrmod.pick_default_scan(mconn)
+        if scan_id is None:
+            return 0
+        row = mgrmod.get_scan(mconn, scan_id)
+        if row is None:
+            print(f"scan #{scan_id} 없음", file=sys.stderr)
+            return 1
+        db_path = row["db_path"]
+    finally:
+        mconn.close()
+
+    print(f"\n[scan #{scan_id}] 상세")
+    if not os.path.exists(db_path):
+        print("  (초기화 중 — per-run DB 아직 없음)")
+        return 0
+    conn = dbmod.connect(db_path)
     try:
         st = build_status(conn, None, samples=1, top=10)
     finally:
         conn.close()
     if not st.get("ok"):
-        print(f"상태 없음: {st.get('reason') or st.get('error')}")
+        print(f"  상태 없음: {st.get('reason') or st.get('error')}")
         return 1
     r, p = st["run"], st["progress"]
-    print(f"경로        : {r['root_path']}")
-    print(f"상태/단계   : {r['status']} / {r['phase']}  (backend={r['backend']})")
-    print(f"디렉터리    : 탐색 {r['discovered_dirs']:,}  집계 {r['processed_dirs']:,}"
+    print(f"  경로        : {r['root_path']}")
+    print(f"  상태/단계   : {r['status']} / {r['phase']}  (backend={r['backend']})")
+    print(f"  디렉터리    : 탐색 {r['discovered_dirs']:,}  집계 {r['processed_dirs']:,}"
           f" / 총 {r['total_dirs']:,}")
-    print(f"파일 수     : {r['total_files']:,}   오류 디렉터리: {r['error_dirs']:,}")
-    print(f"확인 사용량 : {_human(r['scanned_bytes'])} "
+    print(f"  파일 수     : {r['total_files']:,}   오류 디렉터리: {r['error_dirs']:,}")
+    print(f"  확인 사용량 : {_human(r['scanned_bytes'])} "
           f"(사용량의 {p['disk_verified_pct_of_used']:.1f}%, "
           f"전체의 {p['disk_verified_pct_of_total']:.1f}%)")
-    print(f"디스크      : 사용 {_human(r['fs_used_bytes'])} / 전체 {_human(r['fs_total_bytes'])}")
-    print(f"경과        : {r['elapsed']:.1f}s   현재: {r['current_dir'] or '-'}")
+    print(f"  디스크      : 사용 {_human(r['fs_used_bytes'])} / 전체 {_human(r['fs_total_bytes'])}")
+    print(f"  경과        : {r['elapsed']:.1f}s   현재: {r['current_dir'] or '-'}")
     L = st["resources"].get("latest")
     if L:
-        print(f"메모리      : {L['mem_percent']:.1f}%  "
+        print(f"  메모리      : {L['mem_percent']:.1f}%  "
               f"스캐너RSS {_human(L['scanner_rss'])}  du RSS {_human(L['du_rss'])}")
     if st["top_dirs"]:
-        print("상위 디렉터리:")
+        print("  상위 디렉터리:")
         for i, t in enumerate(st["top_dirs"][:10], 1):
             sz = t["total_bytes"] or t["own_bytes"]
-            print(f"  {i:2}. {_human(sz):>10}  {t['path']}")
+            print(f"    {i:2}. {_human(sz):>10}  {t['path']}")
     return 0
 
 
@@ -217,13 +279,17 @@ def build_parser() -> argparse.ArgumentParser:
     ps.set_defaults(func=cmd_scan)
 
     pv = sub.add_parser("serve", help="대시보드 웹서버만 실행")
-    pv.add_argument("--db", default=DEFAULT_DB)
+    pv.add_argument("--data-dir", default=DEFAULT_DATA_DIR,
+                    help="manager.db + scans/ 상위 폴더 (기본: %(default)s)")
     pv.add_argument("--host", default="0.0.0.0")
     pv.add_argument("--port", type=int, default=8765)
     pv.set_defaults(func=cmd_serve)
 
-    pst = sub.add_parser("status", help="현재 진행 상태를 콘솔에 출력")
-    pst.add_argument("--db", default=DEFAULT_DB)
+    pst = sub.add_parser("status", help="전체 관리 개요 + 스캔 상태를 콘솔에 출력")
+    pst.add_argument("--data-dir", default=DEFAULT_DATA_DIR,
+                     help="manager.db + scans/ 상위 폴더 (기본: %(default)s)")
+    pst.add_argument("--scan", type=int, default=None,
+                     help="상세를 볼 scan id(기본: 진행중/최신 스캔)")
     pst.set_defaults(func=cmd_status)
 
     return p

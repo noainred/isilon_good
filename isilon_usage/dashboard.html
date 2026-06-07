@@ -104,6 +104,30 @@
 </header>
 
 <div class="wrap">
+  <!-- 전체 용량 관리 개요 -->
+  <div class="card" style="margin-bottom:14px;">
+    <h2>전체 용량 관리 개요 (관리 DB)</h2>
+    <div class="grid cols-3" style="gap:14px; margin-bottom:10px;">
+      <div><div class="big" id="ovTotal">0 B</div><div class="sub">총 조사 용량 · 루트별 최신 스캔 합계</div></div>
+      <div><div class="big" id="ovRoots">0</div><div class="sub">관리 중 루트 수</div></div>
+      <div><div class="big" id="ovScans">0</div><div class="sub">전체 스캔 수 · 진행중 <span id="ovActive">0</span></div></div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>루트 (최신 스캔)</th><th>호스트</th><th class="num">조사 용량</th>
+        <th class="num">디스크 사용</th><th class="num">확인%</th><th>상태</th><th>보기</th>
+      </tr></thead>
+      <tbody id="ovBody"><tr><td colspan="7" style="color:var(--muted)">로딩 중…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- 스캔 선택 -->
+  <div class="card" style="margin-bottom:14px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+    <b>상세 보기 스캔</b>
+    <select id="scanSelect" style="background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:6px 10px; font-size:13px; min-width:340px;"></select>
+    <span class="sub" id="scanDbInfo"></span>
+  </div>
+
   <!-- 진행 상태 -->
   <div class="grid cols-2" style="margin-bottom:14px;">
     <div class="card">
@@ -243,17 +267,78 @@ function drawSeries(canvas, points, opts) {
 }
 
 let lastSeries = [];
+let selectedScan = null;   // null → 진행중/최신 스캔 자동 추적
+let userPicked = false;    // 사용자가 직접 고르면 자동 추적 중지
+const statusKo = {discovering:"탐색중", sizing:"집계중", done:"완료", paused:"일시정지", error:"오류"};
+
+function renderOverview(j) {
+  const o = j.overall || {};
+  $("ovTotal").textContent = fmtBytes(o.total_scanned_bytes);
+  $("ovRoots").textContent = fmtNum(o.root_count);
+  $("ovScans").textContent = fmtNum(o.scan_count);
+  $("ovActive").textContent = fmtNum(o.active_scans);
+
+  const body = $("ovBody");
+  const roots = o.roots || [];
+  if (!roots.length) {
+    body.innerHTML = '<tr><td colspan="7" style="color:var(--muted)">등록된 스캔이 없습니다.</td></tr>';
+  } else {
+    body.innerHTML = roots.map(r => {
+      const pct = r.fs_used_bytes ? (r.scanned_bytes / r.fs_used_bytes * 100) : 0;
+      return `<tr>
+        <td class="path" title="${r.root_path}">${r.root_path}</td>
+        <td>${r.hostname || "—"}</td>
+        <td class="num">${fmtBytes(r.scanned_bytes)}</td>
+        <td class="num">${fmtBytes(r.fs_used_bytes)}</td>
+        <td class="num">${pct.toFixed(1)}%</td>
+        <td>${statusKo[r.status] || r.status}</td>
+        <td><a href="#" class="goScan" data-scan="${r.scan_id}">#${r.scan_id}</a></td>
+      </tr>`;
+    }).join("");
+    body.querySelectorAll("a.goScan").forEach(a =>
+      a.addEventListener("click", (e) => { e.preventDefault(); selectScan(parseInt(a.dataset.scan)); }));
+  }
+
+  // 스캔 선택기 채우기
+  const sel = $("scanSelect");
+  const scans = j.scans || [];
+  sel.innerHTML = scans.map(s => {
+    const t = s.started_at ? new Date(s.started_at * 1000).toLocaleString("ko-KR") : "";
+    return `<option value="${s.id}">#${s.id} · ${s.root_path} · ${statusKo[s.status] || s.status} · ${t}</option>`;
+  }).join("");
+
+  // 사용자가 직접 고르지 않았으면 진행중(없으면 최신) 스캔을 자동 추적
+  if (!userPicked) {
+    const active = scans.find(s => s.status === "discovering" || s.status === "sizing");
+    selectedScan = active ? active.id : (scans.length ? scans[0].id : null);
+  }
+  if (selectedScan != null) sel.value = String(selectedScan);
+}
+
+function selectScan(id) {
+  selectedScan = id; userPicked = true;
+  $("scanSelect").value = String(id);
+  poll();
+}
 
 async function poll() {
   try {
-    const res = await fetch("/api/status", {cache: "no-store"});
-    const data = await res.json();
+    // 1) 관리 개요 + 스캔 목록
+    const sj = await (await fetch("/api/scans", {cache: "no-store"})).json();
+    if (sj.ok) renderOverview(sj);
+
+    // 2) 선택된 스캔 상세
+    const url = "/api/status" + (selectedScan != null ? ("?scan=" + selectedScan) : "");
+    const data = await (await fetch(url, {cache: "no-store"})).json();
     $("errLine").textContent = "";
+    if (data.scan_meta) $("scanDbInfo").textContent = "DB 파일: " + (data.scan_meta.db_filename || "");
     if (!data.ok) {
-      $("statusBadge").textContent = "대기 중";
+      $("statusBadge").className = "badge " + (data.reason === "initializing" ? "discovering" : "paused");
+      $("statusBadge").textContent = data.reason === "initializing" ? "초기화 중" : "대기 중";
       $("currentDir").textContent = (data.reason === "no_runs")
         ? "아직 시작된 스캔이 없습니다. `python -m isilon_usage run <경로>` 로 시작하세요."
-        : ("상태 없음: " + (data.reason || data.error || ""));
+        : (data.reason === "initializing" ? "스캔 초기화 중… (per-run DB 생성 대기)"
+           : ("상태 없음: " + (data.reason || data.error || "")));
       return;
     }
     render(data);
@@ -380,6 +465,11 @@ function schedule() {
 }
 $("refreshBtn").addEventListener("click", poll);
 $("autoChk").addEventListener("change", schedule);
+$("scanSelect").addEventListener("change", () => {
+  selectedScan = parseInt($("scanSelect").value);
+  userPicked = true;
+  poll();
+});
 poll(); schedule();
 </script>
 </body>

@@ -71,6 +71,8 @@ class Scanner:
         batch_size: int = 500,
         stop_event: threading.Event | None = None,
         monitor: ResourceMonitor | None = None,
+        manager_db: str | None = None,
+        manager_scan_id: int | None = None,
         progress_every: float = 0.4,
     ) -> None:
         self.db_path = db_path
@@ -81,11 +83,19 @@ class Scanner:
         self.batch_size = batch_size
         self.stop_event = stop_event or threading.Event()
         self.monitor = monitor
+        self.manager_db = manager_db
+        self.manager_scan_id = manager_scan_id
         self.progress_every = progress_every
 
         self.run_id: int | None = None
         self._root_dev: int | None = None
         self._last_progress = 0.0
+        self._mgr_conn = None
+        self._phase = "discovering"
+        self._status = "discovering"
+        self._fs_total = 0
+        self._fs_used = 0
+        self._fs_free = 0
         # 진행률 누적 카운터(메모리 상에서 빠르게 갱신, DB 에 주기적으로 반영)
         self._discovered = 0
         self._processed = 0
@@ -122,16 +132,50 @@ class Scanner:
             "total_files": self._total_files,
             "error_dirs": self._error_dirs,
         }
+        self._current_dir = current_dir
         if current_dir is not None:
             fields["current_dir"] = current_dir
         if current_depth is not None:
             fields["current_depth"] = current_depth
         if phase is not None:
             fields["phase"] = phase
+            self._phase = phase
         if status is not None:
             fields["status"] = status
+            self._status = status
         dbmod.update_run(conn, self.run_id, **fields)
         conn.commit()
+        self._update_manager()
+
+    def _update_manager(self, *, force: bool = False, finished: bool = False) -> None:
+        """관리(매니저) DB 의 이 스캔 요약 행을 갱신한다(파일이 달라 락 경합 없음)."""
+        if not self.manager_db or not self.manager_scan_id:
+            return
+        from . import manager as mgr
+        try:
+            if self._mgr_conn is None:
+                self._mgr_conn = dbmod.connect(self.manager_db)
+            fields = {
+                "status": self._status,
+                "phase": self._phase,
+                "discovered_dirs": self._discovered,
+                "total_dirs": self._discovered,
+                "processed_dirs": self._processed,
+                "total_files": self._total_files,
+                "error_dirs": self._error_dirs,
+                "scanned_bytes": self._scanned_bytes,
+                "fs_total_bytes": self._fs_total,
+                "fs_used_bytes": self._fs_used,
+                "fs_free_bytes": self._fs_free,
+                "current_dir": getattr(self, "_current_dir", None),
+            }
+            if finished:
+                fields["finished_at"] = time.time()
+            mgr.update_scan(self._mgr_conn, self.manager_scan_id, **fields)
+            self._mgr_conn.commit()
+        except Exception:
+            # 관리 DB 갱신 실패가 스캔을 멈추면 안 된다.
+            pass
 
     # --------------------------------------------------------------- lifecycle
     def run(self) -> int:
@@ -139,6 +183,7 @@ class Scanner:
         conn = dbmod.connect(self.db_path)
         try:
             total, used, free = self._statvfs()
+            self._fs_total, self._fs_used, self._fs_free = total, used, free
             self.run_id = dbmod.create_run(
                 conn,
                 self.root_path,
@@ -151,6 +196,7 @@ class Scanner:
                 fs_total_bytes=total, fs_used_bytes=used, fs_free_bytes=free,
             )
             conn.commit()
+            self._update_manager()  # fs 용량 등 초기 요약 반영
             if self.monitor is not None:
                 self.monitor.run_id = self.run_id
 
@@ -182,12 +228,33 @@ class Scanner:
                 dbmod.update_run(conn, self.run_id, status="error", error=str(exc),
                                  finished_at=time.time())
                 conn.commit()
+            self._status = "error"
+            self._phase = "error"
+            try:
+                if self.manager_db and self.manager_scan_id:
+                    from . import manager as mgr
+                    if self._mgr_conn is None:
+                        self._mgr_conn = dbmod.connect(self.manager_db)
+                    mgr.update_scan(self._mgr_conn, self.manager_scan_id,
+                                    status="error", phase="error", error=str(exc),
+                                    finished_at=time.time())
+                    self._mgr_conn.commit()
+            except Exception:
+                pass
             raise
         finally:
             conn.close()
+            if self._mgr_conn is not None:
+                try:
+                    self._mgr_conn.close()
+                except Exception:
+                    pass
 
     def _finish(self, conn, status: str) -> None:
         # 총 디렉터리 수가 아직 0 이면 탐색 수치로 맞춘다.
+        self._status = status
+        self._phase = status
+        self._current_dir = None
         dbmod.update_run(
             conn, self.run_id,
             status=status, phase=status,
@@ -201,6 +268,7 @@ class Scanner:
             current_dir=None,
         )
         conn.commit()
+        self._update_manager(force=True, finished=True)
 
     # ------------------------------------------------------------- 1단계: 탐색
     def _discover(self, conn) -> None:
@@ -441,12 +509,16 @@ def run_scan(
     sample_interval: float = 2.0,
     stop_event: threading.Event | None = None,
     with_monitor: bool = True,
+    manager_db: str | None = None,
+    manager_scan_id: int | None = None,
 ) -> int:
     """편의 함수: DB 초기화 → 모니터 시작 → 스캔(탐색+집계) 실행 → 모니터 정리.
 
     스캔과 자원 모니터링을 한 프로세스 안에서 함께 돌린다. 모니터는 스캔의
     run_id 가 만들어지기 전에는 기록을 보류하다가(run_id 가드), Scanner.run()
     이 run_id 를 설정해 주면 그때부터 샘플을 적재한다.
+
+    manager_db/manager_scan_id 가 주어지면 진행 상황을 관리 DB 에도 반영한다.
     """
     dbmod.init_db(db_path)
     stop_event = stop_event or threading.Event()
@@ -463,6 +535,7 @@ def run_scan(
         backend=backend, size_mode=size_mode,
         one_file_system=one_file_system, batch_size=batch_size,
         stop_event=stop_event, monitor=monitor,
+        manager_db=manager_db, manager_scan_id=manager_scan_id,
     )
 
     if monitor is not None:

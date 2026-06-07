@@ -22,6 +22,7 @@ from urllib.parse import urlparse, parse_qs
 
 from . import db as dbmod
 from . import monitor as monmod
+from . import manager as mgrmod
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -188,17 +189,8 @@ def list_children(conn, run_id: int, parent_id: int | None, *, limit: int = 200)
     return {"ok": True, "children": [dict(r) for r in rows]}
 
 
-def list_runs(conn) -> dict:
-    rows = conn.execute(
-        """SELECT id, root_path, status, phase, started_at, finished_at,
-                  total_dirs, processed_dirs, scanned_bytes
-           FROM scan_runs ORDER BY id DESC LIMIT 50"""
-    ).fetchall()
-    return {"ok": True, "runs": [dict(r) for r in rows]}
-
-
 class DashboardHandler(BaseHTTPRequestHandler):
-    db_path = ""  # 서버 생성 시 클래스 속성으로 주입
+    data_dir = ""  # 서버 생성 시 클래스 속성으로 주입(manager.db + scans/ 의 상위 폴더)
 
     # 표준 로깅을 조용히(대시보드 폴링이 잦아 콘솔이 시끄러워짐)
     def log_message(self, fmt, *args):  # noqa: D401
@@ -234,6 +226,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return None
         return None
 
+    def _resolve_scan_db(self, mconn, scan_id):
+        """scan_id(없으면 기본 스캔)에 해당하는 per-run DB 경로와 manager 행을 반환."""
+        if scan_id is None:
+            scan_id = mgrmod.pick_default_scan(mconn)
+        if scan_id is None:
+            return None, None
+        row = mgrmod.get_scan(mconn, scan_id)
+        if row is None:
+            return None, None
+        return int(row["id"]), row
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
@@ -247,32 +250,73 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_error(404, "not found")
             return
 
-        conn = dbmod.connect(self.db_path)
+        mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
         try:
+            if path == "/api/scans":
+                self._send_json({
+                    "ok": True,
+                    "overall": mgrmod.overall_capacity(mconn),
+                    "scans": mgrmod.list_scans(mconn),
+                    "have_psutil": monmod.have_psutil(),
+                })
+                return
+
             if path == "/api/status":
-                run_id = self._query_int(qs, "run_id")
-                payload = build_status(conn, run_id)
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
+                if row is None:
+                    self._send_json({"ok": False, "reason": "no_runs",
+                                     "have_psutil": monmod.have_psutil()})
+                    return
+                scan_meta = dict(row)
+                db_path = scan_meta["db_path"]
+                if not os.path.exists(db_path):
+                    self._send_json({"ok": False, "reason": "initializing",
+                                     "scan_id": scan_id, "scan_meta": scan_meta})
+                    return
+                pconn = dbmod.connect(db_path)
+                try:
+                    payload = build_status(pconn, None)
+                finally:
+                    pconn.close()
+                payload["scan_id"] = scan_id
+                payload["scan_meta"] = scan_meta
                 self._send_json(payload)
-            elif path == "/api/children":
-                run_id = self._query_int(qs, "run_id") or dbmod.latest_run_id(conn)
-                parent_id = self._query_int(qs, "parent")
-                if run_id is None:
+                return
+
+            if path == "/api/children":
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
+                if row is None:
                     self._send_json({"ok": False, "reason": "no_runs"})
-                else:
-                    self._send_json(list_children(conn, run_id, parent_id))
-            elif path == "/api/runs":
-                self._send_json(list_runs(conn))
-            else:
-                self._send_json({"ok": False, "reason": "unknown_endpoint"}, status=404)
+                    return
+                db_path = row["db_path"]
+                if not os.path.exists(db_path):
+                    self._send_json({"ok": True, "children": []})
+                    return
+                pconn = dbmod.connect(db_path)
+                try:
+                    run_id = dbmod.latest_run_id(pconn)
+                    parent_id = self._query_int(qs, "parent")
+                    if run_id is None:
+                        self._send_json({"ok": True, "children": []})
+                    else:
+                        self._send_json(list_children(pconn, run_id, parent_id))
+                finally:
+                    pconn.close()
+                return
+
+            self._send_json({"ok": False, "reason": "unknown_endpoint"}, status=404)
         except Exception as exc:  # API 오류가 서버를 죽이지 않도록
             self._send_json({"ok": False, "error": str(exc)}, status=500)
         finally:
-            conn.close()
+            mconn.close()
 
 
-def serve(db_path: str, host: str = "0.0.0.0", port: int = 8765) -> ThreadingHTTPServer:
-    """대시보드 HTTP 서버를 만들고 반환한다(호출 측에서 serve_forever)."""
-    dbmod.init_db(db_path)
-    handler = type("BoundHandler", (DashboardHandler,), {"db_path": db_path})
+def serve(data_dir: str, host: str = "0.0.0.0", port: int = 8765) -> ThreadingHTTPServer:
+    """대시보드 HTTP 서버를 만들고 반환한다(호출 측에서 serve_forever).
+
+    data_dir 아래의 manager.db(전체 관리)와 scans/ 의 per-run DB(상세)를 읽는다.
+    """
+    mgrmod.init_manager(data_dir)
+    handler = type("BoundHandler", (DashboardHandler,), {"data_dir": data_dir})
     httpd = ThreadingHTTPServer((host, port), handler)
     return httpd

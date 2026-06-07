@@ -92,32 +92,64 @@ python3 -m isilon_usage run /ifs/data --backend du
 # 논리 크기 기준, 다른 파일시스템으로 안 넘어가게(du -x)
 python3 -m isilon_usage run /ifs/data --size-mode apparent --one-file-system
 
-# DB 파일 위치 지정
-python3 -m isilon_usage run /ifs/data --db /var/tmp/ifs_scan.db
+# 데이터 폴더(관리 DB + per-run DB)를 둘 위치 지정
+python3 -m isilon_usage run /ifs/data --data-dir /var/lib/isilon_usage
 ```
 
 ### 2) 스캔만 (대시보드 없이)
 
 ```bash
-python3 -m isilon_usage scan /ifs/data --db /var/tmp/ifs_scan.db
+python3 -m isilon_usage scan /ifs/data --data-dir /var/lib/isilon_usage
 ```
 
-### 3) 대시보드만 (이미 만들어진 DB 를 읽기)
+### 3) 대시보드만 (이미 만들어진 데이터 폴더를 읽기)
 
 ```bash
-python3 -m isilon_usage serve --db /var/tmp/ifs_scan.db --port 8765
+python3 -m isilon_usage serve --data-dir /var/lib/isilon_usage --port 8765
 ```
 
-### 4) 콘솔에서 현재 상태 확인
+### 4) 콘솔에서 전체 관리 개요 + 상태 확인
 
 ```bash
-python3 -m isilon_usage status --db /var/tmp/ifs_scan.db
+python3 -m isilon_usage status --data-dir /var/lib/isilon_usage
+python3 -m isilon_usage status --data-dir /var/lib/isilon_usage --scan 3   # 특정 스캔 상세
 ```
+
+---
+
+## 데이터 구조 — 실행마다 별도 DB + 관리 DB
+
+스캔을 **실행할 때마다 별도의 per-run DB** 파일을 만들고, 그 위에 모든 스캔을
+모아 보는 **관리(매니저) DB** 를 둡니다.
+
+```
+<data-dir>/                     (기본: ./isilon_data, --data-dir 로 변경)
+├── manager.db                  관리 DB — 모든 스캔의 요약 카탈로그 + 전체 용량 집계
+└── scans/
+    ├── scan_20260607-010259_ifs_data.db    실행 #1 의 상세(디렉터리별 집계·자원 시계열)
+    ├── scan_20260607-143012_ifs_home.db    실행 #2
+    └── ...
+```
+
+- **per-run DB**: 그 스캔 한 번의 상세 데이터(디렉터리별 파일 수·용량, 자원 시계열).
+  실행마다 `시각 + 경로` 로 이름이 붙어 새로 생기므로 과거 스캔이 덮어써지지 않습니다.
+- **관리 DB(manager.db)**: 각 스캔의 요약(루트, 상태, 조사 용량, 파일 수, 디스크
+  용량 등)을 한 줄씩 보관합니다. 스캐너가 진행하면서 이 행을 주기적으로 갱신합니다.
+- **전체 용량 관리**: 같은 루트를 여러 번 스캔했으면 **루트별 ‘최신 스캔’만** 골라
+  합산해(과거 중복 합산 방지) 총 조사 용량을 보여줍니다. 대시보드 상단의
+  “전체 용량 관리 개요”와 `status` 명령에서 확인할 수 있습니다.
+
+> 직접 per-run DB 경로를 지정하려면 `--db <파일>` 을 추가할 수 있습니다(그래도
+> 관리 DB 에는 함께 등록됩니다).
 
 ---
 
 ## 대시보드에 표시되는 것
 
+- **전체 용량 관리 개요(상단)** — 총 조사 용량(루트별 최신 합계), 관리 중 루트 수,
+  전체/진행중 스캔 수, 루트별 최신 스캔 표(조사 용량·디스크 사용·확인%·상태).
+- **스캔 선택기** — 등록된 스캔 중 하나를 골라 아래 상세를 봅니다(기본은 진행중/
+  최신 스캔을 자동 추적).
 - **현재 진행 상황**
   - 지금 조사 중인 디렉터리 경로
   - 디렉터리 진행률: `처리한 디렉터리 수 / 전체 디렉터리 수` (집계 단계)
@@ -142,24 +174,27 @@ python3 -m isilon_usage status --db /var/tmp/ifs_scan.db
 
 ```
 isilon_usage/
-├── db.py          SQLite 스키마/헬퍼 (WAL: 스캔 쓰기 + 대시보드 읽기 동시)
+├── db.py          per-run DB 스키마/헬퍼 (WAL: 스캔 쓰기 + 대시보드 읽기 동시)
+├── manager.py     관리 DB (모든 스캔 카탈로그 + 전체 용량 집계)
 ├── monitor.py     자원 모니터 스레드 (psutil 또는 /proc)
 ├── scanner.py     스캐너 (1단계 탐색 + 2단계 상향식 집계, native/du)
 ├── server.py      대시보드 HTTP 서버 + JSON API
 ├── dashboard.html 단일 페이지 대시보드(외부 CDN 없음, vanilla JS)
 └── cli.py         명령행 인터페이스 (run/scan/serve/status)
-tools/make_tree.py 테스트용 합성 디렉터리 트리 생성기
-tests/test_scanner.py  정확성 테스트 (native/du == 참조값)
+tools/make_tree.py    테스트용 합성 디렉터리 트리 생성기
+tests/test_scanner.py 스캐너 정확성 테스트 (native/du == 참조값)
+tests/test_manager.py 관리 DB 통합 테스트 (per-run 분리 + 전체 집계)
 ```
 
 데이터 모델(요약):
-- `scan_runs` — 스캔 1회의 메타데이터 + 실시간 진행 상태
-- `directories` — 디렉터리별 집계(파일 수, `own_bytes`, 재귀 `total_bytes` 등)
-- `resource_samples` — 자원 사용 시계열(메모리/CPU/RSS 등)
+- 관리 DB `scans` — 스캔별 요약 한 줄(루트, 상태, 조사 용량, 디스크 용량 등)
+- per-run `scan_runs` — 그 스캔의 메타데이터 + 실시간 진행 상태
+- per-run `directories` — 디렉터리별 집계(파일 수, `own_bytes`, 재귀 `total_bytes` 등)
+- per-run `resource_samples` — 자원 사용 시계열(메모리/CPU/RSS 등)
 
 ### 재시작/이어하기
 모든 진행 상태가 SQLite 에 있으므로 중간에 멈춰도 데이터가 남습니다. 같은
-`--db` 로 `serve` 하면 마지막 상태를 그대로 볼 수 있습니다.
+`--data-dir` 로 `serve` 하면 모든 과거 스캔과 마지막 상태를 그대로 볼 수 있습니다.
 
 ---
 
