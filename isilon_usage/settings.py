@@ -46,6 +46,7 @@ DEFAULTS: dict = {
     "powerstore_user": "",              # PowerStore 읽기 계정
     "powerstore_password": "",          # PowerStore 비밀번호
     "powerstore_verify_ssl": False,     # 자체 서명 인증서면 False(검증 생략)
+    "storage_arrays": [],               # 추가 스토리지 어레이(Unity/PowerMax/VMAX/XtremIO/VPLEX 등)
 }
 
 EDITABLE_KEYS = set(DEFAULTS.keys())
@@ -112,7 +113,37 @@ def sanitize(raw: dict) -> dict:
     s["mount_bases"] = [os.path.abspath(x.strip()) for x in mb if str(x).strip()]
 
     s["schedules"] = _sanitize_schedules(s.get("schedules"))
+    s["storage_arrays"] = _sanitize_storage_arrays(s.get("storage_arrays"))
     return s
+
+
+_STORAGE_TYPES = ("isilon", "powerstore", "unity", "powermax", "vmax", "xtremio", "vplex")
+
+
+def _sanitize_storage_arrays(raw) -> list:
+    """추가 스토리지 어레이 목록 보정. 각 항목:
+    {id, type, name, url, user, password, verify_ssl}
+    """
+    out = []
+    if not isinstance(raw, list):
+        return out
+    for it in raw:
+        if not isinstance(it, dict):
+            continue
+        t = str(it.get("type") or "").strip().lower()
+        url = str(it.get("url") or "").strip()
+        if t not in _STORAGE_TYPES or not url:
+            continue
+        out.append({
+            "id": str(it.get("id") or it.get("name") or url).strip(),
+            "type": t,
+            "name": str(it.get("name") or "").strip(),
+            "url": url,
+            "user": str(it.get("user") or "").strip(),
+            "password": str(it.get("password") or ""),
+            "verify_ssl": bool(it.get("verify_ssl", False)),
+        })
+    return out
 
 
 _SCHED_UNITS = ("minute", "hour", "day", "week", "month")

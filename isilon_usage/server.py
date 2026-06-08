@@ -41,6 +41,7 @@ from . import manager as mgrmod
 from . import settings as setmod
 from . import isilon_api as isilonmod
 from . import powerstore_api as powerstoremod
+from . import storage_status as storagemod
 from .scanner import run_scan
 
 
@@ -91,6 +92,13 @@ def _public_settings(s: dict) -> dict:
     out["isilon_password_set"] = bool((s or {}).get("isilon_password"))
     out["powerstore_password"] = ""
     out["powerstore_password_set"] = bool((s or {}).get("powerstore_password"))
+    sa = []
+    for a in ((s or {}).get("storage_arrays") or []):
+        b = dict(a)
+        b["password"] = ""
+        b["password_set"] = bool(a.get("password"))
+        sa.append(b)
+    out["storage_arrays"] = sa
     return out
 
 
@@ -507,6 +515,8 @@ class ScanController:
                 s.get("powerstore_url", ""), s.get("powerstore_user", ""),
                 s.get("powerstore_password", ""),
                 verify_ssl=bool(s.get("powerstore_verify_ssl", False)), timeout=10.0))
+        for arr in (s.get("storage_arrays") or []):   # Unity/PowerMax/VMAX/XtremIO/VPLEX 등
+            arrays.append(storagemod.query(arr))
         self._storage_cache = arrays
         self._storage_ts = now
         return arrays
@@ -582,6 +592,14 @@ class ScanController:
             new.pop("isilon_password", None)
         if not (new.get("powerstore_password") or "").strip():
             new.pop("powerstore_password", None)
+        # 어레이 목록: 빈 비밀번호는 기존 값(같은 id) 유지
+        if isinstance(new.get("storage_arrays"), list):
+            cur = {a.get("id"): a for a in (self.settings.get("storage_arrays") or [])}
+            for a in new["storage_arrays"]:
+                if isinstance(a, dict) and not (a.get("password") or "").strip():
+                    old = cur.get(a.get("id")) or cur.get(a.get("name")) or cur.get(a.get("url"))
+                    if old:
+                        a["password"] = old.get("password", "")
         merged = dict(self.settings)
         merged.update({k: v for k, v in new.items() if k in setmod.EDITABLE_KEYS})
         self.settings = setmod.save(self.data_dir, merged)

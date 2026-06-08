@@ -80,6 +80,31 @@ class _PowerStore(http.server.BaseHTTPRequestHandler):
         self._send([{"physical_total": 2000, "physical_used": 900}])
 
 
+class _Unity(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def _s(self, o):
+        b = json.dumps(o).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+
+    def do_GET(self):  # noqa: N802
+        p = self.path
+        if "types/system/instances" in p:
+            self._s({"entries": [{"content": {"name": "unity-sg", "model": "Unity 480",
+                                              "health": {"value": 5}}}]})
+        elif "systemCapacity" in p:
+            self._s({"entries": [{"content": {"sizeTotal": 4000, "sizeUsed": 1000, "sizeFree": 3000}}]})
+        elif "storageProcessor" in p:
+            self._s({"entries": [{"content": {}}, {"content": {}}]})
+        else:
+            self._s({"entries": []})
+
+
 def _srv(handler):
     srv = http.server.HTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -144,7 +169,35 @@ def main() -> int:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
 
-    print("[isilon] OK  PAPI + PowerStore + /api/storage + 마스킹 통과")
+    # 5) 디스패처 + 어레이 목록(Unity) — /api/storage + 마스킹/보존
+    from isilon_usage import storage_status as ss
+    assert set(["unity", "powermax", "vmax", "xtremio", "vplex"]).issubset(set(ss.ARRAY_TYPES))
+    assert not ss.query({"type": "nope", "url": "http://x"})["ok"]
+
+    uni, uurl = _srv(_Unity)
+    tmp2 = tempfile.mkdtemp(prefix="arr_")
+    h2 = serve(tmp2, host="127.0.0.1", port=0, enable_scan=True, initial_settings={
+        "storage_arrays": [{"type": "unity", "name": "서울Unity", "url": uurl,
+                            "user": "u", "password": "p"}]})
+    port2 = h2.server_address[1]
+    threading.Thread(target=h2.serve_forever, daemon=True).start()
+    try:
+        sj = json.load(urllib.request.urlopen("http://127.0.0.1:%d/api/storage" % port2, timeout=5))
+        uni_arr = [a for a in sj["arrays"] if a.get("type") == "unity"]
+        assert uni_arr and uni_arr[0]["name"] == "unity-sg", sj
+        assert "서울Unity" in uni_arr[0]["label"], uni_arr[0]
+        # 어레이 비밀번호 마스킹
+        st = json.load(urllib.request.urlopen("http://127.0.0.1:%d/api/settings" % port2, timeout=5))["settings"]
+        a0 = st["storage_arrays"][0]
+        assert a0["password"] == "" and a0["password_set"] is True, a0
+    finally:
+        h2.shutdown()
+        h2.server_close()
+        uni.shutdown()
+        import shutil
+        shutil.rmtree(tmp2, ignore_errors=True)
+
+    print("[isilon] OK  PAPI + PowerStore + Unity 디스패처 + /api/storage + 마스킹 통과")
     print("모든 테스트 통과 ✅")
     return 0
 

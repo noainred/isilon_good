@@ -411,6 +411,27 @@
       </div>
 
       <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
+        <div class="sub" style="margin-bottom:6px;">추가 스토리지 어레이 — Unity / PowerMax / VMAX / XtremIO / VPLEX (읽기 전용 계정 권장)</div>
+        <table><thead><tr><th>유형</th><th>이름</th><th>주소</th><th>계정</th><th></th></tr></thead>
+          <tbody id="arrBody"><tr><td colspan="5" class="sub">없음</td></tr></tbody></table>
+        <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; align-items:center;">
+          <select id="arrType" class="optsel">
+            <option value="unity">Unity</option><option value="powermax">PowerMax</option>
+            <option value="vmax">VMAX</option><option value="xtremio">XtremIO</option>
+            <option value="vplex">VPLEX</option><option value="isilon">Isilon</option>
+            <option value="powerstore">PowerStore</option>
+          </select>
+          <input id="arrName" class="setinput" style="width:120px;" placeholder="표시 이름(선택)" />
+          <input id="arrUrl" class="setinput mono" style="flex:1; min-width:200px;" placeholder="https://host" />
+          <input id="arrUser" class="setinput mono" style="width:110px;" placeholder="계정" />
+          <input id="arrPass" type="password" class="setinput mono" style="width:120px;" placeholder="비밀번호" />
+          <label class="sub" style="display:flex; gap:4px; align-items:center;"><input type="checkbox" id="arrVerify" /> 인증서검증</label>
+          <button id="arrAdd">추가</button>
+        </div>
+        <div class="sub">추가/삭제 후 아래 “설정 저장”을 눌러야 반영됩니다.</div>
+      </div>
+
+      <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
         <div class="sub" style="margin-bottom:6px;">저장 경로</div>
         <div class="setgrid">
           <label>DB 저장 경로(data-dir) — 실행 시 지정(읽기 전용)
@@ -742,6 +763,8 @@ async function loadSettings() {
     $("setSmtpFrom").value = s.smtp_from || "";
     $("setSmtpPass").value = "";
     $("setSmtpPass").placeholder = s.smtp_password_set ? "(설정됨 — 변경 시에만 입력)" : "(설정 안 됨)";
+    storageArrays = (s.storage_arrays || []).map(x => ({...x}));
+    renderStorageArrays();
     schedules = (s.schedules || []).map(x => ({...x}));
     renderSchedules();
     populateSchedulePaths();
@@ -764,7 +787,8 @@ async function loadSettings() {
     ["setBackend","setSize","setOFS","setReadonly","setBatch","setSample","setTopN","setRefresh",
      "setWorkers","setRetention","setWebhook","setApiToken",
      "setIsilonUrl","setIsilonUser","setIsilonPass","setIsilonVerify",
-     "setPsUrl","setPsUser","setPsPass","setPsVerify","setMounts","saveSettingsBtn",
+     "setPsUrl","setPsUser","setPsPass","setPsVerify",
+     "arrType","arrName","arrUrl","arrUser","arrPass","arrVerify","arrAdd","setMounts","saveSettingsBtn",
      "schPath","schUnit","schEvery","schAt","schMonth","schDay","schBackend","schAdd",
      "setLogPath","setEmail","setSmtpHost","setSmtpPort","setSmtpTls",
      "setSmtpUser","setSmtpPass","setSmtpFrom"].forEach(id => { $(id).disabled = !j.editable; });
@@ -803,6 +827,7 @@ async function saveSettings() {
     powerstore_verify_ssl: $("setPsVerify").value === "true",
     mount_bases: $("setMounts").value.split("\n").map(x => x.trim()).filter(Boolean),
     schedules: schedules,
+    storage_arrays: storageArrays,
     log_path: $("setLogPath").value.trim(),
     notify_email: $("setEmail").value.trim(),
     smtp_host: $("setSmtpHost").value.trim(),
@@ -1300,6 +1325,19 @@ async function loadErrors() {
 
 // ---- 예약 스캔 편집 ----
 let schedules = [];
+let storageArrays = [];   // 추가 스토리지 어레이(Unity/PowerMax/VMAX/XtremIO/VPLEX 등)
+function renderStorageArrays() {
+  const tb = $("arrBody");
+  if (!storageArrays.length) { tb.innerHTML = '<tr><td colspan="5" class="sub">없음</td></tr>'; return; }
+  tb.innerHTML = storageArrays.map((a, i) =>
+    `<tr><td>${a.type}</td><td>${a.name || "—"}</td>
+     <td class="mono" style="max-width:240px; overflow:hidden; text-overflow:ellipsis;" title="${a.url}">${a.url}</td>
+     <td class="mono">${a.user || ""}</td>
+     <td><button class="stopbtn" data-arrdel="${i}">✕</button></td></tr>`).join("");
+  tb.querySelectorAll("button[data-arrdel]").forEach(b => b.addEventListener("click", () => {
+    storageArrays.splice(parseInt(b.dataset.arrdel), 1); renderStorageArrays();
+  }));
+}
 const SCHED_DOW = ["일", "월", "화", "수", "목", "금", "토"];
 let schWsel = new Set([1]);   // 예약 추가용 요일 선택(기본 월)
 
@@ -1707,6 +1745,17 @@ $("treeRoot").addEventListener("click", () => { treeStack = []; loadTree(null, [
 $("treeSearch").addEventListener("keydown", (e) => { if (e.key === "Enter") treeSearch($("treeSearch").value.trim()); });
 // 스캔 비교
 $("diffRun").addEventListener("click", runDiff);
+// 스토리지 어레이 추가
+$("arrAdd").addEventListener("click", () => {
+  const url = $("arrUrl").value.trim();
+  if (!url) { alert("어레이 주소를 입력하세요."); return; }
+  const name = $("arrName").value.trim();
+  storageArrays.push({type: $("arrType").value, name: name, url: url,
+    user: $("arrUser").value.trim(), password: $("arrPass").value,
+    verify_ssl: $("arrVerify").checked, id: (name || url)});
+  $("arrUrl").value = ""; $("arrName").value = ""; $("arrUser").value = ""; $("arrPass").value = "";
+  $("arrVerify").checked = false; renderStorageArrays();
+});
 // 내보내기
 $("exportCsv").addEventListener("click", () => { if (selectedScan != null) location.href = "/api/export?scan=" + selectedScan + "&format=csv"; });
 $("exportJson").addEventListener("click", () => { if (selectedScan != null) location.href = "/api/export?scan=" + selectedScan + "&format=json"; });

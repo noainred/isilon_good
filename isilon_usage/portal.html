@@ -224,15 +224,16 @@ function renderPortalDash(){
     const arrays = (n.storage && n.storage.length) ? n.storage
                    : ((n.isilon && n.isilon.configured !== false) ? [n.isilon] : []);
     const cfgArr = arrays.filter(a => a && a.configured !== false);
+    const TCODE = {isilon:"ISI", powerstore:"PS", unity:"UNI", powermax:"PMAX", vmax:"VMAX", xtremio:"XIO", vplex:"VPLEX"};
     const arrBadges = cfgArr.map(a => {
-      const lab = (a.type === "powerstore") ? "PS" : "ISI";
+      const lab = TCODE[a.type] || String(a.type||"ARR").toUpperCase().slice(0,5);
       return a.ok ? (a.health === "ok"
           ? ` <span class="badge b-online" title="${a.label||a.type} 정상">${lab} ✓</span>`
           : ` <span class="badge" style="background:#3f3516;color:#f0c86a" title="${a.label||a.type} 주의">${lab} ⚠</span>`)
         : ` <span class="badge b-offline" title="${a.label||a.type} 연결 실패">${lab} ✕</span>`;
     }).join("");
     const arrRows = cfgArr.map(a => `<tr class="rr-${idx}" style="display:none; background:#101a26;"><td></td><td colspan="7" class="sub">${
-      a.type === "powerstore" ? "🟧" : "🟦"} ${a.label||a.type} ${
+      a.type === "isilon" ? "🟦" : "🟧"} ${a.label||a.type} ${
       a.ok ? `<b>${a.name||"?"}</b> · ${a.version||""} · 노드 ${(a.nodes&&a.nodes.online)!=null?a.nodes.online:"?"}/${(a.nodes&&a.nodes.total)!=null?a.nodes.total:"?"} · 용량 ${(a.capacity&&a.capacity.used_pct!=null)?a.capacity.used_pct+"%":"—"} · 이벤트/알림 ${a.events_unresolved!=null?a.events_unresolved:"—"} · ${a.health==="ok"?"정상":"주의"}`
            : `연결 실패: ${a.error||""}`}</td></tr>`).join("");
     const roots = arrRows + (n.roots||[]).map(r=>
