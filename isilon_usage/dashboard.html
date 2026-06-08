@@ -123,6 +123,42 @@
 </header>
 
 <div class="wrap">
+  <!-- 자원 모니터링 (맨 위) -->
+  <div class="grid cols-3" style="margin-bottom:14px;">
+    <div class="card">
+      <h2>서버 메모리</h2>
+      <div class="big" id="memPct">0%</div>
+      <div class="sub" id="memDetail">— / —</div>
+      <div class="bar mem" style="margin-top:10px;"><span id="memBar"></span></div>
+      <canvas id="memChart" width="380" height="90" style="margin-top:12px;"></canvas>
+      <div class="legend"><span><span class="dot" style="background:#f5a623"></span>메모리 사용률(%)</span></div>
+      <div class="kv" style="margin-top:8px;"><span class="k">스왑 사용</span><span class="v" id="swapUsed">0</span></div>
+    </div>
+
+    <div class="card">
+      <h2>측정 프로세스 메모리 (du)</h2>
+      <div class="big" id="duRss">0 B</div>
+      <div class="sub" id="duRssNote">du 프로세스 RSS</div>
+      <canvas id="rssChart" width="380" height="90" style="margin-top:12px;"></canvas>
+      <div class="legend">
+        <span><span class="dot" style="background:#4f9cff"></span>스캐너 프로세스</span>
+        <span><span class="dot" style="background:#38d39f"></span>du 프로세스</span>
+      </div>
+      <div class="kv" style="margin-top:8px;"><span class="k">스캐너 RSS</span><span class="v" id="scanRss">0 B</span></div>
+      <div class="kv"><span class="k">최대(peak) du / 스캐너</span><span class="v" id="peakRss">0 B / 0 B</span></div>
+    </div>
+
+    <div class="card">
+      <h2>CPU · 디스크</h2>
+      <div class="big" id="cpuPct">0%</div>
+      <div class="sub">CPU 사용률 · load1 <span id="load1">0</span></div>
+      <div class="kv" style="margin-top:10px;"><span class="k">파일시스템 전체</span><span class="v" id="fsTotal">—</span></div>
+      <div class="kv"><span class="k">파일시스템 사용</span><span class="v" id="fsUsed">—</span></div>
+      <div class="kv"><span class="k">파일시스템 여유</span><span class="v" id="fsFree">—</span></div>
+      <div class="kv"><span class="k">스캐너 PID</span><span class="v" id="pid">—</span></div>
+    </div>
+  </div>
+
   <!-- 전체 용량 관리 개요 -->
   <div class="card" style="margin-bottom:14px;">
     <h2>전체 용량 관리 개요 (관리 DB)</h2>
@@ -325,42 +361,6 @@
       <div class="kv"><span class="k">오류(접근불가) 디렉터리</span><span class="v" id="errDirs">0</span></div>
       <div class="kv"><span class="k">경과 시간</span><span class="v" id="elapsed">0s</span></div>
       <div class="kv"><span class="k">예상 잔여(ETA)</span><span class="v" id="eta">—</span></div>
-    </div>
-  </div>
-
-  <!-- 자원 모니터링 -->
-  <div class="grid cols-3" style="margin-bottom:14px;">
-    <div class="card">
-      <h2>서버 메모리</h2>
-      <div class="big" id="memPct">0%</div>
-      <div class="sub" id="memDetail">— / —</div>
-      <div class="bar mem" style="margin-top:10px;"><span id="memBar"></span></div>
-      <canvas id="memChart" width="380" height="90" style="margin-top:12px;"></canvas>
-      <div class="legend"><span><span class="dot" style="background:#f5a623"></span>메모리 사용률(%)</span></div>
-      <div class="kv" style="margin-top:8px;"><span class="k">스왑 사용</span><span class="v" id="swapUsed">0</span></div>
-    </div>
-
-    <div class="card">
-      <h2>측정 프로세스 메모리 (du)</h2>
-      <div class="big" id="duRss">0 B</div>
-      <div class="sub" id="duRssNote">du 프로세스 RSS</div>
-      <canvas id="rssChart" width="380" height="90" style="margin-top:12px;"></canvas>
-      <div class="legend">
-        <span><span class="dot" style="background:#4f9cff"></span>스캐너 프로세스</span>
-        <span><span class="dot" style="background:#38d39f"></span>du 프로세스</span>
-      </div>
-      <div class="kv" style="margin-top:8px;"><span class="k">스캐너 RSS</span><span class="v" id="scanRss">0 B</span></div>
-      <div class="kv"><span class="k">최대(peak) du / 스캐너</span><span class="v" id="peakRss">0 B / 0 B</span></div>
-    </div>
-
-    <div class="card">
-      <h2>CPU · 디스크</h2>
-      <div class="big" id="cpuPct">0%</div>
-      <div class="sub">CPU 사용률 · load1 <span id="load1">0</span></div>
-      <div class="kv" style="margin-top:10px;"><span class="k">파일시스템 전체</span><span class="v" id="fsTotal">—</span></div>
-      <div class="kv"><span class="k">파일시스템 사용</span><span class="v" id="fsUsed">—</span></div>
-      <div class="kv"><span class="k">파일시스템 여유</span><span class="v" id="fsFree">—</span></div>
-      <div class="kv"><span class="k">스캐너 PID</span><span class="v" id="pid">—</span></div>
     </div>
   </div>
 
