@@ -97,6 +97,10 @@ def sanitize_node(raw: dict) -> Optional[dict]:
         "region": str(raw.get("region") or "").strip(),
         "url": url,
         "token": str(raw.get("token") or ""),
+        # 경로 별칭: 이 노드의 로컬 마운트 접두어 ↔ 공통 논리 접두어
+        # 예) alias_local=/mnt/isilon/data, alias_logical=/data
+        "alias_local": str(raw.get("alias_local") or "").strip().rstrip("/"),
+        "alias_logical": str(raw.get("alias_logical") or "").strip().rstrip("/"),
         "interval_minutes": interval,
         "unit": unit,
         "every": every,
@@ -436,6 +440,18 @@ class PortalController:
         }
 
     # --- 경로 비교(Cross-DC) — 복제본 DB 를 경로로 조인 ---
+    @staticmethod
+    def _to_local(node: dict, logical: str) -> str:
+        """공통 논리 경로를 이 노드의 로컬 경로로 변환한다(별칭이 있으면).
+
+        alias_logical 접두어를 alias_local 로 바꾼다. 별칭이 없으면 그대로(절대경로 일치).
+        """
+        al = (node.get("alias_local") or "").rstrip("/")
+        lo = (node.get("alias_logical") or "").rstrip("/")
+        if al and lo and (logical == lo or logical.startswith(lo + "/")):
+            return al + logical[len(lo):]
+        return logical
+
     def _replica_db_for(self, node_id: str, path: str):
         """노드 복제본에서 path 를 포함하는(root 가 prefix) 최신 완료 스캔 DB 경로."""
         rep = os.path.join(self.replicas_dir, node_id)
@@ -463,14 +479,15 @@ class PortalController:
         for n in self.nodes:
             entry = {"id": n["id"], "region": n.get("region"), "found": False,
                      "total_bytes": 0, "own_bytes": 0, "total_files": 0, "subdir_count": 0}
-            dbp = self._replica_db_for(n["id"], path)
+            local = self._to_local(n, path)   # 논리 경로 → 이 노드의 로컬 경로(별칭)
+            dbp = self._replica_db_for(n["id"], local)
             if dbp:
                 try:
                     c = dbmod.connect(dbp)
                     rid = dbmod.latest_run_id(c)
                     r = c.execute(
                         "SELECT total_bytes, own_bytes, total_files, subdir_count "
-                        "FROM directories WHERE run_id=? AND path=?", (rid, path)).fetchone()
+                        "FROM directories WHERE run_id=? AND path=?", (rid, local)).fetchone()
                     c.close()
                     if r is not None:
                         sz = r["total_bytes"] if r["total_bytes"] else r["own_bytes"]
@@ -488,18 +505,19 @@ class PortalController:
         node_ids = [n["id"] for n in self.nodes]
         children = {}
         for n in self.nodes:
-            dbp = self._replica_db_for(n["id"], path)
+            local = self._to_local(n, path)   # 논리 경로 → 이 노드의 로컬 경로(별칭)
+            dbp = self._replica_db_for(n["id"], local)
             if not dbp:
                 continue
             try:
                 c = dbmod.connect(dbp)
                 rid = dbmod.latest_run_id(c)
                 prow = c.execute("SELECT depth FROM directories WHERE run_id=? AND path=?",
-                                 (rid, path)).fetchone()
+                                 (rid, local)).fetchone()
                 if prow is None:
                     c.close()
                     continue
-                like = (path.replace("\\", "\\\\").replace("%", "\\%")
+                like = (local.replace("\\", "\\\\").replace("%", "\\%")
                         .replace("_", "\\_")).rstrip("/") + "/%"
                 kids = c.execute(
                     "SELECT name, total_bytes, own_bytes, subdir_count FROM directories "

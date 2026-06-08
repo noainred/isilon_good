@@ -95,6 +95,8 @@
       <label class="fld">지역(표시용)<input id="nRegion" class="inp" placeholder="아시아/도쿄" /></label>
       <label class="fld">주소(URL)<input id="nUrl" class="inp mono" placeholder="http://10.20.1.5:8765" /></label>
       <label class="fld">API 토큰(엣지 api_token 과 동일)<input id="nToken" class="inp mono" type="password" placeholder="(변경 시에만)" /></label>
+      <label class="fld">경로 별칭: 로컬 접두어(선택)<input id="nAliasLocal" class="inp mono" placeholder="/mnt/isilon/data" /></label>
+      <label class="fld">경로 별칭: 논리 접두어(선택)<input id="nAliasLogical" class="inp mono" placeholder="/data" /></label>
       <label class="fld">복제 단위<select id="nUnit" class="inp">
         <option value="minute">분 마다</option><option value="hour">시간 마다</option>
         <option value="day">일 마다</option><option value="week">주 마다</option>
@@ -133,7 +135,7 @@
 <!-- 경로 비교(Cross-DC) -->
 <div class="wrap view" id="view-compare">
   <div class="card" style="margin-bottom:14px;">
-    <h2>같은 경로를 데이터센터별로 비교 — 복제본 기준(절대경로 동일 시 정렬)</h2>
+    <h2>같은 경로를 데이터센터별로 비교 — <b>논리 경로</b> 입력(노드별 경로 별칭으로 로컬 경로에 매핑)</h2>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
       <input id="cmpPath" class="inp mono" style="flex:1; min-width:300px;" placeholder="/data/nexus-data" />
       <button id="cmpRun" class="primary">비교</button>
@@ -222,6 +224,7 @@ async function loadNodes(){
     $("regRows").querySelectorAll("button[data-edit]").forEach(b=>b.addEventListener("click",()=>{
       const n=rows.find(x=>x.id===b.dataset.edit); if(!n) return;
       $("nId").value=n.id; $("nRegion").value=n.region||""; $("nUrl").value=n.url; $("nToken").value="";
+      $("nAliasLocal").value=n.alias_local||""; $("nAliasLogical").value=n.alias_logical||"";
       $("nUnit").value=n.unit||"minute"; $("nEvery").value=n.every||n.interval_minutes||30;
       $("nAt").value=n.at||"03:00"; $("nMonth").value=n.start_month||1; $("nDay").value=n.start_day||1;
       nWsel=new Set(n.weekdays&&n.weekdays.length?n.weekdays:[1]); buildNW();
@@ -256,6 +259,7 @@ function nodePayload(){
   const u=$("nUnit").value;
   return { id:$("nId").value.trim(), region:$("nRegion").value.trim(), url:$("nUrl").value.trim(),
     token:$("nToken").value, mode:$("nMode").value, enabled:$("nEnabled").checked,
+    alias_local:$("nAliasLocal").value.trim(), alias_logical:$("nAliasLogical").value.trim(),
     unit:u, every:Math.max(1,parseInt($("nEvery").value)||1), at:$("nAt").value||"03:00",
     weekdays:[...nWsel].sort((a,b)=>a-b), start_month:parseInt($("nMonth").value)||1,
     start_day:parseInt($("nDay").value)||1,
@@ -297,7 +301,7 @@ function renderCompare(j){
       <td class="num">${pct.toFixed(0)}%</td>
       <td>${drift?'<span class="badge b-offline">드리프트 ⚠</span>':'<span class="badge b-online">정상</span>'}</td></tr>`;
   }).join("") : '<tr><td colspan="6" class="sub">등록된 노드가 없습니다.</td></tr>';
-  $("cmpNote").textContent = `${found.length}/${all.length} 노드에서 발견 · ‘최대 대비’ 85% 미만이면 드리프트(복제 지연/누락 의심). 절대경로가 다른 노드는 ‘없음’으로 나옵니다.`;
+  $("cmpNote").textContent = `${found.length}/${all.length} 노드에서 발견 · ‘최대 대비’ 85% 미만이면 드리프트(복제 지연/누락 의심). 마운트 접두어가 다른 노드는 ‘노드 설정’의 경로 별칭으로 매핑하세요.`;
 }
 function renderMatrix(j){
   const nodes=j.nodes||[], kids=j.children||[];

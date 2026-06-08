@@ -103,6 +103,16 @@ def main() -> int:
         mat = pc.compare_matrix(root)
         assert "sub1" in [c["name"] for c in mat["children"]], mat
 
+        # 7c) 경로 별칭: 로컬 root 를 논리 /L 로 매핑 → 논리 경로로 비교/매트릭스
+        pc.upsert_node({"id": "dc-test", "url": ebase, "region": "아시아/서울",
+                        "alias_local": root, "alias_logical": "/L"})
+        cmpa = pc.compare_path("/L")
+        assert cmpa["rows"][0]["found"] and cmpa["rows"][0]["total_bytes"] > 0, cmpa
+        assert "sub1" in [c["name"] for c in pc.compare_matrix("/L")["children"]]
+        # 별칭 없이 논리 경로로 조회하면 못 찾음(절대경로 불일치)
+        pc.upsert_node({"id": "dc-test", "url": ebase, "region": "아시아/서울"})
+        assert not pc.compare_path("/L")["rows"][0]["found"]
+
         # 8) 토큰 비우고 저장 → 기존 토큰 유지(동기화 여전히 성공)
         pc.upsert_node({"id": "dc-test", "url": ebase, "token": "", "region": "아시아/서울"})
         pc._sync_one("dc-test", False)
