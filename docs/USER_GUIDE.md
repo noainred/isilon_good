@@ -39,7 +39,7 @@
 ## 2. 설치 (처음부터)
 
 ### 2.1 사전 요구사항
-- **Python 3.8 이상** (`python3 --version`)
+- **Python 3.6 이상** (`python3 --version`) — RHEL/CentOS 7 의 기본 3.6 에서도 동작
 - **리눅스** (자원 수집에 `/proc` 사용)
 - 조사할 NAS 가 이 서버에 **마운트**되어 있고 읽기 권한이 있을 것
 
@@ -391,7 +391,8 @@ journalctl -u isilon-usage -f
 
 | 증상 | 원인/해결 |
 |------|-----------|
-| `python3: command not found` | `python` 시도 또는 Python 3.8+ 설치 |
+| `python3: command not found` | `python` 시도 또는 Python 3.6+ 설치 |
+| `pip install` 시 `setuptools>=61` 못 찾음(폐쇄망) | pip 설치 불필요 — 압축 풀어 `python3 -m isilon_usage` 로 실행. 굳이 설치하려면 `pip install --no-build-isolation .` |
 | 브라우저 접속 안 됨 | `--host 0.0.0.0` 확인, 방화벽/포트 확인 |
 | `Address already in use` | 다른 `--port` 사용 |
 | 대시보드에 `/proc 폴백` 표시 | 정상(psutil 미설치). 원하면 `pip install psutil` |

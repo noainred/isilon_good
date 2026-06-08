@@ -11,15 +11,23 @@
   GET /api/runs          스캔 실행 목록
 """
 
-from __future__ import annotations
+from typing import Dict, Optional
 
 import json
 import os
 import socket
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
+
+try:  # ThreadingHTTPServer 는 Python 3.7+ 에만 있음 — 3.6 폴백
+    from http.server import ThreadingHTTPServer  # novermin
+except ImportError:  # pragma: no cover
+    import socketserver
+
+    class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
+        daemon_threads = True
 
 from . import __version__
 from . import db as dbmod
@@ -48,7 +56,7 @@ def _human_bytes(n) -> str:
     return f"{n:.1f} PB"
 
 
-def build_status(conn, run_id: int | None, *, samples: int = 150, top: int = 20) -> dict:
+def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 20) -> dict:
     """대시보드가 한 번의 폴링으로 쓸 수 있는 통합 상태 객체를 만든다."""
     if run_id is None:
         run_id = dbmod.latest_run_id(conn)
@@ -183,7 +191,7 @@ def build_status(conn, run_id: int | None, *, samples: int = 150, top: int = 20)
     }
 
 
-def list_children(conn, run_id: int, parent_id: int | None, *, limit: int = 200) -> dict:
+def list_children(conn, run_id: int, parent_id: Optional[int], *, limit: int = 200) -> dict:
     if parent_id is None:
         rows = conn.execute(
             """SELECT id, path, name, depth, file_count, subdir_count,
@@ -224,7 +232,7 @@ def list_errors(pconn, run_id: int, *, limit: int = 1000) -> dict:
 
 
 def diff_scans(data_dir: str, base_id: int, target_id: int, *,
-               limit: int = 100, max_depth: int | None = None) -> dict:
+               limit: int = 100, max_depth: Optional[int] = None) -> dict:
     """두 스캔(같은/다른 per-run DB)의 디렉터리별 재귀 용량 변화를 비교한다."""
     mconn = dbmod.connect(mgrmod.manager_db_path(data_dir))
     try:
@@ -312,7 +320,7 @@ def list_mounts() -> list:
     return out
 
 
-def browse_dir(path: str | None) -> dict:
+def browse_dir(path: Optional[str]) -> dict:
     """주어진 경로의 바로 아래 하위 디렉터리 목록을 돌려준다(폴더 선택용).
 
     파일 내용은 읽지 않고 디렉터리 이름만 나열한다. 경로가 없으면 루트(/)부터.
@@ -351,7 +359,7 @@ class ScanController:
         self.data_dir = data_dir
         self.lock_settings = lock_settings
         self.settings = setmod.load(data_dir)
-        self._scans: dict[int, dict] = {}   # manager scan_id -> {stop, thread}
+        self._scans: Dict[int, dict] = {}   # manager scan_id -> {stop, thread}
         self._lock = threading.Lock()
 
     # 설정에서 파생되는 값들(편집되면 즉시 반영)

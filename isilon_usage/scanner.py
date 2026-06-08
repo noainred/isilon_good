@@ -31,7 +31,7 @@
     더 느리다(선택 사항).
 """
 
-from __future__ import annotations
+from typing import List, Optional, Tuple
 
 import os
 import shutil
@@ -76,10 +76,10 @@ class Scanner:
         batch_size: int = 500,
         workers: int = 1,
         resume: bool = False,
-        stop_event: threading.Event | None = None,
-        monitor: ResourceMonitor | None = None,
-        manager_db: str | None = None,
-        manager_scan_id: int | None = None,
+        stop_event: Optional[threading.Event] = None,
+        monitor: Optional[ResourceMonitor] = None,
+        manager_db: Optional[str] = None,
+        manager_scan_id: Optional[int] = None,
         progress_every: float = 0.4,
     ) -> None:
         self.db_path = db_path
@@ -96,10 +96,10 @@ class Scanner:
         self.manager_scan_id = manager_scan_id
         self.progress_every = progress_every
 
-        self.run_id: int | None = None
-        self._root_dev: int | None = None
+        self.run_id: Optional[int] = None
+        self._root_dev: Optional[int] = None
         self._seen_inodes: set = set()   # 하드링크(st_nlink>1) 중복 제거용
-        self._pool: ThreadPoolExecutor | None = None
+        self._pool: Optional[ThreadPoolExecutor] = None
         self._last_progress = 0.0
         self._mgr_conn = None
         self._phase = "discovering"
@@ -118,7 +118,7 @@ class Scanner:
     def _stopped(self) -> bool:
         return self.stop_event.is_set()
 
-    def _statvfs(self) -> tuple[int, int, int]:
+    def _statvfs(self) -> Tuple[int, int, int]:
         """대상 경로가 속한 파일시스템의 (total, used, free) 바이트."""
         try:
             v = os.statvfs(self.root_path)
@@ -362,8 +362,8 @@ class Scanner:
         own_bytes = 0
         file_count = 0
         subdir_count = 0
-        children: list[tuple] = []
-        err: str | None = None
+        children: List[tuple] = []
+        err: Optional[str] = None
 
         file_chunk: list = []
 
@@ -498,7 +498,7 @@ class Scanner:
             if self.monitor is not None:
                 self.monitor.set_du_pid(None)
 
-    def _aggregate_one(self, conn, row, depth: int, du_path: str | None) -> None:
+    def _aggregate_one(self, conn, row, depth: int, du_path: Optional[str]) -> None:
         dir_id = row["id"]
         path = row["path"]
         own_bytes = int(row["own_bytes"])
@@ -547,7 +547,7 @@ class Scanner:
         args.append(path)
         try:
             proc = subprocess.Popen(
-                args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+                args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True
             )
         except OSError:
             return -1
@@ -581,10 +581,10 @@ def run_scan(
     workers: int = 1,
     resume: bool = False,
     sample_interval: float = 2.0,
-    stop_event: threading.Event | None = None,
+    stop_event: Optional[threading.Event] = None,
     with_monitor: bool = True,
-    manager_db: str | None = None,
-    manager_scan_id: int | None = None,
+    manager_db: Optional[str] = None,
+    manager_scan_id: Optional[int] = None,
 ) -> int:
     """편의 함수: DB 초기화 → 모니터 시작 → 스캔(탐색+집계) 실행 → 모니터 정리.
 
@@ -597,7 +597,7 @@ def run_scan(
     dbmod.init_db(db_path)
     stop_event = stop_event or threading.Event()
 
-    monitor: ResourceMonitor | None = None
+    monitor: Optional[ResourceMonitor] = None
     if with_monitor:
         monitor = ResourceMonitor(
             db_path, run_id=0, scanner_pid=os.getpid(),

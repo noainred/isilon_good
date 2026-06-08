@@ -10,7 +10,7 @@
   - resource_samples : 서버/프로세스 자원 사용 샘플(메모리/CPU 등 시계열)
 """
 
-from __future__ import annotations
+from typing import Optional
 
 import os
 import socket
@@ -160,13 +160,13 @@ def create_run(
     return int(cur.lastrowid)
 
 
-def latest_run_id(conn: sqlite3.Connection) -> int | None:
+def latest_run_id(conn: sqlite3.Connection) -> Optional[int]:
     """가장 최근 스캔 실행의 id (대시보드 기본 표시용)."""
     row = conn.execute("SELECT id FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()
     return int(row["id"]) if row else None
 
 
-def get_run(conn: sqlite3.Connection, run_id: int) -> sqlite3.Row | None:
+def get_run(conn: sqlite3.Connection, run_id: int) -> Optional[sqlite3.Row]:
     return conn.execute("SELECT * FROM scan_runs WHERE id=?", (run_id,)).fetchone()
 
 

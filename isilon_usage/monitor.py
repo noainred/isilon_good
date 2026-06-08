@@ -11,12 +11,11 @@ psutil 이 설치돼 있으면 사용하고, 없으면 리눅스 /proc 파일시
   - du 자식 프로세스 RSS (backend=du 일 때 실제 du 프로세스의 메모리)
 """
 
-from __future__ import annotations
+from typing import Dict, Optional, Tuple
 
 import os
 import threading
 import time
-from dataclasses import dataclass, asdict
 
 from . import db as dbmod
 
@@ -32,30 +31,37 @@ except Exception:  # pragma: no cover - 환경에 따라 다름
 PAGE_SIZE = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
 
 
-@dataclass
 class Sample:
-    ts: float = 0.0
-    mem_total: int = 0
-    mem_used: int = 0
-    mem_percent: float = 0.0
-    swap_used: int = 0
-    cpu_percent: float = 0.0
-    load1: float = 0.0
-    scanner_rss: int = 0
-    du_rss: int = 0
-    du_pid: int | None = None
+    """자원 샘플 1개 (Python 3.6 호환을 위해 dataclass 대신 일반 클래스)."""
+
+    __slots__ = ("ts", "mem_total", "mem_used", "mem_percent", "swap_used",
+                 "cpu_percent", "load1", "scanner_rss", "du_rss", "du_pid")
+
+    def __init__(self, ts=0.0, mem_total=0, mem_used=0, mem_percent=0.0,
+                 swap_used=0, cpu_percent=0.0, load1=0.0, scanner_rss=0,
+                 du_rss=0, du_pid=None):
+        self.ts = ts
+        self.mem_total = mem_total
+        self.mem_used = mem_used
+        self.mem_percent = mem_percent
+        self.swap_used = swap_used
+        self.cpu_percent = cpu_percent
+        self.load1 = load1
+        self.scanner_rss = scanner_rss
+        self.du_rss = du_rss
+        self.du_pid = du_pid
 
     def as_dict(self) -> dict:
-        return asdict(self)
+        return {k: getattr(self, k) for k in self.__slots__}
 
 
 # ----------------------------------------------------------------------------
 # /proc 기반 폴백 구현
 # ----------------------------------------------------------------------------
 
-def _read_meminfo() -> tuple[int, int, int]:
+def _read_meminfo() -> Tuple[int, int, int]:
     """(mem_total, mem_used, swap_used) 바이트 단위로 반환."""
-    info: dict[str, int] = {}
+    info: Dict[str, int] = {}
     try:
         with open("/proc/meminfo", "r") as fh:
             for line in fh:
@@ -77,7 +83,7 @@ def _read_meminfo() -> tuple[int, int, int]:
     return (total, max(used, 0), max(swap_used, 0))
 
 
-def _read_proc_rss(pid: int | None) -> int:
+def _read_proc_rss(pid: Optional[int]) -> int:
     """주어진 PID 의 RSS(바이트). /proc/<pid>/statm 의 두 번째 값 × 페이지 크기."""
     if not pid:
         return 0
@@ -91,7 +97,7 @@ def _read_proc_rss(pid: int | None) -> int:
     return 0
 
 
-_prev_cpu: dict[str, float] = {}
+_prev_cpu: Dict[str, float] = {}
 
 
 def _read_cpu_percent() -> float:
@@ -118,7 +124,7 @@ def _read_cpu_percent() -> float:
     return max(0.0, min(100.0, (1.0 - di / dt) * 100.0))
 
 
-def _proc_alive(pid: int | None) -> bool:
+def _proc_alive(pid: Optional[int]) -> bool:
     if not pid:
         return False
     if _HAVE_PSUTIL:
@@ -129,7 +135,7 @@ def _proc_alive(pid: int | None) -> bool:
     return os.path.exists(f"/proc/{pid}")
 
 
-def collect(scanner_pid: int, du_pid: int | None = None) -> Sample:
+def collect(scanner_pid: int, du_pid: Optional[int] = None) -> Sample:
     """현재 시점의 자원 샘플 1개를 수집한다."""
     s = Sample(ts=time.time(), du_pid=du_pid)
 
@@ -185,7 +191,7 @@ class ResourceMonitor(threading.Thread):
         scanner_pid: int,
         *,
         interval: float = 2.0,
-        stop_event: threading.Event | None = None,
+        stop_event: Optional[threading.Event] = None,
     ) -> None:
         super().__init__(name="resource-monitor", daemon=True)
         self.db_path = db_path
@@ -193,17 +199,17 @@ class ResourceMonitor(threading.Thread):
         self.scanner_pid = scanner_pid
         self.interval = interval
         self.stop_event = stop_event or threading.Event()
-        self._du_pid: int | None = None
+        self._du_pid: Optional[int] = None
         self._lock = threading.Lock()
         self._written = 0
         self.peak_scanner_rss = 0
         self.peak_du_rss = 0
 
-    def set_du_pid(self, pid: int | None) -> None:
+    def set_du_pid(self, pid: Optional[int]) -> None:
         with self._lock:
             self._du_pid = pid
 
-    def get_du_pid(self) -> int | None:
+    def get_du_pid(self) -> Optional[int]:
         with self._lock:
             return self._du_pid
 

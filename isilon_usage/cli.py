@@ -12,7 +12,7 @@
   python -m isilon_usage serve --db ./isilon_scan.db --port 8765
 """
 
-from __future__ import annotations
+from typing import List, Optional
 
 import argparse
 import os
@@ -84,7 +84,7 @@ def _prepare_run(args, path: str):
     return data_dir, db_path, manager_db, scan_id
 
 
-def _run_server(args, *, initial_path: str | None) -> int:
+def _run_server(args, *, initial_path: Optional[str]) -> int:
     """serve/run 공통: 웹 스캔 가능한 대시보드 서버를 띄운다.
 
     initial_path 가 주어지면(=run) 그 경로 스캔을 즉시 시작한다. 어느 경우든
@@ -337,7 +337,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--version", action="version",
                    version=f"isilon_usage {__version__} (schema {SCHEMA_VERSION})")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    sub = p.add_subparsers(dest="cmd")
+    sub.required = True   # add_subparsers(required=) 는 3.7+ 이라 속성으로 설정(3.6 호환)
 
     pr = sub.add_parser("run", help="초기 스캔 + 대시보드 실행(웹에서 추가 스캔도 가능)")
     pr.add_argument("path", help="조사할 루트 디렉터리")
@@ -404,7 +405,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)

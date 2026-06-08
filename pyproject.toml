@@ -1,45 +1,13 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=40.8.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[project]
-name = "isilon-usage"
-dynamic = ["version"]
-description = "초대용량 NAS(아이실론 등)의 디렉터리별 사용량을 메모리 최소로 조사하고 웹 대시보드로 보여주는 도구"
-readme = "README.md"
-requires-python = ">=3.8"
-authors = [{ name = "noainred" }]
-keywords = ["isilon", "nas", "du", "disk-usage", "dashboard"]
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "Operating System :: POSIX :: Linux",
-    "Topic :: System :: Filesystems",
-    "Topic :: System :: Monitoring",
-]
-dependencies = []                      # 표준 라이브러리만으로 동작
-
-[project.optional-dependencies]
-monitor = ["psutil>=5.9"]              # 있으면 더 정확한 자원 지표(없으면 /proc 폴백)
-
-[project.scripts]
-isilon-usage = "isilon_usage.cli:main"
-
-[project.urls]
-Homepage = "https://github.com/noainred/isilon_good"
-Changelog = "https://github.com/noainred/isilon_good/blob/main/CHANGELOG.md"
-
-[tool.setuptools]
-packages = ["isilon_usage"]
-
-[tool.setuptools.dynamic]
-version = { attr = "isilon_usage.__version__" }
-
-[tool.setuptools.package-data]
-isilon_usage = ["dashboard.html"]
+# 패키지 메타데이터는 옛 setuptools(폐쇄망 미러) + Python 3.6 에서도 설치되도록
+# classic setup.cfg 에 둔다(PEP 621 [project] 는 setuptools 61+ 필요).
 
 # 린트: 실제 오류(미정의 이름/문법 등)만 검사해 스타일로 CI 가 깨지지 않게 한다.
 [tool.ruff]
-target-version = "py38"
+target-version = "py37"
 line-length = 100
 
 [tool.ruff.lint]

@@ -5,7 +5,6 @@ Slack 수신 웹훅 등 일반 웹훅과 호환되도록 'text' 필드도 함께
 표준 라이브러리(urllib)만 사용하며, 실패해도 스캔에 영향을 주지 않는다.
 """
 
-from __future__ import annotations
 
 import json
 import urllib.request

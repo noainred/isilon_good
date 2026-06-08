@@ -13,6 +13,25 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.1.1] - 2026-06-08
+
+폐쇄망의 Python 3.6 환경(RHEL/CentOS 7 등)에서도 동작하도록 호환성 수정.
+
+### 수정됨 (Fixed)
+- **Python 3.6 호환**: 3.7+ 전용 문법/모듈을 제거 — `from __future__ import
+  annotations`, PEP 604 `X | None`(→ `Optional`), PEP 585 `dict[...]`(→ `Dict`),
+  `dataclasses`(→ 일반 클래스), `http.server.ThreadingHTTPServer`(→ 3.6 폴백),
+  `subprocess(text=)`(→ `universal_newlines=`), `add_subparsers(required=)`
+  (→ 속성 설정). 이제 **Python 3.6 이상**에서 실행된다(vermin 확인).
+- **설치 호환**: 옛 setuptools(`<61`)와 Python 3.6 에서도 `pip install` 이 되도록
+  PEP 621 `[project]` 대신 classic `setup.cfg`/`setup.py` 로 전환
+  (`setuptools>=61` 강제 의존 제거). `python_requires>=3.6`.
+
+> 폐쇄망에서는 설치 없이 압축을 풀어 `python3 -m isilon_usage ...` 로 바로
+> 실행할 수 있습니다(표준 라이브러리만 사용).
+
+---
+
 ## [1.1.0] - 2026-06-07
 
 정확도·성능·관리 기능을 대폭 보강. DB 스키마 변경 없음(스키마 버전 1 유지).
@@ -118,5 +137,6 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 - "확인된 사용량"은 하드링크/스파스 파일/블록 정렬 등으로 디스크 사용량과 정확히
   일치하지 않을 수 있습니다.
 
+[1.1.1]: https://github.com/noainred/isilon_good/releases/tag/v1.1.1
 [1.1.0]: https://github.com/noainred/isilon_good/releases/tag/v1.1.0
 [1.0.0]: https://github.com/noainred/isilon_good/releases/tag/v1.0.0

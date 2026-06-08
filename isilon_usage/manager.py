@@ -11,7 +11,7 @@ manager.db 에는 각 스캔의 "요약 한 줄"이 들어가 전체를 한눈�
 스캐너가 진행하면서 manager.db 의 해당 행을 주기적으로 갱신한다.
 """
 
-from __future__ import annotations
+from typing import Dict, Optional
 
 import os
 import re
@@ -157,7 +157,7 @@ def list_scans(conn, limit: int = 200) -> list:
     return [dict(r) for r in rows]
 
 
-def pick_default_scan(conn) -> int | None:
+def pick_default_scan(conn) -> Optional[int]:
     """대시보드 기본 표시 대상: 진행 중인 스캔 우선, 없으면 가장 최근."""
     row = conn.execute(
         "SELECT id FROM scans WHERE status IN ('discovering','sizing') "
@@ -197,8 +197,8 @@ def delete_scan(data_dir: str, scan_id: int) -> dict:
         conn.close()
 
 
-def prune_scans(data_dir: str, *, keep_per_root: int | None = None,
-                older_than_days: float | None = None,
+def prune_scans(data_dir: str, *, keep_per_root: Optional[int] = None,
+                older_than_days: Optional[float] = None,
                 running_ids=None) -> dict:
     """오래된 스캔을 정리한다.
 
@@ -215,7 +215,7 @@ def prune_scans(data_dir: str, *, keep_per_root: int | None = None,
 
     to_delete = set()
     if keep_per_root and keep_per_root > 0:
-        seen: dict[str, int] = {}
+        seen: Dict[str, int] = {}
         for r in rows:
             rp = r["root_path"]
             seen[rp] = seen.get(rp, 0) + 1
@@ -244,7 +244,7 @@ def overall_capacity(conn) -> dict:
     골라 합산한다(과거 스캔 중복 합산 방지). 루트별 최신 요약 목록도 함께 준다.
     """
     scans = conn.execute("SELECT * FROM scans ORDER BY id DESC").fetchall()
-    latest_by_root: dict[str, dict] = {}
+    latest_by_root: Dict[str, dict] = {}
     for s in scans:
         rp = s["root_path"]
         if rp not in latest_by_root:  # id 내림차순이므로 처음 본 게 최신

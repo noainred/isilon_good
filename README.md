@@ -1,6 +1,6 @@
 # Isilon 디렉터리 사용량 스캐너
 
-**버전 1.1.0** · [사용 설명서](docs/USER_GUIDE.md) · [변경 이력](CHANGELOG.md)
+**버전 1.1.1** · [사용 설명서](docs/USER_GUIDE.md) · [변경 이력](CHANGELOG.md) · Python 3.6+
 
 아이실론(Isilon)처럼 **한 디렉터리에 수천만 개의 파일**이 있는 초대용량 NAS
 에서, 트리 전체에 `du` 를 한 번에 돌리면 메모리를 너무 많이 써서 프로세스가
@@ -65,13 +65,17 @@
 
 ## 설치
 
-별도 설치 없이 바로 실행할 수 있습니다(파이썬 3.8+).
+별도 설치 없이 바로 실행할 수 있습니다(**파이썬 3.6 이상**, 표준 라이브러리만 사용).
 
 ```bash
 git clone <repo>
 cd isilon_good
 python3 -m isilon_usage --help
 ```
+
+> **폐쇄망 + Python 3.6(RHEL/CentOS 7 등)**: `pip install` 이 필요 없습니다. 압축본을
+> 풀어 `python3 -m isilon_usage ...` 로 바로 실행하세요. (사내 미러의 옛 setuptools로
+> 굳이 설치하려면 `pip install --no-build-isolation .` 을 사용)
 
 (선택) 더 정확한 자원 지표를 원하면 `psutil` 을 설치합니다. 없으면 자동으로
 `/proc` 폴백을 사용합니다.

@@ -7,7 +7,6 @@
 서버 구동에 고정되는 값은 읽기 전용 정보로만 보여준다.
 """
 
-from __future__ import annotations
 
 import json
 import os

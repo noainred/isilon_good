@@ -1,12 +1,12 @@
 # 오프라인(폐쇄망) 다운로드
 
 git 을 쓸 수 없는 폐쇄망 서버를 위해, **압축본 하나만 받아서** 옮기면 바로 실행할
-수 있도록 미리 만들어 둔 파일입니다. (현재 버전: **1.1.0**)
+수 있도록 미리 만들어 둔 파일입니다. (현재 버전: **1.1.1**)
 
 | 파일 | 용도 |
 |------|------|
-| `isilon_usage-1.1.0.tar.gz` | 리눅스용(이 버전 고정) |
-| `isilon_usage-1.1.0.zip` | 윈도우 등(이 버전 고정) |
+| `isilon_usage-1.1.1.tar.gz` | 리눅스용(이 버전 고정) |
+| `isilon_usage-1.1.1.zip` | 윈도우 등(이 버전 고정) |
 | `isilon_usage-latest.tar.gz` | **링크가 안 바뀌는 최신본**(리눅스) |
 | `isilon_usage-latest.zip` | 링크가 안 바뀌는 최신본(윈도우) |
 
@@ -28,7 +28,7 @@ wget https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/downlo
 wget https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-latest.{tar.gz,zip}
 
 # 특정 버전으로 받기
-wget https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.1.0.tar.gz
+wget https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.1.1.tar.gz
 
 # (대안) raw.githubusercontent.com 주소도 동일
 wget https://raw.githubusercontent.com/noainred/isilon_good/claude/upbeat-bell-cXX8f/download/isilon_usage-latest.tar.gz
@@ -46,8 +46,8 @@ curl -L -H "Authorization: Bearer <GITHUB_PAT>" \
 ## 설치/실행 (압축 해제만으로 — 별도 설치 불필요)
 ```bash
 tar xzf isilon_usage-latest.tar.gz        # 또는 unzip isilon_usage-latest.zip
-cd isilon_usage-1.1.0
-python3 -m isilon_usage --version          # isilon_usage 1.1.0 (schema 1)
+cd isilon_usage-1.1.1
+python3 -m isilon_usage --version          # isilon_usage 1.1.1 (schema 1)
 
 python3 -m isilon_usage serve --data-dir /var/lib/isilon_usage \
         --mount-base /mnt/isilon --port 8765
