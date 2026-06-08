@@ -29,17 +29,19 @@ except Exception:  # pragma: no cover - 환경에 따라 다름
 
 
 PAGE_SIZE = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
+CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
 
 
 class Sample:
     """자원 샘플 1개 (Python 3.6 호환을 위해 dataclass 대신 일반 클래스)."""
 
     __slots__ = ("ts", "mem_total", "mem_used", "mem_percent", "swap_used",
-                 "cpu_percent", "load1", "scanner_rss", "du_rss", "du_pid")
+                 "cpu_percent", "load1", "scanner_rss", "du_rss", "du_pid",
+                 "scanner_cpu", "du_cpu")
 
     def __init__(self, ts=0.0, mem_total=0, mem_used=0, mem_percent=0.0,
                  swap_used=0, cpu_percent=0.0, load1=0.0, scanner_rss=0,
-                 du_rss=0, du_pid=None):
+                 du_rss=0, du_pid=None, scanner_cpu=0.0, du_cpu=0.0):
         self.ts = ts
         self.mem_total = mem_total
         self.mem_used = mem_used
@@ -50,9 +52,33 @@ class Sample:
         self.scanner_rss = scanner_rss
         self.du_rss = du_rss
         self.du_pid = du_pid
+        self.scanner_cpu = scanner_cpu   # 스캐너 프로세스 CPU%(코어 합산, >100% 가능)
+        self.du_cpu = du_cpu             # du 자식 프로세스 CPU%
 
     def as_dict(self) -> dict:
         return {k: getattr(self, k) for k in self.__slots__}
+
+
+def _proc_cputime_seconds(pid: Optional[int]) -> Optional[float]:
+    """프로세스의 누적 CPU 시간(user+system, 초). 없으면 None."""
+    if not pid:
+        return None
+    if _HAVE_PSUTIL:
+        try:
+            t = psutil.Process(int(pid)).cpu_times()
+            return float(t.user + t.system)
+        except Exception:
+            pass
+    try:
+        with open("/proc/%d/stat" % int(pid), "r") as fh:
+            data = fh.read()
+        # comm(2번째 필드)에 공백/괄호가 있을 수 있어 마지막 ')' 뒤부터 파싱
+        rest = data[data.rfind(")") + 1:].split()
+        utime = int(rest[11])   # 14번째 필드(utime)
+        stime = int(rest[12])   # 15번째 필드(stime)
+        return (utime + stime) / CLK_TCK
+    except Exception:
+        return None
 
 
 # ----------------------------------------------------------------------------
@@ -204,6 +230,25 @@ class ResourceMonitor(threading.Thread):
         self._written = 0
         self.peak_scanner_rss = 0
         self.peak_du_rss = 0
+        # 프로세스별 CPU% 계산용 직전 측정값: role -> (pid, cpu_seconds, wall_ts)
+        self._cpu_prev: Dict[str, tuple] = {}
+
+    def _cpu_pct(self, role: str, pid: Optional[int]) -> float:
+        """프로세스의 CPU%(직전 샘플 대비 델타). 코어 합산이라 100%를 넘을 수 있다."""
+        if not pid:
+            self._cpu_prev.pop(role, None)
+            return 0.0
+        now_t = time.time()
+        now_c = _proc_cputime_seconds(pid)
+        prev = self._cpu_prev.get(role)
+        self._cpu_prev[role] = (pid, now_c, now_t)
+        if now_c is None or not prev or prev[0] != pid or prev[1] is None:
+            return 0.0
+        dt = now_t - prev[2]
+        dc = now_c - prev[1]
+        if dt <= 0:
+            return 0.0
+        return round(max(0.0, dc / dt * 100.0), 1)
 
     def set_du_pid(self, pid: Optional[int]) -> None:
         with self._lock:
@@ -216,6 +261,8 @@ class ResourceMonitor(threading.Thread):
     def _write_sample(self, conn) -> None:
         du_pid = self.get_du_pid()
         sample = collect(self.scanner_pid, du_pid)
+        sample.scanner_cpu = self._cpu_pct("scanner", self.scanner_pid)
+        sample.du_cpu = self._cpu_pct("du", du_pid)
         self.peak_scanner_rss = max(self.peak_scanner_rss, sample.scanner_rss)
         self.peak_du_rss = max(self.peak_du_rss, sample.du_rss)
         try:
@@ -223,13 +270,15 @@ class ResourceMonitor(threading.Thread):
                 """
                 INSERT INTO resource_samples
                     (run_id, ts, mem_total, mem_used, mem_percent,
-                     swap_used, cpu_percent, load1, scanner_rss, du_rss, du_pid)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                     swap_used, cpu_percent, load1, scanner_rss, du_rss, du_pid,
+                     scanner_cpu, du_cpu)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     self.run_id, sample.ts, sample.mem_total, sample.mem_used,
                     sample.mem_percent, sample.swap_used, sample.cpu_percent,
                     sample.load1, sample.scanner_rss, sample.du_rss, sample.du_pid,
+                    sample.scanner_cpu, sample.du_cpu,
                 ),
             )
             dbmod.prune_samples(conn, self.run_id)

@@ -95,13 +95,21 @@ def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 
         if rate > 0:
             eta = remaining / rate
 
-    # 최신 자원 샘플 + 시계열(스파크라인용)
-    sample_rows = conn.execute(
-        """SELECT ts, mem_percent, mem_used, mem_total, swap_used, cpu_percent,
-                  load1, scanner_rss, du_rss, du_pid
-           FROM resource_samples WHERE run_id=? ORDER BY id DESC LIMIT ?""",
-        (run_id, samples),
-    ).fetchall()
+    # 최신 자원 샘플 + 시계열(스파크라인용). 구버전 DB(scanner_cpu/du_cpu 없음) 호환.
+    _cols = ("ts, mem_percent, mem_used, mem_total, swap_used, cpu_percent, "
+             "load1, scanner_rss, du_rss, du_pid, scanner_cpu, du_cpu")
+    try:
+        sample_rows = conn.execute(
+            f"SELECT {_cols} FROM resource_samples WHERE run_id=? ORDER BY id DESC LIMIT ?",
+            (run_id, samples),
+        ).fetchall()
+    except Exception:
+        sample_rows = conn.execute(
+            """SELECT ts, mem_percent, mem_used, mem_total, swap_used, cpu_percent,
+                      load1, scanner_rss, du_rss, du_pid
+               FROM resource_samples WHERE run_id=? ORDER BY id DESC LIMIT ?""",
+            (run_id, samples),
+        ).fetchall()
     series = [dict(s) for s in reversed(sample_rows)]
     recorded_latest = series[-1] if series else None
     latest = recorded_latest
@@ -120,6 +128,9 @@ def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 
             if recorded_latest:
                 live["du_rss"] = recorded_latest.get("du_rss", 0)
                 live["du_pid"] = recorded_latest.get("du_pid")
+                # 프로세스별 CPU% 는 델타 기반이라 즉석 수집이 어려워 최근 기록값 사용
+                live["scanner_cpu"] = recorded_latest.get("scanner_cpu", 0)
+                live["du_cpu"] = recorded_latest.get("du_cpu", 0)
             latest = live
             if recorded_latest is not None:
                 series = series + [live]  # 차트의 마지막 점도 실시간으로

@@ -266,6 +266,7 @@ def overall_capacity(conn) -> dict:
             "fs_total_bytes": s.get("fs_total_bytes") or 0,
             "fs_used_bytes": s.get("fs_used_bytes") or 0,
             "fs_free_bytes": s.get("fs_free_bytes") or 0,
+            "started_at": s.get("started_at"),
             "finished_at": s.get("finished_at"),
             "updated_at": s.get("updated_at"),
         })

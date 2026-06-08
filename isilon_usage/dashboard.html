@@ -136,7 +136,7 @@
     </div>
 
     <div class="card">
-      <h2>측정 프로세스 메모리 (du)</h2>
+      <h2>측정 프로세스 (CPU · 메모리)</h2>
       <div class="big" id="duRss">0 B</div>
       <div class="sub" id="duRssNote">du 프로세스 RSS</div>
       <canvas id="rssChart" width="380" height="90" style="margin-top:12px;"></canvas>
@@ -144,7 +144,8 @@
         <span><span class="dot" style="background:#4f9cff"></span>스캐너 프로세스</span>
         <span><span class="dot" style="background:#38d39f"></span>du 프로세스</span>
       </div>
-      <div class="kv" style="margin-top:8px;"><span class="k">스캐너 RSS</span><span class="v" id="scanRss">0 B</span></div>
+      <div class="kv" style="margin-top:8px;"><span class="k">스캐너 CPU · RSS</span><span class="v"><span id="scanCpu">0%</span> · <span id="scanRss">0 B</span></span></div>
+      <div class="kv"><span class="k">du 프로세스 CPU · RSS</span><span class="v"><span id="duCpu">—</span> · <span id="duRssRow">0 B</span></span></div>
       <div class="kv"><span class="k">최대(peak) du / 스캐너</span><span class="v" id="peakRss">0 B / 0 B</span></div>
     </div>
 
@@ -170,7 +171,7 @@
     <table>
       <thead><tr>
         <th>루트 (최신 스캔)</th><th>호스트</th><th class="num">조사 용량</th>
-        <th class="num">디스크 사용</th><th class="num">확인%</th><th>상태</th><th>보기</th>
+        <th class="num">디스크 사용</th><th class="num">확인%</th><th class="num">소요 시간</th><th>상태</th><th>보기</th>
       </tr></thead>
       <tbody id="ovBody"><tr><td colspan="7" style="color:var(--muted)">로딩 중…</td></tr></tbody>
     </table>
@@ -210,6 +211,7 @@
       </div><!-- /browseSection -->
 
       <div style="display:flex; gap:14px; align-items:flex-end; flex-wrap:wrap;">
+        <div id="scanInputs" style="display:flex; gap:14px; align-items:flex-end; flex-wrap:wrap; flex:1;">
         <div style="flex:1; min-width:300px;">
           <div class="sub" style="margin-bottom:4px;">스캔할 디렉터리</div>
           <input id="scanPath" class="mono"
@@ -233,6 +235,7 @@
         <label class="sub" style="display:flex; align-items:center; gap:6px; padding-bottom:9px;">
           <input type="checkbox" id="optOFS" /> 한 파일시스템(-x)
         </label>
+        </div><!-- /scanInputs -->
         <button id="startBtn" style="border-color:var(--accent2); color:#cfe; font-weight:700; padding:9px 16px;">
           ▶ 이 디렉터리 스캔 시작
         </button>
@@ -635,9 +638,11 @@ function updateStartButton(runningCount) {
     btn.classList.remove("scanning");
     btn.disabled = !canScan;
   }
-  // 스캔 진행 중에는 마운트 선택 + 폴더 탐색 영역을 숨긴다(불필요).
+  // 스캔 진행 중에는 입력/탐색 영역을 숨긴다(불필요). 빨간 "스캔 중…" 버튼만 남긴다.
   const bs = $("browseSection");
   if (bs) bs.style.display = scanning ? "none" : "block";
+  const si = $("scanInputs");
+  if (si) si.style.display = scanning ? "none" : "flex";
 }
 
 async function startScan() {
@@ -835,10 +840,12 @@ function renderOverview(j) {
   const body = $("ovBody");
   const roots = o.roots || [];
   if (!roots.length) {
-    body.innerHTML = '<tr><td colspan="7" style="color:var(--muted)">등록된 스캔이 없습니다.</td></tr>';
+    body.innerHTML = '<tr><td colspan="8" style="color:var(--muted)">등록된 스캔이 없습니다.</td></tr>';
   } else {
     body.innerHTML = roots.map(r => {
       const pct = r.fs_used_bytes ? (r.scanned_bytes / r.fs_used_bytes * 100) : 0;
+      const endt = r.finished_at || r.updated_at;
+      const el = (r.started_at && endt) ? (endt - r.started_at) : null;
       const running = runningSet.has(r.scan_id);
       let act = `<a href="#" class="goScan" data-scan="${r.scan_id}">#${r.scan_id}</a>`;
       if (running) act += ` <button class="stopbtn" data-stop="${r.scan_id}">중지</button>`;
@@ -852,6 +859,7 @@ function renderOverview(j) {
         <td class="num">${fmtBytes(r.scanned_bytes)}</td>
         <td class="num">${fmtBytes(r.fs_used_bytes)}</td>
         <td class="num">${pct.toFixed(1)}%</td>
+        <td class="num">${el == null ? "—" : fmtDur(el)}</td>
         <td>${statusKo[r.status] || r.status}</td>
         <td>${act}</td>
       </tr>`;
@@ -976,11 +984,16 @@ function render(d) {
     $("load1").textContent = (L.load1 || 0).toFixed(2);
 
     $("scanRss").textContent = fmtBytes(L.scanner_rss);
+    $("scanCpu").textContent = (L.scanner_cpu || 0).toFixed(0) + "%";
     if (r.backend === "du") {
       $("duRss").textContent = fmtBytes(L.du_rss);
+      $("duRssRow").textContent = fmtBytes(L.du_rss);
+      $("duCpu").textContent = L.du_pid ? ((L.du_cpu || 0).toFixed(0) + "%") : "—";
       $("duRssNote").textContent = L.du_pid ? ("실행 중 du PID " + L.du_pid) : "현재 du 실행 안 함";
     } else {
       $("duRss").textContent = fmtBytes(L.scanner_rss);
+      $("duRssRow").textContent = "—";
+      $("duCpu").textContent = "—";
       $("duRssNote").textContent = "native 백엔드 — 스캐너 프로세스가 직접 측정(별도 du 없음)";
     }
   }

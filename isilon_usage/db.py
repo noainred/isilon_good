@@ -82,7 +82,9 @@ CREATE TABLE IF NOT EXISTS resource_samples (
     load1        REAL    NOT NULL DEFAULT 0,
     scanner_rss  INTEGER NOT NULL DEFAULT 0,
     du_rss       INTEGER NOT NULL DEFAULT 0,
-    du_pid       INTEGER
+    du_pid       INTEGER,
+    scanner_cpu  REAL    NOT NULL DEFAULT 0,
+    du_cpu       REAL    NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_sample_run_ts ON resource_samples(run_id, ts);
@@ -125,6 +127,8 @@ def init_db(db_path: str) -> None:
         # 구버전 DB 호환: 누락 컬럼 보강
         ensure_column(conn, "scan_runs", "hostname", "TEXT")
         ensure_column(conn, "scan_runs", "app_version", "TEXT")
+        ensure_column(conn, "resource_samples", "scanner_cpu", "REAL NOT NULL DEFAULT 0")
+        ensure_column(conn, "resource_samples", "du_cpu", "REAL NOT NULL DEFAULT 0")
         conn.execute(f"PRAGMA user_version={int(SCHEMA_VERSION)}")
         conn.commit()
     finally:
