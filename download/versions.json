@@ -1,0 +1,26 @@
+{
+  "latest": "1.1.1",
+  "versions": [
+    {
+      "version": "1.1.1",
+      "python": "Python 3.6+",
+      "tar_gz": "isilon_usage-1.1.1.tar.gz",
+      "zip": "isilon_usage-1.1.1.zip",
+      "size_bytes": 64037
+    },
+    {
+      "version": "1.1.0",
+      "python": "Python 3.7+",
+      "tar_gz": "isilon_usage-1.1.0.tar.gz",
+      "zip": "isilon_usage-1.1.0.zip",
+      "size_bytes": 61558
+    },
+    {
+      "version": "1.0.0",
+      "python": "Python 3.7+",
+      "tar_gz": "isilon_usage-1.0.0.tar.gz",
+      "zip": "isilon_usage-1.0.0.zip",
+      "size_bytes": 47893
+    }
+  ]
+}

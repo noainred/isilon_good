@@ -1,51 +1,49 @@
-# 오프라인(폐쇄망) 다운로드
+# 오프라인(폐쇄망) 다운로드 — 버전별 보관소
 
-git 을 쓸 수 없는 폐쇄망 서버를 위해, **압축본 하나만 받아서** 옮기면 바로 실행할
-수 있도록 미리 만들어 둔 파일입니다. (현재 버전: **1.1.1**)
+사설 Nexus 가 불안정할 때를 대비해, **각 버전을 GitHub 에 그대로 보관**합니다.
+git 없이 브라우저/`wget` 으로 원하는 버전을 받아 폐쇄망 서버로 옮겨 바로 실행하세요.
+(`tar.gz` 또는 `zip` **한 개가 프로그램 전체**입니다.)
 
-| 파일 | 용도 |
-|------|------|
-| `isilon_usage-1.1.1.tar.gz` | 리눅스용(이 버전 고정) |
-| `isilon_usage-1.1.1.zip` | 윈도우 등(이 버전 고정) |
-| `isilon_usage-latest.tar.gz` | **링크가 안 바뀌는 최신본**(리눅스) |
-| `isilon_usage-latest.zip` | 링크가 안 바뀌는 최신본(윈도우) |
+## 📦 버전 목록 (버전별 다운로드)
+표의 링크를 `wget` 하거나 브라우저로 받으세요. 기계 판독용 목록은 `versions.json`.
 
-> `tar.gz`(또는 `zip`) **한 개가 프로그램 전체**입니다. 하나만 받으면 됩니다.
+<!-- VERSIONS:START -->
+| 버전 | 호환 | tar.gz | zip |
+|------|------|--------|-----|
+| **1.1.1** (latest) | Python 3.6+ | [tar.gz](https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.1.1.tar.gz) (62 KB) | [zip](https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.1.1.zip) |
+| **1.1.0** | Python 3.7+ | [tar.gz](https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.1.0.tar.gz) (60 KB) | [zip](https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.1.0.zip) |
+| **1.0.0** | Python 3.7+ | [tar.gz](https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.0.0.tar.gz) (46 KB) | [zip](https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.0.0.zip) |
+<!-- VERSIONS:END -->
 
-## ⬇️ wget 으로 받기 (중요)
-GitHub **파일 페이지(`/blob/...`) 주소를 wget 하면 HTML 페이지가 받아집니다.**
-반드시 아래 **raw 주소**(`raw.githubusercontent.com`)를 쓰세요. 인터넷 되는 PC에서
-받아 폐쇄망 서버로 `scp`/USB 로 옮깁니다.
+> ⚠️ 1.0.0 / 1.1.0 은 **Python 3.7+** 전용입니다. RHEL/CentOS 7 의 기본 **Python 3.6**
+> 에서는 **1.1.1 이상**을 받으세요.
 
-github.com 주소를 쓰려면 `/blob/` 을 **`/raw/`** 로 바꾸면 됩니다(자동 리다이렉트,
-wget 이 따라감). raw.githubusercontent.com 주소도 동일하게 동작합니다.
+## ⬇️ wget 으로 받기 (중요: `/blob/` 아님 `/raw/`)
+GitHub 파일 페이지(`/blob/...`)를 wget 하면 HTML 이 받아집니다. **`/raw/`** 를 쓰세요.
 
 ```bash
-# github.com 주소 — /blob/ → /raw/ (권장, 최신본/링크 고정)
+# 최신본(URL 고정) — 항상 가장 최신 버전
 wget https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-latest.tar.gz
 
-# tar.gz + zip 둘 다 한 번에(bash 중괄호 확장)
-wget https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-latest.{tar.gz,zip}
-
-# 특정 버전으로 받기
+# 특정 버전 받기 (예: 1.1.1)
 wget https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.1.1.tar.gz
 
-# (대안) raw.githubusercontent.com 주소도 동일
-wget https://raw.githubusercontent.com/noainred/isilon_good/claude/upbeat-bell-cXX8f/download/isilon_usage-latest.tar.gz
+# tar.gz + zip 둘 다 한 번에(bash 중괄호 확장)
+wget https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.1.1.{tar.gz,zip}
 ```
 
-### 비공개(private) 저장소라서 위 wget 이 404/로그인 페이지를 주면
-토큰(PAT)으로 GitHub API 를 통해 받습니다(파일이 1MB 미만이라 가능):
+### 비공개(private) 저장소라 wget 이 404/로그인 페이지를 주면
+토큰(PAT)으로 GitHub API 를 통해 받습니다(파일 1MB 미만이라 가능):
 ```bash
 curl -L -H "Authorization: Bearer <GITHUB_PAT>" \
      -H "Accept: application/vnd.github.raw" \
-     -o isilon_usage-latest.tar.gz \
-  "https://api.github.com/repos/noainred/isilon_good/contents/download/isilon_usage-latest.tar.gz?ref=claude/upbeat-bell-cXX8f"
+     -o isilon_usage-1.1.1.tar.gz \
+  "https://api.github.com/repos/noainred/isilon_good/contents/download/isilon_usage-1.1.1.tar.gz?ref=claude/upbeat-bell-cXX8f"
 ```
 
-## 설치/실행 (압축 해제만으로 — 별도 설치 불필요)
+## 설치/실행 (압축 해제만으로 — 별도 설치 불필요, Python 3.6+)
 ```bash
-tar xzf isilon_usage-latest.tar.gz        # 또는 unzip isilon_usage-latest.zip
+tar xzf isilon_usage-1.1.1.tar.gz        # 또는 unzip isilon_usage-1.1.1.zip
 cd isilon_usage-1.1.1
 python3 -m isilon_usage --version          # isilon_usage 1.1.1 (schema 1)
 
@@ -55,7 +53,9 @@ python3 -m isilon_usage serve --data-dir /var/lib/isilon_usage \
 표준 라이브러리만으로 동작합니다(psutil 은 선택). 자세한 사용법은 압축본 안의
 `docs/USER_GUIDE.md` 참고.
 
-## 압축본 재생성
+## 압축본 재생성 / 새 버전 추가
 ```bash
-python3 tools/make_release.py     # download/ 의 버전본 + latest 본 갱신(재현 가능)
+python3 tools/make_release.py     # 현재 버전 + latest + 과거 버전 보관 + 인덱스 갱신
 ```
+make_release.py 는 **기존 버전을 지우지 않고 누적**하며, `versions.json` 과 위
+버전 표를 자동으로 갱신합니다.
