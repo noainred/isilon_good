@@ -17,15 +17,21 @@ GitHub **파일 페이지(`/blob/...`) 주소를 wget 하면 HTML 페이지가 �
 반드시 아래 **raw 주소**(`raw.githubusercontent.com`)를 쓰세요. 인터넷 되는 PC에서
 받아 폐쇄망 서버로 `scp`/USB 로 옮깁니다.
 
+github.com 주소를 쓰려면 `/blob/` 을 **`/raw/`** 로 바꾸면 됩니다(자동 리다이렉트,
+wget 이 따라감). raw.githubusercontent.com 주소도 동일하게 동작합니다.
+
 ```bash
-# 최신본(링크 고정) — 리눅스
-wget https://raw.githubusercontent.com/noainred/isilon_good/claude/upbeat-bell-cXX8f/download/isilon_usage-latest.tar.gz
+# github.com 주소 — /blob/ → /raw/ (권장, 최신본/링크 고정)
+wget https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-latest.tar.gz
 
 # tar.gz + zip 둘 다 한 번에(bash 중괄호 확장)
-wget https://raw.githubusercontent.com/noainred/isilon_good/claude/upbeat-bell-cXX8f/download/isilon_usage-latest.{tar.gz,zip}
+wget https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-latest.{tar.gz,zip}
 
 # 특정 버전으로 받기
-wget https://raw.githubusercontent.com/noainred/isilon_good/claude/upbeat-bell-cXX8f/download/isilon_usage-1.1.0.tar.gz
+wget https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.1.0.tar.gz
+
+# (대안) raw.githubusercontent.com 주소도 동일
+wget https://raw.githubusercontent.com/noainred/isilon_good/claude/upbeat-bell-cXX8f/download/isilon_usage-latest.tar.gz
 ```
 
 ### 비공개(private) 저장소라서 위 wget 이 404/로그인 페이지를 주면
