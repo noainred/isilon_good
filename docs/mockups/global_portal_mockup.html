@@ -57,6 +57,11 @@
   .row-exp td { background:#121a24; }
   .dot { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:6px; vertical-align:middle; }
   .legend { display:flex; gap:18px; flex-wrap:wrap; font-size:12.5px; color:var(--muted); }
+  .warn-cell { color:#ffcf8b; font-weight:600; }
+  .miss-cell { color:#ff8b8b; font-weight:600; }
+  .base-cell { color:#9fd0ff; }
+  .cmpbar { height:8px; background:#0d1219; border-radius:5px; overflow:hidden; border:1px solid var(--line); width:90px; display:inline-block; vertical-align:middle; }
+  .cmpbar > span { display:block; height:100%; background: linear-gradient(90deg,#4f9cff,#38d39f); }
   .watermark { position: fixed; right: 12px; bottom: 10px; color:#33414f; font-size: 11px; }
 </style>
 </head>
@@ -68,6 +73,7 @@
   <nav id="nav">
     <button class="navbtn active" data-view="arch">아키텍처 구성도</button>
     <button class="navbtn" data-view="dash">글로벌 대시보드</button>
+    <button class="navbtn" data-view="compare">경로 비교</button>
     <button class="navbtn" data-view="nodes">노드 설정</button>
   </nav>
 </header>
@@ -285,11 +291,72 @@
   </div>
 </div>
 
+<!-- ================= 경로 비교 (Cross-DC) ================= -->
+<div class="wrap view" id="view-compare" style="display:none;">
+  <div class="card" style="margin-bottom:14px;">
+    <h2>같은 경로를 데이터센터별로 비교 — 모든 스토리지의 디렉터리 구성이 거의 같아 정렬 비교가 잘 맞습니다</h2>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <span class="sub">경로</span>
+      <input class="inp mono" style="flex:1; min-width:280px;" value="/ifs/data/research" />
+      <span class="sub">기준</span>
+      <select class="inp"><option>🇰🇷 HQ(서울 본사)</option><option>dc-seoul</option><option>중앙값(median)</option></select>
+      <span class="sub">용량 기준</span>
+      <select class="inp"><option>디스크 점유</option><option>논리 크기</option></select>
+      <button class="primary">비교</button>
+    </div>
+    <table style="margin-top:12px;">
+      <thead><tr><th>위치</th><th class="num">재귀 용량</th><th>상대 크기</th><th class="num">파일 수</th><th>최근 스캔</th><th class="num">기준(HQ) 대비</th><th>판정</th></tr></thead>
+      <tbody>
+        <tr><td><b>🇰🇷 HQ(서울 본사)</b></td><td class="num base-cell">1.30 PB</td><td><span class="cmpbar"><span style="width:96%"></span></span></td><td class="num">4.20억</td><td class="sub">방금</td><td class="num">기준</td><td><span class="badge b-online">기준</span></td></tr>
+        <tr><td>dc-seoul</td><td class="num">1.28 PB</td><td><span class="cmpbar"><span style="width:95%"></span></span></td><td class="num">4.10억</td><td class="sub">5분 전</td><td class="num">−20 TB</td><td><span class="badge b-online">정상</span></td></tr>
+        <tr><td>dc-frankfurt</td><td class="num">1.35 PB</td><td><span class="cmpbar"><span style="width:100%"></span></span></td><td class="num">4.40억</td><td class="sub">12분 전</td><td class="num">+50 TB</td><td><span class="badge b-online">정상</span></td></tr>
+        <tr><td>dc-virginia</td><td class="num warn-cell">0.98 PB</td><td><span class="cmpbar"><span style="width:73%;background:linear-gradient(90deg,#f5a623,#ff5c5c)"></span></span></td><td class="num warn-cell">3.00억</td><td class="sub">1시간 전</td><td class="num warn-cell">−320 TB</td><td><span class="badge b-stale">드리프트 ⚠</span></td></tr>
+      </tbody>
+    </table>
+    <div class="note" style="margin-top:12px;">버지니아가 기준 대비 <b>−320 TB(−25%)</b> → <b>복제 지연/누락 의심</b>. 각 값은 해당 DC의 <b>최근 완료 스캔</b> 기준이라 <b>스캔 시각</b>을 함께 표시합니다.</div>
+  </div>
+
+  <div class="card">
+    <h2>통합 디렉터리 매트릭스 — 행=디렉터리, 열=데이터센터 · 클릭하면 그 디렉터리로 더 깊이</h2>
+    <div style="display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; align-items:center;">
+      <button>🏠 루트</button>
+      <span class="sub mono" style="flex:1;">🏠 / <a class="link" href="#">ifs</a> / <a class="link" href="#">data</a></span>
+      <span class="tag">표준(중앙값) 대비 ±15% 초과 시 강조</span>
+    </div>
+    <table>
+      <thead><tr><th>디렉터리</th><th class="num">🇰🇷 HQ</th><th class="num">서울</th><th class="num">프랑크푸르트</th><th class="num">버지니아</th><th>편차 판정</th></tr></thead>
+      <tbody>
+        <tr><td><a class="link" href="#">research</a> <span class="tag">▸ 9.1M 디렉터리</span></td>
+          <td class="num">1.30 PB</td><td class="num">1.28 PB</td><td class="num">1.35 PB</td><td class="num warn-cell">0.98 PB</td>
+          <td><span class="badge b-stale">버지니아 낮음 ⚠</span></td></tr>
+        <tr><td><a class="link" href="#">backup</a></td>
+          <td class="num">0.80 PB</td><td class="num">0.81 PB</td><td class="num">0.79 PB</td><td class="num">0.80 PB</td>
+          <td><span class="badge b-online">정상</span></td></tr>
+        <tr><td><a class="link" href="#">archive</a></td>
+          <td class="num">0.42 PB</td><td class="num">0.40 PB</td><td class="num miss-cell">없음</td><td class="num">0.41 PB</td>
+          <td><span class="badge b-offline">프랑크푸르트 누락 ⚠</span></td></tr>
+        <tr><td><a class="link" href="#">logs</a></td>
+          <td class="num">0.05 PB</td><td class="num">0.05 PB</td><td class="num">0.06 PB</td><td class="num warn-cell">0.30 PB</td>
+          <td><span class="badge b-stale">버지니아 급증 ⚠</span></td></tr>
+        <tr><td><a class="link" href="#">tmp</a></td>
+          <td class="num">0.02 PB</td><td class="num">0.02 PB</td><td class="num">0.02 PB</td><td class="num">0.02 PB</td>
+          <td><span class="badge b-online">정상</span></td></tr>
+      </tbody>
+    </table>
+    <div class="legend" style="margin-top:10px;">
+      <span><span class="dot" style="background:#38d39f"></span>정상(편차 작음)</span>
+      <span><span class="dot" style="background:#f5a623"></span>드리프트/급증(편차 큼)</span>
+      <span><span class="dot" style="background:#ff5c5c"></span>누락(한 DC에 디렉터리 없음)</span>
+    </div>
+    <div class="note" style="margin-top:10px;"><b>전제</b> — 절대경로가 같으면 바로 정렬됩니다. 마운트 접두어가 다른 DC는 노드별 <b>경로 별칭</b>(예: <span class="mono">/mnt/isilon → /ifs</span>) 한 줄로 정규화합니다. 비교는 <b>같은 용량 기준(size_mode)</b>일 때 공정합니다.</div>
+  </div>
+</div>
+
 <div class="watermark">샘플 목업 — 데이터는 예시이며 실제 연결되지 않습니다</div>
 <script>
   const $ = (id) => document.getElementById(id);
   function show(v){
-    ["arch","dash","nodes"].forEach(n => $("view-"+n).style.display = (n===v)?"block":"none");
+    ["arch","dash","compare","nodes"].forEach(n => $("view-"+n).style.display = (n===v)?"block":"none");
     document.querySelectorAll(".navbtn").forEach(b => b.classList.toggle("active", b.dataset.view===v));
   }
   document.querySelectorAll(".navbtn").forEach(b => b.addEventListener("click", () => show(b.dataset.view)));
