@@ -204,7 +204,11 @@ def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 
             "max_depth": r.get("max_depth") or 0,
             "workers": r.get("workers") or 0,             # 설정된 동시 스캔 스레드 수
             "active_workers": r.get("active_workers") or 0,  # 현재 병렬 처리 중인 워커 수
-            "mount_readonly": bool(r.get("mount_readonly")),  # 대상 마운트 읽기전용(ro) 여부
+            # 마운트 읽기전용: -1=확인 안 함(설정 끔), 0=쓰기가능, 1=읽기전용
+            "mount_readonly": (r.get("mount_readonly") is not None
+                               and int(r.get("mount_readonly")) == 1),
+            "readonly_checked": (r.get("mount_readonly") is not None
+                                 and int(r.get("mount_readonly")) >= 0),
             "fs_total_bytes": fs_total,
             "fs_used_bytes": fs_used,
             "fs_free_bytes": r.get("fs_free_bytes") or 0,
@@ -548,7 +552,7 @@ class ScanController:
             self.data_dir, root_path=path, db_path=db_path,
             backend=backend, size_mode=size_mode,
         )
-        readonly = _path_readonly(path)
+        readonly = _path_readonly(path) if self.settings.get("check_readonly", True) else None
         self._log("scan #%d start: %s (backend=%s, size=%s, x=%s, ro=%s)" % (
             scan_id, path, backend, size_mode, one_file_system, readonly))
         self._launch(scan_id, db_path, path, backend, size_mode,
@@ -569,6 +573,7 @@ class ScanController:
                     backend=backend, size_mode=size_mode,
                     one_file_system=one_file_system,
                     batch_size=self.batch_size, workers=self.workers,
+                    check_readonly=bool(self.settings.get("check_readonly", True)),
                     resume=resume, sample_interval=self.sample_interval,
                     stop_event=stop, with_monitor=True,
                     manager_db=mgrmod.manager_db_path(self.data_dir),

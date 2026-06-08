@@ -17,6 +17,7 @@ DEFAULTS: dict = {
     "default_backend": "native",        # 새 스캔 기본 백엔드(native/du)
     "default_size_mode": "disk",        # 기본 용량 기준(disk/apparent)
     "default_one_file_system": False,   # 기본 -x(한 파일시스템)
+    "check_readonly": True,             # 스캔 시작 시 대상 마운트 읽기전용(ro) 검사·표시
     "batch_size": 500,                  # DB 커밋 배치 크기
     "sample_interval": 2.0,             # 자원 샘플링 주기(초)
     "mount_bases": [],                  # 웹에서 스캔 허용할 경로 목록(빈 목록=전체 허용)
@@ -56,6 +57,7 @@ def sanitize(raw: dict) -> dict:
     if s["default_size_mode"] not in ("disk", "apparent"):
         s["default_size_mode"] = "disk"
     s["default_one_file_system"] = bool(s["default_one_file_system"])
+    s["check_readonly"] = bool(s.get("check_readonly", True))
 
     def _int(v, lo, hi, dflt):
         try:

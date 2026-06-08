@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>예약 스캔 — 반복 주기 (샘플 목업)</title>
+<title>예약 스캔 — 반복 주기 (시작 + 반복주기) 샘플</title>
 <style>
   :root { --bg:#0f141b; --panel:#19212c; --panel2:#1f2937; --line:#2b3543;
     --text:#e6edf3; --muted:#8b98a9; --accent:#4f9cff; --accent2:#38d39f; --ok:#38d39f; }
@@ -20,13 +20,14 @@
   label.fld { display:flex; flex-direction:column; gap:6px; font-size:12.5px; color:var(--muted); }
   .row { display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; }
   .inp, select.inp { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:9px 11px; font-size:13px; }
-  input.num { width:90px; }
+  input.num { width:84px; }
+  .seg { border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .seg .lab { font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#7cc4ff; font-weight:700; margin-bottom:10px; }
   button { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:8px 13px; cursor:pointer; font-size:12.5px; }
-  button:hover { border-color:var(--accent); }
-  button.primary { border-color:var(--accent2); color:#cfe; font-weight:700; }
+  button:hover { border-color:var(--accent); } button.primary { border-color:var(--accent2); color:#cfe; font-weight:700; }
   .chip { background:var(--panel2); border:1px solid var(--line); border-radius:999px; padding:6px 12px; cursor:pointer; font-size:12.5px; user-select:none; }
   .chip.on { background:#16344f; border-color:#2f6fb0; color:#cfe6ff; font-weight:700; }
-  .grp { display:none; gap:12px; align-items:flex-end; flex-wrap:wrap; margin-top:14px; padding-top:14px; border-top:1px dashed #2b3543; }
+  .grp { display:none; gap:14px; flex-wrap:wrap; margin-top:14px; }
   .grp.on { display:flex; }
   .summary { margin-top:16px; background:#0d1219; border:1px solid var(--line); border-radius:9px; padding:14px 16px; }
   .summary .big { font-size:18px; font-weight:700; color:#cfe6ff; }
@@ -37,113 +38,102 @@
 </style>
 </head>
 <body>
-<header><h1>⏱ 예약 스캔 — 반복 주기 설정 <span class="pill">샘플 목업 (구현 전 미리보기)</span></h1></header>
+<header><h1>⏱ 예약 스캔 — 반복 주기 <span class="sub" style="font-weight:400">(시작 + 반복주기)</span> <span class="pill">샘플 목업</span></h1></header>
 <div class="wrap">
 
   <div class="card">
-    <h2>예약 추가 — 반복 주기를 콤보박스로 지정</h2>
+    <h2>예약 추가 — 단위를 고르면 “시작”과 “반복주기”를 따로 지정</h2>
     <div class="row">
-      <label class="fld">스캔 루트(기존 스캔 이력에서)
-        <select id="path" class="inp mono" style="min-width:260px;">
-          <option>/data/nexus-data</option><option>/data/research</option><option>/data/backup</option>
-        </select>
+      <label class="fld">스캔 루트
+        <select id="path" class="inp mono" style="min-width:240px;">
+          <option>/data/nexus-data</option><option>/data/research</option><option>/data/backup</option></select>
       </label>
       <label class="fld">반복 단위
         <select id="unit" class="inp" style="min-width:150px;">
           <option value="minute">분 마다</option>
           <option value="hour">시간 마다</option>
-          <option value="day">일 마다</option>
-          <option value="week">주 마다</option>
-          <option value="month">개월 마다</option>
-          <option value="weekday">요일 지정(매주)</option>
+          <option value="day">일 마다 (Daily)</option>
+          <option value="week" selected>주 마다 (Weekly)</option>
+          <option value="month">개월 마다 (Monthly)</option>
         </select>
       </label>
     </div>
 
     <!-- 분 -->
-    <div class="grp" id="g-minute"><label class="fld">간격<div><input id="m-n" class="inp num" type="number" value="30" min="1"/> 분 마다</div></label></div>
+    <div class="grp" id="g-minute">
+      <div class="seg"><div class="lab">반복주기</div><div class="row"><input id="mi-y" class="inp num" type="number" value="30" min="1"/> 분마다</div></div>
+    </div>
     <!-- 시간 -->
-    <div class="grp" id="g-hour"><label class="fld">간격<div><input id="h-n" class="inp num" type="number" value="6" min="1"/> 시간 마다</div></label></div>
-    <!-- 일 -->
+    <div class="grp" id="g-hour">
+      <div class="seg"><div class="lab">시작</div><div class="row"><label class="fld">기준 시각<input id="ho-t" class="inp" type="time" value="00:00"/></label></div></div>
+      <div class="seg"><div class="lab">반복주기</div><div class="row"><input id="ho-y" class="inp num" type="number" value="6" min="1"/> 시간마다</div></div>
+    </div>
+    <!-- 일 (Daily) -->
     <div class="grp" id="g-day">
-      <label class="fld">간격<div><input id="d-n" class="inp num" type="number" value="1" min="1"/> 일 마다</div></label>
-      <label class="fld">실행 시각<input id="d-t" class="inp" type="time" value="03:00"/></label>
+      <div class="seg"><div class="lab">시작</div><div class="row">
+        <label class="fld">시작일<input id="da-d" class="inp" type="date"/></label>
+        <label class="fld">시각<input id="da-t" class="inp" type="time" value="03:00"/></label></div></div>
+      <div class="seg"><div class="lab">반복주기</div><div class="row"><input id="da-y" class="inp num" type="number" value="1" min="1"/> 일마다</div></div>
     </div>
-    <!-- 주 -->
+    <!-- 주 (Weekly) -->
     <div class="grp" id="g-week">
-      <label class="fld">간격<div><input id="w-n" class="inp num" type="number" value="2" min="1"/> 주 마다</div></label>
-      <label class="fld">요일(복수 선택)<div id="w-days" class="row" style="gap:6px;"></div></label>
-      <label class="fld">실행 시각<input id="w-t" class="inp" type="time" value="03:00"/></label>
+      <div class="seg"><div class="lab">시작 (요일)</div><div class="row">
+        <label class="fld">시작 요일(복수)<div id="wk-days" class="row" style="gap:6px;"></div></label>
+        <label class="fld">시각<input id="wk-t" class="inp" type="time" value="03:00"/></label></div></div>
+      <div class="seg"><div class="lab">반복주기</div><div class="row"><input id="wk-y" class="inp num" type="number" value="2" min="1"/> 주마다</div></div>
     </div>
-    <!-- 개월 -->
+    <!-- 개월 (Monthly) -->
     <div class="grp" id="g-month">
-      <label class="fld">간격<div><input id="mo-n" class="inp num" type="number" value="1" min="1"/> 개월 마다</div></label>
-      <label class="fld">며칠<div><input id="mo-d" class="inp num" type="number" value="1" min="1" max="31"/> 일</div></label>
-      <label class="fld">실행 시각<input id="mo-t" class="inp" type="time" value="04:00"/></label>
-    </div>
-    <!-- 요일 지정 -->
-    <div class="grp" id="g-weekday">
-      <label class="fld">매주 선택 요일<div id="wd-days" class="row" style="gap:6px;"></div></label>
-      <label class="fld">실행 시각<input id="wd-t" class="inp" type="time" value="03:00"/></label>
+      <div class="seg"><div class="lab">시작 (x월 x일부터)</div><div class="row">
+        <label class="fld">시작 월<select id="mo-m" class="inp"></select></label>
+        <label class="fld">시작 일<select id="mo-d" class="inp"></select></label>
+        <label class="fld">시각<input id="mo-t" class="inp" type="time" value="04:00"/></label></div></div>
+      <div class="seg"><div class="lab">반복주기</div><div class="row"><input id="mo-y" class="inp num" type="number" value="1" min="1"/> 개월마다</div></div>
     </div>
 
     <div class="summary">
-      <div class="sub">요약(사람이 읽기 쉬운 표현)</div>
+      <div class="sub">요약</div>
       <div class="big" id="summary">—</div>
       <div class="sub" id="nextrun" style="margin-top:6px;"></div>
     </div>
-    <div class="row" style="margin-top:14px; justify-content:flex-end;">
-      <button>미리보기 갱신</button><button class="primary">＋ 예약 추가</button>
-    </div>
+    <div class="row" style="margin-top:14px; justify-content:flex-end;"><button class="primary">＋ 예약 추가</button></div>
   </div>
 
   <div class="card">
     <h2>등록된 예약 (예시)</h2>
     <table>
-      <thead><tr><th>경로</th><th>반복</th><th>다음 실행</th><th>사용</th><th>동작</th></tr></thead>
+      <thead><tr><th>경로</th><th>시작</th><th>반복주기</th><th>다음 실행</th><th>사용</th></tr></thead>
       <tbody>
-        <tr><td class="mono">/data/nexus-data</td><td>매 <b>30분</b></td><td class="sub">12분 후</td><td><span class="badge">사용</span></td><td><button>수정</button> <button>삭제</button></td></tr>
-        <tr><td class="mono">/data/research</td><td>매주 <b>월</b> 03:00</td><td class="sub">내일 03:00</td><td><span class="badge">사용</span></td><td><button>수정</button> <button>삭제</button></td></tr>
-        <tr><td class="mono">/data/backup</td><td>매 <b>2주</b> 토 02:00</td><td class="sub">5일 후 02:00</td><td><span class="badge">사용</span></td><td><button>수정</button> <button>삭제</button></td></tr>
-        <tr><td class="mono">/data/archive</td><td>매 <b>1개월</b> 1일 04:00</td><td class="sub">23일 후 04:00</td><td><span class="badge">사용</span></td><td><button>수정</button> <button>삭제</button></td></tr>
-        <tr><td class="mono">/data/logs</td><td>매 <b>6시간</b></td><td class="sub">2시간 후</td><td><span class="badge">사용</span></td><td><button>수정</button> <button>삭제</button></td></tr>
+        <tr><td class="mono">/data/research</td><td>월요일 03:00</td><td>매 <b>2주</b>마다</td><td class="sub">6일 후 03:00</td><td><span class="badge">사용</span></td></tr>
+        <tr><td class="mono">/data/backup</td><td>3월 1일 04:00</td><td>매 <b>1개월</b>마다</td><td class="sub">23일 후 04:00</td><td><span class="badge">사용</span></td></tr>
+        <tr><td class="mono">/data/nexus-data</td><td>—</td><td>매 <b>30분</b>마다</td><td class="sub">12분 후</td><td><span class="badge">사용</span></td></tr>
+        <tr><td class="mono">/data/logs</td><td>00:00 기준</td><td>매 <b>6시간</b>마다</td><td class="sub">2시간 후</td><td><span class="badge">사용</span></td></tr>
       </tbody>
     </table>
-    <div class="sub" style="margin-top:8px;">내부 저장은 <span class="mono">{unit, every, weekdays, day_of_month, at}</span> 형태로 보관 → 스케줄러가 다음 실행 시각을 계산합니다.</div>
+    <div class="sub" style="margin-top:8px;">내부 저장: <span class="mono">{unit, every, start_weekdays|start_month/start_day, at}</span> → 스케줄러가 “시작 기준 + 반복주기”로 다음 실행을 계산.</div>
   </div>
 </div>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const DOW = ["일","월","화","수","목","금","토"];
-const sel = { week:new Set([1]), weekday:new Set([1]) };  // 기본 월요일
-
-function buildDays(boxId, key){
-  const box = $(boxId); box.innerHTML = "";
-  DOW.forEach((d,i)=>{ const c=document.createElement("span");
-    c.className="chip"+(sel[key].has(i)?" on":""); c.textContent=d;
-    c.onclick=()=>{ if(sel[key].has(i)) sel[key].delete(i); else sel[key].add(i);
-      c.classList.toggle("on"); update(); };
-    box.appendChild(c); });
-}
-function days(key){ return [...sel[key]].sort().map(i=>DOW[i]).join(",") || "(요일 선택)"; }
-
-function showGroup(u){
-  ["minute","hour","day","week","month","weekday"].forEach(g=>$("g-"+g).classList.toggle("on", g===u));
-}
+const wsel = new Set([1]); // 기본 월요일
+function buildDays(){ const b=$("wk-days"); b.innerHTML="";
+  DOW.forEach((d,i)=>{ const c=document.createElement("span"); c.className="chip"+(wsel.has(i)?" on":""); c.textContent=d;
+    c.onclick=()=>{ wsel.has(i)?wsel.delete(i):wsel.add(i); c.classList.toggle("on"); update(); }; b.appendChild(c); }); }
+function fillSel(id,n,suffix){ const s=$(id); for(let i=1;i<=n;i++){ const o=document.createElement("option"); o.value=i; o.textContent=i+suffix; s.appendChild(o);} }
+function wdays(){ return [...wsel].sort().map(i=>DOW[i]+"요일").join(", ") || "(요일 선택)"; }
+function showGroup(u){ ["minute","hour","day","week","month"].forEach(g=>$("g-"+g).classList.toggle("on", g===u)); }
 function update(){
-  const u = $("unit").value; showGroup(u);
-  let s = "—";
-  if(u==="minute") s = `매 ${$("m-n").value}분 마다 실행`;
-  else if(u==="hour") s = `매 ${$("h-n").value}시간 마다 실행`;
-  else if(u==="day") s = `매 ${$("d-n").value}일 마다 · ${$("d-t").value} 에 실행`;
-  else if(u==="week") s = `매 ${$("w-n").value}주 마다 · ${days("week")}요일 · ${$("w-t").value} 에 실행`;
-  else if(u==="month") s = `매 ${$("mo-n").value}개월 마다 · ${$("mo-d").value}일 · ${$("mo-t").value} 에 실행`;
-  else if(u==="weekday") s = `매주 ${days("weekday")}요일 · ${$("wd-t").value} 에 실행`;
-  $("summary").textContent = s;
-  $("nextrun").textContent = "예상 다음 실행: (스케줄러가 계산) — 예: 가장 가까운 조건 시각";
+  const u=$("unit").value; showGroup(u); let s="—", nx="";
+  if(u==="minute"){ s=`매 ${$("mi-y").value}분마다`; nx="다음 실행: 약 "+$("mi-y").value+"분 후"; }
+  else if(u==="hour"){ s=`${$("ho-t").value} 기준 · 매 ${$("ho-y").value}시간마다`; nx="다음 실행: 기준 시각부터 N시간 간격"; }
+  else if(u==="day"){ s=`${$("da-d").value||"(시작일)"} ${$("da-t").value} 시작 · 매 ${$("da-y").value}일마다`; }
+  else if(u==="week"){ s=`${wdays()} ${$("wk-t").value} · 매 ${$("wk-y").value}주마다`; nx="다음 실행: 가장 가까운 선택 요일"; }
+  else if(u==="month"){ s=`${$("mo-m").value}월 ${$("mo-d").value}일 ${$("mo-t").value}부터 · 매 ${$("mo-y").value}개월마다`; nx="다음 실행: 시작일 기준 N개월 간격"; }
+  $("summary").textContent=s; $("nextrun").textContent=nx;
 }
-buildDays("w-days","week"); buildDays("wd-days","weekday");
+buildDays(); fillSel("mo-m",12,"월"); fillSel("mo-d",31,"일");
 document.querySelectorAll("select,input").forEach(e=>e.addEventListener("input",update));
 update();
 </script>

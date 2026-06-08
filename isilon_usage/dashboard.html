@@ -313,6 +313,12 @@
             <option value="true">사용</option>
           </select>
         </label>
+        <label>마운트 읽기전용(ro) 확인
+          <select id="setReadonly" class="optsel">
+            <option value="true">사용(시작 시 검사·표시)</option>
+            <option value="false">사용 안 함</option>
+          </select>
+        </label>
         <label>커밋 배치 크기
           <input id="setBatch" type="number" min="1" max="1000000" class="setinput" />
         </label>
@@ -441,7 +447,7 @@
     <div class="card">
       <h2>요약</h2>
       <div class="kv"><span class="k">단계</span><span class="v" id="phaseTxt">—</span></div>
-      <div class="kv"><span class="k">마운트 상태</span><span class="v" id="mountRo">—</span></div>
+      <div class="kv" id="mountRoRow"><span class="k">마운트 상태</span><span class="v" id="mountRo">—</span></div>
       <div class="kv"><span class="k">탐색된 디렉터리</span><span class="v" id="discovered">0</span></div>
       <div class="kv"><span class="k">집계 완료 디렉터리</span><span class="v" id="processed">0</span></div>
       <div class="kv"><span class="k">총 파일 수</span><span class="v" id="totalFiles">0</span></div>
@@ -607,6 +613,7 @@ async function loadSettings() {
     $("setBackend").value = s.default_backend;
     $("setSize").value = s.default_size_mode;
     $("setOFS").value = String(s.default_one_file_system);
+    $("setReadonly").value = String(s.check_readonly !== false);
     $("setBatch").value = s.batch_size;
     $("setSample").value = s.sample_interval;
     $("setTopN").value = s.top_n;
@@ -647,7 +654,7 @@ async function loadSettings() {
     }
     // 편집 가능 여부
     $("settingsLockMsg").style.display = j.locked ? "block" : "none";
-    ["setBackend","setSize","setOFS","setBatch","setSample","setTopN","setRefresh",
+    ["setBackend","setSize","setOFS","setReadonly","setBatch","setSample","setTopN","setRefresh",
      "setWorkers","setRetention","setWebhook","setApiToken","setMounts","saveSettingsBtn",
      "schPath","schEvery","schBackend","schAdd",
      "setLogPath","setEmail","setSmtpHost","setSmtpPort","setSmtpTls",
@@ -668,6 +675,7 @@ async function saveSettings() {
     default_backend: $("setBackend").value,
     default_size_mode: $("setSize").value,
     default_one_file_system: $("setOFS").value === "true",
+    check_readonly: $("setReadonly").value === "true",
     batch_size: parseInt($("setBatch").value),
     sample_interval: parseFloat($("setSample").value),
     top_n: parseInt($("setTopN").value),
@@ -808,9 +816,10 @@ async function startScan() {
     });
     const j = await res.json();
     if (j.ok) {
-      const roTxt = j.mount_readonly
-        ? ' · <span style="color:var(--ok)">🔒 읽기전용(ro)</span>'
-        : ' · <span style="color:var(--warn)">✏ 쓰기가능(rw)</span>';
+      const roTxt = (j.mount_readonly == null) ? ""
+        : (j.mount_readonly
+          ? ' · <span style="color:var(--ok)">🔒 읽기전용(ro)</span>'
+          : ' · <span style="color:var(--warn)">✏ 쓰기가능(rw)</span>');
       $("startMsg").innerHTML = `<span style="color:var(--ok)">✓ 스캔 #${j.scan_id} 시작됨: ${j.root_path}</span>${roTxt}`;
       selectedScan = j.scan_id; userPicked = true;
       updateStartButton(1);   // 즉시 빨간 "스캔 중…"
@@ -1320,10 +1329,15 @@ function render(d) {
   badge.textContent = phaseKo[r.status] || phaseKo[r.phase] || r.status;
   $("phaseTxt").textContent = phaseKo[r.phase] || r.phase;
 
-  // 마운트 읽기전용(ro) 여부 — 실행 시 확인해 안전 상태를 표시
-  $("mountRo").innerHTML = r.mount_readonly
-    ? '<span style="color:var(--ok)">🔒 읽기전용(ro) — 안전</span>'
-    : '<span style="color:var(--warn)">✏ 쓰기가능(rw)</span>';
+  // 마운트 읽기전용(ro) 여부 — 설정(check_readonly)이 켜졌을 때만 표시
+  if (r.readonly_checked) {
+    $("mountRoRow").style.display = "flex";
+    $("mountRo").innerHTML = r.mount_readonly
+      ? '<span style="color:var(--ok)">🔒 읽기전용(ro) — 안전</span>'
+      : '<span style="color:var(--warn)">✏ 쓰기가능(rw)</span>';
+  } else {
+    $("mountRoRow").style.display = "none";   // 확인 끔 → 행 숨김
+  }
 
   $("currentDir").textContent = r.current_dir || (r.status === "done" ? "✅ 스캔 완료" : "—");
 

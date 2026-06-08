@@ -75,6 +75,7 @@ class Scanner:
         batch_size: int = 500,
         workers: int = 1,
         resume: bool = False,
+        check_readonly: bool = True,
         stop_event: Optional[threading.Event] = None,
         monitor: Optional[ResourceMonitor] = None,
         manager_db: Optional[str] = None,
@@ -89,6 +90,7 @@ class Scanner:
         self.batch_size = batch_size
         self.workers = max(1, int(workers))
         self.resume = resume
+        self.check_readonly = bool(check_readonly)
         self.stop_event = stop_event or threading.Event()
         self.monitor = monitor
         self.manager_db = manager_db
@@ -235,7 +237,8 @@ class Scanner:
                 conn, self.run_id,
                 fs_total_bytes=total, fs_used_bytes=used, fs_free_bytes=free,
                 workers=self.workers,   # 설정된 동시 스캔 스레드 수(병렬도)
-                mount_readonly=int(self._is_readonly()),  # 마운트 읽기전용(ro) 여부
+                # 마운트 읽기전용(ro) 여부 — 검사 끔이면 -1(확인 안 함)
+                mount_readonly=(int(self._is_readonly()) if self.check_readonly else -1),
             )
             conn.commit()
             self._update_manager()  # fs 용량 등 초기 요약 반영
@@ -661,6 +664,7 @@ def run_scan(
     batch_size: int = 500,
     workers: int = 1,
     resume: bool = False,
+    check_readonly: bool = True,
     sample_interval: float = 2.0,
     stop_event: Optional[threading.Event] = None,
     with_monitor: bool = True,
@@ -689,7 +693,7 @@ def run_scan(
         db_path, root_path,
         backend=backend, size_mode=size_mode,
         one_file_system=one_file_system, batch_size=batch_size,
-        workers=workers, resume=resume,
+        workers=workers, resume=resume, check_readonly=check_readonly,
         stop_event=stop_event, monitor=monitor,
         manager_db=manager_db, manager_scan_id=manager_scan_id,
     )

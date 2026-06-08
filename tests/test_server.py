@@ -153,8 +153,9 @@ def main() -> int:
         assert st["api_token"] == "" and st["api_token_set"] is True, st
 
         # 설정 저장 라운드트립
-        up = c.post("/api/settings", {"settings": {"top_n": 3, "scan_workers": 2}})
+        up = c.post("/api/settings", {"settings": {"top_n": 3, "scan_workers": 2, "check_readonly": False}})
         assert up["ok"] and up["settings"]["top_n"] == 3 and up["settings"]["scan_workers"] == 2
+        assert up["settings"]["check_readonly"] is False, up["settings"]
 
         # 스캔 2 → diff
         r2 = c.post("/api/scan/start", {"path": root})
