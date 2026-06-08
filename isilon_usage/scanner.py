@@ -155,6 +155,7 @@ class Scanner:
             "scanned_bytes": self._scanned_bytes,
             "total_files": self._total_files,
             "error_dirs": self._error_dirs,
+            "active_workers": self._disc_active,   # 지금 동시에 처리 중인 워커 수
         }
         self._current_dir = current_dir
         if current_dir is not None:
@@ -225,6 +226,7 @@ class Scanner:
             dbmod.update_run(
                 conn, self.run_id,
                 fs_total_bytes=total, fs_used_bytes=used, fs_free_bytes=free,
+                workers=self.workers,   # 설정된 동시 스캔 스레드 수(병렬도)
             )
             conn.commit()
             self._update_manager()  # fs 용량 등 초기 요약 반영

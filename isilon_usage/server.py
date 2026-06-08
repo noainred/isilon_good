@@ -187,6 +187,8 @@ def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 
             "current_dir": r.get("current_dir"),
             "current_depth": r.get("current_depth") or 0,
             "max_depth": r.get("max_depth") or 0,
+            "workers": r.get("workers") or 0,             # 설정된 동시 스캔 스레드 수
+            "active_workers": r.get("active_workers") or 0,  # 현재 병렬 처리 중인 워커 수
             "fs_total_bytes": fs_total,
             "fs_used_bytes": fs_used,
             "fs_free_bytes": r.get("fs_free_bytes") or 0,
@@ -228,6 +230,65 @@ def list_children(conn, run_id: int, parent_id: Optional[int], *, limit: int = 2
             (run_id, parent_id, limit),
         ).fetchall()
     return {"ok": True, "children": [dict(r) for r in rows]}
+
+
+# 상위 디렉터리 표의 정렬 가능한 컬럼(화이트리스트 — SQL 주입 방지)
+_TOP_SORT_COLS = {
+    "size": "(CASE WHEN total_bytes>0 THEN total_bytes ELSE own_bytes END)",
+    "own": "own_bytes",
+    "files": "(CASE WHEN total_files>0 THEN total_files ELSE file_count END)",
+    "subdirs": "subdir_count",
+    "depth": "depth",
+    "path": "path",
+}
+
+
+def list_top_dirs(conn, run_id, *, under_id=None, rel_depth=None,
+                  sort="size", order="desc", limit=50) -> dict:
+    """용량 상위 디렉터리를 조건에 맞춰 돌려준다.
+
+    - under_id: 이 디렉터리 하위로만 한정(없으면 스캔 루트 전체).
+    - rel_depth: 기준(루트 또는 under) 대비 상대 깊이. 1=직속 자식, 2=손자… .
+                 0/None 이면 깊이 제한 없이 하위 전체.
+    - sort/order: 정렬 컬럼(_TOP_SORT_COLS)과 방향(asc/desc).
+    """
+    sort_expr = _TOP_SORT_COLS.get(str(sort), _TOP_SORT_COLS["size"])
+    order_sql = "ASC" if str(order).lower() == "asc" else "DESC"
+
+    where = ["run_id=?"]
+    params = [run_id]
+    under_depth = 0
+    under_path = None
+    if under_id is not None:
+        urow = conn.execute(
+            "SELECT path, depth FROM directories WHERE run_id=? AND id=?",
+            (run_id, under_id),
+        ).fetchone()
+        if urow is not None:
+            under_depth = int(urow["depth"])
+            under_path = urow["path"]
+            like = (under_path.replace("\\", "\\\\")
+                    .replace("%", "\\%").replace("_", "\\_")).rstrip("/")
+            where.append("path LIKE ? ESCAPE '\\'")
+            params.append(like + "/%")
+    if rel_depth:
+        try:
+            where.append("depth=?")
+            params.append(under_depth + int(rel_depth))
+        except (TypeError, ValueError):
+            pass
+
+    params.append(int(limit))
+    rows = conn.execute(
+        "SELECT id, path, name, depth, file_count, subdir_count, "
+        "own_bytes, total_bytes, total_files, status FROM directories "
+        "WHERE " + " AND ".join(where) +
+        " ORDER BY " + sort_expr + " " + order_sql + ", id ASC LIMIT ?",
+        params,
+    ).fetchall()
+    return {"ok": True, "rows": [dict(r) for r in rows],
+            "under_id": under_id, "under_path": under_path,
+            "under_depth": under_depth, "sort": sort, "order": order_sql.lower()}
 
 
 def search_dirs(pconn, run_id: int, q: str, *, limit: int = 200) -> dict:
@@ -659,12 +720,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def _send_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+        except OSError:
+            # 브라우저가 응답 도중 연결을 끊음(잦은 폴링·새로고침·페이지 이동).
+            # BrokenPipe/ConnectionReset 등은 정상 동작이므로 조용히 무시한다.
+            pass
 
     def _send_html(self, path: str) -> None:
         try:
@@ -673,11 +739,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except OSError:
             self.send_error(404, "dashboard.html not found")
             return
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except OSError:
+            pass  # 클라이언트 연결 끊김 — 무시
 
     def _query_int(self, qs: dict, key: str):
         if key in qs and qs[key]:
@@ -824,6 +893,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     pconn.close()
                 return
 
+            if path == "/api/topdirs":
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
+                if row is None or not os.path.exists(row["db_path"]):
+                    self._send_json({"ok": True, "rows": []})
+                    return
+                pconn = dbmod.connect(row["db_path"])
+                try:
+                    run_id = dbmod.latest_run_id(pconn)
+                    if run_id is None:
+                        self._send_json({"ok": True, "rows": []})
+                    else:
+                        top_n = int(self._current_settings().get("top_n", 20))
+                        self._send_json(list_top_dirs(
+                            pconn, run_id,
+                            under_id=self._query_int(qs, "under"),
+                            rel_depth=self._query_int(qs, "rel"),
+                            sort=(qs.get("sort", ["size"])[0]),
+                            order=(qs.get("order", ["desc"])[0]),
+                            limit=top_n,
+                        ))
+                finally:
+                    pconn.close()
+                return
+
             if path in ("/api/search", "/api/errors"):
                 scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
                 if row is None or not os.path.exists(row["db_path"]):
@@ -861,6 +954,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             self._send_json({"ok": False, "reason": "unknown_endpoint"}, status=404)
+        except ConnectionError:
+            pass  # 클라이언트가 응답 도중 연결을 끊음 — 무시
         except Exception as exc:  # API 오류가 서버를 죽이지 않도록
             self._send_json({"ok": False, "error": str(exc)}, status=500)
         finally:
@@ -904,6 +999,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     p = '"' + str(r["path"]).replace('"', '""') + '"'
                     line = f'{p},{r["depth"]},{r["file_count"]},{r["subdir_count"]},{r["own_bytes"]},{r["total_bytes"]},{r["total_files"]},{r["status"]}\n'
                     self.wfile.write(line.encode("utf-8"))
+        except OSError:
+            pass  # 다운로드 도중 클라이언트가 연결을 끊음 — 무시
         finally:
             pconn.close()
 
@@ -974,6 +1071,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             self._send_json({"ok": False, "reason": "unknown_endpoint"}, status=404)
+        except ConnectionError:
+            pass  # 클라이언트가 응답 도중 연결을 끊음 — 무시
         except Exception as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=500)
 

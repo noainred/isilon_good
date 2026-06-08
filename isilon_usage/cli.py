@@ -48,7 +48,7 @@ def _add_scan_opts(p: argparse.ArgumentParser) -> None:
                    help="다른 파일시스템으로 넘어가지 않음(du -x 와 동일)")
     p.add_argument("--batch-size", type=int, default=500,
                    help="DB 커밋 배치 크기 (기본: %(default)s)")
-    p.add_argument("--workers", type=int, default=4,
+    p.add_argument("--workers", type=int, default=8,
                    help="동시 스캔 스레드 수(디렉터리 병렬, NFS 가속, 기본: %(default)s)")
     p.add_argument("--sample-interval", type=float, default=2.0,
                    help="자원 샘플링 주기(초) (기본: %(default)s)")
@@ -368,8 +368,8 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("--size-mode", choices=["disk", "apparent"], default="disk")
     pv.add_argument("--one-file-system", "-x", action="store_true")
     pv.add_argument("--batch-size", type=int, default=500)
-    pv.add_argument("--workers", type=int, default=4,
-                    help="파일 stat 동시 처리 스레드 수(웹 스캔 기본값, NFS 가속)")
+    pv.add_argument("--workers", type=int, default=8,
+                    help="동시 스캔 스레드 수(디렉터리 병렬, 웹 스캔 기본값, NFS 가속)")
     pv.add_argument("--sample-interval", type=float, default=2.0)
     pv.add_argument("--lock-settings", action="store_true",
                     help="웹에서 설정 편집을 막음(읽기 전용)")

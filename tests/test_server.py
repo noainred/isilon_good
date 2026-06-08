@@ -103,6 +103,21 @@ def main() -> int:
         names = {k["name"] for k in kids["children"]}
         assert {"sub1", "sub2"} <= names, names
 
+        # 병렬 워커 수가 상태에 노출됨(설정값 반영)
+        assert d1["run"].get("workers", 0) >= 1, d1["run"]
+
+        # 상위 디렉터리: 깊이 선택 + 정렬 + 드릴다운
+        td = c.get(f"/api/topdirs?scan={s1}&rel=1&sort=size&order=desc")
+        names1 = [r["name"] for r in td["rows"]]
+        assert set(names1) == {"sub1", "sub2"} and names1[0] == "sub1", td  # sub1 이 더 큼
+        td_asc = c.get(f"/api/topdirs?scan={s1}&rel=1&sort=path&order=asc")
+        assert [r["name"] for r in td_asc["rows"]] == ["sub1", "sub2"], td_asc
+        sub1_id = next(r["id"] for r in td["rows"] if r["name"] == "sub1")
+        td2 = c.get(f"/api/topdirs?scan={s1}&under={sub1_id}&rel=1")  # sub1 직속 자식
+        assert [r["name"] for r in td2["rows"]] == ["deep"], td2
+        td3 = c.get(f"/api/topdirs?scan={s1}&under={sub1_id}&rel=0")  # 전체 깊이
+        assert any(r["name"] == "deep" for r in td3["rows"]), td3
+
         # 검색 / 오류
         sr = c.get(f"/api/search?scan={s1}&q=deep")
         assert any("deep" in r["path"] for r in sr["results"]), sr

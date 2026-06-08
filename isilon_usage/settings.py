@@ -22,7 +22,7 @@ DEFAULTS: dict = {
     "mount_bases": [],                  # 웹에서 스캔 허용할 경로 목록(빈 목록=전체 허용)
     "top_n": 20,                        # 상위 디렉터리 표시 개수
     "refresh_ms": 1500,                 # 대시보드 자동 새로고침 주기(ms)
-    "scan_workers": 4,                  # 동시 스캔 스레드 수(디렉터리 단위 병렬, NFS 가속, 더 올릴수록 빠름)
+    "scan_workers": 8,                  # 동시 스캔 스레드 수(디렉터리 단위 병렬, NFS 가속, 더 올릴수록 빠름)
     "retention_per_root": 0,            # 루트별 보관 스캔 수(0=무제한). 완료 시 자동 정리
     "notify_webhook": "",               # 스캔 완료/오류 시 POST 할 웹훅 URL(빈값=사용 안 함)
     "schedules": [],                    # 예약 스캔 목록(아래 _sanitize_schedules 참고)
@@ -72,7 +72,7 @@ def sanitize(raw: dict) -> dict:
     s["sample_interval"] = _float(s["sample_interval"], 0.2, 60.0, 2.0)
     s["top_n"] = _int(s["top_n"], 1, 500, 20)
     s["refresh_ms"] = _int(s["refresh_ms"], 500, 600_000, 1500)
-    s["scan_workers"] = _int(s["scan_workers"], 1, 64, 1)
+    s["scan_workers"] = _int(s["scan_workers"], 1, 64, 8)
     s["retention_per_root"] = _int(s["retention_per_root"], 0, 100_000, 0)
     s["notify_webhook"] = str(s.get("notify_webhook") or "").strip()
     s["log_path"] = str(s.get("log_path") or "").strip()
