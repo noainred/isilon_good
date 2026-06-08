@@ -370,20 +370,30 @@ class Scanner:
         def flush_files():
             # 청크를 (필요시 동시에) stat 한 뒤 용량/개수에 반영. 하드링크는
             # (st_dev, st_ino) 로 1회만 계산(du 와 동일).
+            # 대용량 디렉터리에서도 진행 숫자가 멈춰 보이지 않도록, 청크마다
+            # 전역 카운터(self._total_files/_scanned_bytes)를 즉시 올리고
+            # 진행 상태를 갱신한다.
             nonlocal own_bytes, file_count
             if not file_chunk:
                 return
+            chunk_bytes = 0
+            chunk_files = 0
             for st in self._stat_many(file_chunk):
                 if st is None:
                     continue
-                file_count += 1
+                chunk_files += 1
                 if st.st_nlink > 1:
                     key = (st.st_dev, st.st_ino)
                     if key in self._seen_inodes:
                         continue  # 하드링크 중복 — 용량은 한 번만
                     self._seen_inodes.add(key)
-                own_bytes += _entry_bytes(st, self.size_mode)
+                chunk_bytes += _entry_bytes(st, self.size_mode)
             file_chunk.clear()
+            own_bytes += chunk_bytes
+            file_count += chunk_files
+            self._scanned_bytes += chunk_bytes
+            self._total_files += chunk_files
+            self._flush_progress(conn, current_dir=path, current_depth=depth)
 
         try:
             with os.scandir(path) as it:
@@ -415,12 +425,16 @@ class Scanner:
             err = f"{type(exc).__name__}: {exc}"
             self._error_dirs += 1
 
-        # 디렉터리 자기 자신의 inode 가 차지하는 블록도 포함(du 와 동일)
+        # 디렉터리 자기 자신의 inode 가 차지하는 블록도 포함(du 와 동일).
+        # 파일 분(own_bytes/file_count)은 이미 flush_files 에서 전역 카운터에
+        # 반영됐으므로, 여기서는 디렉터리 inode 분만 전역에 추가한다.
         try:
             dstat = os.stat(path)
-            own_bytes += _entry_bytes(dstat, self.size_mode)
+            dir_bytes = _entry_bytes(dstat, self.size_mode)
         except OSError:
-            pass
+            dir_bytes = 0
+        own_bytes += dir_bytes
+        self._scanned_bytes += dir_bytes
 
         if children:
             conn.executemany(
@@ -436,10 +450,8 @@ class Scanner:
             (own_bytes, file_count, subdir_count, err, dir_id),
         )
 
-        # 진행 카운터 갱신: 탐색 단계에서 "확인된 사용량"이 쌓인다.
+        # 디렉터리 1개 완료. (파일 수/용량은 flush_files 에서 실시간 반영됨)
         self._discovered += 1
-        self._scanned_bytes += own_bytes
-        self._total_files += file_count
         if depth > 0:
             self._maybe_update_depth(conn, depth)
         self._flush_progress(conn, current_dir=path, current_depth=depth)

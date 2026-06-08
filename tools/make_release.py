@@ -40,6 +40,7 @@ INCLUDE_DIRS = ["docs", "tools"]   # isilon_usage 패키지는 별도 처리
 HISTORY = {
     "1.0.0": "34d88f6",
     "1.1.0": "0b1ef3a",
+    "1.1.1": "cc19374",
 }
 # 버전별 파이썬 호환(없으면 기본값). 1.1.1 부터 3.6 호환.
 PY_COMPAT = {"1.0.0": "Python 3.7+", "1.1.0": "Python 3.7+"}

@@ -96,6 +96,8 @@
     font-size:12.5px; color:#cfe3ff; }
   .diritem:hover { background:#16202c; }
   .stopbtn { background:#3a1c1c; border-color:#5a2a2a; color:#ff9b9b; padding:2px 8px; font-size:11.5px; }
+  #startBtn.scanning { background:#7a1f1f; border-color:#c0392b; color:#ffd5d5; cursor:default; }
+  #startBtn.scanning:hover { border-color:#c0392b; }
   .pill { font-size:11.5px; color:var(--muted); border:1px solid var(--line);
     border-radius:999px; padding:2px 9px; }
   .note { color: var(--warn); font-size: 12px; }
@@ -146,6 +148,8 @@
     </div>
 
     <div id="startForm">
+      <!-- 스캔 진행 중에는 숨겨지는 영역(마운트 선택 + 폴더 탐색) -->
+      <div id="browseSection">
       <div class="sub" style="margin-bottom:6px;">마운트 빠른 선택 (네트워크 파일시스템 우선)</div>
       <div id="mountPicks" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
         <span class="sub">로딩 중…</span>
@@ -167,6 +171,7 @@
       <div class="sub err" id="browseErr"></div>
 
       <hr style="border:none; border-top:1px solid var(--line); margin:14px 0;" />
+      </div><!-- /browseSection -->
 
       <div style="display:flex; gap:14px; align-items:flex-end; flex-wrap:wrap;">
         <div style="flex:1; min-width:300px;">
@@ -616,6 +621,25 @@ async function doBrowse(path) {
 }
 
 // ---- 스캔 시작 / 중지 ----
+// 스캔 진행 여부에 따라 "이 디렉터리 스캔 시작" 버튼을 빨간 "스캔 중…"으로 전환
+function updateStartButton(runningCount) {
+  const btn = $("startBtn");
+  if (!btn) return;
+  const scanning = runningCount > 0;
+  if (scanning) {
+    btn.textContent = runningCount > 1 ? `● 스캔 중… (${runningCount})` : "● 스캔 중…";
+    btn.classList.add("scanning");
+    btn.disabled = true;
+  } else {
+    btn.textContent = "▶ 이 디렉터리 스캔 시작";
+    btn.classList.remove("scanning");
+    btn.disabled = !canScan;
+  }
+  // 스캔 진행 중에는 마운트 선택 + 폴더 탐색 영역을 숨긴다(불필요).
+  const bs = $("browseSection");
+  if (bs) bs.style.display = scanning ? "none" : "block";
+}
+
 async function startScan() {
   const path = $("scanPath").value.trim();
   if (!path) { $("startMsg").innerHTML = '<span class="err">경로를 입력/선택하세요.</span>'; return; }
@@ -635,15 +659,14 @@ async function startScan() {
     if (j.ok) {
       $("startMsg").innerHTML = `<span style="color:var(--ok)">✓ 스캔 #${j.scan_id} 시작됨: ${j.root_path}</span>`;
       selectedScan = j.scan_id; userPicked = true;
-      poll();
+      updateStartButton(1);   // 즉시 빨간 "스캔 중…"
     } else {
       $("startMsg").innerHTML = '<span class="err">시작 실패: ' + (j.reason || j.error || "") + '</span>';
     }
   } catch (e) {
     $("startMsg").innerHTML = '<span class="err">요청 오류: ' + e + '</span>';
-  } finally {
-    $("startBtn").disabled = false;
   }
+  await poll();   // 실행 중 목록을 즉시 반영해 버튼 상태 갱신
 }
 
 async function stopScan(id) {
@@ -807,6 +830,7 @@ function renderOverview(j) {
   mountBases = j.mount_bases || [];
   $("scanDisabledMsg").style.display = canScan ? "none" : "block";
   $("startForm").style.display = canScan ? "block" : "none";
+  updateStartButton(runningSet.size);   // 스캔 중이면 빨간 "스캔 중…" 버튼
 
   const body = $("ovBody");
   const roots = o.roots || [];

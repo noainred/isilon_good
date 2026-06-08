@@ -22,7 +22,7 @@ DEFAULTS: dict = {
     "mount_bases": [],                  # 웹에서 스캔 허용할 경로 목록(빈 목록=전체 허용)
     "top_n": 20,                        # 상위 디렉터리 표시 개수
     "refresh_ms": 1500,                 # 대시보드 자동 새로고침 주기(ms)
-    "scan_workers": 1,                  # 파일 stat 동시 처리 스레드 수(NFS 가속)
+    "scan_workers": 4,                  # 파일 stat 동시 처리 스레드 수(NFS 가속, 더 올릴수록 빠름)
     "retention_per_root": 0,            # 루트별 보관 스캔 수(0=무제한). 완료 시 자동 정리
     "notify_webhook": "",               # 스캔 완료/오류 시 POST 할 웹훅 URL(빈값=사용 안 함)
     "schedules": [],                    # 예약 스캔 목록(아래 _sanitize_schedules 참고)
