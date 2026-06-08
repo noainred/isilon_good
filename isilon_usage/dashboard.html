@@ -161,7 +161,7 @@
   <div class="grid cols-3" style="margin-bottom:14px;">
     <div class="card">
       <h2>서버 메모리</h2>
-      <div class="big" id="memPct">0%</div>
+      <div class="big" id="memPct">—</div>
       <div class="sub" id="memDetail">— / —</div>
       <div class="bar mem" style="margin-top:10px;"><span id="memBar"></span></div>
       <canvas id="memChart" width="380" height="90" style="margin-top:12px;"></canvas>
@@ -171,7 +171,7 @@
 
     <div class="card">
       <h2>측정 프로세스 (CPU · 메모리)</h2>
-      <div class="big" id="duRss">0 B</div>
+      <div class="big" id="duRss">—</div>
       <div class="sub" id="duRssNote">du 프로세스 RSS</div>
       <canvas id="rssChart" width="380" height="90" style="margin-top:12px;"></canvas>
       <div class="legend">
@@ -186,7 +186,7 @@
 
     <div class="card">
       <h2>CPU · 디스크</h2>
-      <div class="big" id="cpuPct">0%</div>
+      <div class="big" id="cpuPct">—</div>
       <div class="sub">CPU 사용률 · load1 <span id="load1">0</span></div>
       <div class="kv" style="margin-top:10px;"><span class="k">파일시스템 전체</span><span class="v" id="fsTotal">—</span></div>
       <div class="kv"><span class="k">파일시스템 사용</span><span class="v" id="fsUsed">—</span></div>
@@ -451,6 +451,9 @@
   <div class="grid cols-2" style="margin-bottom:14px;">
     <div class="card">
       <h2>현재 진행 상황</h2>
+      <div class="sub" id="progNotice" style="display:none; margin-bottom:8px; color:#7cc4ff;">
+        🔎 탐색 단계 — 모든 디렉터리를 먼저 찾은 뒤, 집계(재귀 용량 계산)가 시작됩니다. 그때까지 ‘집계 완료/ETA’는 0/—로 표시됩니다.
+      </div>
       <div class="sub" style="margin-bottom:6px;">지금 조사 중인 디렉터리</div>
       <div class="current" id="currentDir">—</div>
 
@@ -1402,6 +1405,9 @@ function render(d) {
   // 분석 화면: 스캔 진행 중(탐색/집계)에는 정확한 데이터가 아니므로 안내 배너 표시
   const _an = $("analysisNotice");
   if (_an) _an.style.display = (r.status === "discovering" || r.status === "sizing") ? "block" : "none";
+  // Summary 진행 카드: 탐색 단계 안내(집계 시작 전)
+  const _pn = $("progNotice");
+  if (_pn) _pn.style.display = (r.phase === "discovering") ? "block" : "none";
 
   // 마운트 읽기전용(ro) 여부 — 설정(check_readonly)이 켜졌을 때만 표시
   if (r.readonly_checked) {

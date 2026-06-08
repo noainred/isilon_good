@@ -46,6 +46,11 @@
     padding:4px 9px; cursor:pointer; font-size:12px; user-select:none; }
   .chip.on { background:#16344f; border-color:#2f6fb0; color:#cfe6ff; font-weight:700; }
   td.miss { color:#ff8b8b; font-weight:600; } td.warn { color:#ffcf8b; font-weight:600; }
+  th.sortable { cursor:pointer; user-select:none; white-space:nowrap; }
+  th.sortable:hover { color:var(--text); }
+  .regcard { cursor:pointer; border:1px solid transparent; border-radius:9px; padding:6px 8px; }
+  .regcard:hover { border-color:var(--line); }
+  .regcard.active { border-color:var(--accent); background:#13202e; }
 </style>
 </head>
 <body>
@@ -76,10 +81,15 @@
   </div>
 
   <div class="card">
-    <h2>데이터센터별 사용량 — 행을 클릭하면 스토리지 펼침 · “열기”로 해당 DC 대시보드</h2>
-    <table>
-      <thead><tr><th>노드</th><th>지역</th><th class="num">스토리지</th><th class="num">사용</th>
-        <th>버전</th><th>마지막 동기화</th><th>상태</th><th></th></tr></thead>
+    <h2>데이터센터별 사용량 — 행 클릭=스토리지 펼침 · 지역 카드=필터 · 머리글=정렬 <span class="sub" id="updAt" style="float:right; font-weight:400;"></span></h2>
+    <table id="nodeTable">
+      <thead><tr>
+        <th class="sortable" data-nsort="id" data-label="노드">노드</th>
+        <th class="sortable" data-nsort="region" data-label="지역">지역</th>
+        <th class="num sortable" data-nsort="storages" data-label="스토리지">스토리지</th>
+        <th class="num sortable" data-nsort="used_bytes" data-label="사용">사용</th>
+        <th>버전</th><th>마지막 동기화</th>
+        <th class="sortable" data-nsort="status" data-label="상태">상태</th><th></th></tr></thead>
       <tbody id="nodeRows"><tr><td colspan="8" class="sub">불러오는 중…</td></tr></tbody>
     </table>
     <div class="sub" id="dashNote" style="margin-top:8px;"></div>
@@ -172,39 +182,64 @@ function show(v){ ["dash","compare","nodes"].forEach(n=>$("view-"+n).classList.t
   document.querySelectorAll(".navbtn").forEach(b=>b.classList.toggle("active", b.dataset.view===v)); }
 document.querySelectorAll(".navbtn").forEach(b=>b.addEventListener("click",()=>show(b.dataset.view)));
 
+let pOverview=null, regionFilter="", nodeSort="used_bytes", nodeOrder="desc";
 async function loadOverview(){
   try {
     const j = await (await fetch("/api/portal/overview",{cache:"no-store"})).json();
-    if(!j.ok) return;
-    if(j.version) $("ver").textContent = "v"+j.version;
-    const t=j.totals||{};
-    $("kUsed").textContent=fmtBytes(t.used_bytes); $("kStorages").textContent=fmtNum(t.storages);
-    $("kNodes").textContent=(t.nodes_online||0)+" / "+(t.nodes_total||0); $("kActive").textContent=fmtNum(t.active_scans);
-    $("regions").innerHTML = (j.regions||[]).map(r=>
-      `<div><div class="big" style="font-size:20px">${fmtBytes(r.used_bytes)}</div><div class="sub">${r.region} · ${fmtNum(r.storages)} 스토리지</div></div>`
-    ).join("") || '<div class="sub">등록된 노드가 없습니다.</div>';
-    const rows=(j.nodes||[]);
-    $("nodeRows").innerHTML = rows.length ? rows.map((n,idx)=>{
-      const st = !n.enabled ? '<span class="badge">사용 안 함</span>'
-        : (n.online ? (n.active_scans>0 ? '<span class="badge b-scan">스캔 중</span>' : '<span class="badge b-online">온라인</span>')
-                    : '<span class="badge b-offline">오프라인</span>');
-      const open = `<a class="link" href="${n.url}" target="_blank" rel="noopener">열기 ↗</a>`;
-      const roots = (n.roots||[]).map(r=>
-        `<tr class="rr-${idx}" style="display:none; background:#121a24;"><td></td>
-          <td colspan="7" class="sub mono">📁 ${r.root_path} — 사용 ${fmtBytes(r.scanned_bytes)} / fs ${fmtBytes(r.fs_used_bytes)} · ${r.status||""}</td></tr>`).join("");
-      return `<tr class="noderow" data-idx="${idx}" style="cursor:pointer;" title="클릭하면 스토리지 펼침">
-        <td><b>${n.id}</b> <span class="sub mono">${n.hostname||""}</span></td><td>${n.region||"—"}</td>
-        <td class="num">▸ ${fmtNum(n.storages)}</td><td class="num">${fmtBytes(n.used_bytes)}</td>
-        <td class="sub">${n.version?("v"+n.version):"—"}</td><td class="sub">${ago(n.last_poll)}</td>
-        <td>${st}</td><td>${open}</td></tr>` + roots +
-        (n.last_error ? `<tr><td colspan="8" class="sub" style="color:#ff9a9a">${n.id}: ${n.last_error}</td></tr>` : "");
-    }).join("") : '<tr><td colspan="8" class="sub">등록된 노드가 없습니다. “노드 설정”에서 추가하세요.</td></tr>';
-    $("nodeRows").querySelectorAll("tr.noderow").forEach(tr=>tr.addEventListener("click",e=>{
-      if(e.target.closest("a")) return;
-      $("nodeRows").querySelectorAll(".rr-"+tr.dataset.idx).forEach(r=>r.style.display = r.style.display==="none"?"table-row":"none");
-    }));
-    $("dashNote").textContent = "노드 행을 클릭하면 스토리지(루트)가 펼쳐집니다. 깊은 경로 비교는 ‘경로 비교’ 탭에서.";
+    if(!j.ok) return; pOverview=j; renderPortalDash();
   } catch(e){ /* 무시 */ }
+}
+function statRank(n){ return n.online ? (n.active_scans>0?2:1) : 0; }
+function renderPortalDash(){
+  const j=pOverview; if(!j) return;
+  if(j.version) $("ver").textContent = "v"+j.version;
+  const t=j.totals||{};
+  $("kUsed").textContent=fmtBytes(t.used_bytes); $("kStorages").textContent=fmtNum(t.storages);
+  $("kNodes").textContent=(t.nodes_online||0)+" / "+(t.nodes_total||0); $("kActive").textContent=fmtNum(t.active_scans);
+  // 지역 카드(클릭 = 필터 토글)
+  $("regions").innerHTML = (j.regions||[]).map(r=>
+    `<div class="regcard${regionFilter===r.region?' active':''}" data-region="${r.region}">
+       <div class="big" style="font-size:20px">${fmtBytes(r.used_bytes)}</div>
+       <div class="sub">${r.region} · ${fmtNum(r.storages)} 스토리지</div></div>`
+  ).join("") || '<div class="sub">등록된 노드가 없습니다.</div>';
+  $("regions").querySelectorAll(".regcard").forEach(c=>c.addEventListener("click",()=>{
+    regionFilter=(regionFilter===c.dataset.region)?"":c.dataset.region; renderPortalDash(); }));
+  // 노드 필터 + 정렬
+  let rows=(j.nodes||[]).slice();
+  if(regionFilter) rows=rows.filter(n=>(n.region||"")===regionFilter);
+  rows.sort((a,b)=>{
+    let va,vb;
+    if(nodeSort==="status"){ va=statRank(a); vb=statRank(b); }
+    else { va=a[nodeSort]; vb=b[nodeSort]; }
+    if(typeof va==="string"||typeof vb==="string"){ va=String(va||""); vb=String(vb||"");
+      return nodeOrder==="asc"?va.localeCompare(vb):vb.localeCompare(va); }
+    va=va||0; vb=vb||0; return nodeOrder==="asc"?va-vb:vb-va;
+  });
+  $("nodeRows").innerHTML = rows.length ? rows.map((n,idx)=>{
+    const st = !n.enabled ? '<span class="badge">사용 안 함</span>'
+      : (n.online ? (n.active_scans>0 ? '<span class="badge b-scan">스캔 중</span>' : '<span class="badge b-online">온라인</span>')
+                  : '<span class="badge b-offline">오프라인</span>');
+    const open = `<a class="link" href="${n.url}" target="_blank" rel="noopener">열기 ↗</a>`;
+    const roots = (n.roots||[]).map(r=>
+      `<tr class="rr-${idx}" style="display:none; background:#121a24;"><td></td>
+        <td colspan="7" class="sub mono">📁 ${r.root_path} — 사용 ${fmtBytes(r.scanned_bytes)} / fs ${fmtBytes(r.fs_used_bytes)} · ${r.status||""}</td></tr>`).join("");
+    return `<tr class="noderow" data-idx="${idx}" style="cursor:pointer;" title="클릭하면 스토리지 펼침">
+      <td><b>${n.id}</b> <span class="sub mono">${n.hostname||""}</span></td><td>${n.region||"—"}</td>
+      <td class="num">▸ ${fmtNum(n.storages)}</td><td class="num">${fmtBytes(n.used_bytes)}</td>
+      <td class="sub">${n.version?("v"+n.version):"—"}</td><td class="sub">${ago(n.last_poll)}</td>
+      <td>${st}</td><td>${open}</td></tr>` + roots +
+      (n.last_error ? `<tr><td colspan="8" class="sub" style="color:#ff9a9a">${n.id}: ${n.last_error}</td></tr>` : "");
+  }).join("") : '<tr><td colspan="8" class="sub">표시할 노드가 없습니다.</td></tr>';
+  $("nodeRows").querySelectorAll("tr.noderow").forEach(tr=>tr.addEventListener("click",e=>{
+    if(e.target.closest("a")) return;
+    $("nodeRows").querySelectorAll(".rr-"+tr.dataset.idx).forEach(r=>r.style.display = r.style.display==="none"?"table-row":"none");
+  }));
+  $("nodeTable").querySelectorAll("th[data-nsort]").forEach(th=>{
+    th.textContent = th.dataset.label + (th.dataset.nsort===nodeSort ? (nodeOrder==="desc"?" ▼":" ▲") : ""); });
+  $("updAt").textContent = "마지막 갱신: 방금" + (regionFilter?` · ‘${regionFilter}’ 필터`:"");
+  $("dashNote").textContent = regionFilter
+    ? `‘${regionFilter}’ 지역만 표시 중 — 지역 카드를 다시 클릭하면 해제됩니다.`
+    : "노드 행 클릭=스토리지 펼침 · 지역 카드=필터 · 머리글=정렬. 깊은 경로 비교는 ‘경로 비교’ 탭에서.";
 }
 
 async function loadNodes(){
@@ -326,6 +361,12 @@ $("cmpRun").addEventListener("click", ()=>loadCompare($("cmpPath").value.trim())
 $("cmpPath").addEventListener("keydown", e=>{ if(e.key==="Enter") loadCompare($("cmpPath").value.trim()); });
 $("cmpRoot").addEventListener("click", ()=>{ const up=cmpCur.replace(/\/[^/]+$/,""); loadCompare(up||"/"); });
 $("refreshBtn").addEventListener("click", ()=>{ loadOverview(); loadNodes(); });
+$("nodeTable").querySelectorAll("th[data-nsort]").forEach(th=>th.addEventListener("click",()=>{
+  const c=th.dataset.nsort;
+  if(nodeSort===c) nodeOrder=(nodeOrder==="desc")?"asc":"desc";
+  else { nodeSort=c; nodeOrder=(c==="id"||c==="region")?"asc":"desc"; }
+  renderPortalDash();
+}));
 $("nUnit").addEventListener("change", updateNUnit);
 ["nEvery","nAt","nMonth","nDay"].forEach(id=>$(id).addEventListener("input", updateNUnit));
 buildNW(); fillNSel("nMonth",12,"월"); fillNSel("nDay",31,"일"); updateNUnit();
