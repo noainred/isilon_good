@@ -402,8 +402,12 @@ journalctl -u isilon-usage -f
 
 ## 10. 문제 해결(FAQ)
 
+> **화면이 멈춘 것 같을 때**(상세가 `—`/`0`, "마지막 업데이트: —")는 별도 문서
+> **[화면이 멈췄을 때 — 프로세스 확인/복구](TROUBLESHOOTING-frozen-dashboard.md)** 를 보세요.
+
 | 증상 | 원인/해결 |
 |------|-----------|
+| 대시보드 상세가 `—`/`0`, "마지막 업데이트: —" | 거대 스캔에서 DB가 커져 `/api/status`가 느려진 것(보통 스캔은 살아있음). → [프로세스 확인/복구 문서](TROUBLESHOOTING-frozen-dashboard.md). v1.13.0+ 권장 |
 | `python3: command not found` | `python` 시도 또는 Python 3.6+ 설치 |
 | `pip install` 시 `setuptools>=61` 못 찾음(폐쇄망) | pip 설치 불필요 — 압축 풀어 `python3 -m isilon_usage` 로 실행. 굳이 설치하려면 `pip install --no-build-isolation .` |
 | 브라우저 접속 안 됨 | `--host 0.0.0.0` 확인, 방화벽/포트 확인 |
