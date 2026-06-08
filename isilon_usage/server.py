@@ -471,6 +471,44 @@ class ScanController:
         self.settings = setmod.load(data_dir)
         self._scans: Dict[int, dict] = {}   # manager scan_id -> {stop, thread}
         self._lock = threading.Lock()
+        self._reconcile_orphans()           # 이전 프로세스가 남긴 고아 스캔 정리
+
+    def _reconcile_orphans(self) -> None:
+        """서버 시작 시: 실제로 실행 중이 아닌데 상태가 '진행 중'(discovering/sizing)
+        으로 남은 스캔을 '일시정지'로 정리한다.
+
+        대시보드 서버를 재시작하면 이전 프로세스에서 돌던 스캔 스레드가 죽지만 DB
+        상태는 '탐색중'으로 남아, 개요에는 탐색중인데 실제로는 아무것도 안 도는
+        모순이 생긴다. 시작 시 한 번 정리해 일관성을 맞추고 '재개'로 이어갈 수 있게 한다.
+        """
+        try:
+            mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+        except Exception:
+            return
+        try:
+            for s in mgrmod.list_scans(mconn):
+                if s.get("status") not in ("discovering", "sizing"):
+                    continue
+                sid = int(s["id"])
+                if sid in self._scans:   # 이 컨트롤러가 실제로 돌리는 중이면 건드리지 않음
+                    continue
+                mgrmod.update_scan(mconn, sid, status="paused", phase="paused")
+                dbp = s.get("db_path")
+                if dbp and os.path.exists(dbp):
+                    try:
+                        pc = dbmod.connect(dbp)
+                        rid = dbmod.latest_run_id(pc)
+                        if rid is not None:
+                            dbmod.update_run(pc, rid, status="paused", phase="paused")
+                            pc.commit()
+                        pc.close()
+                    except Exception:
+                        pass
+            mconn.commit()
+        except Exception:
+            pass
+        finally:
+            mconn.close()
 
     # 설정에서 파생되는 값들(편집되면 즉시 반영)
     @property

@@ -128,7 +128,8 @@
   </div>
   <nav id="nav">
     <button class="navbtn active" data-view="summary">Summary</button>
-    <button class="navbtn" data-view="analysis">분석</button>
+    <button class="navbtn" data-view="analysis">디렉터리</button>
+    <button class="navbtn" data-view="trends">추세·비교</button>
     <button class="navbtn" data-view="settings">⚙ 설정</button>
     <button class="navbtn" data-view="history">📖 버전 기록</button>
   </nav>
@@ -151,6 +152,9 @@
     <b>임시 표시(직속 용량 기준)</b>입니다. 스캔이 <b>완료</b>되면 정확한 값으로 바뀝니다.
   </div>
 </div>
+
+<!-- 추세·비교 화면(여기로 JS 가 용량 추세/스캔 비교/오류 카드를 옮긴다) -->
+<div class="wrap view" id="view-trends" style="display:none;"></div>
 
 <div class="wrap view" id="view-summary">
   <!-- 자원 모니터링 (맨 위) -->
@@ -1594,16 +1598,24 @@ buildSchWeekdays(); fillSchSel("schMonth", 12, "월"); fillSchSel("schDay", 31, 
 (function () {
   const sc = $("settingsCard"), vs = $("view-settings");
   if (sc && vs) { vs.appendChild(sc); sc.open = true; sc.style.marginBottom = "0"; }
-  // 분석 화면으로 파이·상위 디렉터리·드릴다운·추세/비교·오류 카드를 옮긴다.
+  // 디렉터리(분석) 화면: 파이·상세보기·상위 디렉터리·드릴다운.
   const va = $("view-analysis");
   if (va) {
-    ["pieCard", "scanSelectCard", "secTopDirs", "secTree", "trendDiffRow", "errCard"].forEach(id => {
+    ["pieCard", "scanSelectCard", "secTopDirs", "secTree"].forEach(id => {
       const el = $(id);
       if (el) va.appendChild(el);
     });
   }
+  // 추세·비교 화면: 용량 추세·스캔 비교·오류 디렉터리.
+  const vt = $("view-trends");
+  if (vt) {
+    ["trendDiffRow", "errCard"].forEach(id => {
+      const el = $(id);
+      if (el) vt.appendChild(el);
+    });
+  }
 })();
-const VIEWS = ["summary", "analysis", "settings", "history"];
+const VIEWS = ["summary", "analysis", "trends", "settings", "history"];
 let changelogLoaded = false;
 function showView(name) {
   if (VIEWS.indexOf(name) < 0) name = "summary";
