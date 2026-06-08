@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover
     class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
         daemon_threads = True
 
-from . import __version__
+from . import __version__, SCHEMA_VERSION
 from . import db as dbmod
 from . import monitor as monmod
 from . import manager as mgrmod
@@ -54,6 +54,14 @@ def _human_bytes(n) -> str:
             return f"{int(n)} B" if u == "B" else f"{n:.1f} {u}"
         n /= 1024
     return f"{n:.1f} PB"
+
+
+def _public_settings(s: dict) -> dict:
+    """화면/응답용 설정 — 비밀번호는 노출하지 않고 설정 여부만 알린다."""
+    out = dict(s)
+    out["smtp_password"] = ""
+    out["smtp_password_set"] = bool((s or {}).get("smtp_password"))
+    return out
 
 
 def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 20) -> dict:
@@ -390,10 +398,25 @@ class ScanController:
         """설정을 저장하고 갱신된 설정을 반환한다(잠겨 있으면 거부)."""
         if self.lock_settings:
             return {"ok": False, "reason": "설정이 잠겨 있습니다(--lock-settings)."}
+        new = dict(new or {})
+        # 비밀번호는 화면에 노출하지 않으므로(마스킹), 빈 값으로 오면 기존 값 유지
+        if not (new.get("smtp_password") or "").strip():
+            new.pop("smtp_password", None)
         merged = dict(self.settings)
-        merged.update({k: v for k, v in (new or {}).items() if k in setmod.EDITABLE_KEYS})
+        merged.update({k: v for k, v in new.items() if k in setmod.EDITABLE_KEYS})
         self.settings = setmod.save(self.data_dir, merged)
-        return {"ok": True, "settings": self.settings}
+        return {"ok": True, "settings": _public_settings(self.settings)}
+
+    def _log(self, msg: str) -> None:
+        """log_path 가 설정돼 있으면 한 줄 추가한다(베스트 에포트)."""
+        p = self.settings.get("log_path")
+        if not p:
+            return
+        try:
+            with open(p, "a", encoding="utf-8") as fh:
+                fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
+        except Exception:
+            pass
 
     # ----- 경로 허용 검사 -----
     def path_allowed(self, path: str):
@@ -436,6 +459,8 @@ class ScanController:
             self.data_dir, root_path=path, db_path=db_path,
             backend=backend, size_mode=size_mode,
         )
+        self._log("scan #%d start: %s (backend=%s, size=%s, x=%s)" % (
+            scan_id, path, backend, size_mode, one_file_system))
         self._launch(scan_id, db_path, path, backend, size_mode,
                      one_file_system, resume=False)
         return {"ok": True, "scan_id": scan_id, "db_path": db_path,
@@ -491,9 +516,13 @@ class ScanController:
                 mconn.close()
             if row is None:
                 return
+            human = _human_bytes(row["scanned_bytes"])
+            self._log("scan #%d %s: %s (dirs=%s files=%s, %s)" % (
+                scan_id, row["status"], row["root_path"],
+                row["total_dirs"], row["total_files"], human))
+            from . import notify as notifymod
             webhook = self.settings.get("notify_webhook", "")
             if webhook:
-                from . import notify as notifymod
                 notifymod.send(webhook, {
                     "event": "scan_finished",
                     "scan_id": scan_id,
@@ -502,9 +531,19 @@ class ScanController:
                     "total_dirs": row["total_dirs"],
                     "total_files": row["total_files"],
                     "scanned_bytes": row["scanned_bytes"],
-                    "scanned_human": _human_bytes(row["scanned_bytes"]),
+                    "scanned_human": human,
                     "hostname": row["hostname"],
                 })
+            # 완료/오류 메일
+            if self.settings.get("notify_email") and self.settings.get("smtp_host"):
+                subject = "[isilon_usage] 스캔 %s: %s" % (row["status"], row["root_path"])
+                bodytxt = (
+                    "스캔 #%d 결과\n\n"
+                    "경로     : %s\n호스트   : %s\n상태     : %s\n"
+                    "디렉터리 : %s\n파일 수  : %s\n조사 용량: %s\n"
+                ) % (scan_id, row["root_path"], row["hostname"], row["status"],
+                     row["total_dirs"], row["total_files"], human)
+                notifymod.send_email(self.settings, subject, bodytxt)
             keep = int(self.settings.get("retention_per_root", 0))
             if keep > 0 and row["status"] in ("done", "error"):
                 mgrmod.prune_scans(self.data_dir, keep_per_root=keep,
@@ -704,12 +743,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if path == "/api/settings":
                 self._send_json({
                     "ok": True,
-                    "settings": self._current_settings(),
+                    "settings": _public_settings(self._current_settings()),
                     "editable": (self.controller is not None
                                  and not self.controller.lock_settings),
                     "locked": bool(self.controller and self.controller.lock_settings),
                     "server": {
                         "version": __version__,
+                        "schema_version": SCHEMA_VERSION,
                         "data_dir": os.path.abspath(self.data_dir),
                         "host": getattr(self, "bound_host", None),
                         "port": getattr(self, "bound_port", None),
@@ -717,6 +757,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         "can_scan": self.controller is not None,
                     },
                 })
+                return
+
+            if path == "/api/changelog":
+                text = None
+                for cand in (os.path.join(os.path.dirname(HERE), "CHANGELOG.md"),
+                             os.path.join(os.getcwd(), "CHANGELOG.md")):
+                    try:
+                        with open(cand, "r", encoding="utf-8") as fh:
+                            text = fh.read()
+                        break
+                    except OSError:
+                        continue
+                self._send_json({"ok": True, "version": __version__,
+                                 "schema_version": SCHEMA_VERSION, "changelog": text})
                 return
 
             if path == "/api/browse":

@@ -26,6 +26,14 @@ DEFAULTS: dict = {
     "retention_per_root": 0,            # 루트별 보관 스캔 수(0=무제한). 완료 시 자동 정리
     "notify_webhook": "",               # 스캔 완료/오류 시 POST 할 웹훅 URL(빈값=사용 안 함)
     "schedules": [],                    # 예약 스캔 목록(아래 _sanitize_schedules 참고)
+    "log_path": "",                     # 로그 파일 경로(비우면 파일 로깅 안 함)
+    "notify_email": "",                 # 완료/오류 알림 받을 메일(쉼표로 여러 명)
+    "smtp_host": "",                    # 메일 발송 SMTP 서버(비우면 메일 안 보냄)
+    "smtp_port": 587,                   # SMTP 포트(465=SSL, 587/25=STARTTLS)
+    "smtp_user": "",                    # SMTP 로그인 사용자(비우면 인증 안 함)
+    "smtp_password": "",                # SMTP 비밀번호
+    "smtp_from": "",                    # 보내는 사람(비우면 smtp_user)
+    "smtp_tls": True,                   # STARTTLS 사용(465 포트는 자동 SSL)
 }
 
 EDITABLE_KEYS = set(DEFAULTS.keys())
@@ -67,6 +75,14 @@ def sanitize(raw: dict) -> dict:
     s["scan_workers"] = _int(s["scan_workers"], 1, 64, 1)
     s["retention_per_root"] = _int(s["retention_per_root"], 0, 100_000, 0)
     s["notify_webhook"] = str(s.get("notify_webhook") or "").strip()
+    s["log_path"] = str(s.get("log_path") or "").strip()
+    s["notify_email"] = str(s.get("notify_email") or "").strip()
+    s["smtp_host"] = str(s.get("smtp_host") or "").strip()
+    s["smtp_port"] = _int(s["smtp_port"], 1, 65535, 587)
+    s["smtp_user"] = str(s.get("smtp_user") or "").strip()
+    s["smtp_password"] = str(s.get("smtp_password") or "")
+    s["smtp_from"] = str(s.get("smtp_from") or "").strip()
+    s["smtp_tls"] = bool(s.get("smtp_tls", True))
 
     mb = s.get("mount_bases") or []
     if isinstance(mb, str):

@@ -84,6 +84,14 @@
     border-radius:7px; padding:6px 11px; cursor:pointer; font-size:12.5px; }
   button:hover { border-color: var(--accent); }
   button:disabled { opacity:.5; cursor:not-allowed; }
+  nav#nav { display:flex; gap:6px; margin-left:18px; }
+  .navbtn { background:transparent; color:var(--muted); border:1px solid transparent;
+    border-radius:7px; padding:6px 12px; cursor:pointer; font-size:13px; font-weight:600; }
+  .navbtn:hover { color:var(--text); }
+  .navbtn.active { background:var(--panel2); color:var(--text); border-color:var(--line); }
+  pre.changelog { white-space:pre-wrap; word-break:break-word; font-family: ui-monospace, Menlo, monospace;
+    font-size:12.5px; line-height:1.6; color:#cfe3ff; background:#0d1219; border:1px solid var(--line);
+    border-radius:8px; padding:14px; max-height:70vh; overflow:auto; }
   .optsel { background:var(--panel2); color:var(--text); border:1px solid var(--line);
     border-radius:7px; padding:8px 10px; font-size:13px; }
   .setgrid { display:grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap:12px; }
@@ -111,6 +119,11 @@
     <h1>📦 Isilon 디렉터리 사용량 스캐너</h1>
     <div class="root" id="rootPath">대상 경로 로딩 중…</div>
   </div>
+  <nav id="nav">
+    <button class="navbtn active" data-view="dashboard">대시보드</button>
+    <button class="navbtn" data-view="settings">⚙ 설정</button>
+    <button class="navbtn" data-view="history">📖 버전 기록</button>
+  </nav>
   <div class="spacer"></div>
   <span class="pill" id="verPill" title="앱 버전">v–</span>
   <span class="pill" id="backendPill">backend</span>
@@ -122,7 +135,7 @@
   </div>
 </header>
 
-<div class="wrap">
+<div class="wrap view" id="view-dashboard">
   <!-- 자원 모니터링 (맨 위) -->
   <div class="grid cols-3" style="margin-bottom:14px;">
     <div class="card">
@@ -302,6 +315,46 @@
         <input id="setWebhook" type="text" class="setinput mono" style="width:100%;"
                placeholder="https://hooks.slack.com/services/..." />
       </label>
+
+      <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
+        <div class="sub" style="margin-bottom:6px;">저장 경로</div>
+        <div class="setgrid">
+          <label>DB 저장 경로(data-dir) — 실행 시 지정(읽기 전용)
+            <input id="setDataDir" class="setinput mono" readonly />
+          </label>
+          <label>로그 저장 경로(파일, 비우면 로깅 안 함)
+            <input id="setLogPath" type="text" class="setinput mono" placeholder="/var/log/isilon_usage.log" />
+          </label>
+        </div>
+      </div>
+
+      <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
+        <div class="sub" style="margin-bottom:6px;">완료/오류 메일 알림 (SMTP) — 받는 메일 + SMTP 서버가 모두 있어야 발송</div>
+        <div class="setgrid">
+          <label>받는 메일(쉼표로 여러 명)
+            <input id="setEmail" type="text" class="setinput mono" placeholder="ops@example.com" />
+          </label>
+          <label>SMTP 서버
+            <input id="setSmtpHost" type="text" class="setinput mono" placeholder="smtp.example.com" />
+          </label>
+          <label>SMTP 포트(465=SSL, 587=STARTTLS)
+            <input id="setSmtpPort" type="number" min="1" max="65535" class="setinput" />
+          </label>
+          <label>STARTTLS
+            <select id="setSmtpTls" class="optsel"><option value="true">사용</option><option value="false">사용 안 함</option></select>
+          </label>
+          <label>SMTP 사용자(비우면 인증 안 함)
+            <input id="setSmtpUser" type="text" class="setinput mono" />
+          </label>
+          <label>SMTP 비밀번호(변경 시에만 입력)
+            <input id="setSmtpPass" type="password" class="setinput mono" placeholder="(변경 안 함)" />
+          </label>
+          <label>보내는 사람(비우면 사용자)
+            <input id="setSmtpFrom" type="text" class="setinput mono" />
+          </label>
+        </div>
+      </div>
+
       <label style="display:block; margin-top:12px;">웹에서 스캔 허용 경로(mount_bases) — 한 줄에 하나, 비우면 전체 허용
         <textarea id="setMounts" rows="3" class="setinput mono" style="width:100%; resize:vertical;"
                   placeholder="/mnt/isilon"></textarea>
@@ -428,6 +481,21 @@
   </div>
 </div>
 
+<!-- 설정 페이지(여기로 #settingsCard 를 JS 가 옮긴다) -->
+<div class="wrap view" id="view-settings" style="display:none;">
+  <h2 style="margin:0 0 14px;">⚙ 설정</h2>
+</div>
+
+<!-- 버전 기록 페이지 -->
+<div class="wrap view" id="view-history" style="display:none;">
+  <div class="card">
+    <h2>버전 기록 (Version History)</h2>
+    <div class="sub" id="historyMeta" style="margin-bottom:10px;">—</div>
+    <div id="historyDownloads" class="sub" style="margin-bottom:12px;"></div>
+    <pre class="changelog" id="changelogBox">불러오는 중…</pre>
+  </div>
+</div>
+
 <script>
 const $ = (id) => document.getElementById(id);
 
@@ -503,6 +571,17 @@ async function loadSettings() {
     $("setRetention").value = s.retention_per_root;
     $("setWebhook").value = s.notify_webhook || "";
     $("setMounts").value = (s.mount_bases || []).join("\n");
+    // 경로 / 메일(SMTP)
+    $("setDataDir").value = (j.server && j.server.data_dir) || "";
+    $("setLogPath").value = s.log_path || "";
+    $("setEmail").value = s.notify_email || "";
+    $("setSmtpHost").value = s.smtp_host || "";
+    $("setSmtpPort").value = s.smtp_port || 587;
+    $("setSmtpTls").value = String(s.smtp_tls !== false);
+    $("setSmtpUser").value = s.smtp_user || "";
+    $("setSmtpFrom").value = s.smtp_from || "";
+    $("setSmtpPass").value = "";
+    $("setSmtpPass").placeholder = s.smtp_password_set ? "(설정됨 — 변경 시에만 입력)" : "(설정 안 됨)";
     schedules = (s.schedules || []).map(x => ({...x}));
     renderSchedules();
 
@@ -523,7 +602,9 @@ async function loadSettings() {
     $("settingsLockMsg").style.display = j.locked ? "block" : "none";
     ["setBackend","setSize","setOFS","setBatch","setSample","setTopN","setRefresh",
      "setWorkers","setRetention","setWebhook","setMounts","saveSettingsBtn",
-     "schPath","schEvery","schBackend","schAdd"].forEach(id => { $(id).disabled = !j.editable; });
+     "schPath","schEvery","schBackend","schAdd",
+     "setLogPath","setEmail","setSmtpHost","setSmtpPort","setSmtpTls",
+     "setSmtpUser","setSmtpPass","setSmtpFrom"].forEach(id => { $(id).disabled = !j.editable; });
     // 서버 정보(읽기 전용)
     const sv = j.server || {};
     $("serverInfo").innerHTML =
@@ -549,7 +630,17 @@ async function saveSettings() {
     notify_webhook: $("setWebhook").value.trim(),
     mount_bases: $("setMounts").value.split("\n").map(x => x.trim()).filter(Boolean),
     schedules: schedules,
+    log_path: $("setLogPath").value.trim(),
+    notify_email: $("setEmail").value.trim(),
+    smtp_host: $("setSmtpHost").value.trim(),
+    smtp_port: parseInt($("setSmtpPort").value) || 587,
+    smtp_tls: $("setSmtpTls").value === "true",
+    smtp_user: $("setSmtpUser").value.trim(),
+    smtp_from: $("setSmtpFrom").value.trim(),
   };
+  // 비밀번호는 입력했을 때만 전송(빈값이면 기존 유지)
+  const _pw = $("setSmtpPass").value;
+  if (_pw) payload.smtp_password = _pw;
   $("saveSettingsBtn").disabled = true;
   $("settingsMsg").textContent = "저장 중…";
   try {
@@ -638,7 +729,9 @@ function updateStartButton(runningCount) {
     btn.classList.remove("scanning");
     btn.disabled = !canScan;
   }
-  // 스캔 진행 중에는 입력/탐색 영역을 숨긴다(불필요). 빨간 "스캔 중…" 버튼만 남긴다.
+  // 스캔 진행 중에는 「새 스캔 시작」 카드 전체를 숨긴다.
+  const card = $("startCard");
+  if (card) card.style.display = scanning ? "none" : "block";
   const bs = $("browseSection");
   if (bs) bs.style.display = scanning ? "none" : "block";
   const si = $("scanInputs");
@@ -1091,9 +1184,42 @@ $("schAdd").addEventListener("click", () => {
   $("schPath").value = ""; renderSchedules();
 });
 
+// ===== 페이지(뷰) 전환: 대시보드 / 설정 / 버전 기록 =====
+// 설정 카드를 설정 페이지로 DOM 이동(HTML 구조는 그대로, 노드만 옮김).
+(function () {
+  const sc = $("settingsCard"), vs = $("view-settings");
+  if (sc && vs) { vs.appendChild(sc); sc.open = true; sc.style.marginBottom = "0"; }
+})();
+let changelogLoaded = false;
+function showView(name) {
+  ["dashboard", "settings", "history"].forEach(v => {
+    const el = $("view-" + v);
+    if (el) el.style.display = (v === name) ? "block" : "none";
+  });
+  document.querySelectorAll(".navbtn").forEach(b => b.classList.toggle("active", b.dataset.view === name));
+  try { history.replaceState(null, "", "#" + name); } catch (e) { location.hash = name; }
+  if (name === "history" && !changelogLoaded) loadChangelog();
+}
+document.querySelectorAll(".navbtn").forEach(b => b.addEventListener("click", () => showView(b.dataset.view)));
+window.addEventListener("hashchange", () => {
+  const v = location.hash.slice(1);
+  if (["dashboard", "settings", "history"].includes(v)) showView(v);
+});
+async function loadChangelog() {
+  changelogLoaded = true;
+  try {
+    const j = await (await fetch("/api/changelog", {cache: "no-store"})).json();
+    $("changelogBox").textContent = j.changelog || "CHANGELOG.md 를 찾을 수 없습니다.";
+    $("historyMeta").textContent = "현재 버전 v" + (j.version || "?") + " · DB 스키마 " + (j.schema_version || "?");
+  } catch (e) { $("changelogBox").textContent = "불러오기 실패: " + e; }
+  $("historyDownloads").innerHTML = "버전별 압축본은 저장소의 <code>download/</code> 폴더(또는 <code>versions.json</code>)에서 받을 수 있습니다.";
+}
+
 loadMounts();
 loadSettings();
 poll(); schedule();
+// 초기 뷰(URL 해시)
+showView(["settings", "history"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "dashboard");
 </script>
 </body>
 </html>

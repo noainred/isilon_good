@@ -7,7 +7,9 @@ Slack 수신 웹훅 등 일반 웹훅과 호환되도록 'text' 필드도 함께
 
 
 import json
+import smtplib
 import urllib.request
+from email.message import EmailMessage
 
 
 def send(webhook_url: str, payload: dict, *, timeout: float = 5.0) -> bool:
@@ -29,5 +31,49 @@ def send(webhook_url: str, payload: dict, *, timeout: float = 5.0) -> bool:
     try:
         with urllib.request.urlopen(req, timeout=timeout):
             return True
+    except Exception:
+        return False
+
+
+def send_email(settings: dict, subject: str, body: str, *, timeout: float = 20.0) -> bool:
+    """설정의 SMTP 로 완료/오류 메일을 보낸다(베스트 에포트, 실패해도 무시).
+
+    notify_email(받는 사람)과 smtp_host 가 모두 있어야 보낸다.
+    포트 465 는 SSL, 그 외(587/25)는 STARTTLS(smtp_tls).
+    """
+    to = (settings.get("notify_email") or "").strip()
+    host = (settings.get("smtp_host") or "").strip()
+    if not to or not host:
+        return False
+    sender = (settings.get("smtp_from") or settings.get("smtp_user")
+              or "isilon-usage@localhost")
+    msg = EmailMessage()
+    msg["From"] = sender
+    msg["To"] = to
+    msg["Subject"] = subject
+    msg.set_content(body)
+    try:
+        port = int(settings.get("smtp_port") or 587)
+    except (TypeError, ValueError):
+        port = 587
+    user = settings.get("smtp_user") or ""
+    pw = settings.get("smtp_password") or ""
+    try:
+        if port == 465:
+            srv = smtplib.SMTP_SSL(host, port, timeout=timeout)
+        else:
+            srv = smtplib.SMTP(host, port, timeout=timeout)
+        try:
+            if port != 465 and settings.get("smtp_tls", True):
+                srv.starttls()
+            if user:
+                srv.login(user, pw)
+            srv.send_message(msg)
+        finally:
+            try:
+                srv.quit()
+            except Exception:
+                pass
+        return True
     except Exception:
         return False
