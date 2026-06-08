@@ -97,6 +97,12 @@ def main() -> int:
         dbs = [f for f in os.listdir(os.path.join(rep, "scans")) if f.endswith(".db")]
         assert dbs, "복제된 per-run DB 없음"
 
+        # 7b) 경로 비교(Cross-DC): 복제본에서 같은 경로 조회 + 디렉터리 매트릭스
+        cmp = pc.compare_path(root)
+        assert cmp["rows"] and cmp["rows"][0]["found"] and cmp["rows"][0]["total_bytes"] > 0, cmp
+        mat = pc.compare_matrix(root)
+        assert "sub1" in [c["name"] for c in mat["children"]], mat
+
         # 8) 토큰 비우고 저장 → 기존 토큰 유지(동기화 여전히 성공)
         pc.upsert_node({"id": "dc-test", "url": ebase, "token": "", "region": "아시아/서울"})
         pc._sync_one("dc-test", False)

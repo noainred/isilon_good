@@ -45,6 +45,7 @@
   .chip { background:var(--panel2); border:1px solid var(--line); border-radius:999px;
     padding:4px 9px; cursor:pointer; font-size:12px; user-select:none; }
   .chip.on { background:#16344f; border-color:#2f6fb0; color:#cfe6ff; font-weight:700; }
+  td.miss { color:#ff8b8b; font-weight:600; } td.warn { color:#ffcf8b; font-weight:600; }
 </style>
 </head>
 <body>
@@ -54,6 +55,7 @@
   <div class="spacer"></div>
   <nav>
     <button class="navbtn active" data-view="dash">글로벌 대시보드</button>
+    <button class="navbtn" data-view="compare">경로 비교</button>
     <button class="navbtn" data-view="nodes">노드 설정</button>
   </nav>
   <button id="refreshBtn" title="새로고침">↻</button>
@@ -128,6 +130,34 @@
   </div>
 </div>
 
+<!-- 경로 비교(Cross-DC) -->
+<div class="wrap view" id="view-compare">
+  <div class="card" style="margin-bottom:14px;">
+    <h2>같은 경로를 데이터센터별로 비교 — 복제본 기준(절대경로 동일 시 정렬)</h2>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <input id="cmpPath" class="inp mono" style="flex:1; min-width:300px;" placeholder="/data/nexus-data" />
+      <button id="cmpRun" class="primary">비교</button>
+    </div>
+    <table style="margin-top:12px;">
+      <thead><tr><th>노드</th><th>지역</th><th class="num">사용 용량</th><th class="num">파일 수</th><th class="num">최대 대비</th><th>판정</th></tr></thead>
+      <tbody id="cmpRows"><tr><td colspan="6" class="sub">경로를 입력하고 “비교”를 누르세요.</td></tr></tbody>
+    </table>
+    <div class="sub" id="cmpNote" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="card">
+    <h2>통합 디렉터리 매트릭스 — 행=디렉터리, 열=노드 · 클릭하면 더 깊이</h2>
+    <div style="display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; align-items:center;">
+      <button id="cmpRoot">🏠 루트로</button>
+      <span id="cmpCrumb" class="sub mono" style="flex:1; word-break:break-all;">—</span>
+    </div>
+    <div style="overflow:auto;"><table id="cmpMatrix">
+      <thead id="cmpMHead"></thead>
+      <tbody id="cmpMBody"><tr><td class="sub">경로를 비교하면 표시됩니다.</td></tr></tbody>
+    </table></div>
+  </div>
+</div>
+
 <script>
 const $ = (id) => document.getElementById(id);
 function fmtBytes(n){ n=Number(n||0); const u=["B","KB","MB","GB","TB","PB"]; let i=0;
@@ -135,7 +165,8 @@ function fmtBytes(n){ n=Number(n||0); const u=["B","KB","MB","GB","TB","PB"]; le
 function fmtNum(n){ return Number(n||0).toLocaleString(); }
 function ago(ts){ if(!ts) return "—"; const s=Math.max(0,(Date.now()/1000-ts));
   if(s<60) return Math.floor(s)+"초 전"; if(s<3600) return Math.floor(s/60)+"분 전"; return Math.floor(s/3600)+"시간 전"; }
-function show(v){ ["dash","nodes"].forEach(n=>$("view-"+n).classList.toggle("active", n===v));
+function show(v){ ["dash","compare","nodes"].forEach(n=>$("view-"+n).classList.toggle("active", n===v));
+  if(v==="compare") loadCompare();
   document.querySelectorAll(".navbtn").forEach(b=>b.classList.toggle("active", b.dataset.view===v)); }
 document.querySelectorAll(".navbtn").forEach(b=>b.addEventListener("click",()=>show(b.dataset.view)));
 
@@ -151,18 +182,26 @@ async function loadOverview(){
       `<div><div class="big" style="font-size:20px">${fmtBytes(r.used_bytes)}</div><div class="sub">${r.region} · ${fmtNum(r.storages)} 스토리지</div></div>`
     ).join("") || '<div class="sub">등록된 노드가 없습니다.</div>';
     const rows=(j.nodes||[]);
-    $("nodeRows").innerHTML = rows.length ? rows.map(n=>{
+    $("nodeRows").innerHTML = rows.length ? rows.map((n,idx)=>{
       const st = !n.enabled ? '<span class="badge">사용 안 함</span>'
         : (n.online ? (n.active_scans>0 ? '<span class="badge b-scan">스캔 중</span>' : '<span class="badge b-online">온라인</span>')
                     : '<span class="badge b-offline">오프라인</span>');
       const open = `<a class="link" href="${n.url}" target="_blank" rel="noopener">열기 ↗</a>`;
-      return `<tr><td><b>${n.id}</b> <span class="sub mono">${n.hostname||""}</span></td><td>${n.region||"—"}</td>
-        <td class="num">${fmtNum(n.storages)}</td><td class="num">${fmtBytes(n.used_bytes)}</td>
+      const roots = (n.roots||[]).map(r=>
+        `<tr class="rr-${idx}" style="display:none; background:#121a24;"><td></td>
+          <td colspan="7" class="sub mono">📁 ${r.root_path} — 사용 ${fmtBytes(r.scanned_bytes)} / fs ${fmtBytes(r.fs_used_bytes)} · ${r.status||""}</td></tr>`).join("");
+      return `<tr class="noderow" data-idx="${idx}" style="cursor:pointer;" title="클릭하면 스토리지 펼침">
+        <td><b>${n.id}</b> <span class="sub mono">${n.hostname||""}</span></td><td>${n.region||"—"}</td>
+        <td class="num">▸ ${fmtNum(n.storages)}</td><td class="num">${fmtBytes(n.used_bytes)}</td>
         <td class="sub">${n.version?("v"+n.version):"—"}</td><td class="sub">${ago(n.last_poll)}</td>
-        <td>${st}</td><td>${open}</td></tr>` +
+        <td>${st}</td><td>${open}</td></tr>` + roots +
         (n.last_error ? `<tr><td colspan="8" class="sub" style="color:#ff9a9a">${n.id}: ${n.last_error}</td></tr>` : "");
     }).join("") : '<tr><td colspan="8" class="sub">등록된 노드가 없습니다. “노드 설정”에서 추가하세요.</td></tr>';
-    $("dashNote").textContent = "최근 동기화 기준. 깊은 드릴다운/경로 비교는 다음 단계에서 추가됩니다.";
+    $("nodeRows").querySelectorAll("tr.noderow").forEach(tr=>tr.addEventListener("click",e=>{
+      if(e.target.closest("a")) return;
+      $("nodeRows").querySelectorAll(".rr-"+tr.dataset.idx).forEach(r=>r.style.display = r.style.display==="none"?"table-row":"none");
+    }));
+    $("dashNote").textContent = "노드 행을 클릭하면 스토리지(루트)가 펼쳐집니다. 깊은 경로 비교는 ‘경로 비교’ 탭에서.";
   } catch(e){ /* 무시 */ }
 }
 
@@ -232,6 +271,56 @@ $("testBtn").addEventListener("click", async ()=>{
   const j = await (await fetch("/api/portal/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(nodePayload())})).json();
   $("nodeMsg").textContent = j.ok ? `✓ 연결 OK · v${j.version||"?"} · ${fmtNum(j.storages)} 스토리지 · ${fmtBytes(j.used_bytes)}` : ("✗ "+(j.reason||"실패"));
 });
+// ---- 경로 비교(Cross-DC) ----
+let cmpCur = "";
+async function loadCompare(path){
+  if(path!==undefined && path!==null && path!=="") { cmpCur = path; $("cmpPath").value = path; }
+  const p = (cmpCur || $("cmpPath").value.trim());
+  if(!p) return;
+  cmpCur = p;
+  try {
+    const j = await (await fetch("/api/portal/compare?path="+encodeURIComponent(p),{cache:"no-store"})).json();
+    renderCompare(j);
+    const m = await (await fetch("/api/portal/matrix?path="+encodeURIComponent(p),{cache:"no-store"})).json();
+    renderMatrix(m);
+    $("cmpCrumb").textContent = p;
+  } catch(e){ $("cmpNote").textContent = "오류: "+e; }
+}
+function renderCompare(j){
+  const all=(j.rows||[]); const found=all.filter(r=>r.found);
+  const maxB = found.reduce((a,r)=>Math.max(a,r.total_bytes),0) || 1;
+  $("cmpRows").innerHTML = all.length ? all.map(r=>{
+    if(!r.found) return `<tr><td><b>${r.id}</b></td><td>${r.region||"—"}</td><td class="num miss">없음</td><td class="num">—</td><td class="num">—</td><td><span class="badge b-offline">미스캔/누락</span></td></tr>`;
+    const pct=r.total_bytes/maxB*100, drift=pct<85;
+    return `<tr><td><b>${r.id}</b></td><td>${r.region||"—"}</td>
+      <td class="num">${fmtBytes(r.total_bytes)}</td><td class="num">${fmtNum(r.total_files)}</td>
+      <td class="num">${pct.toFixed(0)}%</td>
+      <td>${drift?'<span class="badge b-offline">드리프트 ⚠</span>':'<span class="badge b-online">정상</span>'}</td></tr>`;
+  }).join("") : '<tr><td colspan="6" class="sub">등록된 노드가 없습니다.</td></tr>';
+  $("cmpNote").textContent = `${found.length}/${all.length} 노드에서 발견 · ‘최대 대비’ 85% 미만이면 드리프트(복제 지연/누락 의심). 절대경로가 다른 노드는 ‘없음’으로 나옵니다.`;
+}
+function renderMatrix(j){
+  const nodes=j.nodes||[], kids=j.children||[];
+  $("cmpMHead").innerHTML = "<tr><th>디렉터리</th>"+nodes.map(n=>`<th class="num">${n}</th>`).join("")+"</tr>";
+  if(!kids.length){ $("cmpMBody").innerHTML = `<tr><td colspan="${nodes.length+1}" class="sub">하위 디렉터리가 없습니다(집계 완료 복제본 필요).</td></tr>`; return; }
+  $("cmpMBody").innerHTML = kids.map(k=>{
+    const present=nodes.map(n=>k.vals[n]).filter(v=>v!==undefined&&v!==null).sort((a,b)=>a-b);
+    const med = present.length? present[Math.floor(present.length/2)] : 0;
+    const name = (k.subdir_count>0) ? `<a href="#" class="link cmpdrill" data-name="${k.name}">${k.name}</a>` : k.name;
+    const cells = nodes.map(n=>{
+      const v=k.vals[n];
+      if(v===undefined||v===null) return '<td class="num miss">없음</td>';
+      const off = med>0? Math.abs(v-med)/med : 0;
+      return `<td class="num ${off>0.15?'warn':''}">${fmtBytes(v)}</td>`;
+    }).join("");
+    return `<tr><td class="mono">${name}</td>${cells}</tr>`;
+  }).join("");
+  $("cmpMBody").querySelectorAll("a.cmpdrill").forEach(a=>a.addEventListener("click",e=>{
+    e.preventDefault(); loadCompare(cmpCur.replace(/\/+$/,"")+"/"+a.dataset.name); }));
+}
+$("cmpRun").addEventListener("click", ()=>loadCompare($("cmpPath").value.trim()));
+$("cmpPath").addEventListener("keydown", e=>{ if(e.key==="Enter") loadCompare($("cmpPath").value.trim()); });
+$("cmpRoot").addEventListener("click", ()=>{ const up=cmpCur.replace(/\/[^/]+$/,""); loadCompare(up||"/"); });
 $("refreshBtn").addEventListener("click", ()=>{ loadOverview(); loadNodes(); });
 $("nUnit").addEventListener("change", updateNUnit);
 ["nEvery","nAt","nMonth","nDay"].forEach(id=>$(id).addEventListener("input", updateNUnit));

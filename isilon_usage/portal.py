@@ -26,6 +26,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
 from . import __version__
+from . import db as dbmod
 from . import settings as setmod
 from .server import ThreadingHTTPServer  # 3.6 폴백 포함 재사용
 
@@ -434,6 +435,90 @@ class PortalController:
             "nodes": out_nodes,
         }
 
+    # --- 경로 비교(Cross-DC) — 복제본 DB 를 경로로 조인 ---
+    def _replica_db_for(self, node_id: str, path: str):
+        """노드 복제본에서 path 를 포함하는(root 가 prefix) 최신 완료 스캔 DB 경로."""
+        rep = os.path.join(self.replicas_dir, node_id)
+        try:
+            with open(os.path.join(rep, "meta.json"), "r", encoding="utf-8") as fh:
+                meta = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        best = None
+        for s in meta.get("scans", []):
+            root = (s.get("root_path") or "").rstrip("/")
+            if path == root or path.startswith(root + "/"):
+                if best is None or float(s.get("finished_at") or 0) > float(best.get("finished_at") or 0):
+                    best = s
+        if not best:
+            return None
+        dbf = best.get("db_filename") or os.path.basename(best.get("db_path") or "")
+        dbp = os.path.join(rep, "scans", dbf)
+        return dbp if (dbf and os.path.exists(dbp)) else None
+
+    def compare_path(self, path: str) -> dict:
+        """같은 경로의 노드별 용량/파일 수를 모아 비교한다(복제본 기준)."""
+        path = os.path.abspath(path)
+        rows = []
+        for n in self.nodes:
+            entry = {"id": n["id"], "region": n.get("region"), "found": False,
+                     "total_bytes": 0, "own_bytes": 0, "total_files": 0, "subdir_count": 0}
+            dbp = self._replica_db_for(n["id"], path)
+            if dbp:
+                try:
+                    c = dbmod.connect(dbp)
+                    rid = dbmod.latest_run_id(c)
+                    r = c.execute(
+                        "SELECT total_bytes, own_bytes, total_files, subdir_count "
+                        "FROM directories WHERE run_id=? AND path=?", (rid, path)).fetchone()
+                    c.close()
+                    if r is not None:
+                        sz = r["total_bytes"] if r["total_bytes"] else r["own_bytes"]
+                        entry.update({"found": True, "total_bytes": sz,
+                                      "own_bytes": r["own_bytes"], "total_files": r["total_files"],
+                                      "subdir_count": r["subdir_count"]})
+                except Exception:  # noqa: BLE001
+                    pass
+            rows.append(entry)
+        return {"ok": True, "path": path, "rows": rows}
+
+    def compare_matrix(self, path: str) -> dict:
+        """path 직속 자식들의 노드별 용량 매트릭스(누락·드리프트 비교)."""
+        path = os.path.abspath(path)
+        node_ids = [n["id"] for n in self.nodes]
+        children = {}
+        for n in self.nodes:
+            dbp = self._replica_db_for(n["id"], path)
+            if not dbp:
+                continue
+            try:
+                c = dbmod.connect(dbp)
+                rid = dbmod.latest_run_id(c)
+                prow = c.execute("SELECT depth FROM directories WHERE run_id=? AND path=?",
+                                 (rid, path)).fetchone()
+                if prow is None:
+                    c.close()
+                    continue
+                like = (path.replace("\\", "\\\\").replace("%", "\\%")
+                        .replace("_", "\\_")).rstrip("/") + "/%"
+                kids = c.execute(
+                    "SELECT name, total_bytes, own_bytes, subdir_count FROM directories "
+                    "WHERE run_id=? AND depth=? AND path LIKE ? ESCAPE '\\'",
+                    (rid, int(prow["depth"]) + 1, like)).fetchall()
+                c.close()
+                for k in kids:
+                    e = children.setdefault(k["name"], {"name": k["name"], "subdir_count": 0, "vals": {}})
+                    e["vals"][n["id"]] = int(k["total_bytes"] or k["own_bytes"] or 0)
+                    e["subdir_count"] = max(e["subdir_count"], int(k["subdir_count"] or 0))
+            except Exception:  # noqa: BLE001
+                pass
+        out = []
+        for e in children.values():
+            e["sum"] = sum(e["vals"].values())
+            out.append(e)
+        out.sort(key=lambda x: -x["sum"])
+        return {"ok": True, "path": path, "nodes": node_ids, "children": out}
+
 
 # ------------------------------------------------------------------ HTTP 핸들러
 class PortalHandler(BaseHTTPRequestHandler):
@@ -495,6 +580,20 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/portal/overview":
                 self._send_json(c.overview())
+                return
+            if path == "/api/portal/compare":
+                qp = parse_qs(urlparse(self.path).query).get("path", [""])[0]
+                if not qp:
+                    self._send_json({"ok": False, "reason": "path 필요"}, status=400)
+                else:
+                    self._send_json(c.compare_path(qp))
+                return
+            if path == "/api/portal/matrix":
+                qp = parse_qs(urlparse(self.path).query).get("path", [""])[0]
+                if not qp:
+                    self._send_json({"ok": False, "reason": "path 필요"}, status=400)
+                else:
+                    self._send_json(c.compare_matrix(qp))
                 return
             self._send_json({"ok": False, "reason": "unknown_endpoint"}, status=404)
         except ConnectionError:
