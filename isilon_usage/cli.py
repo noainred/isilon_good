@@ -248,6 +248,39 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return _run_server(args, initial_path=None)
 
 
+def cmd_portal(args: argparse.Namespace) -> int:
+    """글로벌 통합 포탈(HQ) 실행 — 여러 데이터센터 엣지를 모아 조망."""
+    from .portal import serve_portal
+
+    data_dir = os.path.abspath(args.data_dir)
+    httpd = serve_portal(data_dir, host=args.host, port=args.port)
+    url = _dashboard_url(args.host, args.port)
+    print("=" * 64)
+    print("  글로벌 통합 포탈 (HQ) — 여러 데이터센터를 한 화면에서 조망")
+    print(f"  포탈:    {url}")
+    print(f"  데이터:  {data_dir}  (portal_nodes.json + replicas/)")
+    print(f"  노드 추가/관리: 포탈의 '노드 설정' 화면에서")
+    print("  중지하려면 Ctrl+C")
+    print("=" * 64)
+
+    def handle_sigint(signum, frame):
+        print("\n중지 신호 수신 — 정리 중…", file=sys.stderr)
+        if httpd.controller:
+            httpd.controller.stop()
+        threading.Thread(target=httpd.shutdown, daemon=True).start()
+
+    signal.signal(signal.SIGINT, handle_sigint)
+    signal.signal(signal.SIGTERM, handle_sigint)
+    try:
+        httpd.serve_forever()
+    finally:
+        if httpd.controller:
+            httpd.controller.stop()
+        httpd.server_close()
+    print("종료되었습니다.")
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     data_dir = os.path.abspath(args.data_dir)
     manager_db = mgrmod.manager_db_path(data_dir)
@@ -401,6 +434,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     pvr = sub.add_parser("version", help="버전/환경 정보 출력")
     pvr.set_defaults(func=cmd_version)
+
+    ppo = sub.add_parser("portal", help="글로벌 통합 포탈(HQ) — 여러 DC 를 한 화면에서 조망")
+    ppo.add_argument("--data-dir", default="isilon_portal_data",
+                     help="portal_nodes.json + replicas/ 상위 폴더 (기본: %(default)s)")
+    ppo.add_argument("--host", default="0.0.0.0")
+    ppo.add_argument("--port", type=int, default=8800)
+    ppo.set_defaults(func=cmd_portal)
 
     return p
 

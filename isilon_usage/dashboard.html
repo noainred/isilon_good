@@ -866,11 +866,13 @@ async function loadPie() {
   } catch (e) { /* 폴링 중 일시 오류 무시 */ }
 }
 
-function renderPieCrumb() {
+function renderPieCrumb(sizeBytes) {
   const el = $("pieCrumb");
-  if (!piePath.length) { el.textContent = "(루트)"; return; }
+  const szTxt = sizeBytes > 0
+    ? ` · <b style="color:#cfe3ff" title="현재 위치의 재귀 사용 용량">${fmtBytes(sizeBytes)}</b>` : "";
+  if (!piePath.length) { el.innerHTML = "(루트)" + szTxt; return; }
   el.innerHTML = "🏠 / " + piePath.map((c, i) =>
-    `<a href="#" class="piecrumb" data-i="${i}">${c.name}</a>`).join(" / ");
+    `<a href="#" class="piecrumb" data-i="${i}">${c.name}</a>`).join(" / ") + szTxt;
   el.querySelectorAll("a.piecrumb").forEach(a => a.addEventListener("click", (e) => {
     e.preventDefault();
     piePath = piePath.slice(0, parseInt(a.dataset.i) + 1);
@@ -903,7 +905,7 @@ function drawPie(canvas, slices, denom) {
 function renderPie(j) {
   const rows = (j && j.rows) || [];
   const parent = j && j.parent;
-  renderPieCrumb();
+  renderPieCrumb(parent ? (parent.total_bytes || parent.own_bytes || 0) : 0);
   const slices = [];
   rows.forEach((t, i) => {
     const sz = (t.total_bytes > 0 ? t.total_bytes : t.own_bytes) || 0;
@@ -995,11 +997,14 @@ function renderTopDepthOptions() {
   sel.value = String(topRel);
 }
 
-function renderTopCrumb() {
+function renderTopCrumb(sizeBytes) {
   const el = $("topCrumb");
-  if (!topPath.length) { el.textContent = "(루트)"; return; }
+  // 현재 위치(루트 또는 드릴 위치)의 재귀 사용 용량을 경로 뒤에 표시
+  const szTxt = sizeBytes > 0
+    ? ` · <b style="color:#cfe3ff" title="현재 위치의 재귀 사용 용량">${fmtBytes(sizeBytes)}</b>` : "";
+  if (!topPath.length) { el.innerHTML = "(루트)" + szTxt; return; }
   el.innerHTML = "🏠 / " + topPath.map((c, i) =>
-    `<a href="#" class="topcrumb" data-i="${i}">${c.name}</a>`).join(" / ");
+    `<a href="#" class="topcrumb" data-i="${i}">${c.name}</a>`).join(" / ") + szTxt;
   el.querySelectorAll("a.topcrumb").forEach(a => a.addEventListener("click", (e) => {
     e.preventDefault();
     topPath = topPath.slice(0, parseInt(a.dataset.i) + 1);
@@ -1020,8 +1025,9 @@ function updateTopSortIndicators() {
 function renderTopDirs(j) {
   const tb = $("topBody");
   lastTopRows = (j && j.rows) || [];
+  const par = j && j.parent;
   renderTopDepthOptions();
-  renderTopCrumb();
+  renderTopCrumb(par ? (par.total_bytes || par.own_bytes || 0) : 0);
   updateTopSortIndicators();
   if (!lastTopRows.length) {
     tb.innerHTML = '<tr><td colspan="8" style="color:var(--muted)">아직 집계된 디렉터리가 없습니다…</td></tr>';

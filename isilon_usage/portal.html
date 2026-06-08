@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>글로벌 통합 포탈 (HQ)</title>
+<style>
+  :root { --bg:#0f141b; --panel:#19212c; --panel2:#1f2937; --line:#2b3543;
+    --text:#e6edf3; --muted:#8b98a9; --accent:#4f9cff; --accent2:#38d39f;
+    --warn:#f5a623; --danger:#ff5c5c; --ok:#38d39f; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-size:14px;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif; }
+  header { padding:16px 22px; border-bottom:1px solid var(--line); display:flex;
+    align-items:center; gap:16px; flex-wrap:wrap; background:linear-gradient(180deg,#1a232f,#141a23); }
+  header h1 { font-size:17px; margin:0; font-weight:650; }
+  .spacer { flex:1; }
+  nav { display:flex; gap:6px; }
+  .navbtn { background:transparent; color:var(--muted); border:1px solid transparent;
+    border-radius:7px; padding:6px 12px; cursor:pointer; font-size:13px; font-weight:600; }
+  .navbtn:hover { color:var(--text); } .navbtn.active { background:var(--panel2); color:var(--text); border-color:var(--line); }
+  .wrap { padding:18px 22px; max-width:1320px; margin:0 auto; }
+  .grid { display:grid; gap:14px; } .cols-4 { grid-template-columns:repeat(4,1fr); }
+  @media (max-width:980px){ .cols-4 { grid-template-columns:1fr 1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 18px; }
+  .card h2 { font-size:12.5px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); margin:0 0 12px; font-weight:700; }
+  .big { font-size:28px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .sub { color:var(--muted); font-size:12px; margin-top:2px; }
+  .mono { font-family:ui-monospace,Menlo,monospace; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:8px 9px; border-bottom:1px solid #222c38; }
+  th { color:var(--muted); font-weight:600; font-size:12px; }
+  td.num,th.num { text-align:right; font-variant-numeric:tabular-nums; font-family:ui-monospace,Menlo,monospace; }
+  .badge { padding:2px 9px; border-radius:999px; font-size:11.5px; font-weight:600; border:1px solid var(--line); white-space:nowrap; }
+  .b-online { background:#173a2a; color:#52e0a0; } .b-offline { background:#43201f; color:#ff8b8b; }
+  .b-scan { background:#16344f; color:#7cc4ff; }
+  button { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:6px 11px; cursor:pointer; font-size:12.5px; }
+  button:hover { border-color:var(--accent); } button.primary { border-color:var(--accent2); color:#cfe; font-weight:700; }
+  a.link { color:#9fd0ff; text-decoration:none; } a.link:hover { text-decoration:underline; }
+  .setgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; }
+  label.fld { display:flex; flex-direction:column; gap:5px; font-size:12.5px; color:var(--muted); }
+  .inp { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:8px 10px; font-size:13px; }
+  .note { background:#0d1219; border:1px solid var(--line); border-radius:8px; padding:10px 12px; color:#bcd; font-size:12.5px; }
+  .view { display:none; } .view.active { display:block; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🌐 글로벌 통합 포탈 <span class="sub" style="font-weight:400">— 한국 HQ</span></h1>
+  <span class="sub" id="ver">—</span>
+  <div class="spacer"></div>
+  <nav>
+    <button class="navbtn active" data-view="dash">글로벌 대시보드</button>
+    <button class="navbtn" data-view="nodes">노드 설정</button>
+  </nav>
+  <button id="refreshBtn" title="새로고침">↻</button>
+</header>
+
+<!-- 글로벌 대시보드 -->
+<div class="wrap view active" id="view-dash">
+  <div class="grid cols-4" style="margin-bottom:14px;">
+    <div class="card"><h2>총 사용 용량 (전 DC)</h2><div class="big" id="kUsed">—</div><div class="sub">조사 용량 합계</div></div>
+    <div class="card"><h2>스토리지(루트)</h2><div class="big" id="kStorages">—</div><div class="sub">전 노드 합계</div></div>
+    <div class="card"><h2>노드 온라인</h2><div class="big" id="kNodes">—</div><div class="sub">최근 동기화 기준</div></div>
+    <div class="card"><h2>진행 중 스캔</h2><div class="big" id="kActive">—</div><div class="sub">전 노드 합계</div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px;">
+    <h2>지역별 롤업</h2>
+    <div class="grid cols-4" id="regions"><div class="sub">—</div></div>
+  </div>
+
+  <div class="card">
+    <h2>데이터센터별 사용량 — 행을 클릭하면 스토리지 펼침 · “열기”로 해당 DC 대시보드</h2>
+    <table>
+      <thead><tr><th>노드</th><th>지역</th><th class="num">스토리지</th><th class="num">사용</th>
+        <th>버전</th><th>마지막 동기화</th><th>상태</th><th></th></tr></thead>
+      <tbody id="nodeRows"><tr><td colspan="8" class="sub">불러오는 중…</td></tr></tbody>
+    </table>
+    <div class="sub" id="dashNote" style="margin-top:8px;"></div>
+  </div>
+</div>
+
+<!-- 노드 설정 -->
+<div class="wrap view" id="view-nodes">
+  <div class="card" style="margin-bottom:14px;">
+    <h2>글로벌 노드 추가 / 수정</h2>
+    <div class="setgrid">
+      <label class="fld">노드 이름(고유)<input id="nId" class="inp mono" placeholder="dc-tokyo" /></label>
+      <label class="fld">지역(표시용)<input id="nRegion" class="inp" placeholder="아시아/도쿄" /></label>
+      <label class="fld">주소(URL)<input id="nUrl" class="inp mono" placeholder="http://10.20.1.5:8765" /></label>
+      <label class="fld">API 토큰(엣지 api_token 과 동일)<input id="nToken" class="inp mono" type="password" placeholder="(변경 시에만)" /></label>
+      <label class="fld">동기화 주기(분)<input id="nInterval" class="inp" type="number" value="30" /></label>
+      <label class="fld">수집 방식<select id="nMode" class="inp"><option value="both">복제 + 폴링(권장)</option><option value="replicate">복제만</option><option value="poll">폴링만</option></select></label>
+    </div>
+    <div style="display:flex; gap:10px; align-items:center; margin-top:14px; flex-wrap:wrap;">
+      <label class="sub" style="display:flex; gap:6px; align-items:center;"><input id="nEnabled" type="checkbox" checked /> 사용함</label>
+      <span class="sub" id="nodeMsg"></span>
+      <div class="spacer"></div>
+      <button id="testBtn">연결 테스트</button>
+      <button id="addBtn" class="primary">저장(추가/수정)</button>
+    </div>
+    <div class="note" style="margin-top:12px;">연결 테스트는 <span class="mono">/api/dbexport</span>(meta.json)로 응답·토큰·요약을 확인합니다. 같은 이름으로 저장하면 수정됩니다.</div>
+  </div>
+
+  <div class="card">
+    <h2>등록된 글로벌 노드</h2>
+    <table>
+      <thead><tr><th>이름</th><th>지역</th><th>주소</th><th class="num">주기(분)</th><th>마지막 동기화</th><th>상태</th><th>동작</th></tr></thead>
+      <tbody id="regRows"><tr><td colspan="7" class="sub">불러오는 중…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+function fmtBytes(n){ n=Number(n||0); const u=["B","KB","MB","GB","TB","PB"]; let i=0;
+  while(n>=1024 && i<u.length-1){ n/=1024; i++; } return (i===0? n.toFixed(0): n.toFixed(1))+" "+u[i]; }
+function fmtNum(n){ return Number(n||0).toLocaleString(); }
+function ago(ts){ if(!ts) return "—"; const s=Math.max(0,(Date.now()/1000-ts));
+  if(s<60) return Math.floor(s)+"초 전"; if(s<3600) return Math.floor(s/60)+"분 전"; return Math.floor(s/3600)+"시간 전"; }
+function show(v){ ["dash","nodes"].forEach(n=>$("view-"+n).classList.toggle("active", n===v));
+  document.querySelectorAll(".navbtn").forEach(b=>b.classList.toggle("active", b.dataset.view===v)); }
+document.querySelectorAll(".navbtn").forEach(b=>b.addEventListener("click",()=>show(b.dataset.view)));
+
+async function loadOverview(){
+  try {
+    const j = await (await fetch("/api/portal/overview",{cache:"no-store"})).json();
+    if(!j.ok) return;
+    if(j.version) $("ver").textContent = "v"+j.version;
+    const t=j.totals||{};
+    $("kUsed").textContent=fmtBytes(t.used_bytes); $("kStorages").textContent=fmtNum(t.storages);
+    $("kNodes").textContent=(t.nodes_online||0)+" / "+(t.nodes_total||0); $("kActive").textContent=fmtNum(t.active_scans);
+    $("regions").innerHTML = (j.regions||[]).map(r=>
+      `<div><div class="big" style="font-size:20px">${fmtBytes(r.used_bytes)}</div><div class="sub">${r.region} · ${fmtNum(r.storages)} 스토리지</div></div>`
+    ).join("") || '<div class="sub">등록된 노드가 없습니다.</div>';
+    const rows=(j.nodes||[]);
+    $("nodeRows").innerHTML = rows.length ? rows.map(n=>{
+      const st = !n.enabled ? '<span class="badge">사용 안 함</span>'
+        : (n.online ? (n.active_scans>0 ? '<span class="badge b-scan">스캔 중</span>' : '<span class="badge b-online">온라인</span>')
+                    : '<span class="badge b-offline">오프라인</span>');
+      const open = `<a class="link" href="${n.url}" target="_blank" rel="noopener">열기 ↗</a>`;
+      return `<tr><td><b>${n.id}</b> <span class="sub mono">${n.hostname||""}</span></td><td>${n.region||"—"}</td>
+        <td class="num">${fmtNum(n.storages)}</td><td class="num">${fmtBytes(n.used_bytes)}</td>
+        <td class="sub">${n.version?("v"+n.version):"—"}</td><td class="sub">${ago(n.last_poll)}</td>
+        <td>${st}</td><td>${open}</td></tr>` +
+        (n.last_error ? `<tr><td colspan="8" class="sub" style="color:#ff9a9a">${n.id}: ${n.last_error}</td></tr>` : "");
+    }).join("") : '<tr><td colspan="8" class="sub">등록된 노드가 없습니다. “노드 설정”에서 추가하세요.</td></tr>';
+    $("dashNote").textContent = "최근 동기화 기준. 깊은 드릴다운/경로 비교는 다음 단계에서 추가됩니다.";
+  } catch(e){ /* 무시 */ }
+}
+
+async function loadNodes(){
+  try {
+    const j = await (await fetch("/api/portal/nodes",{cache:"no-store"})).json();
+    const rows=(j.nodes||[]);
+    $("regRows").innerHTML = rows.length ? rows.map(n=>
+      `<tr><td class="mono">${n.id}</td><td>${n.region||"—"}</td><td class="mono">${n.url}</td>
+        <td class="num">${n.interval_minutes}</td><td class="sub">${ago(n.last_poll)}</td>
+        <td>${n.online?'<span class="badge b-online">온라인</span>':'<span class="badge b-offline">오프라인</span>'}</td>
+        <td><button data-edit="${n.id}">수정</button> <button data-sync="${n.id}">동기화</button> <button data-del="${n.id}">삭제</button></td></tr>`
+    ).join("") : '<tr><td colspan="7" class="sub">등록된 노드 없음</td></tr>';
+    $("regRows").querySelectorAll("button[data-del]").forEach(b=>b.addEventListener("click",async()=>{
+      if(confirm("노드 "+b.dataset.del+" 삭제?")){ await fetch("/api/portal/nodes/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:b.dataset.del})}); loadNodes(); loadOverview(); }}));
+    $("regRows").querySelectorAll("button[data-sync]").forEach(b=>b.addEventListener("click",async()=>{
+      await fetch("/api/portal/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:b.dataset.sync})}); b.textContent="동기화…"; setTimeout(()=>{loadNodes();loadOverview();},1500); }));
+    $("regRows").querySelectorAll("button[data-edit]").forEach(b=>b.addEventListener("click",()=>{
+      const n=rows.find(x=>x.id===b.dataset.edit); if(!n) return;
+      $("nId").value=n.id; $("nRegion").value=n.region||""; $("nUrl").value=n.url; $("nToken").value="";
+      $("nInterval").value=n.interval_minutes; $("nMode").value=n.mode||"both"; $("nEnabled").checked=!!n.enabled;
+      show("nodes"); $("nodeMsg").textContent="수정 모드: "+n.id; }));
+  } catch(e){ /* 무시 */ }
+}
+
+function nodePayload(){
+  return { id:$("nId").value.trim(), region:$("nRegion").value.trim(), url:$("nUrl").value.trim(),
+    token:$("nToken").value, interval_minutes:parseInt($("nInterval").value)||30,
+    mode:$("nMode").value, enabled:$("nEnabled").checked };
+}
+$("addBtn").addEventListener("click", async ()=>{
+  const j = await (await fetch("/api/portal/nodes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(nodePayload())})).json();
+  $("nodeMsg").textContent = j.ok ? "✓ 저장됨" : ("실패: "+(j.reason||""));
+  if(j.ok){ loadNodes(); loadOverview(); }
+});
+$("testBtn").addEventListener("click", async ()=>{
+  $("nodeMsg").textContent="테스트 중…";
+  const j = await (await fetch("/api/portal/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(nodePayload())})).json();
+  $("nodeMsg").textContent = j.ok ? `✓ 연결 OK · v${j.version||"?"} · ${fmtNum(j.storages)} 스토리지 · ${fmtBytes(j.used_bytes)}` : ("✗ "+(j.reason||"실패"));
+});
+$("refreshBtn").addEventListener("click", ()=>{ loadOverview(); loadNodes(); });
+
+loadOverview(); loadNodes();
+setInterval(()=>{ loadOverview(); loadNodes(); }, 5000);
+</script>
+</body>
+</html>

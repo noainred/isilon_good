@@ -19,6 +19,7 @@ import io
 import json
 import os
 import socket
+import sqlite3
 import tarfile
 import threading
 import time
@@ -905,6 +906,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 try:
                     top_n = int(self._current_settings().get("top_n", 20))
                     payload = build_status(pconn, None, top=top_n)
+                except sqlite3.OperationalError:
+                    # per-run DB 파일은 생겼지만 아직 테이블 생성 전(스캔 시작 직후 레이스).
+                    # 500 대신 "초기화 중"으로 응답해 다음 폴링에 정상 표시되게 한다.
+                    self._send_json({"ok": False, "reason": "initializing",
+                                     "scan_id": scan_id, "scan_meta": scan_meta})
+                    return
                 finally:
                     pconn.close()
                 payload["scan_id"] = scan_id
@@ -953,6 +960,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             order=(qs.get("order", ["desc"])[0]),
                             limit=top_n,
                         ))
+                except sqlite3.OperationalError:
+                    self._send_json({"ok": True, "rows": []})  # 초기화 전 레이스 — 빈 목록
                 finally:
                     pconn.close()
                 return
