@@ -34,6 +34,7 @@ DEFAULTS: dict = {
     "smtp_password": "",                # SMTP 비밀번호
     "smtp_from": "",                    # 보내는 사람(비우면 smtp_user)
     "smtp_tls": True,                   # STARTTLS 사용(465 포트는 자동 SSL)
+    "api_token": "",                    # 글로벌 포탈 복제용 토큰(설정 시 /api/dbexport 인증 필요)
 }
 
 EDITABLE_KEYS = set(DEFAULTS.keys())
@@ -83,6 +84,7 @@ def sanitize(raw: dict) -> dict:
     s["smtp_password"] = str(s.get("smtp_password") or "")
     s["smtp_from"] = str(s.get("smtp_from") or "").strip()
     s["smtp_tls"] = bool(s.get("smtp_tls", True))
+    s["api_token"] = str(s.get("api_token") or "").strip()
 
     mb = s.get("mount_bases") or []
     if isinstance(mb, str):

@@ -132,6 +132,14 @@ class Scanner:
         used = (v.f_blocks - v.f_bfree) * v.f_frsize
         return (total, used, free)
 
+    def _is_readonly(self) -> bool:
+        """대상 마운트가 읽기 전용(ro)으로 마운트됐는지 확인한다(statvfs ST_RDONLY)."""
+        try:
+            flags = os.statvfs(self.root_path).f_flag
+        except OSError:
+            return False
+        return bool(flags & getattr(os, "ST_RDONLY", 1))
+
     def _flush_progress(self, conn, *, force: bool = False, current_dir=None,
                         current_depth=None, phase=None, status=None) -> None:
         """진행 상태를 DB(scan_runs)에 반영한다(과도한 쓰기를 막기 위해 스로틀).
@@ -227,6 +235,7 @@ class Scanner:
                 conn, self.run_id,
                 fs_total_bytes=total, fs_used_bytes=used, fs_free_bytes=free,
                 workers=self.workers,   # 설정된 동시 스캔 스레드 수(병렬도)
+                mount_readonly=int(self._is_readonly()),  # 마운트 읽기전용(ro) 여부
             )
             conn.commit()
             self._update_manager()  # fs 용량 등 초기 요약 반영

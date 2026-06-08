@@ -5,9 +5,10 @@
 """
 
 # 애플리케이션 버전(릴리즈노트 CHANGELOG.md 와 git 태그 v<버전>에 대응)
-__version__ = "1.1.9"
+__version__ = "1.2.0"
 
 # DB 스키마 버전. 스키마가 바뀌면 1씩 올리고 마이그레이션을 추가한다.
 # (per-run DB / manager DB 의 PRAGMA user_version 에 기록된다)
 # 3: scan_runs 에 workers/active_workers(병렬 워커 수) 컬럼 추가
-SCHEMA_VERSION = 3
+# 4: scan_runs 에 mount_readonly(대상 마운트 읽기전용 여부) 컬럼 추가
+SCHEMA_VERSION = 4

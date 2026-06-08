@@ -13,9 +13,13 @@
 
 from typing import Dict, Optional
 
+import gzip
+import hmac
+import io
 import json
 import os
 import socket
+import tarfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -56,11 +60,21 @@ def _human_bytes(n) -> str:
     return f"{n:.1f} PB"
 
 
+def _path_readonly(path: str) -> bool:
+    """경로가 속한 마운트가 읽기 전용(ro)인지 확인한다(statvfs ST_RDONLY)."""
+    try:
+        return bool(os.statvfs(path).f_flag & getattr(os, "ST_RDONLY", 1))
+    except OSError:
+        return False
+
+
 def _public_settings(s: dict) -> dict:
     """화면/응답용 설정 — 비밀번호는 노출하지 않고 설정 여부만 알린다."""
     out = dict(s)
     out["smtp_password"] = ""
     out["smtp_password_set"] = bool((s or {}).get("smtp_password"))
+    out["api_token"] = ""
+    out["api_token_set"] = bool((s or {}).get("api_token"))
     return out
 
 
@@ -189,6 +203,7 @@ def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 
             "max_depth": r.get("max_depth") or 0,
             "workers": r.get("workers") or 0,             # 설정된 동시 스캔 스레드 수
             "active_workers": r.get("active_workers") or 0,  # 현재 병렬 처리 중인 워커 수
+            "mount_readonly": bool(r.get("mount_readonly")),  # 대상 마운트 읽기전용(ro) 여부
             "fs_total_bytes": fs_total,
             "fs_used_bytes": fs_used,
             "fs_free_bytes": r.get("fs_free_bytes") or 0,
@@ -470,9 +485,11 @@ class ScanController:
         if self.lock_settings:
             return {"ok": False, "reason": "설정이 잠겨 있습니다(--lock-settings)."}
         new = dict(new or {})
-        # 비밀번호는 화면에 노출하지 않으므로(마스킹), 빈 값으로 오면 기존 값 유지
+        # 비밀번호/토큰은 화면에 노출하지 않으므로(마스킹), 빈 값으로 오면 기존 값 유지
         if not (new.get("smtp_password") or "").strip():
             new.pop("smtp_password", None)
+        if not (new.get("api_token") or "").strip():
+            new.pop("api_token", None)
         merged = dict(self.settings)
         merged.update({k: v for k, v in new.items() if k in setmod.EDITABLE_KEYS})
         self.settings = setmod.save(self.data_dir, merged)
@@ -530,12 +547,14 @@ class ScanController:
             self.data_dir, root_path=path, db_path=db_path,
             backend=backend, size_mode=size_mode,
         )
-        self._log("scan #%d start: %s (backend=%s, size=%s, x=%s)" % (
-            scan_id, path, backend, size_mode, one_file_system))
+        readonly = _path_readonly(path)
+        self._log("scan #%d start: %s (backend=%s, size=%s, x=%s, ro=%s)" % (
+            scan_id, path, backend, size_mode, one_file_system, readonly))
         self._launch(scan_id, db_path, path, backend, size_mode,
                      one_file_system, resume=False)
         return {"ok": True, "scan_id": scan_id, "db_path": db_path,
-                "root_path": path, "backend": backend, "size_mode": size_mode}
+                "root_path": path, "backend": backend, "size_mode": size_mode,
+                "mount_readonly": readonly}
 
     def _launch(self, scan_id, db_path, path, backend, size_mode,
                 one_file_system, *, resume: bool) -> None:
@@ -782,6 +801,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return self.controller.settings
         return setmod.load(self.data_dir)
 
+    def _authorized(self, qs: dict) -> bool:
+        """api_token 이 설정돼 있으면 X-Auth-Token 헤더(또는 ?token=)를 검증한다.
+
+        토큰이 비어 있으면(미설정) 공개로 간주한다(기존 동작 유지).
+        """
+        tok = (self._current_settings().get("api_token") or "").strip()
+        if not tok:
+            return True
+        given = self.headers.get("X-Auth-Token") or (qs.get("token", [""])[0] or "")
+        return hmac.compare_digest(str(given), tok)
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
@@ -963,6 +993,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._export(row, fmt=(qs.get("format", ["csv"])[0]))
                 return
 
+            if path == "/api/dbexport":
+                # 글로벌 포탈 복제용: 완료된 per-run DB + 노드 요약(meta.json)을 tar.gz 로.
+                if not self._authorized(qs):
+                    self._send_json({"ok": False, "reason": "unauthorized"}, status=401)
+                    return
+                try:
+                    since = float(qs.get("since", ["0"])[0] or 0)
+                except (TypeError, ValueError):
+                    since = 0.0
+                self._export_dbs(mconn, since=since)
+                return
+
             self._send_json({"ok": False, "reason": "unknown_endpoint"}, status=404)
         except ConnectionError:
             pass  # 클라이언트가 응답 도중 연결을 끊음 — 무시
@@ -1013,6 +1055,63 @@ class DashboardHandler(BaseHTTPRequestHandler):
             pass  # 다운로드 도중 클라이언트가 연결을 끊음 — 무시
         finally:
             pconn.close()
+
+    def _export_dbs(self, mconn, *, since: float = 0.0) -> None:
+        """완료된 per-run DB(불변) + 노드 요약(meta.json)을 tar.gz 로 스트리밍한다.
+
+        글로벌 포탈(HQ)이 이 번들을 받아 복제한다. 진행 중 스캔의 DB 는
+        쓰기 중이라 제외하고, status 가 done/paused/error 인 것만(또는 since
+        이후 완료분만) 보낸다. 완료된 DB 는 불변이라 그대로 복사해도 안전하다.
+        (Python 3.6·구버전 SQLite 호환: backup API/VACUUM INTO 를 쓰지 않는다.)
+        """
+        scans = mgrmod.list_scans(mconn)
+        overall = mgrmod.overall_capacity(mconn)
+        terminal = ("done", "paused", "error")
+        finished = [s for s in scans
+                    if s.get("status") in terminal
+                    and float(s.get("finished_at") or 0) > since]
+        meta = {
+            "hostname": socket.gethostname(),
+            "version": __version__,
+            "schema_version": SCHEMA_VERSION,
+            "exported_at": time.time(),
+            "since": since,
+            "overall": overall,
+            "scans": [dict(s, db_filename=os.path.basename(s.get("db_path") or ""))
+                      for s in finished],
+        }
+        self.send_response(200)
+        self.send_header("Content-Type", "application/gzip")
+        self.send_header("Content-Disposition", 'attachment; filename="dbexport.tar.gz"')
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            gz = gzip.GzipFile(fileobj=self.wfile, mode="wb")
+            tar = tarfile.open(fileobj=gz, mode="w")
+            mb = json.dumps(meta, ensure_ascii=False, default=str).encode("utf-8")
+            ti = tarfile.TarInfo("meta.json")
+            ti.size = len(mb)
+            ti.mtime = int(time.time())
+            tar.addfile(ti, io.BytesIO(mb))
+            for s in finished:
+                dbp = s.get("db_path")
+                if not dbp or not os.path.exists(dbp):
+                    continue
+                # 완료 DB 의 WAL 을 본 파일로 합쳐 단일 파일로 복사(안전·일관)
+                try:
+                    c = dbmod.connect(dbp)
+                    c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    c.close()
+                except Exception:
+                    pass
+                try:
+                    tar.add(dbp, arcname="scans/" + os.path.basename(dbp))
+                except OSError:
+                    continue
+            tar.close()
+            gz.close()
+        except OSError:
+            pass  # 전송 중 클라이언트 연결 끊김 — 무시
 
     def _read_json_body(self) -> dict:
         try:

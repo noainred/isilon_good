@@ -7,9 +7,11 @@ serve() 로 실제 HTTP 서버를 띄우고 주요 엔드포인트를 호출해 
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import sys
+import tarfile
 import tempfile
 import threading
 import time
@@ -90,10 +92,12 @@ def main() -> int:
         # 스캔 1 시작 → 완료
         r1 = c.post("/api/scan/start", {"path": root})
         assert r1["ok"], r1
+        assert "mount_readonly" in r1, r1   # 시작 응답에 마운트 ro 여부 포함
         s1 = r1["scan_id"]
         d1 = _wait_done(c, s1)
         assert d1["run"]["status"] == "done"
         assert d1["run"]["total_files"] == 4, d1["run"]["total_files"]
+        assert isinstance(d1["run"]["mount_readonly"], bool), d1["run"]  # 상태에도 노출
 
         # 드릴다운: 루트 → 자식
         ch = c.get(f"/api/children?scan={s1}")
@@ -129,6 +133,24 @@ def main() -> int:
         # 내보내기 CSV
         csv = c.get_raw(f"/api/export?scan={s1}&format=csv").decode("utf-8")
         assert "path,depth" in csv and root in csv
+
+        # 글로벌 포탈 복제용 DB export (토큰 보호 + tar.gz 번들)
+        c.post("/api/settings", {"settings": {"api_token": "secret123"}})
+        try:
+            c.get_raw("/api/dbexport")
+            raise AssertionError("토큰 없이 통과되면 안 됨")
+        except urllib.error.HTTPError as e:
+            assert e.code == 401, e.code
+        raw = c.get_raw("/api/dbexport?token=secret123")
+        tar = tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz")
+        names = tar.getnames()
+        assert "meta.json" in names, names
+        assert any(n.startswith("scans/") and n.endswith(".db") for n in names), names
+        meta = json.loads(tar.extractfile("meta.json").read().decode("utf-8"))
+        assert meta["hostname"] and any(sc["status"] == "done" for sc in meta["scans"]), meta
+        # 토큰은 응답에 노출되지 않고(set 여부만), 빈 값 저장 시 기존 토큰 유지
+        st = c.get("/api/settings")["settings"]
+        assert st["api_token"] == "" and st["api_token_set"] is True, st
 
         # 설정 저장 라운드트립
         up = c.post("/api/settings", {"settings": {"top_n": 3, "scan_workers": 2}})

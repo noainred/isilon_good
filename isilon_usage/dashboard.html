@@ -338,6 +338,14 @@
       </label>
 
       <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
+        <div class="sub" style="margin-bottom:6px;">글로벌 통합 포탈(HQ) — DB 복제 인증</div>
+        <label style="display:block;">API 토큰(설정 시 <span class="mono">/api/dbexport</span> 복제에 토큰 필요, 비우면 공개)
+          <input id="setApiToken" type="password" class="setinput mono" style="width:100%;"
+                 placeholder="(미설정 — 변경 시에만 입력)" />
+        </label>
+      </div>
+
+      <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
         <div class="sub" style="margin-bottom:6px;">저장 경로</div>
         <div class="setgrid">
           <label>DB 저장 경로(data-dir) — 실행 시 지정(읽기 전용)
@@ -433,6 +441,7 @@
     <div class="card">
       <h2>요약</h2>
       <div class="kv"><span class="k">단계</span><span class="v" id="phaseTxt">—</span></div>
+      <div class="kv"><span class="k">마운트 상태</span><span class="v" id="mountRo">—</span></div>
       <div class="kv"><span class="k">탐색된 디렉터리</span><span class="v" id="discovered">0</span></div>
       <div class="kv"><span class="k">집계 완료 디렉터리</span><span class="v" id="processed">0</span></div>
       <div class="kv"><span class="k">총 파일 수</span><span class="v" id="totalFiles">0</span></div>
@@ -605,6 +614,8 @@ async function loadSettings() {
     $("setWorkers").value = s.scan_workers;
     $("setRetention").value = s.retention_per_root;
     $("setWebhook").value = s.notify_webhook || "";
+    $("setApiToken").value = "";
+    $("setApiToken").placeholder = s.api_token_set ? "(설정됨 — 변경 시에만 입력)" : "(미설정 — 공개)";
     $("setMounts").value = (s.mount_bases || []).join("\n");
     // 경로 / 메일(SMTP)
     $("setDataDir").value = (j.server && j.server.data_dir) || "";
@@ -637,7 +648,7 @@ async function loadSettings() {
     // 편집 가능 여부
     $("settingsLockMsg").style.display = j.locked ? "block" : "none";
     ["setBackend","setSize","setOFS","setBatch","setSample","setTopN","setRefresh",
-     "setWorkers","setRetention","setWebhook","setMounts","saveSettingsBtn",
+     "setWorkers","setRetention","setWebhook","setApiToken","setMounts","saveSettingsBtn",
      "schPath","schEvery","schBackend","schAdd",
      "setLogPath","setEmail","setSmtpHost","setSmtpPort","setSmtpTls",
      "setSmtpUser","setSmtpPass","setSmtpFrom"].forEach(id => { $(id).disabled = !j.editable; });
@@ -664,6 +675,7 @@ async function saveSettings() {
     scan_workers: parseInt($("setWorkers").value),
     retention_per_root: parseInt($("setRetention").value),
     notify_webhook: $("setWebhook").value.trim(),
+    api_token: $("setApiToken").value,
     mount_bases: $("setMounts").value.split("\n").map(x => x.trim()).filter(Boolean),
     schedules: schedules,
     log_path: $("setLogPath").value.trim(),
@@ -796,7 +808,10 @@ async function startScan() {
     });
     const j = await res.json();
     if (j.ok) {
-      $("startMsg").innerHTML = `<span style="color:var(--ok)">✓ 스캔 #${j.scan_id} 시작됨: ${j.root_path}</span>`;
+      const roTxt = j.mount_readonly
+        ? ' · <span style="color:var(--ok)">🔒 읽기전용(ro)</span>'
+        : ' · <span style="color:var(--warn)">✏ 쓰기가능(rw)</span>';
+      $("startMsg").innerHTML = `<span style="color:var(--ok)">✓ 스캔 #${j.scan_id} 시작됨: ${j.root_path}</span>${roTxt}`;
       selectedScan = j.scan_id; userPicked = true;
       updateStartButton(1);   // 즉시 빨간 "스캔 중…"
     } else {
@@ -1016,7 +1031,11 @@ function renderTopDirs(j) {
                     sizing:"집계중", done:"완료", error:"오류"};
   const rootDepth = topPath.length ? topPath[topPath.length - 1].depth : 0;
   tb.innerHTML = lastTopRows.map((t, i) => {
-    const sz = t.total_bytes > 0 ? t.total_bytes : t.own_bytes;
+    const aggregated = t.total_bytes > 0;
+    // 집계 전(탐색 중)에는 재귀 용량이 아직 없으므로 직속 용량을 임시값으로 흐리게 표시
+    const recCell = aggregated
+      ? fmtBytes(t.total_bytes)
+      : `<span style="color:var(--muted)" title="집계 전 임시값(직속 용량만). 스캔 완료 후 하위를 포함한 재귀 용량으로 바뀝니다.">~${fmtBytes(t.own_bytes)}</span>`;
     const canDrill = (t.subdir_count || 0) > 0;
     const nameCell = canDrill
       ? `<a href="#" class="topdrill" data-i="${i}" title="클릭하면 하위로 들어갑니다: ${t.path}">${t.path}</a>`
@@ -1025,7 +1044,7 @@ function renderTopDirs(j) {
       <td class="num">${i + 1}</td>
       <td class="path">${nameCell}</td>
       <td class="num">${t.depth - rootDepth}</td>
-      <td class="num">${fmtBytes(sz)}</td>
+      <td class="num">${recCell}</td>
       <td class="num">${fmtBytes(t.own_bytes)}</td>
       <td class="num">${fmtNum(t.total_files || t.file_count)}</td>
       <td class="num">${fmtNum(t.subdir_count)}</td>
@@ -1294,6 +1313,11 @@ function render(d) {
                    done:"완료", paused:"일시정지", error:"오류"};
   badge.textContent = phaseKo[r.status] || phaseKo[r.phase] || r.status;
   $("phaseTxt").textContent = phaseKo[r.phase] || r.phase;
+
+  // 마운트 읽기전용(ro) 여부 — 실행 시 확인해 안전 상태를 표시
+  $("mountRo").innerHTML = r.mount_readonly
+    ? '<span style="color:var(--ok)">🔒 읽기전용(ro) — 안전</span>'
+    : '<span style="color:var(--warn)">✏ 쓰기가능(rw)</span>';
 
   $("currentDir").textContent = r.current_dir || (r.status === "done" ? "✅ 스캔 완료" : "—");
 
