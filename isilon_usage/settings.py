@@ -42,6 +42,10 @@ DEFAULTS: dict = {
     "isilon_user": "",                  # PAPI 읽기 계정
     "isilon_password": "",              # PAPI 비밀번호
     "isilon_verify_ssl": False,         # 자체 서명 인증서면 False(검증 생략)
+    "powerstore_url": "",               # PowerStore REST API 주소(예: https://10.0.0.20)
+    "powerstore_user": "",              # PowerStore 읽기 계정
+    "powerstore_password": "",          # PowerStore 비밀번호
+    "powerstore_verify_ssl": False,     # 자체 서명 인증서면 False(검증 생략)
 }
 
 EDITABLE_KEYS = set(DEFAULTS.keys())
@@ -97,6 +101,10 @@ def sanitize(raw: dict) -> dict:
     s["isilon_user"] = str(s.get("isilon_user") or "").strip()
     s["isilon_password"] = str(s.get("isilon_password") or "")
     s["isilon_verify_ssl"] = bool(s.get("isilon_verify_ssl", False))
+    s["powerstore_url"] = str(s.get("powerstore_url") or "").strip()
+    s["powerstore_user"] = str(s.get("powerstore_user") or "").strip()
+    s["powerstore_password"] = str(s.get("powerstore_password") or "")
+    s["powerstore_verify_ssl"] = bool(s.get("powerstore_verify_ssl", False))
 
     mb = s.get("mount_bases") or []
     if isinstance(mb, str):

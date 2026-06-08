@@ -40,6 +40,7 @@ from . import monitor as monmod
 from . import manager as mgrmod
 from . import settings as setmod
 from . import isilon_api as isilonmod
+from . import powerstore_api as powerstoremod
 from .scanner import run_scan
 
 
@@ -88,6 +89,8 @@ def _public_settings(s: dict) -> dict:
     out["api_token_set"] = bool((s or {}).get("api_token"))
     out["isilon_password"] = ""
     out["isilon_password_set"] = bool((s or {}).get("isilon_password"))
+    out["powerstore_password"] = ""
+    out["powerstore_password_set"] = bool((s or {}).get("powerstore_password"))
     return out
 
 
@@ -484,25 +487,36 @@ class ScanController:
         self.settings = setmod.load(data_dir)
         self._scans: Dict[int, dict] = {}   # manager scan_id -> {stop, thread}
         self._lock = threading.Lock()
-        self._isilon_cache = None           # 아이실론 PAPI 상태 캐시
-        self._isilon_ts = 0.0
+        self._storage_cache = None          # 스토리지 어레이(아이실론/PowerStore) 상태 캐시
+        self._storage_ts = 0.0
         self._reconcile_orphans()           # 이전 프로세스가 남긴 고아 스캔 정리
 
-    def isilon_status(self, force: bool = False) -> dict:
-        """아이실론(OneFS PAPI) 상태를 캐시(60초 TTL)와 함께 돌려준다."""
-        s = self.settings
-        url = (s.get("isilon_url") or "").strip()
-        if not url:
-            return {"ok": False, "configured": False, "error": "미설정"}
+    def storage_status(self, force: bool = False) -> list:
+        """설정된 스토리지 어레이(아이실론/PowerStore) 상태 목록을 캐시(60초)와 함께 반환."""
         now = time.time()
-        if (not force) and self._isilon_cache is not None and (now - self._isilon_ts) < 60:
-            return self._isilon_cache
-        res = isilonmod.cluster_status(
-            url, s.get("isilon_user", ""), s.get("isilon_password", ""),
-            verify_ssl=bool(s.get("isilon_verify_ssl", False)), timeout=10.0)
-        self._isilon_cache = res
-        self._isilon_ts = now
-        return res
+        if (not force) and self._storage_cache is not None and (now - self._storage_ts) < 60:
+            return self._storage_cache
+        s = self.settings
+        arrays = []
+        if (s.get("isilon_url") or "").strip():
+            arrays.append(isilonmod.cluster_status(
+                s.get("isilon_url", ""), s.get("isilon_user", ""), s.get("isilon_password", ""),
+                verify_ssl=bool(s.get("isilon_verify_ssl", False)), timeout=10.0))
+        if (s.get("powerstore_url") or "").strip():
+            arrays.append(powerstoremod.cluster_status(
+                s.get("powerstore_url", ""), s.get("powerstore_user", ""),
+                s.get("powerstore_password", ""),
+                verify_ssl=bool(s.get("powerstore_verify_ssl", False)), timeout=10.0))
+        self._storage_cache = arrays
+        self._storage_ts = now
+        return arrays
+
+    def isilon_status(self, force: bool = False) -> dict:
+        """back-compat: 아이실론 항목만 반환(/api/isilon)."""
+        for a in self.storage_status(force=force):
+            if a.get("type") == "isilon":
+                return a
+        return {"ok": False, "configured": False, "type": "isilon", "error": "미설정"}
 
     def _reconcile_orphans(self) -> None:
         """서버 시작 시: 실제로 실행 중이 아닌데 상태가 '진행 중'(discovering/sizing)
@@ -566,6 +580,8 @@ class ScanController:
             new.pop("api_token", None)
         if not (new.get("isilon_password") or "").strip():
             new.pop("isilon_password", None)
+        if not (new.get("powerstore_password") or "").strip():
+            new.pop("powerstore_password", None)
         merged = dict(self.settings)
         merged.update({k: v for k, v in new.items() if k in setmod.EDITABLE_KEYS})
         self.settings = setmod.save(self.data_dir, merged)
@@ -934,6 +950,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         force=(qs.get("force", ["0"])[0] == "1")))
                 return
 
+            if path == "/api/storage":
+                arrays = (self.controller.storage_status(force=(qs.get("force", ["0"])[0] == "1"))
+                          if self.controller else [])
+                self._send_json({"ok": True, "arrays": arrays})
+                return
+
             if path == "/api/settings":
                 self._send_json({
                     "ok": True,
@@ -1172,6 +1194,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "overall": overall,
             "isilon": (self.controller.isilon_status() if self.controller else
                        {"ok": False, "configured": False}),
+            "storage": (self.controller.storage_status() if self.controller else []),
             "scans": [dict(s, db_filename=os.path.basename(s.get("db_path") or ""))
                       for s in finished],
         }

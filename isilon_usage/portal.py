@@ -323,6 +323,7 @@ class PortalController:
                         "version": meta.get("version"), "hostname": meta.get("hostname"),
                         "overall": meta.get("overall") or {},
                         "isilon": meta.get("isilon") or {"configured": False},
+                        "storage": meta.get("storage") or [],
                         "error": "",
                     }
                 n["last_poll"] = time.time()
@@ -431,6 +432,7 @@ class PortalController:
                 "active_scans": int(ov.get("active_scans") or 0),
                 "roots": ov.get("roots") or [],
                 "isilon": c.get("isilon") or {"configured": False},
+                "storage": c.get("storage") or [],
             })
         return {
             "ok": True,

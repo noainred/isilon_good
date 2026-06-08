@@ -53,7 +53,8 @@ class IsilonClient:
     def status(self) -> dict:
         """클러스터 상태 요약(베스트 에포트)."""
         out = {
-            "ok": False, "base": self.base, "name": None, "version": None,
+            "ok": False, "type": "isilon", "label": "Isilon (OneFS)",
+            "base": self.base, "name": None, "version": None,
             "capacity": {}, "nodes": {}, "events_unresolved": None,
             "health": "unknown", "error": "",
         }
@@ -118,7 +119,7 @@ def cluster_status(url: str, user: str, password: str, *,
                    verify_ssl: bool = False, timeout: float = 10.0) -> dict:
     """편의 함수: 설정값으로 한 번 조회. 미설정이면 configured=False."""
     if not (url or "").strip():
-        return {"ok": False, "configured": False, "error": "미설정"}
+        return {"ok": False, "configured": False, "type": "isilon", "error": "미설정"}
     res = IsilonClient(url, user, password, verify_ssl=verify_ssl, timeout=timeout).status()
     res["configured"] = True
     return res
