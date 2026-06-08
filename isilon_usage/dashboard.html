@@ -144,7 +144,13 @@
 </header>
 
 <!-- 분석 화면(여기로 JS 가 파이·상위 디렉터리·드릴다운·추세·비교·오류 카드를 옮긴다) -->
-<div class="wrap view" id="view-analysis" style="display:none;"></div>
+<div class="wrap view" id="view-analysis" style="display:none;">
+  <div id="analysisNotice" class="card"
+       style="display:none; margin-bottom:14px; border-color:var(--warn); background:#2a2310; color:#f0d9a0;">
+    ⚠ <b>스캔 진행 중</b> — 집계가 끝나기 전이라 재귀 용량·비율·파일 수 등 일부 값은
+    <b>임시 표시(직속 용량 기준)</b>입니다. 스캔이 <b>완료</b>되면 정확한 값으로 바뀝니다.
+  </div>
+</div>
 
 <div class="wrap view" id="view-summary">
   <!-- 자원 모니터링 (맨 위) -->
@@ -219,7 +225,7 @@
   </div>
 
   <!-- 새 스캔 시작 (웹에서 디렉터리 지정) -->
-  <div class="card" id="startCard" style="margin-bottom:14px;">
+  <div class="card" id="startCard" style="margin-bottom:14px; display:none;">
     <h2>새 스캔 시작 — 조사할 디렉터리 지정</h2>
     <div class="sub" id="scanDisabledMsg" style="display:none; color:var(--warn);">
       이 서버는 웹 스캔이 비활성화되어 있습니다. <code>serve</code> 또는 <code>run</code> 으로 실행하세요.
@@ -1388,6 +1394,10 @@ function render(d) {
                    done:"완료", paused:"일시정지", error:"오류"};
   badge.textContent = phaseKo[r.status] || phaseKo[r.phase] || r.status;
   $("phaseTxt").textContent = phaseKo[r.phase] || r.phase;
+
+  // 분석 화면: 스캔 진행 중(탐색/집계)에는 정확한 데이터가 아니므로 안내 배너 표시
+  const _an = $("analysisNotice");
+  if (_an) _an.style.display = (r.status === "discovering" || r.status === "sizing") ? "block" : "none";
 
   // 마운트 읽기전용(ro) 여부 — 설정(check_readonly)이 켜졌을 때만 표시
   if (r.readonly_checked) {
