@@ -220,11 +220,20 @@ function renderPortalDash(){
       : (n.online ? (n.active_scans>0 ? '<span class="badge b-scan">스캔 중</span>' : '<span class="badge b-online">온라인</span>')
                   : '<span class="badge b-offline">오프라인</span>');
     const open = `<a class="link" href="${n.url}" target="_blank" rel="noopener">열기 ↗</a>`;
-    const roots = (n.roots||[]).map(r=>
+    const isi = n.isilon || {};
+    const isiBadge = (isi.configured === false || isi.configured === undefined) ? ""
+      : (isi.ok ? (isi.health === "ok" ? ' <span class="badge b-online" title="아이실론 정상">ISI ✓</span>'
+                                       : ' <span class="badge" style="background:#3f3516;color:#f0c86a" title="아이실론 주의">ISI ⚠</span>')
+                : ' <span class="badge b-offline" title="아이실론 연결 실패">ISI ✕</span>');
+    const isiRow = (isi.configured === false || isi.configured === undefined) ? ""
+      : `<tr class="rr-${idx}" style="display:none; background:#101a26;"><td></td><td colspan="7" class="sub">🟦 아이실론 ${
+          isi.ok ? `<b>${isi.name||"?"}</b> · OneFS ${isi.version||"?"} · 노드 ${(isi.nodes&&isi.nodes.online)!=null?isi.nodes.online:"?"}/${(isi.nodes&&isi.nodes.total)!=null?isi.nodes.total:"?"} · 용량 ${(isi.capacity&&isi.capacity.used_pct!=null)?isi.capacity.used_pct+"%":"—"} · 미해결 이벤트 ${isi.events_unresolved!=null?isi.events_unresolved:"—"} · ${isi.health==="ok"?"정상":"주의"}`
+                 : `연결 실패: ${isi.error||""}`}</td></tr>`;
+    const roots = isiRow + (n.roots||[]).map(r=>
       `<tr class="rr-${idx}" style="display:none; background:#121a24;"><td></td>
         <td colspan="7" class="sub mono">📁 ${r.root_path} — 사용 ${fmtBytes(r.scanned_bytes)} / fs ${fmtBytes(r.fs_used_bytes)} · ${r.status||""}</td></tr>`).join("");
-    return `<tr class="noderow" data-idx="${idx}" style="cursor:pointer;" title="클릭하면 스토리지 펼침">
-      <td><b>${n.id}</b> <span class="sub mono">${n.hostname||""}</span></td><td>${n.region||"—"}</td>
+    return `<tr class="noderow" data-idx="${idx}" style="cursor:pointer;" title="클릭하면 스토리지/아이실론 펼침">
+      <td><b>${n.id}</b>${isiBadge} <span class="sub mono">${n.hostname||""}</span></td><td>${n.region||"—"}</td>
       <td class="num">▸ ${fmtNum(n.storages)}</td><td class="num">${fmtBytes(n.used_bytes)}</td>
       <td class="sub">${n.version?("v"+n.version):"—"}</td><td class="sub">${ago(n.last_poll)}</td>
       <td>${st}</td><td>${open}</td></tr>` + roots +

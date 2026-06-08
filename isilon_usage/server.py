@@ -39,6 +39,7 @@ from . import db as dbmod
 from . import monitor as monmod
 from . import manager as mgrmod
 from . import settings as setmod
+from . import isilon_api as isilonmod
 from .scanner import run_scan
 
 
@@ -85,6 +86,8 @@ def _public_settings(s: dict) -> dict:
     out["smtp_password_set"] = bool((s or {}).get("smtp_password"))
     out["api_token"] = ""
     out["api_token_set"] = bool((s or {}).get("api_token"))
+    out["isilon_password"] = ""
+    out["isilon_password_set"] = bool((s or {}).get("isilon_password"))
     return out
 
 
@@ -481,7 +484,25 @@ class ScanController:
         self.settings = setmod.load(data_dir)
         self._scans: Dict[int, dict] = {}   # manager scan_id -> {stop, thread}
         self._lock = threading.Lock()
+        self._isilon_cache = None           # 아이실론 PAPI 상태 캐시
+        self._isilon_ts = 0.0
         self._reconcile_orphans()           # 이전 프로세스가 남긴 고아 스캔 정리
+
+    def isilon_status(self, force: bool = False) -> dict:
+        """아이실론(OneFS PAPI) 상태를 캐시(60초 TTL)와 함께 돌려준다."""
+        s = self.settings
+        url = (s.get("isilon_url") or "").strip()
+        if not url:
+            return {"ok": False, "configured": False, "error": "미설정"}
+        now = time.time()
+        if (not force) and self._isilon_cache is not None and (now - self._isilon_ts) < 60:
+            return self._isilon_cache
+        res = isilonmod.cluster_status(
+            url, s.get("isilon_user", ""), s.get("isilon_password", ""),
+            verify_ssl=bool(s.get("isilon_verify_ssl", False)), timeout=10.0)
+        self._isilon_cache = res
+        self._isilon_ts = now
+        return res
 
     def _reconcile_orphans(self) -> None:
         """서버 시작 시: 실제로 실행 중이 아닌데 상태가 '진행 중'(discovering/sizing)
@@ -543,6 +564,8 @@ class ScanController:
             new.pop("smtp_password", None)
         if not (new.get("api_token") or "").strip():
             new.pop("api_token", None)
+        if not (new.get("isilon_password") or "").strip():
+            new.pop("isilon_password", None)
         merged = dict(self.settings)
         merged.update({k: v for k, v in new.items() if k in setmod.EDITABLE_KEYS})
         self.settings = setmod.save(self.data_dir, merged)
@@ -902,6 +925,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 })
                 return
 
+            if path == "/api/isilon":
+                if self.controller is None:
+                    self._send_json({"ok": False, "configured": False,
+                                     "reason": "이 서버는 웹 스캔/설정이 비활성입니다."})
+                else:
+                    self._send_json(self.controller.isilon_status(
+                        force=(qs.get("force", ["0"])[0] == "1")))
+                return
+
             if path == "/api/settings":
                 self._send_json({
                     "ok": True,
@@ -1138,6 +1170,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "exported_at": time.time(),
             "since": since,
             "overall": overall,
+            "isilon": (self.controller.isilon_status() if self.controller else
+                       {"ok": False, "configured": False}),
             "scans": [dict(s, db_filename=os.path.basename(s.get("db_path") or ""))
                       for s in finished],
         }

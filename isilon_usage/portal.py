@@ -321,7 +321,9 @@ class PortalController:
                     self._cache[nid] = {
                         "online": True, "ts": time.time(),
                         "version": meta.get("version"), "hostname": meta.get("hostname"),
-                        "overall": meta.get("overall") or {}, "error": "",
+                        "overall": meta.get("overall") or {},
+                        "isilon": meta.get("isilon") or {"configured": False},
+                        "error": "",
                     }
                 n["last_poll"] = time.time()
                 n["last_status"] = "online"
@@ -428,6 +430,7 @@ class PortalController:
                 "used_bytes": used, "storages": st,
                 "active_scans": int(ov.get("active_scans") or 0),
                 "roots": ov.get("roots") or [],
+                "isilon": c.get("isilon") or {"configured": False},
             })
         return {
             "ok": True,

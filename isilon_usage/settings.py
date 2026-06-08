@@ -38,6 +38,10 @@ DEFAULTS: dict = {
     "smtp_from": "",                    # 보내는 사람(비우면 smtp_user)
     "smtp_tls": True,                   # STARTTLS 사용(465 포트는 자동 SSL)
     "api_token": "",                    # 글로벌 포탈 복제용 토큰(설정 시 /api/dbexport 인증 필요)
+    "isilon_url": "",                   # OneFS Platform API 주소(예: https://10.0.0.10:8080)
+    "isilon_user": "",                  # PAPI 읽기 계정
+    "isilon_password": "",              # PAPI 비밀번호
+    "isilon_verify_ssl": False,         # 자체 서명 인증서면 False(검증 생략)
 }
 
 EDITABLE_KEYS = set(DEFAULTS.keys())
@@ -89,6 +93,10 @@ def sanitize(raw: dict) -> dict:
     s["smtp_from"] = str(s.get("smtp_from") or "").strip()
     s["smtp_tls"] = bool(s.get("smtp_tls", True))
     s["api_token"] = str(s.get("api_token") or "").strip()
+    s["isilon_url"] = str(s.get("isilon_url") or "").strip()
+    s["isilon_user"] = str(s.get("isilon_user") or "").strip()
+    s["isilon_password"] = str(s.get("isilon_password") or "")
+    s["isilon_verify_ssl"] = bool(s.get("isilon_verify_ssl", False))
 
     mb = s.get("mount_bases") or []
     if isinstance(mb, str):

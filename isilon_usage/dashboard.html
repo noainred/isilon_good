@@ -211,6 +211,12 @@
     <div class="sub" id="pieNote" style="margin-top:8px;"></div>
   </div>
 
+  <!-- 아이실론 클러스터 상태(OneFS PAPI) -->
+  <div class="card" id="isilonCard" style="margin-bottom:14px;">
+    <h2>아이실론 클러스터 상태 (OneFS)</h2>
+    <div id="isilonBody" class="sub">설정에서 아이실론 주소·계정을 입력하면 표시됩니다.</div>
+  </div>
+
   <!-- 전체 용량 관리 개요 -->
   <div class="card" style="margin-bottom:14px;">
     <h2>전체 용량 관리 개요 (관리 DB)</h2>
@@ -366,6 +372,24 @@
           <input id="setApiToken" type="password" class="setinput mono" style="width:100%;"
                  placeholder="(미설정 — 변경 시에만 입력)" />
         </label>
+      </div>
+
+      <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
+        <div class="sub" style="margin-bottom:6px;">아이실론 클러스터 상태 (OneFS Platform API) — 읽기 전용 계정 권장</div>
+        <div class="setgrid">
+          <label>PAPI 주소(예: https://클러스터:8080)
+            <input id="setIsilonUrl" type="text" class="setinput mono" placeholder="https://10.0.0.10:8080" />
+          </label>
+          <label>계정
+            <input id="setIsilonUser" type="text" class="setinput mono" placeholder="readonly" />
+          </label>
+          <label>비밀번호(변경 시에만 입력)
+            <input id="setIsilonPass" type="password" class="setinput mono" placeholder="(변경 안 함)" />
+          </label>
+          <label>인증서 검증(자체 서명이면 끔)
+            <select id="setIsilonVerify" class="optsel"><option value="false">검증 안 함</option><option value="true">검증</option></select>
+          </label>
+        </div>
       </div>
 
       <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
@@ -678,6 +702,11 @@ async function loadSettings() {
     $("setWebhook").value = s.notify_webhook || "";
     $("setApiToken").value = "";
     $("setApiToken").placeholder = s.api_token_set ? "(설정됨 — 변경 시에만 입력)" : "(미설정 — 공개)";
+    $("setIsilonUrl").value = s.isilon_url || "";
+    $("setIsilonUser").value = s.isilon_user || "";
+    $("setIsilonPass").value = "";
+    $("setIsilonPass").placeholder = s.isilon_password_set ? "(설정됨 — 변경 시에만)" : "(미설정)";
+    $("setIsilonVerify").value = String(s.isilon_verify_ssl === true);
     $("setMounts").value = (s.mount_bases || []).join("\n");
     // 경로 / 메일(SMTP)
     $("setDataDir").value = (j.server && j.server.data_dir) || "";
@@ -710,7 +739,8 @@ async function loadSettings() {
     // 편집 가능 여부
     $("settingsLockMsg").style.display = j.locked ? "block" : "none";
     ["setBackend","setSize","setOFS","setReadonly","setBatch","setSample","setTopN","setRefresh",
-     "setWorkers","setRetention","setWebhook","setApiToken","setMounts","saveSettingsBtn",
+     "setWorkers","setRetention","setWebhook","setApiToken",
+     "setIsilonUrl","setIsilonUser","setIsilonPass","setIsilonVerify","setMounts","saveSettingsBtn",
      "schPath","schUnit","schEvery","schAt","schMonth","schDay","schBackend","schAdd",
      "setLogPath","setEmail","setSmtpHost","setSmtpPort","setSmtpTls",
      "setSmtpUser","setSmtpPass","setSmtpFrom"].forEach(id => { $(id).disabled = !j.editable; });
@@ -739,6 +769,10 @@ async function saveSettings() {
     retention_per_root: parseInt($("setRetention").value),
     notify_webhook: $("setWebhook").value.trim(),
     api_token: $("setApiToken").value,
+    isilon_url: $("setIsilonUrl").value.trim(),
+    isilon_user: $("setIsilonUser").value.trim(),
+    isilon_password: $("setIsilonPass").value,
+    isilon_verify_ssl: $("setIsilonVerify").value === "true",
     mount_bases: $("setMounts").value.split("\n").map(x => x.trim()).filter(Boolean),
     schedules: schedules,
     log_path: $("setLogPath").value.trim(),
@@ -1389,8 +1423,37 @@ function selectScan(id) {
   poll();
 }
 
+async function loadIsilon() {
+  try {
+    const j = await (await fetch("/api/isilon", {cache: "no-store"})).json();
+    const el = $("isilonBody");
+    if (!el) return;
+    if (j.configured === false) {
+      el.innerHTML = '<span class="sub">미설정 — “⚙ 설정”에서 아이실론 주소·계정을 입력하세요.</span>';
+      return;
+    }
+    if (!j.ok) { el.innerHTML = '<span class="err">연결 실패: ' + (j.error || "") + '</span>'; return; }
+    const cap = j.capacity || {}, nd = j.nodes || {};
+    const health = (j.health === "ok") ? '<span class="badge done">정상</span>' : '<span class="badge paused">주의</span>';
+    const onl = (nd.online != null) ? nd.online : "?", tot = (nd.total != null) ? nd.total : "?";
+    const ev = (j.events_unresolved != null) ? j.events_unresolved : "—";
+    const pct = (cap.used_pct != null) ? cap.used_pct : null;
+    let capHtml = "";
+    if (cap.total) {
+      capHtml = `<div style="margin-top:10px;"><div class="barlabel"><span>용량 사용</span><b>${pct != null ? pct + "%" : "—"}</b></div>
+        <div class="bar"><span style="width:${pct || 0}%"></span></div>
+        <div class="sub">사용 ${fmtBytes(cap.used)} / 전체 ${fmtBytes(cap.total)} · 여유 ${fmtBytes(cap.avail)}</div></div>`;
+    }
+    el.innerHTML = `<div style="display:flex; gap:18px; flex-wrap:wrap; align-items:center;">
+        <div><b style="font-size:15px;">${j.name || "?"}</b> <span class="sub">OneFS ${j.version || "?"}</span> ${health}</div>
+        <div class="sub">노드 ${onl} / ${tot}</div>
+        <div class="sub">미해결 이벤트 ${ev}</div></div>` + capHtml;
+  } catch (e) { /* 무시 */ }
+}
+
 async function poll() {
   try {
+    loadIsilon();   // 아이실론 상태(서버 60초 캐시라 가벼움)
     // 1) 관리 개요 + 스캔 목록
     const sj = await (await fetch("/api/scans", {cache: "no-store"})).json();
     if (sj.ok) renderOverview(sj);
