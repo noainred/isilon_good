@@ -77,6 +77,9 @@ class Scanner:
         workers: int = 1,
         resume: bool = False,
         check_readonly: bool = True,
+        max_depth: int = 0,
+        hardlink_dedup: bool = True,
+        min_free_bytes: int = 0,
         stop_event: Optional[threading.Event] = None,
         monitor: Optional[ResourceMonitor] = None,
         manager_db: Optional[str] = None,
@@ -92,6 +95,10 @@ class Scanner:
         self.workers = max(1, int(workers))
         self.resume = resume
         self.check_readonly = bool(check_readonly)
+        # 초대용량(수십억 파일) 안전장치
+        self.max_depth = max(0, int(max_depth or 0))         # 0=무제한, N=그 깊이까지만 탐색
+        self.hardlink_dedup = bool(hardlink_dedup)           # False 면 메모리 절약(하드링크 중복 셈)
+        self.min_free_bytes = max(0, int(min_free_bytes or 0))  # 0=off. 데이터 디스크 여유가 이 미만이면 자동 일시정지
         self.stop_event = stop_event or threading.Event()
         self.monitor = monitor
         self.manager_db = manager_db
@@ -100,6 +107,7 @@ class Scanner:
 
         self.run_id: Optional[int] = None
         self._root_dev: Optional[int] = None
+        self._stop_reason: Optional[str] = None   # 디스크 부족 등 자동 정지 사유
         self._seen_inodes: set = set()   # 하드링크(st_nlink>1) 중복 제거용
         # 디렉터리 단위 병렬 탐색용: 단일 RLock 으로 DB(공유 conn)+카운터만 보호하고
         # scandir/stat(느린 NFS I/O)는 락 밖에서 병렬 실행해 데드락 없이 가속.
@@ -196,6 +204,18 @@ class Scanner:
                 conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             except Exception:
                 pass
+            # 디스크 여유 가드: 데이터 디스크가 부족하면 깨지기 전에 자동 일시정지(체크포인트 직후 확인)
+            if self.min_free_bytes and not self.stop_event.is_set():
+                try:
+                    v = os.statvfs(os.path.dirname(self.db_path) or ".")
+                    free = v.f_bavail * v.f_frsize
+                    if free < self.min_free_bytes:
+                        self._stop_reason = (
+                            "디스크 공간 부족(여유 %d < 기준 %d) — 자동 일시정지"
+                            % (free, self.min_free_bytes))
+                        self.stop_event.set()
+                except OSError:
+                    pass
         self._update_manager()
 
     def _update_manager(self, *, force: bool = False, finished: bool = False) -> None:
@@ -346,8 +366,7 @@ class Scanner:
         self._status = status
         self._phase = status
         self._current_dir = None
-        dbmod.update_run(
-            conn, self.run_id,
+        fields = dict(
             status=status, phase=status,
             finished_at=time.time(),
             discovered_dirs=self._discovered,
@@ -358,6 +377,9 @@ class Scanner:
             error_dirs=self._error_dirs,
             current_dir=None,
         )
+        if self._stop_reason:   # 디스크 부족 등으로 자동 정지된 경우 사유 기록
+            fields["error"] = self._stop_reason
+        dbmod.update_run(conn, self.run_id, **fields)
         conn.commit()
         self._update_manager(force=True, finished=True)
 
@@ -478,10 +500,11 @@ class Scanner:
                     if st is None:
                         continue
                     cf += 1
-                    if st.st_nlink > 1:
+                    # 하드링크 중복 제거(용량 한 번만). dedup 끄면 메모리 절약(수십억 파일 대비).
+                    if self.hardlink_dedup and st.st_nlink > 1:
                         key = (st.st_dev, st.st_ino)
                         if key in self._seen_inodes:
-                            continue  # 하드링크 중복 — 용량은 한 번만
+                            continue
                         self._seen_inodes.add(key)
                     cb += _entry_bytes(st, self.size_mode)
                 own_bytes += cb
@@ -509,6 +532,9 @@ class Scanner:
                             except OSError:
                                 continue
                         subdir_count += 1
+                        # 최대 깊이 제한(옵션): 그 아래는 탐색/저장하지 않아 DB 크기를 묶는다.
+                        if self.max_depth and (depth + 1) > self.max_depth:
+                            continue
                         children.append(
                             (self.run_id, dir_id, entry.path, entry.name, depth + 1))
                     else:
@@ -685,6 +711,9 @@ def run_scan(
     workers: int = 1,
     resume: bool = False,
     check_readonly: bool = True,
+    max_depth: int = 0,
+    hardlink_dedup: bool = True,
+    min_free_bytes: int = 0,
     sample_interval: float = 2.0,
     stop_event: Optional[threading.Event] = None,
     with_monitor: bool = True,
@@ -714,6 +743,7 @@ def run_scan(
         backend=backend, size_mode=size_mode,
         one_file_system=one_file_system, batch_size=batch_size,
         workers=workers, resume=resume, check_readonly=check_readonly,
+        max_depth=max_depth, hardlink_dedup=hardlink_dedup, min_free_bytes=min_free_bytes,
         stop_event=stop_event, monitor=monitor,
         manager_db=manager_db, manager_scan_id=manager_scan_id,
     )

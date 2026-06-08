@@ -26,6 +26,9 @@ DEFAULTS: dict = {
     "top_n": 20,                        # 상위 디렉터리 표시 개수
     "refresh_ms": 1500,                 # 대시보드 자동 새로고침 주기(ms)
     "scan_workers": 8,                  # 동시 스캔 스레드 수(디렉터리 단위 병렬, NFS 가속, 더 올릴수록 빠름)
+    "scan_max_depth": 0,                # 탐색 최대 깊이(0=무제한). 거대 트리 DB 크기 제한용
+    "hardlink_dedup": True,             # 하드링크 중복 제거(끄면 메모리 절약, 수십억 파일 대비)
+    "min_free_gb": 0,                   # 데이터 디스크 여유가 이 GB 미만이면 자동 일시정지(0=off)
     "retention_per_root": 0,            # 루트별 보관 스캔 수(0=무제한). 완료 시 자동 정리
     "notify_webhook": "",               # 스캔 완료/오류 시 POST 할 웹훅 URL(빈값=사용 안 함)
     "schedules": [],                    # 예약 스캔 목록(아래 _sanitize_schedules 참고)
@@ -87,6 +90,9 @@ def sanitize(raw: dict) -> dict:
     s["top_n"] = _int(s["top_n"], 1, 500, 20)
     s["refresh_ms"] = _int(s["refresh_ms"], 500, 600_000, 1500)
     s["scan_workers"] = _int(s["scan_workers"], 1, 64, 8)
+    s["scan_max_depth"] = _int(s.get("scan_max_depth"), 0, 100000, 0)
+    s["hardlink_dedup"] = bool(s.get("hardlink_dedup", True))
+    s["min_free_gb"] = _int(s.get("min_free_gb"), 0, 1000000, 0)
     s["retention_per_root"] = _int(s["retention_per_root"], 0, 100_000, 0)
     s["notify_webhook"] = str(s.get("notify_webhook") or "").strip()
     s["log_path"] = str(s.get("log_path") or "").strip()

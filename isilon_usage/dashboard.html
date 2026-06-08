@@ -357,6 +357,15 @@
         <label>동시 스캔 스레드(디렉터리 병렬, NFS 가속)
           <input id="setWorkers" type="number" min="1" max="64" class="setinput" />
         </label>
+        <label>탐색 최대 깊이(0=무제한) — 거대 트리 DB 크기 제한
+          <input id="setMaxDepth" type="number" min="0" max="100000" class="setinput" />
+        </label>
+        <label>디스크 여유 GB 미만이면 자동 일시정지(0=off)
+          <input id="setMinFreeGb" type="number" min="0" max="1000000" class="setinput" />
+        </label>
+        <label>하드링크 중복 제거(끄면 메모리 절약·수십억 파일 대비)
+          <select id="setHardlink" class="optsel"><option value="true">사용</option><option value="false">사용 안 함</option></select>
+        </label>
         <label>루트별 보관 스캔 수(0=무제한)
           <input id="setRetention" type="number" min="0" max="100000" class="setinput" />
         </label>
@@ -738,6 +747,9 @@ async function loadSettings() {
     $("setTopN").value = s.top_n;
     $("setRefresh").value = s.refresh_ms;
     $("setWorkers").value = s.scan_workers;
+    $("setMaxDepth").value = s.scan_max_depth || 0;
+    $("setMinFreeGb").value = s.min_free_gb || 0;
+    $("setHardlink").value = String(s.hardlink_dedup !== false);
     $("setRetention").value = s.retention_per_root;
     $("setWebhook").value = s.notify_webhook || "";
     $("setApiToken").value = "";
@@ -786,7 +798,7 @@ async function loadSettings() {
     // 편집 가능 여부
     $("settingsLockMsg").style.display = j.locked ? "block" : "none";
     ["setBackend","setSize","setOFS","setReadonly","setBatch","setSample","setTopN","setRefresh",
-     "setWorkers","setRetention","setWebhook","setApiToken",
+     "setWorkers","setMaxDepth","setMinFreeGb","setHardlink","setRetention","setWebhook","setApiToken",
      "setIsilonUrl","setIsilonUser","setIsilonPass","setIsilonVerify",
      "setPsUrl","setPsUser","setPsPass","setPsVerify",
      "arrType","arrName","arrUrl","arrUser","arrPass","arrVerify","arrAdd","setMounts","saveSettingsBtn",
@@ -815,6 +827,9 @@ async function saveSettings() {
     top_n: parseInt($("setTopN").value),
     refresh_ms: parseInt($("setRefresh").value),
     scan_workers: parseInt($("setWorkers").value),
+    scan_max_depth: parseInt($("setMaxDepth").value) || 0,
+    min_free_gb: parseInt($("setMinFreeGb").value) || 0,
+    hardlink_dedup: $("setHardlink").value === "true",
     retention_per_root: parseInt($("setRetention").value),
     notify_webhook: $("setWebhook").value.trim(),
     api_token: $("setApiToken").value,
@@ -1522,16 +1537,27 @@ async function loadStorage() {
   } catch (e) { /* 무시 */ }
 }
 
+let _statusInFlight = false;
+function fetchJsonTimeout(url, ms) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), ms);
+  return fetch(url, {cache: "no-store", signal: ac.signal})
+    .then(r => r.json()).finally(() => clearTimeout(t));
+}
 async function poll() {
+  loadStorage();   // 스토리지 어레이 상태(서버 60초 캐시라 가벼움)
+  // 1) 관리 개요(가벼움) — 항상 먼저 갱신. 상세가 느려도 개요는 막히지 않는다.
   try {
-    loadStorage();   // 스토리지 어레이 상태(서버 60초 캐시라 가벼움)
-    // 1) 관리 개요 + 스캔 목록
-    const sj = await (await fetch("/api/scans", {cache: "no-store"})).json();
+    const sj = await fetchJsonTimeout("/api/scans", 8000);
     if (sj.ok) renderOverview(sj);
-
-    // 2) 선택된 스캔 상세
+  } catch (e) { /* 개요 일시 오류 무시 */ }
+  // 2) 상세(/api/status) — 한 번에 하나만. 거대 DB(수십억 파일)에서 느린 요청이
+  //    쌓여 브라우저 연결을 막고 개요까지 멈추는 것을 방지한다(+타임아웃).
+  if (_statusInFlight) return;
+  _statusInFlight = true;
+  try {
     const url = "/api/status" + (selectedScan != null ? ("?scan=" + selectedScan) : "");
-    const data = await (await fetch(url, {cache: "no-store"})).json();
+    const data = await fetchJsonTimeout(url, 25000);
     $("errLine").textContent = "";
     if (data.scan_meta) $("scanDbInfo").textContent = "DB 파일: " + (data.scan_meta.db_filename || "");
     if (!data.ok) {
@@ -1541,11 +1567,13 @@ async function poll() {
         ? "아직 시작된 스캔이 없습니다. `python -m isilon_usage run <경로>` 로 시작하세요."
         : (data.reason === "initializing" ? "스캔 초기화 중… (per-run DB 생성 대기)"
            : ("상태 없음: " + (data.reason || data.error || "")));
-      return;
+    } else {
+      render(data);
     }
-    render(data);
   } catch (e) {
-    $("errLine").textContent = "API 오류: " + e;
+    $("errLine").textContent = "상세 갱신 지연/오류(개요는 정상): " + e;
+  } finally {
+    _statusInFlight = false;
   }
 }
 

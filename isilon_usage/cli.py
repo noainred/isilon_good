@@ -50,6 +50,13 @@ def _add_scan_opts(p: argparse.ArgumentParser) -> None:
                    help="DB 커밋 배치 크기 (기본: %(default)s)")
     p.add_argument("--workers", type=int, default=8,
                    help="동시 스캔 스레드 수(디렉터리 병렬, NFS 가속, 기본: %(default)s)")
+    p.add_argument("--max-depth", type=int, default=0,
+                   help="탐색 최대 깊이(0=무제한). 거대 트리 DB 크기 제한용")
+    p.add_argument("--min-free-gb", type=int, default=0,
+                   help="데이터 디스크 여유가 이 GB 미만이면 자동 일시정지(0=끔). "
+                        "DB/WAL 이 디스크를 채워 서버가 죽기 전에 안전하게 멈춘다")
+    p.add_argument("--no-hardlink-dedup", action="store_true",
+                   help="하드링크 중복 제거를 끔(메모리 절약·수십억 파일 대비, 용량은 중복 셈)")
     p.add_argument("--sample-interval", type=float, default=2.0,
                    help="자원 샘플링 주기(초) (기본: %(default)s)")
 
@@ -100,6 +107,9 @@ def _run_server(args, *, initial_path: Optional[str]) -> int:
         "default_one_file_system": args.one_file_system,
         "batch_size": args.batch_size,
         "scan_workers": getattr(args, "workers", 1),
+        "scan_max_depth": getattr(args, "max_depth", 0),
+        "min_free_gb": getattr(args, "min_free_gb", 0),
+        "hardlink_dedup": not getattr(args, "no_hardlink_dedup", False),
         "sample_interval": args.sample_interval,
         "mount_bases": mount_bases,
     }
@@ -189,6 +199,9 @@ def cmd_scan(args: argparse.Namespace) -> int:
         backend=args.backend, size_mode=args.size_mode,
         one_file_system=args.one_file_system,
         batch_size=args.batch_size, workers=args.workers,
+        max_depth=args.max_depth,
+        hardlink_dedup=not args.no_hardlink_dedup,
+        min_free_bytes=int(args.min_free_gb or 0) * (1024 ** 3),
         sample_interval=args.sample_interval,
         stop_event=stop, with_monitor=True,
         manager_db=manager_db, manager_scan_id=scan_id,
@@ -235,6 +248,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
         row["db_path"], row["root_path"],
         backend=row["backend"], size_mode=row["size_mode"],
         batch_size=s["batch_size"], workers=s["scan_workers"],
+        max_depth=int(s.get("scan_max_depth", 0) or 0),
+        hardlink_dedup=bool(s.get("hardlink_dedup", True)),
+        min_free_bytes=int(s.get("min_free_gb", 0) or 0) * (1024 ** 3),
         sample_interval=s["sample_interval"], resume=True,
         stop_event=stop, with_monitor=True,
         manager_db=mgrmod.manager_db_path(data_dir), manager_scan_id=args.scan,
