@@ -8,8 +8,10 @@
 """
 
 
+import datetime as _dt
 import json
 import os
+import time as _time
 
 
 # 키: (기본값) — 새 설정 항목을 추가하면 여기에 등록한다.
@@ -97,23 +99,53 @@ def sanitize(raw: dict) -> dict:
     return s
 
 
+_SCHED_UNITS = ("minute", "hour", "day", "week", "month")
+
+
+def parse_at(s) -> tuple:
+    """'HH:MM' → (hour, minute). 잘못되면 (3, 0)."""
+    try:
+        hh, mm = str(s or "03:00").split(":")[:2]
+        return max(0, min(23, int(hh))), max(0, min(59, int(mm)))
+    except (TypeError, ValueError):
+        return 3, 0
+
+
 def _sanitize_schedules(raw) -> list:
-    """예약 스캔 목록 보정. 각 항목:
-    {path, every_minutes, backend, size_mode, one_file_system, enabled, last_run}
+    """예약 스캔 목록 보정. 각 항목(시작 + 반복주기 모델):
+    {path, unit(minute/hour/day/week/month), every, at('HH:MM'),
+     weekdays([0=일..6=토]), start_month(1-12), start_day(1-31),
+     backend, size_mode, one_file_system, enabled, anchor, last_run, every_minutes}
     """
     out = []
     if not isinstance(raw, list):
         return out
+    now = _time.time()
     for it in raw:
         if not isinstance(it, dict):
             continue
         path = str(it.get("path") or "").strip()
         if not path:
             continue
-        try:
-            every = max(1, int(it.get("every_minutes", 60)))
-        except (TypeError, ValueError):
-            every = 60
+
+        def _int(key, lo, hi, dflt, _it=it):
+            try:
+                return max(lo, min(hi, int(_it.get(key, dflt))))
+            except (TypeError, ValueError):
+                return dflt
+
+        unit = it.get("unit")
+        if unit not in _SCHED_UNITS:
+            unit = "minute"   # 구버전(every_minutes만 있던) 호환
+        # every: 없으면 minute 은 every_minutes, 그 외엔 1
+        if it.get("every") is not None:
+            every = _int("every", 1, 100000, 1)
+        elif unit == "minute":
+            every = _int("every_minutes", 1, 100000, 60)
+        else:
+            every = 1
+        weekdays = sorted({d for d in (it.get("weekdays") or [])
+                           if isinstance(d, int) and 0 <= d <= 6})
         backend = it.get("backend", "native")
         if backend not in ("native", "du"):
             backend = "native"
@@ -124,16 +156,77 @@ def _sanitize_schedules(raw) -> list:
             last_run = float(it.get("last_run", 0) or 0)
         except (TypeError, ValueError):
             last_run = 0.0
+        try:
+            anchor = float(it.get("anchor", 0) or 0)
+        except (TypeError, ValueError):
+            anchor = 0.0
+        if anchor <= 0:
+            anchor = now   # 생성 시각(주/월 반복주기 정렬 기준)
+        hh, mm = parse_at(it.get("at"))
+        # minute 일 때 every_minutes 도 유지(구버전 읽기 호환)
+        every_minutes = every if unit == "minute" else _int("every_minutes", 1, 100000, 60)
         out.append({
             "path": os.path.abspath(path),
-            "every_minutes": every,
+            "unit": unit,
+            "every": every,
+            "at": "%02d:%02d" % (hh, mm),
+            "weekdays": weekdays,
+            "start_month": _int("start_month", 1, 12, 1),
+            "start_day": _int("start_day", 1, 31, 1),
             "backend": backend,
             "size_mode": size_mode,
             "one_file_system": bool(it.get("one_file_system", False)),
             "enabled": bool(it.get("enabled", True)),
+            "anchor": anchor,
             "last_run": last_run,
+            "every_minutes": every_minutes,
         })
     return out
+
+
+def schedule_due(sc: dict, now: float) -> bool:
+    """예약 스캔이 지금 실행될 차례인지 판정한다(시작 + 반복주기 모델).
+
+    - minute/hour: 마지막 실행 후 every 간격이 지났으면 실행(간격형).
+    - day/week/month: 그날의 지정 시각(at)을 지났고, 오늘이 반복 조건에 맞으며,
+      오늘 슬롯을 아직 실행하지 않았으면 실행(달력형).
+    """
+    unit = sc.get("unit", "minute")
+    every = max(1, int(sc.get("every", 1) or 1))
+    last = float(sc.get("last_run", 0) or 0)
+    if unit == "minute":
+        return (now - last) >= every * 60
+    if unit == "hour":
+        return (now - last) >= every * 3600
+
+    n = _dt.datetime.fromtimestamp(now)
+    hh, mm = parse_at(sc.get("at"))
+    slot = n.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    if n < slot:
+        return False                       # 오늘 지정 시각 전
+    if last >= slot.timestamp():
+        return False                       # 오늘 슬롯은 이미 실행됨
+    anchor = _dt.datetime.fromtimestamp(float(sc.get("anchor", 0) or now))
+
+    if unit == "day":
+        delta = (n.date() - anchor.date()).days
+        return delta >= 0 and delta % every == 0
+    if unit == "week":
+        wd = (n.weekday() + 1) % 7         # 0=일 .. 6=토
+        if wd not in (sc.get("weekdays") or []):
+            return False
+        weeks = (n.date() - anchor.date()).days // 7
+        return weeks >= 0 and weeks % every == 0
+    if unit == "month":
+        sd = int(sc.get("start_day", 1) or 1)
+        if n.day != sd:
+            return False
+        sm = int(sc.get("start_month", 1) or 1)
+        # 시작(start_month/day)이 생성 연도에 이미 지났으면 첫 발생은 다음 해
+        fo_year = anchor.year if (sm, sd) >= (anchor.month, anchor.day) else anchor.year + 1
+        months = (n.year - fo_year) * 12 + (n.month - sm)
+        return months >= 0 and months % every == 0
+    return False
 
 
 def load(data_dir: str) -> dict:

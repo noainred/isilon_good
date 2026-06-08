@@ -716,8 +716,7 @@ class ScanController:
         for sc in schedules:
             if not sc.get("enabled", True):
                 continue
-            due = (now - float(sc.get("last_run", 0))) >= sc["every_minutes"] * 60
-            if not due:
+            if not setmod.schedule_due(sc, now):
                 continue
             path = sc["path"]
             if path in running_paths:

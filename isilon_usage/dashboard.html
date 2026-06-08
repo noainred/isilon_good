@@ -76,6 +76,9 @@
     max-width: 520px; overflow:hidden; text-overflow: ellipsis; white-space: nowrap; }
   a.topdrill, a.topcrumb, a.piecell, a.piecrumb { color:#9fd0ff; text-decoration:none; }
   a.topdrill:hover, a.topcrumb:hover, a.piecell:hover, a.piecrumb:hover { text-decoration:underline; }
+  .chip { background:var(--panel2); border:1px solid var(--line); border-radius:999px;
+    padding:4px 9px; cursor:pointer; font-size:12px; user-select:none; }
+  .chip.on { background:#16344f; border-color:#2f6fb0; color:#cfe6ff; font-weight:700; }
   canvas { width: 100%; height: 90px; display:block; }
   .legend { display:flex; gap:14px; font-size:12px; color:var(--muted); margin-top:6px; }
   .dot { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px;
@@ -396,18 +399,29 @@
       </label>
 
       <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
-        <div class="sub" style="margin-bottom:6px;">예약 스캔(반복) — 기존에 스캔한 루트 중에서 골라 지정 간격마다 자동 스캔</div>
-        <table><thead><tr><th>경로</th><th class="num">주기(분)</th><th>백엔드</th><th>사용</th><th></th></tr></thead>
+        <div class="sub" style="margin-bottom:6px;">예약 스캔(반복) — 기존에 스캔한 루트를 골라 “시작 + 반복주기”로 자동 스캔</div>
+        <table><thead><tr><th>경로</th><th>반복주기</th><th>백엔드</th><th>사용</th><th></th></tr></thead>
           <tbody id="schedBody"><tr><td colspan="5" class="sub">예약 없음</td></tr></tbody></table>
         <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; align-items:center;">
-          <select id="schPath" class="optsel mono" style="flex:1; min-width:240px;" title="스캔했던 루트 중에서 선택">
+          <select id="schPath" class="optsel mono" style="flex:1; min-width:200px;" title="스캔했던 루트 중에서 선택">
             <option value="">스캔 이력에서 선택…</option>
           </select>
-          <input id="schEvery" type="number" min="1" class="setinput" style="width:90px;" value="60" title="주기(분)" />
+          <select id="schUnit" class="optsel" title="반복 단위">
+            <option value="minute">분 마다</option><option value="hour">시간 마다</option>
+            <option value="day">일 마다</option><option value="week">주 마다</option>
+            <option value="month">개월 마다</option>
+          </select>
+          <input id="schEvery" type="number" min="1" class="setinput" style="width:70px;" value="30" title="반복 간격(Y)" />
+          <span id="schUnitLabel" class="sub">분마다</span>
+          <span id="schWeekdays" style="display:none; gap:5px; align-items:center;"></span>
+          <select id="schMonth" class="optsel" style="display:none;" title="시작 월"></select>
+          <select id="schDay" class="optsel" style="display:none;" title="시작 일"></select>
+          <input id="schAt" type="time" class="setinput" style="width:110px; display:none;" value="03:00" title="실행 시각" />
           <select id="schBackend" class="optsel"><option value="native">native</option><option value="du">du</option></select>
           <button id="schAdd">예약 추가</button>
         </div>
-        <div class="sub">목록은 지금까지 스캔한 루트입니다. 추가/삭제 후 아래 “설정 저장”을 눌러야 반영됩니다.</div>
+        <div class="sub" id="schSummary" style="margin-top:6px;"></div>
+        <div class="sub">추가/삭제 후 아래 “설정 저장”을 눌러야 반영됩니다.</div>
       </div>
 
       <div style="display:flex; gap:12px; align-items:center; margin-top:12px; flex-wrap:wrap;">
@@ -656,7 +670,7 @@ async function loadSettings() {
     $("settingsLockMsg").style.display = j.locked ? "block" : "none";
     ["setBackend","setSize","setOFS","setReadonly","setBatch","setSample","setTopN","setRefresh",
      "setWorkers","setRetention","setWebhook","setApiToken","setMounts","saveSettingsBtn",
-     "schPath","schEvery","schBackend","schAdd",
+     "schPath","schUnit","schEvery","schAt","schMonth","schDay","schBackend","schAdd",
      "setLogPath","setEmail","setSmtpHost","setSmtpPort","setSmtpTls",
      "setSmtpUser","setSmtpPass","setSmtpFrom"].forEach(id => { $(id).disabled = !j.editable; });
     // 서버 정보(읽기 전용)
@@ -1183,12 +1197,54 @@ async function loadErrors() {
 
 // ---- 예약 스캔 편집 ----
 let schedules = [];
+const SCHED_DOW = ["일", "월", "화", "수", "목", "금", "토"];
+let schWsel = new Set([1]);   // 예약 추가용 요일 선택(기본 월)
+
+function scheduleSummary(s) {
+  const u = s.unit || "minute", y = s.every || s.every_minutes || 1;
+  if (u === "minute") return `매 ${y}분마다`;
+  if (u === "hour") return `${s.at || "00:00"} 기준 · 매 ${y}시간마다`;
+  if (u === "day") return `${s.at || "03:00"} · 매 ${y}일마다`;
+  if (u === "week") {
+    const d = (s.weekdays || []).map(i => SCHED_DOW[i]).join(",");
+    return `${d || "?"}요일 ${s.at || "03:00"} · 매 ${y}주마다`;
+  }
+  if (u === "month") return `${s.start_month || 1}월 ${s.start_day || 1}일 ${s.at || "04:00"} · 매 ${y}개월마다`;
+  return "—";
+}
+function buildSchWeekdays() {
+  const box = $("schWeekdays"); box.innerHTML = "";
+  SCHED_DOW.forEach((d, i) => {
+    const c = document.createElement("span");
+    c.className = "chip" + (schWsel.has(i) ? " on" : ""); c.textContent = d;
+    c.onclick = () => { schWsel.has(i) ? schWsel.delete(i) : schWsel.add(i); c.classList.toggle("on"); updateSchUnit(); };
+    box.appendChild(c);
+  });
+}
+function fillSchSel(id, n, suf) {
+  const s = $(id); if (s.options.length) return;
+  for (let i = 1; i <= n; i++) { const o = document.createElement("option"); o.value = i; o.textContent = i + suf; s.appendChild(o); }
+}
+function updateSchUnit() {
+  const u = $("schUnit").value;
+  $("schAt").style.display = (u !== "minute") ? "inline-block" : "none";
+  $("schWeekdays").style.display = (u === "week") ? "inline-flex" : "none";
+  $("schMonth").style.display = (u === "month") ? "inline-block" : "none";
+  $("schDay").style.display = (u === "month") ? "inline-block" : "none";
+  $("schUnitLabel").textContent = {minute:"분마다", hour:"시간마다", day:"일마다", week:"주마다", month:"개월마다"}[u];
+  $("schSummary").textContent = "미리보기: " + scheduleSummary({
+    unit: u, every: parseInt($("schEvery").value) || 1, at: $("schAt").value,
+    weekdays: [...schWsel].sort((a, b) => a - b),
+    start_month: parseInt($("schMonth").value) || 1, start_day: parseInt($("schDay").value) || 1,
+  });
+}
+
 function renderSchedules() {
   const tb = $("schedBody");
   if (!schedules.length) { tb.innerHTML = '<tr><td colspan="5" class="sub">예약 없음</td></tr>'; return; }
   tb.innerHTML = schedules.map((s, i) =>
-    `<tr><td class="mono" style="max-width:280px; overflow:hidden; text-overflow:ellipsis;" title="${s.path}">${s.path}</td>
-     <td class="num">${s.every_minutes}</td><td>${s.backend}</td>
+    `<tr><td class="mono" style="max-width:240px; overflow:hidden; text-overflow:ellipsis;" title="${s.path}">${s.path}</td>
+     <td>${scheduleSummary(s)}</td><td>${s.backend}</td>
      <td>${s.enabled ? "✓" : "✕"}</td>
      <td><button class="stopbtn" data-schdel="${i}">✕</button></td></tr>`
   ).join("");
@@ -1506,11 +1562,18 @@ $("exportJson").addEventListener("click", () => { if (selectedScan != null) loca
 $("schAdd").addEventListener("click", () => {
   const path = $("schPath").value.trim();
   if (!path) { alert("스캔 이력에서 루트를 선택하세요."); return; }
-  schedules.push({path, every_minutes: Math.max(1, parseInt($("schEvery").value) || 60),
-                  backend: $("schBackend").value, size_mode: "disk",
-                  one_file_system: false, enabled: true, last_run: 0});
+  const u = $("schUnit").value;
+  if (u === "week" && !schWsel.size) { alert("요일을 하나 이상 선택하세요."); return; }
+  schedules.push({path, unit: u, every: Math.max(1, parseInt($("schEvery").value) || 1),
+    at: $("schAt").value || "03:00", weekdays: [...schWsel].sort((a, b) => a - b),
+    start_month: parseInt($("schMonth").value) || 1, start_day: parseInt($("schDay").value) || 1,
+    backend: $("schBackend").value, size_mode: "disk", one_file_system: false,
+    enabled: true, last_run: 0});
   $("schPath").value = ""; renderSchedules();
 });
+$("schUnit").addEventListener("change", updateSchUnit);
+["schEvery", "schAt", "schMonth", "schDay"].forEach(id => $(id).addEventListener("input", updateSchUnit));
+buildSchWeekdays(); fillSchSel("schMonth", 12, "월"); fillSchSel("schDay", 31, "일"); updateSchUnit();
 
 // ===== 페이지(뷰) 전환: 대시보드 / 설정 / 버전 기록 =====
 // 설정 카드를 설정 페이지로 DOM 이동(HTML 구조는 그대로, 노드만 옮김).
