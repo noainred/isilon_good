@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>글로벌 통합 포탈 (HQ) — 샘플 목업</title>
+<style>
+  :root {
+    --bg: #0f141b; --panel: #19212c; --panel2: #1f2937; --line: #2b3543;
+    --text: #e6edf3; --muted: #8b98a9; --accent: #4f9cff; --accent2: #38d39f;
+    --warn: #f5a623; --danger: #ff5c5c; --ok: #38d39f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", "Apple SD Gothic Neo", sans-serif; }
+  header { padding: 16px 22px; border-bottom: 1px solid var(--line); display: flex;
+    align-items: center; gap: 16px; flex-wrap: wrap; background: linear-gradient(180deg,#1a232f,#141a23); }
+  header h1 { font-size: 17px; margin: 0; font-weight: 650; }
+  .spacer { flex: 1; }
+  .pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--line); color: var(--muted); }
+  nav { display: flex; gap: 6px; }
+  .navbtn { background: transparent; color: var(--muted); border: 1px solid transparent;
+    border-radius: 7px; padding: 6px 12px; cursor: pointer; font-size: 13px; font-weight: 600; }
+  .navbtn:hover { color: var(--text); }
+  .navbtn.active { background: var(--panel2); color: var(--text); border-color: var(--line); }
+  .wrap { padding: 18px 22px; max-width: 1320px; margin: 0 auto; }
+  .grid { display: grid; gap: 14px; }
+  .cols-4 { grid-template-columns: repeat(4, 1fr); }
+  .cols-2 { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 980px){ .cols-4,.cols-2 { grid-template-columns: 1fr 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .card h2 { font-size: 12.5px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 12px; font-weight: 700; }
+  .big { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .mono { font-family: ui-monospace, Menlo, monospace; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 9px; border-bottom: 1px solid #222c38; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-family: ui-monospace, Menlo, monospace; }
+  .badge { padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; border: 1px solid var(--line); white-space: nowrap; }
+  .b-online { background:#173a2a; color:#52e0a0; }
+  .b-stale  { background:#3f3516; color:#f0c86a; }
+  .b-offline{ background:#43201f; color:#ff8b8b; }
+  .b-scan   { background:#16344f; color:#7cc4ff; }
+  .bar { height: 9px; background:#0d1219; border-radius: 6px; overflow: hidden; border:1px solid var(--line); width: 120px; display:inline-block; vertical-align: middle; }
+  .bar > span { display:block; height:100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+  .bar.high > span { background: linear-gradient(90deg,#f5a623,#ff5c5c); }
+  button { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:6px 11px; cursor:pointer; font-size:12.5px; }
+  button:hover { border-color: var(--accent); }
+  button.primary { border-color: var(--accent2); color:#cfe; font-weight:700; }
+  a.link { color:#9fd0ff; text-decoration:none; } a.link:hover { text-decoration: underline; }
+  .setgrid { display:grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap:12px; }
+  label.fld { display:flex; flex-direction:column; gap:5px; font-size:12.5px; color:var(--muted); }
+  .inp { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:8px 10px; font-size:13px; }
+  .note { background:#0d1219; border:1px solid var(--line); border-radius:8px; padding:10px 12px; color:#bcd; font-size:12.5px; }
+  .tag { font-size:11px; color:var(--muted); }
+  .row-exp td { background:#121a24; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:6px; vertical-align:middle; }
+  .legend { display:flex; gap:18px; flex-wrap:wrap; font-size:12.5px; color:var(--muted); }
+  .watermark { position: fixed; right: 12px; bottom: 10px; color:#33414f; font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🌐 글로벌 통합 포탈 <span class="sub" style="font-weight:400">— 한국 HQ (isilon_usage portal)</span></h1>
+  <span class="pill">샘플 목업 (구현 전 미리보기)</span>
+  <div class="spacer"></div>
+  <nav id="nav">
+    <button class="navbtn active" data-view="arch">아키텍처 구성도</button>
+    <button class="navbtn" data-view="dash">글로벌 대시보드</button>
+    <button class="navbtn" data-view="nodes">노드 설정</button>
+  </nav>
+</header>
+
+<!-- ================= 아키텍처 구성도 ================= -->
+<div class="wrap view" id="view-arch">
+  <div class="card">
+    <h2>아키텍처 — 허브·스포크 (DB 복제 + 라이브 폴링 하이브리드)</h2>
+    <svg viewBox="0 0 1180 560" width="100%" style="max-width:1180px; display:block;">
+      <defs>
+        <marker id="arr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+          <path d="M0,0 L8,3 L0,6 Z" fill="#5b9bd5"/>
+        </marker>
+        <marker id="arrd" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+          <path d="M0,0 L8,3 L0,6 Z" fill="#8b98a9"/>
+        </marker>
+      </defs>
+
+      <!-- HQ 박스 -->
+      <rect x="300" y="20" width="580" height="170" rx="14" fill="#15202c" stroke="#2f6fb0" stroke-width="2"/>
+      <text x="590" y="48" text-anchor="middle" fill="#7cc4ff" font-size="16" font-weight="700">한국 HQ — 글로벌 통합 포탈  (isilon_usage portal)</text>
+      <rect x="322" y="64" width="170" height="104" rx="9" fill="#1b2733" stroke="#34465a"/>
+      <text x="407" y="90" text-anchor="middle" fill="#e6edf3" font-size="12.5" font-weight="700">복제본 저장소</text>
+      <text x="407" y="110" text-anchor="middle" fill="#8b98a9" font-size="11" font-family="monospace">replicas/&lt;DC&gt;/</text>
+      <text x="407" y="128" text-anchor="middle" fill="#8b98a9" font-size="11" font-family="monospace">manager.db</text>
+      <text x="407" y="146" text-anchor="middle" fill="#8b98a9" font-size="11" font-family="monospace">scans/*.db (불변)</text>
+      <rect x="504" y="64" width="170" height="104" rx="9" fill="#1b2733" stroke="#34465a"/>
+      <text x="589" y="90" text-anchor="middle" fill="#e6edf3" font-size="12.5" font-weight="700">글로벌 대시보드</text>
+      <text x="589" y="110" text-anchor="middle" fill="#8b98a9" font-size="11">전체·DC·스토리지 롤업</text>
+      <text x="589" y="128" text-anchor="middle" fill="#8b98a9" font-size="11">깊은 드릴다운(로컬 조회)</text>
+      <text x="589" y="146" text-anchor="middle" fill="#8b98a9" font-size="11">이력·추세·DC 비교</text>
+      <rect x="686" y="64" width="170" height="104" rx="9" fill="#1b2733" stroke="#34465a"/>
+      <text x="771" y="90" text-anchor="middle" fill="#e6edf3" font-size="12.5" font-weight="700">노드 설정</text>
+      <text x="771" y="110" text-anchor="middle" fill="#8b98a9" font-size="11">글로벌 노드 추가/수정</text>
+      <text x="771" y="128" text-anchor="middle" fill="#8b98a9" font-size="11">주소·토큰·주기</text>
+      <text x="771" y="146" text-anchor="middle" fill="#8b98a9" font-size="11">연결 테스트</text>
+
+      <!-- DC 박스들 -->
+      <g>
+        <rect x="40" y="330" width="250" height="150" rx="12" fill="#15202c" stroke="#34465a" stroke-width="1.5"/>
+        <text x="165" y="356" text-anchor="middle" fill="#e6edf3" font-size="13.5" font-weight="700">DC: 서울 / 도쿄 / …</text>
+        <text x="165" y="378" text-anchor="middle" fill="#8b98a9" font-size="11">isilon_usage serve</text>
+        <rect x="62" y="392" width="206" height="32" rx="7" fill="#1b2733" stroke="#3a4d61"/>
+        <text x="165" y="413" text-anchor="middle" fill="#9fd0ff" font-size="11.5" font-family="monospace">GET /api/dbexport (tar)</text>
+        <text x="165" y="444" text-anchor="middle" fill="#8b98a9" font-size="11">스토리지 ×2 (로컬 NFS 스캔)</text>
+        <ellipse cx="120" cy="466" rx="22" ry="7" fill="#223044" stroke="#3a4d61"/>
+        <ellipse cx="210" cy="466" rx="22" ry="7" fill="#223044" stroke="#3a4d61"/>
+      </g>
+      <g>
+        <rect x="465" y="330" width="250" height="150" rx="12" fill="#15202c" stroke="#34465a" stroke-width="1.5"/>
+        <text x="590" y="356" text-anchor="middle" fill="#e6edf3" font-size="13.5" font-weight="700">DC: 프랑크푸르트 / 런던</text>
+        <text x="590" y="378" text-anchor="middle" fill="#8b98a9" font-size="11">isilon_usage serve</text>
+        <rect x="487" y="392" width="206" height="32" rx="7" fill="#1b2733" stroke="#3a4d61"/>
+        <text x="590" y="413" text-anchor="middle" fill="#9fd0ff" font-size="11.5" font-family="monospace">GET /api/dbexport (tar)</text>
+        <text x="590" y="444" text-anchor="middle" fill="#8b98a9" font-size="11">스토리지 ×2 (로컬 NFS 스캔)</text>
+        <ellipse cx="545" cy="466" rx="22" ry="7" fill="#223044" stroke="#3a4d61"/>
+        <ellipse cx="635" cy="466" rx="22" ry="7" fill="#223044" stroke="#3a4d61"/>
+      </g>
+      <g>
+        <rect x="890" y="330" width="250" height="150" rx="12" fill="#15202c" stroke="#34465a" stroke-width="1.5"/>
+        <text x="1015" y="356" text-anchor="middle" fill="#e6edf3" font-size="13.5" font-weight="700">DC: 버지니아 / … (총 15)</text>
+        <text x="1015" y="378" text-anchor="middle" fill="#8b98a9" font-size="11">isilon_usage serve</text>
+        <rect x="912" y="392" width="206" height="32" rx="7" fill="#1b2733" stroke="#3a4d61"/>
+        <text x="1015" y="413" text-anchor="middle" fill="#9fd0ff" font-size="11.5" font-family="monospace">GET /api/dbexport (tar)</text>
+        <text x="1015" y="444" text-anchor="middle" fill="#8b98a9" font-size="11">스토리지 ×2 (로컬 NFS 스캔)</text>
+        <ellipse cx="970" cy="466" rx="22" ry="7" fill="#223044" stroke="#3a4d61"/>
+        <ellipse cx="1060" cy="466" rx="22" ry="7" fill="#223044" stroke="#3a4d61"/>
+      </g>
+
+      <!-- 화살표: DC -> HQ (DB pull, 실선) -->
+      <path d="M165,330 C165,250 430,250 430,192" fill="none" stroke="#5b9bd5" stroke-width="2" marker-end="url(#arr)"/>
+      <path d="M590,330 C590,270 590,250 590,192" fill="none" stroke="#5b9bd5" stroke-width="2" marker-end="url(#arr)"/>
+      <path d="M1015,330 C1015,250 750,250 750,192" fill="none" stroke="#5b9bd5" stroke-width="2" marker-end="url(#arr)"/>
+      <text x="590" y="232" text-anchor="middle" fill="#9fd0ff" font-size="12">HTTP 복제 pull — 완료된 per-run DB(증분·tar·토큰)</text>
+
+      <!-- 화살표: 라이브 폴링 (점선) -->
+      <path d="M250,360 C400,300 470,300 522,192" fill="none" stroke="#8b98a9" stroke-width="1.6" stroke-dasharray="5 5" marker-end="url(#arrd)"/>
+      <text x="300" y="312" fill="#8b98a9" font-size="11">(선택) /api/scans 라이브 상태</text>
+
+      <!-- 범례 -->
+      <rect x="40" y="500" width="16" height="3" fill="#5b9bd5"/>
+      <text x="64" y="505" fill="#8b98a9" font-size="11.5">실선 = DB 복제(완료 스냅샷, 깊은 조회·이력)</text>
+      <rect x="430" y="500" width="16" height="3" fill="#8b98a9"/>
+      <text x="454" y="505" fill="#8b98a9" font-size="11.5">점선 = 라이브 상태 폴링(지금 스캔 중 표시, 선택)</text>
+    </svg>
+    <div class="note" style="margin-top:14px;">
+      <b>요점</b> — ① 무거운 NFS 스캔은 각 DC 내부에서만. ② HQ는 <b>완료된 per-run DB(불변)</b>를 HTTP로 받아 복제 → 로컬에서 전체·깊은 조회/이력.
+      ③ <b>원격 SQLite 직접 쓰기는 하지 않음</b>(스냅샷 복사만) → 안전. ④ 노드 추가는 포탈 <b>노드 설정</b>에서 입력.
+    </div>
+  </div>
+</div>
+
+<!-- ================= 글로벌 대시보드 ================= -->
+<div class="wrap view" id="view-dash" style="display:none;">
+  <div class="grid cols-4" style="margin-bottom:14px;">
+    <div class="card"><h2>총 사용 용량 (전 DC 합계)</h2><div class="big">18.4 PB</div><div class="sub">최신 완료 스캔 기준 · 용량 24.0 PB의 76.7%</div></div>
+    <div class="card"><h2>스토리지(루트)</h2><div class="big">30</div><div class="sub">15개 데이터센터 · DC당 평균 2개</div></div>
+    <div class="card"><h2>DC 온라인</h2><div class="big">14 <span class="sub" style="font-size:15px">/ 15</span></div><div class="sub">오프라인 1 · 지연(stale) 1</div></div>
+    <div class="card"><h2>진행 중 스캔</h2><div class="big">3</div><div class="sub">도쿄 · 프랑크푸르트 · 오레곤</div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px;">
+    <h2>지역별 롤업</h2>
+    <div class="grid cols-4">
+      <div><div class="big" style="font-size:22px">7.9 PB</div><div class="sub">아시아 · 8 스토리지</div></div>
+      <div><div class="big" style="font-size:22px">5.2 PB</div><div class="sub">유럽 · 8 스토리지</div></div>
+      <div><div class="big" style="font-size:22px">4.1 PB</div><div class="sub">미주 · 6 스토리지</div></div>
+      <div><div class="big" style="font-size:22px">1.2 PB</div><div class="sub">기타 · 8 스토리지</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>데이터센터별 사용량 — 행을 클릭하면 스토리지 펼침 · “열기”로 해당 DC 대시보드</h2>
+    <table>
+      <thead><tr>
+        <th>데이터센터</th><th>지역</th><th class="num">스토리지</th>
+        <th class="num">사용</th><th class="num">용량</th><th>사용률</th>
+        <th>마지막 동기화</th><th>상태</th><th></th>
+      </tr></thead>
+      <tbody>
+        <tr><td><b>dc-seoul</b> <span class="tag mono">10.10.1.5</span></td><td>아시아/서울</td><td class="num">2</td>
+          <td class="num">2.10 PB</td><td class="num">2.50 PB</td>
+          <td><span class="bar"><span style="width:84%"></span></span> 84%</td>
+          <td class="sub">방금 전</td><td><span class="badge b-online">온라인</span></td>
+          <td><a class="link" href="#">열기 ↗</a></td></tr>
+
+        <!-- 펼친 예시 -->
+        <tr class="row-exp"><td colspan="9">
+          <table style="margin:2px 0;">
+            <tbody>
+              <tr><td style="width:40px"></td><td class="mono">/ifs/data/research</td><td class="num">1.30 PB</td>
+                <td><span class="bar"><span style="width:88%"></span></span> 88%</td><td class="sub">파일 4.2억 · 디렉터리 9.1M</td><td><span class="badge b-online">완료</span></td></tr>
+              <tr><td></td><td class="mono">/ifs/data/backup</td><td class="num">0.80 PB</td>
+                <td><span class="bar"><span style="width:72%"></span></span> 72%</td><td class="sub">파일 1.8억 · 디렉터리 3.4M</td><td><span class="badge b-online">완료</span></td></tr>
+            </tbody>
+          </table>
+        </td></tr>
+
+        <tr><td><b>dc-tokyo</b> <span class="tag mono">10.20.1.5</span></td><td>아시아/도쿄</td><td class="num">2</td>
+          <td class="num">1.74 PB</td><td class="num">2.20 PB</td>
+          <td><span class="bar"><span style="width:79%"></span></span> 79%</td>
+          <td class="sub">1분 전</td><td><span class="badge b-scan">스캔 중</span></td>
+          <td><a class="link" href="#">열기 ↗</a></td></tr>
+        <tr><td><b>dc-frankfurt</b> <span class="tag mono">10.30.1.5</span></td><td>유럽/프랑크푸르트</td><td class="num">2</td>
+          <td class="num">1.62 PB</td><td class="num">2.00 PB</td>
+          <td><span class="bar"><span style="width:81%"></span></span> 81%</td>
+          <td class="sub">2분 전</td><td><span class="badge b-scan">스캔 중</span></td>
+          <td><a class="link" href="#">열기 ↗</a></td></tr>
+        <tr><td><b>dc-virginia</b> <span class="tag mono">10.40.1.5</span></td><td>미주/버지니아</td><td class="num">2</td>
+          <td class="num">2.40 PB</td><td class="num">2.60 PB</td>
+          <td><span class="bar high"><span style="width:92%"></span></span> 92%</td>
+          <td class="sub">5분 전</td><td><span class="badge b-online">온라인</span></td>
+          <td><a class="link" href="#">열기 ↗</a></td></tr>
+        <tr><td><b>dc-singapore</b> <span class="tag mono">10.50.1.5</span></td><td>아시아/싱가포르</td><td class="num">2</td>
+          <td class="num">1.05 PB</td><td class="num">1.80 PB</td>
+          <td><span class="bar"><span style="width:58%"></span></span> 58%</td>
+          <td class="sub">38분 전</td><td><span class="badge b-stale">지연</span></td>
+          <td><a class="link" href="#">열기 ↗</a></td></tr>
+        <tr><td><b>dc-saopaulo</b> <span class="tag mono">10.60.1.5</span></td><td>미주/상파울루</td><td class="num">2</td>
+          <td class="num">— </td><td class="num">1.50 PB</td>
+          <td><span class="sub">최근 스냅샷 없음</span></td>
+          <td class="sub">3시간 전</td><td><span class="badge b-offline">오프라인</span></td>
+          <td><a class="link" href="#">열기 ↗</a></td></tr>
+        <tr><td colspan="9" class="sub">… 외 9개 DC (런던·파리·더블린·뭄바이·시드니·두바이·토론토·케이프타운·오레곤)</td></tr>
+      </tbody>
+    </table>
+    <div class="sub" style="margin-top:8px;">상태: <span class="badge b-online">온라인</span> 최근 동기화됨 · <span class="badge b-scan">스캔 중</span> 라이브 폴링이 진행 중 감지 · <span class="badge b-stale">지연</span> 동기화 늦음 · <span class="badge b-offline">오프라인</span> 연결 실패(마지막 스냅샷만)</div>
+  </div>
+</div>
+
+<!-- ================= 노드 설정 ================= -->
+<div class="wrap view" id="view-nodes" style="display:none;">
+  <div class="card" style="margin-bottom:14px;">
+    <h2>글로벌 노드 추가</h2>
+    <div class="setgrid">
+      <label class="fld">노드 이름(고유)
+        <input class="inp mono" placeholder="dc-london" /></label>
+      <label class="fld">지역(표시용)
+        <input class="inp" placeholder="유럽/런던" /></label>
+      <label class="fld">주소(URL)
+        <input class="inp mono" placeholder="http://10.70.1.5:8765" /></label>
+      <label class="fld">API 토큰(선택)
+        <input class="inp mono" type="password" placeholder="(엣지 --api-token 과 동일)" /></label>
+      <label class="fld">동기화 주기(분)
+        <input class="inp" type="number" value="30" /></label>
+      <label class="fld">수집 방식
+        <select class="inp"><option>DB 복제 + 라이브 폴링(권장)</option><option>DB 복제만</option><option>라이브 폴링만</option></select></label>
+    </div>
+    <div style="display:flex; gap:10px; align-items:center; margin-top:14px; flex-wrap:wrap;">
+      <label class="sub" style="display:flex; gap:6px; align-items:center;"><input type="checkbox" checked /> 사용함</label>
+      <div class="spacer"></div>
+      <button>연결 테스트</button>
+      <button class="primary">+ 노드 추가</button>
+    </div>
+    <div class="note" style="margin-top:12px;">연결 테스트는 <span class="mono">GET /api/scans</span>(+토큰)로 응답·버전·스토리지 수를 확인합니다. 추가 후 첫 동기화는 즉시 1회 수행됩니다.</div>
+  </div>
+
+  <div class="card">
+    <h2>등록된 글로벌 노드 (15)</h2>
+    <table>
+      <thead><tr><th>이름</th><th>지역</th><th>주소</th><th class="num">주기(분)</th><th>마지막 동기화</th><th>상태</th><th>동작</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">dc-seoul</td><td>아시아/서울</td><td class="mono">http://10.10.1.5:8765</td><td class="num">30</td><td class="sub">방금 전</td><td><span class="badge b-online">온라인</span></td>
+          <td><button>테스트</button> <button>수정</button> <button>삭제</button></td></tr>
+        <tr><td class="mono">dc-tokyo</td><td>아시아/도쿄</td><td class="mono">http://10.20.1.5:8765</td><td class="num">30</td><td class="sub">1분 전</td><td><span class="badge b-online">온라인</span></td>
+          <td><button>테스트</button> <button>수정</button> <button>삭제</button></td></tr>
+        <tr><td class="mono">dc-singapore</td><td>아시아/싱가포르</td><td class="mono">http://10.50.1.5:8765</td><td class="num">60</td><td class="sub">38분 전</td><td><span class="badge b-stale">지연</span></td>
+          <td><button>테스트</button> <button>수정</button> <button>삭제</button></td></tr>
+        <tr><td class="mono">dc-saopaulo</td><td>미주/상파울루</td><td class="mono">http://10.60.1.5:8765</td><td class="num">30</td><td class="sub">3시간 전</td><td><span class="badge b-offline">오프라인</span></td>
+          <td><button>테스트</button> <button>수정</button> <button>삭제</button></td></tr>
+        <tr><td colspan="7" class="sub">… 외 11개 DC</td></tr>
+      </tbody>
+    </table>
+    <div class="sub" style="margin-top:8px;">설정은 HQ 포탈의 <span class="mono">portal_nodes.json</span> 에 저장되어 재시작해도 유지됩니다(엣지 설정과 분리).</div>
+  </div>
+</div>
+
+<div class="watermark">샘플 목업 — 데이터는 예시이며 실제 연결되지 않습니다</div>
+<script>
+  const $ = (id) => document.getElementById(id);
+  function show(v){
+    ["arch","dash","nodes"].forEach(n => $("view-"+n).style.display = (n===v)?"block":"none");
+    document.querySelectorAll(".navbtn").forEach(b => b.classList.toggle("active", b.dataset.view===v));
+  }
+  document.querySelectorAll(".navbtn").forEach(b => b.addEventListener("click", () => show(b.dataset.view)));
+</script>
+</body>
+</html>
