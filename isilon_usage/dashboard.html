@@ -24,6 +24,13 @@
   header h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: .2px; }
   header .root { color: var(--muted); font-family: ui-monospace, Menlo, monospace;
     font-size: 12.5px; word-break: break-all; }
+  /* 헤더에서 현재 스캔 중인 디렉터리를 스크롤(마퀴)로 표시 */
+  .hdrscan { overflow: hidden; max-width: 560px; white-space: nowrap; margin-top: 3px;
+    font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: #7cc4ff; }
+  .hdrscan > span { display: inline-block; padding-left: 100%;
+    animation: hdrmarq 16s linear infinite; }
+  .hdrscan:hover > span { animation-play-state: paused; }
+  @keyframes hdrmarq { 0% { transform: translateX(0); } 100% { transform: translateX(-100%); } }
   .spacer { flex: 1; }
   .badge { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
     border: 1px solid var(--line); white-space: nowrap; }
@@ -125,6 +132,7 @@
   <div>
     <h1>📦 Isilon 디렉터리 사용량 스캐너</h1>
     <div class="root" id="rootPath">대상 경로 로딩 중…</div>
+    <div class="hdrscan" id="scanMarquee" style="display:none;" title="현재 스캔 중인 디렉터리(마우스를 올리면 멈춤)"><span id="scanMarqueeTxt"></span></div>
   </div>
   <nav id="nav">
     <button class="navbtn active" data-view="summary">Summary</button>
@@ -1420,6 +1428,17 @@ function render(d) {
   }
 
   $("currentDir").textContent = r.current_dir || (r.status === "done" ? "✅ 스캔 완료" : "—");
+
+  // 헤더 마퀴: 스캔 중이면 현재 디렉터리를 스크롤로 표시
+  const _mq = $("scanMarquee"), _mt = $("scanMarqueeTxt");
+  if (_mq && _mt) {
+    if ((r.status === "discovering" || r.status === "sizing") && r.current_dir) {
+      _mt.textContent = "🔎 스캔 중: " + r.current_dir + "          ";
+      _mq.style.display = "block";
+    } else {
+      _mq.style.display = "none";
+    }
+  }
 
   // 디렉터리 진행률
   const total = r.total_dirs || r.discovered_dirs || 0;
