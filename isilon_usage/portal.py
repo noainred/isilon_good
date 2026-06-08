@@ -26,6 +26,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
 from . import __version__
+from . import settings as setmod
 from .server import ThreadingHTTPServer  # 3.6 폴백 포함 재사용
 
 
@@ -67,12 +68,42 @@ def sanitize_node(raw: dict) -> Optional[dict]:
         except (TypeError, ValueError):
             return 0.0
 
+    # 복제 주기: 예약 스캔과 같은 '시작 + 반복주기' 모델(분/시간/일/주/개월).
+    # 구버전(interval_minutes 만 있던) 노드는 unit=minute, every=interval_minutes 로 호환.
+    unit = raw.get("unit")
+    if unit not in ("minute", "hour", "day", "week", "month"):
+        unit = "minute"
+    if raw.get("every") is not None:
+        try:
+            every = max(1, int(raw.get("every")))
+        except (TypeError, ValueError):
+            every = interval if unit == "minute" else 1
+    else:
+        every = interval if unit == "minute" else 1
+    weekdays = sorted({d for d in (raw.get("weekdays") or [])
+                       if isinstance(d, int) and 0 <= d <= 6})
+    hh, mm = setmod.parse_at(raw.get("at"))
+    anchor = _f(raw.get("anchor")) or time.time()
+
+    def _i(key, lo, hi, dflt):
+        try:
+            return max(lo, min(hi, int(raw.get(key, dflt))))
+        except (TypeError, ValueError):
+            return dflt
+
     return {
         "id": nid,
         "region": str(raw.get("region") or "").strip(),
         "url": url,
         "token": str(raw.get("token") or ""),
         "interval_minutes": interval,
+        "unit": unit,
+        "every": every,
+        "at": "%02d:%02d" % (hh, mm),
+        "weekdays": weekdays,
+        "start_month": _i("start_month", 1, 12, 1),
+        "start_day": _i("start_day", 1, 31, 1),
+        "anchor": anchor,
         "mode": mode,
         "enabled": bool(raw.get("enabled", True)),
         "last_poll": _f(raw.get("last_poll")),
@@ -251,8 +282,10 @@ class PortalController:
                         if nid in self._inflight:
                             continue
                     due_poll = (now - n.get("last_poll", 0)) >= self.poll_every
+                    # 복제 시점은 예약 스캔과 동일한 반복주기 모델(schedule_due)로 판정.
+                    # last_run 자리에 last_sync 를 넣어 마지막 복제 이후를 기준으로 한다.
                     due_rep = (n.get("mode") in ("both", "replicate") and
-                               (now - n.get("last_sync", 0)) >= n.get("interval_minutes", 30) * 60)
+                               setmod.schedule_due(dict(n, last_run=n.get("last_sync", 0)), now))
                     if due_poll or due_rep:
                         with self._lock:
                             self._inflight.add(nid)

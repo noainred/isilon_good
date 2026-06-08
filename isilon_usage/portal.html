@@ -42,6 +42,9 @@
   .inp { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:8px 10px; font-size:13px; }
   .note { background:#0d1219; border:1px solid var(--line); border-radius:8px; padding:10px 12px; color:#bcd; font-size:12.5px; }
   .view { display:none; } .view.active { display:block; }
+  .chip { background:var(--panel2); border:1px solid var(--line); border-radius:999px;
+    padding:4px 9px; cursor:pointer; font-size:12px; user-select:none; }
+  .chip.on { background:#16344f; border-color:#2f6fb0; color:#cfe6ff; font-weight:700; }
 </style>
 </head>
 <body>
@@ -90,8 +93,21 @@
       <label class="fld">지역(표시용)<input id="nRegion" class="inp" placeholder="아시아/도쿄" /></label>
       <label class="fld">주소(URL)<input id="nUrl" class="inp mono" placeholder="http://10.20.1.5:8765" /></label>
       <label class="fld">API 토큰(엣지 api_token 과 동일)<input id="nToken" class="inp mono" type="password" placeholder="(변경 시에만)" /></label>
-      <label class="fld">동기화 주기(분)<input id="nInterval" class="inp" type="number" value="30" /></label>
+      <label class="fld">복제 단위<select id="nUnit" class="inp">
+        <option value="minute">분 마다</option><option value="hour">시간 마다</option>
+        <option value="day">일 마다</option><option value="week">주 마다</option>
+        <option value="month">개월 마다</option></select></label>
       <label class="fld">수집 방식<select id="nMode" class="inp"><option value="both">복제 + 폴링(권장)</option><option value="replicate">복제만</option><option value="poll">폴링만</option></select></label>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center;">
+      <span class="sub">반복주기</span>
+      <input id="nEvery" class="inp" type="number" min="1" value="30" style="width:74px;" />
+      <span id="nUnitLabel" class="sub">분마다</span>
+      <span id="nWeekdays" style="display:none; gap:5px; align-items:center;"></span>
+      <select id="nMonth" class="inp" style="display:none;"></select>
+      <select id="nDay" class="inp" style="display:none;"></select>
+      <input id="nAt" type="time" class="inp" style="width:110px; display:none;" value="03:00" />
+      <span class="sub" id="nSummary" style="margin-left:8px;"></span>
     </div>
     <div style="display:flex; gap:10px; align-items:center; margin-top:14px; flex-wrap:wrap;">
       <label class="sub" style="display:flex; gap:6px; align-items:center;"><input id="nEnabled" type="checkbox" checked /> 사용함</label>
@@ -106,7 +122,7 @@
   <div class="card">
     <h2>등록된 글로벌 노드</h2>
     <table>
-      <thead><tr><th>이름</th><th>지역</th><th>주소</th><th class="num">주기(분)</th><th>마지막 동기화</th><th>상태</th><th>동작</th></tr></thead>
+      <thead><tr><th>이름</th><th>지역</th><th>주소</th><th>복제 주기</th><th>마지막 동기화</th><th>상태</th><th>동작</th></tr></thead>
       <tbody id="regRows"><tr><td colspan="7" class="sub">불러오는 중…</td></tr></tbody>
     </table>
   </div>
@@ -156,7 +172,7 @@ async function loadNodes(){
     const rows=(j.nodes||[]);
     $("regRows").innerHTML = rows.length ? rows.map(n=>
       `<tr><td class="mono">${n.id}</td><td>${n.region||"—"}</td><td class="mono">${n.url}</td>
-        <td class="num">${n.interval_minutes}</td><td class="sub">${ago(n.last_poll)}</td>
+        <td>${nodeSummary(n)}</td><td class="sub">${ago(n.last_poll)}</td>
         <td>${n.online?'<span class="badge b-online">온라인</span>':'<span class="badge b-offline">오프라인</span>'}</td>
         <td><button data-edit="${n.id}">수정</button> <button data-sync="${n.id}">동기화</button> <button data-del="${n.id}">삭제</button></td></tr>`
     ).join("") : '<tr><td colspan="7" class="sub">등록된 노드 없음</td></tr>';
@@ -167,15 +183,44 @@ async function loadNodes(){
     $("regRows").querySelectorAll("button[data-edit]").forEach(b=>b.addEventListener("click",()=>{
       const n=rows.find(x=>x.id===b.dataset.edit); if(!n) return;
       $("nId").value=n.id; $("nRegion").value=n.region||""; $("nUrl").value=n.url; $("nToken").value="";
-      $("nInterval").value=n.interval_minutes; $("nMode").value=n.mode||"both"; $("nEnabled").checked=!!n.enabled;
+      $("nUnit").value=n.unit||"minute"; $("nEvery").value=n.every||n.interval_minutes||30;
+      $("nAt").value=n.at||"03:00"; $("nMonth").value=n.start_month||1; $("nDay").value=n.start_day||1;
+      nWsel=new Set(n.weekdays&&n.weekdays.length?n.weekdays:[1]); buildNW();
+      $("nMode").value=n.mode||"both"; $("nEnabled").checked=!!n.enabled; updateNUnit();
       show("nodes"); $("nodeMsg").textContent="수정 모드: "+n.id; }));
   } catch(e){ /* 무시 */ }
 }
 
+// 복제 반복주기 선택기(예약 스캔과 같은 시작 + 반복주기 모델)
+const N_DOW = ["일","월","화","수","목","금","토"]; let nWsel = new Set([1]);
+function nodeSummary(o){
+  const u=o.unit||"minute", y=o.every||o.interval_minutes||1;
+  if(u==="minute") return `매 ${y}분마다`;
+  if(u==="hour") return `${o.at||"00:00"} 기준 · 매 ${y}시간마다`;
+  if(u==="day") return `${o.at||"03:00"} · 매 ${y}일마다`;
+  if(u==="week"){ const d=(o.weekdays||[]).map(i=>N_DOW[i]).join(","); return `${d||"?"}요일 ${o.at||"03:00"} · 매 ${y}주마다`; }
+  if(u==="month") return `${o.start_month||1}월 ${o.start_day||1}일 ${o.at||"04:00"} · 매 ${y}개월마다`;
+  return "—";
+}
+function buildNW(){ const b=$("nWeekdays"); b.innerHTML="";
+  N_DOW.forEach((d,i)=>{ const c=document.createElement("span"); c.className="chip"+(nWsel.has(i)?" on":""); c.textContent=d;
+    c.onclick=()=>{ nWsel.has(i)?nWsel.delete(i):nWsel.add(i); c.classList.toggle("on"); updateNUnit(); }; b.appendChild(c); }); }
+function fillNSel(id,n,s){ const e=$(id); if(e.options.length) return; for(let i=1;i<=n;i++){ const o=document.createElement("option"); o.value=i; o.textContent=i+s; e.appendChild(o);} }
+function updateNUnit(){ const u=$("nUnit").value;
+  $("nAt").style.display=(u!=="minute")?"inline-block":"none";
+  $("nWeekdays").style.display=(u==="week")?"inline-flex":"none";
+  $("nMonth").style.display=(u==="month")?"inline-block":"none"; $("nDay").style.display=(u==="month")?"inline-block":"none";
+  $("nUnitLabel").textContent={minute:"분마다",hour:"시간마다",day:"일마다",week:"주마다",month:"개월마다"}[u];
+  $("nSummary").textContent="복제: "+nodeSummary({unit:u,every:parseInt($("nEvery").value)||1,at:$("nAt").value,
+    weekdays:[...nWsel].sort((a,b)=>a-b),start_month:parseInt($("nMonth").value)||1,start_day:parseInt($("nDay").value)||1}); }
 function nodePayload(){
+  const u=$("nUnit").value;
   return { id:$("nId").value.trim(), region:$("nRegion").value.trim(), url:$("nUrl").value.trim(),
-    token:$("nToken").value, interval_minutes:parseInt($("nInterval").value)||30,
-    mode:$("nMode").value, enabled:$("nEnabled").checked };
+    token:$("nToken").value, mode:$("nMode").value, enabled:$("nEnabled").checked,
+    unit:u, every:Math.max(1,parseInt($("nEvery").value)||1), at:$("nAt").value||"03:00",
+    weekdays:[...nWsel].sort((a,b)=>a-b), start_month:parseInt($("nMonth").value)||1,
+    start_day:parseInt($("nDay").value)||1,
+    interval_minutes: (u==="minute") ? (parseInt($("nEvery").value)||30) : 30 };
 }
 $("addBtn").addEventListener("click", async ()=>{
   const j = await (await fetch("/api/portal/nodes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(nodePayload())})).json();
@@ -188,6 +233,9 @@ $("testBtn").addEventListener("click", async ()=>{
   $("nodeMsg").textContent = j.ok ? `✓ 연결 OK · v${j.version||"?"} · ${fmtNum(j.storages)} 스토리지 · ${fmtBytes(j.used_bytes)}` : ("✗ "+(j.reason||"실패"));
 });
 $("refreshBtn").addEventListener("click", ()=>{ loadOverview(); loadNodes(); });
+$("nUnit").addEventListener("change", updateNUnit);
+["nEvery","nAt","nMonth","nDay"].forEach(id=>$(id).addEventListener("input", updateNUnit));
+buildNW(); fillNSel("nMonth",12,"월"); fillNSel("nDay",31,"일"); updateNUnit();
 
 loadOverview(); loadNodes();
 setInterval(()=>{ loadOverview(); loadNodes(); }, 5000);

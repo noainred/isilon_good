@@ -78,6 +78,8 @@ def main() -> int:
         up = pc.upsert_node({"id": "dc-test", "region": "아시아/서울",
                              "url": ebase, "token": "tok", "interval_minutes": 1})
         assert up["ok"] and up["node"]["token"] == "" and up["node"]["token_set"] is True, up
+        # 반복주기 back-compat: interval_minutes 만 줘도 unit=minute/every 로 채워짐
+        assert up["node"]["unit"] == "minute" and up["node"]["every"] == 1, up["node"]
 
         # 5) 동기화(폴링 + 복제) 동기 실행
         pc._sync_one("dc-test", True)
