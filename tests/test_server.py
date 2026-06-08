@@ -112,9 +112,12 @@ def main() -> int:
         assert set(names1) == {"sub1", "sub2"} and names1[0] == "sub1", td  # sub1 이 더 큼
         td_asc = c.get(f"/api/topdirs?scan={s1}&rel=1&sort=path&order=asc")
         assert [r["name"] for r in td_asc["rows"]] == ["sub1", "sub2"], td_asc
+        # 파이용 parent 요약: 루트의 하위 디렉터리 개수(sub1,sub2=2)
+        assert td["parent"] and td["parent"]["subdir_count"] == 2, td["parent"]
         sub1_id = next(r["id"] for r in td["rows"] if r["name"] == "sub1")
         td2 = c.get(f"/api/topdirs?scan={s1}&under={sub1_id}&rel=1")  # sub1 직속 자식
         assert [r["name"] for r in td2["rows"]] == ["deep"], td2
+        assert td2["parent"]["name"] == "sub1" and td2["parent"]["subdir_count"] == 1, td2["parent"]
         td3 = c.get(f"/api/topdirs?scan={s1}&under={sub1_id}&rel=0")  # 전체 깊이
         assert any(r["name"] == "deep" for r in td3["rows"]), td3
 

@@ -74,8 +74,8 @@
     font-family: ui-monospace, Menlo, monospace; }
   td.path { font-family: ui-monospace, Menlo, monospace; color:#cfe3ff;
     max-width: 520px; overflow:hidden; text-overflow: ellipsis; white-space: nowrap; }
-  a.topdrill, a.topcrumb { color:#9fd0ff; text-decoration:none; }
-  a.topdrill:hover, a.topcrumb:hover { text-decoration:underline; }
+  a.topdrill, a.topcrumb, a.piecell, a.piecrumb { color:#9fd0ff; text-decoration:none; }
+  a.topdrill:hover, a.topcrumb:hover, a.piecell:hover, a.piecrumb:hover { text-decoration:underline; }
   canvas { width: 100%; height: 90px; display:block; }
   .legend { display:flex; gap:14px; font-size:12px; color:var(--muted); margin-top:6px; }
   .dot { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px;
@@ -176,6 +176,22 @@
       <div class="kv"><span class="k">파일시스템 여유</span><span class="v" id="fsFree">—</span></div>
       <div class="kv"><span class="k">스캐너 PID</span><span class="v" id="pid">—</span></div>
     </div>
+  </div>
+
+  <!-- 디스크 사용량 파이(클릭해서 점점 더 깊이 드릴다운) -->
+  <div class="card" id="pieCard" style="margin-bottom:14px;">
+    <h2>디스크 사용량 파이 — 디렉터리를 클릭해 더 깊이 들여다보기</h2>
+    <div style="display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; align-items:center;">
+      <button id="pieRootBtn" title="검색 루트로">🏠 루트</button>
+      <span id="pieCrumb" class="sub mono" style="flex:1; word-break:break-all;">(루트)</span>
+      <span class="sub" id="pieSummary"></span>
+    </div>
+    <div style="display:flex; gap:18px; flex-wrap:wrap; align-items:center;">
+      <canvas id="pieChart" width="240" height="240"
+              style="width:240px; height:240px; flex:0 0 auto; cursor:pointer;"></canvas>
+      <div id="pieLegend" class="sub" style="flex:1; min-width:240px;"></div>
+    </div>
+    <div class="sub" id="pieNote" style="margin-top:8px;"></div>
   </div>
 
   <!-- 전체 용량 관리 개요 -->
@@ -816,6 +832,117 @@ async function scanAction(action, id) {
   } catch (e) { alert("오류: " + e); }
 }
 
+// ---- 디스크 사용량 파이(클릭 드릴다운) ----
+let piePath = [];        // 파이 드릴다운 스택 [{id,name,depth}] — 마지막이 현재 위치
+let pieHit = [];         // 캔버스 클릭 히트테스트용 슬라이스 각도
+const PIE_COLORS = ["#4f9cff", "#38d39f", "#f5a623", "#ff6b6b", "#a78bfa",
+                    "#22d3ee", "#f472b6", "#84cc16", "#fb923c", "#60a5fa",
+                    "#34d399", "#fbbf24"];
+
+async function loadPie() {
+  if (selectedScan == null) return;
+  const under = piePath.length ? piePath[piePath.length - 1] : null;
+  const p = new URLSearchParams({scan: String(selectedScan), rel: "1",
+                                 sort: "size", order: "desc"});
+  if (under) p.set("under", String(under.id));
+  try {
+    const j = await (await fetch("/api/topdirs?" + p.toString(), {cache: "no-store"})).json();
+    renderPie(j);
+  } catch (e) { /* 폴링 중 일시 오류 무시 */ }
+}
+
+function renderPieCrumb() {
+  const el = $("pieCrumb");
+  if (!piePath.length) { el.textContent = "(루트)"; return; }
+  el.innerHTML = "🏠 / " + piePath.map((c, i) =>
+    `<a href="#" class="piecrumb" data-i="${i}">${c.name}</a>`).join(" / ");
+  el.querySelectorAll("a.piecrumb").forEach(a => a.addEventListener("click", (e) => {
+    e.preventDefault();
+    piePath = piePath.slice(0, parseInt(a.dataset.i) + 1);
+    loadPie();
+  }));
+}
+
+function drawPie(canvas, slices, denom) {
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width, H = canvas.height;
+  const cx = W / 2, cy = H / 2, r = Math.min(W, H) / 2 - 4;
+  ctx.clearRect(0, 0, W, H);
+  pieHit = [];
+  if (!slices.length) {
+    ctx.strokeStyle = "#2a3744"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI); ctx.stroke();
+    return;
+  }
+  let a0 = -Math.PI / 2;
+  slices.forEach(s => {
+    const a1 = a0 + (s.bytes / denom) * 2 * Math.PI;
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, r, a0, a1); ctx.closePath();
+    ctx.fillStyle = s.color; ctx.fill();
+    ctx.strokeStyle = "#0f141b"; ctx.lineWidth = 1.5; ctx.stroke();
+    pieHit.push({a0: a0, a1: a1, slice: s});
+    a0 = a1;
+  });
+}
+
+function renderPie(j) {
+  const rows = (j && j.rows) || [];
+  const parent = j && j.parent;
+  renderPieCrumb();
+  const slices = [];
+  rows.forEach((t, i) => {
+    const sz = (t.total_bytes > 0 ? t.total_bytes : t.own_bytes) || 0;
+    if (sz > 0) slices.push({label: t.name, bytes: sz, drill: (t.subdir_count || 0) > 0,
+                             id: t.id, depth: t.depth, color: PIE_COLORS[i % PIE_COLORS.length]});
+  });
+  let total = 0, ownB = 0, subCount = 0;
+  if (parent) { total = parent.total_bytes || 0; ownB = parent.own_bytes || 0; subCount = parent.subdir_count || 0; }
+  // 집계가 끝나면 '기타(나머지 하위)' + '이 폴더의 파일' 슬라이스로 100% 를 채운다.
+  if (total > 0) {
+    const shownChild = slices.reduce((a, s) => a + s.bytes, 0);
+    const others = Math.max(0, (total - ownB) - shownChild);
+    const restCount = Math.max(0, subCount - slices.length);
+    if (others > 0) slices.push({label: `기타(하위 ${fmtNum(restCount)}개)`, bytes: others, drill: false, color: "#64748b"});
+    if (ownB > 0) slices.push({label: "(이 폴더의 파일)", bytes: ownB, drill: false, color: "#3a4759"});
+  }
+  const denom = slices.reduce((a, s) => a + s.bytes, 0) || 1;
+  $("pieSummary").textContent = parent
+    ? `${fmtNum(subCount)}개 하위 디렉터리 · 합계 ${fmtBytes(total || denom)} · 이 폴더 파일 ${fmtBytes(ownB)}`
+    : "";
+  drawPie($("pieChart"), slices, denom);
+
+  const legend = $("pieLegend");
+  if (!slices.length) {
+    legend.innerHTML = '<span style="color:var(--muted)">표시할 하위 디렉터리가 없습니다(집계 진행 중일 수 있습니다).</span>';
+  } else {
+    legend.innerHTML = slices.map((s, i) => {
+      const pct = (s.bytes / denom * 100).toFixed(1);
+      const name = s.drill
+        ? `<a href="#" class="piecell" data-i="${i}" style="flex:1;" title="클릭하면 더 깊이: ${s.label}">${s.label}</a>`
+        : `<span style="flex:1; color:var(--muted);" title="${s.label}">${s.label}</span>`;
+      return `<div style="display:flex; align-items:center; gap:8px; padding:2px 0;">
+        <span class="dot" style="background:${s.color}"></span>
+        ${name}
+        <span class="mono">${fmtBytes(s.bytes)}</span>
+        <span class="mono" style="width:52px; text-align:right; color:var(--muted)">${pct}%</span>
+      </div>`;
+    }).join("");
+    legend.querySelectorAll("a.piecell").forEach(a => a.addEventListener("click", (e) => {
+      e.preventDefault();
+      pieDrill(slices[parseInt(a.dataset.i)]);
+    }));
+  }
+  $("pieNote").textContent = (total > 0)
+    ? "슬라이스나 이름을 클릭하면 그 디렉터리로 내려갑니다. ‘기타·이 폴더의 파일’은 내려갈 수 없습니다."
+    : "집계가 끝나면 정확한 비율로 표시됩니다(탐색 중에는 임시 표시).";
+}
+
+function pieDrill(s) {
+  if (!s || !s.drill) return;
+  piePath.push({id: s.id, name: s.label, depth: s.depth});
+  loadPie();
+}
+
 // ---- 용량 상위 디렉터리(깊이 선택 · 클릭 드릴다운 · 정렬) ----
 let topMaxDepth = 0;      // 현재 스캔의 최대 깊이(깊이 셀렉트 옵션 상한)
 let topPath = [];         // 드릴다운 스택 [{id,path,name,depth}] — 마지막이 현재 위치
@@ -1257,6 +1384,7 @@ function render(d) {
   // 상위 디렉터리(깊이 선택·클릭 드릴다운·정렬은 loadTopDirs 가 담당)
   topMaxDepth = r.max_depth || 0;
   loadTopDirs();
+  loadPie();   // 디스크 사용량 파이도 매 폴링마다 갱신(현재 드릴 위치 유지)
   $("topNote").textContent = (r.phase === "discovering")
     ? "탐색 중에는 집계 전 디렉터리는 '직접 용량'으로 임시 표시됩니다. 경로를 클릭하면 하위로 들어가고, 표 머리글을 클릭하면 정렬됩니다."
     : "'깊이'로 검색 루트 기준 몇 번째 자식을 볼지 고르고, 경로 클릭으로 하위로 들어가며, 표 머리글로 정렬합니다.";
@@ -1267,6 +1395,7 @@ function render(d) {
   if (d.scan_id !== lastDetailScan) {
     lastDetailScan = d.scan_id;
     topPath = []; topRel = 1; _topDepthSig = "";   // 스캔이 바뀌면 드릴다운 초기화
+    piePath = [];                                  // 파이 드릴다운도 초기화
     treeStack = [];
     loadTree(null, []);
     loadErrors();
@@ -1297,6 +1426,20 @@ $("startBtn").addEventListener("click", startScan);
 // 설정 카드
 $("saveSettingsBtn").addEventListener("click", saveSettings);
 $("reloadSettingsBtn").addEventListener("click", loadSettings);
+// 디스크 사용량 파이: 캔버스 슬라이스 클릭(히트테스트) · 루트로
+$("pieChart").addEventListener("click", (e) => {
+  const canvas = $("pieChart");
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) * (canvas.width / rect.width) - canvas.width / 2;
+  const y = (e.clientY - rect.top) * (canvas.height / rect.height) - canvas.height / 2;
+  const r = Math.min(canvas.width, canvas.height) / 2 - 4;
+  if (x * x + y * y > r * r) return;          // 원 밖 클릭은 무시
+  let a = Math.atan2(y, x);                    // +x 기준, 캔버스 y하향이라 시계방향
+  while (a < -Math.PI / 2) a += 2 * Math.PI;   // drawPie 시작각(-PI/2)에 맞춰 정규화
+  const hit = pieHit.find(h => a >= h.a0 && a < h.a1);
+  if (hit) pieDrill(hit.slice);
+});
+$("pieRootBtn").addEventListener("click", () => { piePath = []; loadPie(); });
 // 용량 상위 디렉터리: 깊이 선택 · 루트로 · 머리글 정렬
 $("topDepth").addEventListener("change", () => { topRel = parseInt($("topDepth").value) || 0; loadTopDirs(); });
 $("topRootBtn").addEventListener("click", () => { topPath = []; topRel = 1; _topDepthSig = ""; loadTopDirs(); });

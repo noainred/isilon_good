@@ -254,23 +254,34 @@ def list_top_dirs(conn, run_id, *, under_id=None, rel_depth=None,
     """
     sort_expr = _TOP_SORT_COLS.get(str(sort), _TOP_SORT_COLS["size"])
     order_sql = "ASC" if str(order).lower() == "asc" else "DESC"
+    _cols = ("id, path, name, depth, file_count, subdir_count, "
+             "own_bytes, total_bytes, total_files, status")
 
     where = ["run_id=?"]
     params = [run_id]
     under_depth = 0
     under_path = None
+    parent = None   # 자식들을 나열하는 기준 디렉터리(파이/요약에서 개수·자기파일 용량 사용)
     if under_id is not None:
         urow = conn.execute(
-            "SELECT path, depth FROM directories WHERE run_id=? AND id=?",
+            "SELECT " + _cols + " FROM directories WHERE run_id=? AND id=?",
             (run_id, under_id),
         ).fetchone()
         if urow is not None:
+            parent = dict(urow)
             under_depth = int(urow["depth"])
             under_path = urow["path"]
             like = (under_path.replace("\\", "\\\\")
                     .replace("%", "\\%").replace("_", "\\_")).rstrip("/")
             where.append("path LIKE ? ESCAPE '\\'")
             params.append(like + "/%")
+    else:
+        rrow = conn.execute(
+            "SELECT " + _cols + " FROM directories WHERE run_id=? AND parent_id IS NULL "
+            "ORDER BY depth ASC, id ASC LIMIT 1", (run_id,),
+        ).fetchone()
+        if rrow is not None:
+            parent = dict(rrow)
     if rel_depth:
         try:
             where.append("depth=?")
@@ -280,13 +291,12 @@ def list_top_dirs(conn, run_id, *, under_id=None, rel_depth=None,
 
     params.append(int(limit))
     rows = conn.execute(
-        "SELECT id, path, name, depth, file_count, subdir_count, "
-        "own_bytes, total_bytes, total_files, status FROM directories "
+        "SELECT " + _cols + " FROM directories "
         "WHERE " + " AND ".join(where) +
         " ORDER BY " + sort_expr + " " + order_sql + ", id ASC LIMIT ?",
         params,
     ).fetchall()
-    return {"ok": True, "rows": [dict(r) for r in rows],
+    return {"ok": True, "rows": [dict(r) for r in rows], "parent": parent,
             "under_id": under_id, "under_path": under_path,
             "under_depth": under_depth, "sort": sort, "order": order_sql.lower()}
 
