@@ -69,6 +69,15 @@ def _path_readonly(path: str) -> bool:
         return False
 
 
+def _parse_worker_dirs(s):
+    """scan_runs.worker_dirs(JSON 문자열) → 리스트(안전 파싱)."""
+    try:
+        v = json.loads(s) if s else []
+        return v if isinstance(v, list) else []
+    except (ValueError, TypeError):
+        return []
+
+
 def _public_settings(s: dict) -> dict:
     """화면/응답용 설정 — 비밀번호는 노출하지 않고 설정 여부만 알린다."""
     out = dict(s)
@@ -200,6 +209,7 @@ def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 
             "scanned_bytes": scanned_bytes,
             "total_files": r.get("total_files") or 0,
             "current_dir": r.get("current_dir"),
+            "worker_dirs": _parse_worker_dirs(r.get("worker_dirs")),
             "current_depth": r.get("current_depth") or 0,
             "max_depth": r.get("max_depth") or 0,
             "workers": r.get("workers") or 0,             # 설정된 동시 스캔 스레드 수

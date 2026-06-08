@@ -24,13 +24,6 @@
   header h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: .2px; }
   header .root { color: var(--muted); font-family: ui-monospace, Menlo, monospace;
     font-size: 12.5px; word-break: break-all; }
-  /* 헤더에서 현재 스캔 중인 디렉터리를 스크롤(마퀴)로 표시 */
-  .hdrscan { overflow: hidden; max-width: 560px; white-space: nowrap; margin-top: 3px;
-    font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: #7cc4ff; }
-  .hdrscan > span { display: inline-block; padding-left: 100%;
-    animation: hdrmarq 16s linear infinite; }
-  .hdrscan:hover > span { animation-play-state: paused; }
-  @keyframes hdrmarq { 0% { transform: translateX(0); } 100% { transform: translateX(-100%); } }
   .spacer { flex: 1; }
   .badge { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
     border: 1px solid var(--line); white-space: nowrap; }
@@ -132,7 +125,6 @@
   <div>
     <h1>📦 Isilon 디렉터리 사용량 스캐너</h1>
     <div class="root" id="rootPath">대상 경로 로딩 중…</div>
-    <div class="hdrscan" id="scanMarquee" style="display:none;" title="현재 스캔 중인 디렉터리(마우스를 올리면 멈춤)"><span id="scanMarqueeTxt"></span></div>
   </div>
   <nav id="nav">
     <button class="navbtn active" data-view="summary">Summary</button>
@@ -462,7 +454,14 @@
       <div class="sub" id="progNotice" style="display:none; margin-bottom:8px; color:#7cc4ff;">
         🔎 탐색 단계 — 모든 디렉터리를 먼저 찾은 뒤, 집계(재귀 용량 계산)가 시작됩니다. 그때까지 ‘집계 완료/ETA’는 0/—로 표시됩니다.
       </div>
-      <div class="sub" style="margin-bottom:6px;">지금 조사 중인 디렉터리</div>
+      <div class="sub" style="margin-bottom:6px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+        <span>지금 조사 중인 디렉터리 (워커별)</span>
+        <span style="display:flex; gap:8px; align-items:center;">
+          <label style="display:flex; gap:5px; align-items:center; cursor:pointer;"><input type="checkbox" id="showAllWorkers" checked /> 모두</label>
+          <input type="number" id="workerShowN" min="1" value="3" style="width:56px; background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:3px 6px;" title="표시할 워커 수" />
+          <span>개</span>
+        </span>
+      </div>
       <div class="current" id="currentDir">—</div>
 
       <div style="margin-top:16px;">
@@ -636,6 +635,23 @@ let userPicked = false;    // 사용자가 직접 고르면 자동 추적 중지
 let runningSet = new Set();
 let canScan = false;
 let mountBases = [];
+
+// "지금 조사 중인 디렉터리" — 워커별 현재 디렉터리 표시(모두/N개는 사용자 지정)
+let _lastWD = [], _lastCur = null, _lastStatus = null;
+function renderCurrentDir() {
+  const wd = (_lastWD || []).filter(Boolean);
+  const all = $("showAllWorkers") ? $("showAllWorkers").checked : true;
+  if (wd.length > 1) {
+    const n = all ? wd.length : Math.max(1, parseInt($("workerShowN") && $("workerShowN").value) || 1);
+    const shown = wd.slice(0, n), more = wd.length - shown.length;
+    $("currentDir").innerHTML =
+      `<div class="sub" style="margin-bottom:5px;">⚡ ${wd.length}개 워커가 동시에 탐색 중` +
+      `${all ? "" : ` · 상위 ${shown.length}개 표시${more > 0 ? `, 외 ${more}개` : ""}`}</div>` +
+      shown.map(p => `<div style="font-size:12px; color:#cfe3ff; word-break:break-all; padding:1px 0;">• ${p}</div>`).join("");
+  } else {
+    $("currentDir").textContent = (wd[0] || _lastCur) || (_lastStatus === "done" ? "✅ 스캔 완료" : "—");
+  }
+}
 let mountsLoaded = false;
 let refreshMs = 1500;
 let settingsLoaded = false;
@@ -1301,6 +1317,10 @@ function renderOverview(j) {
 
   // 웹 스캔 가능 여부 / 실행 중 스캔 / 허용 경로
   runningSet = new Set(j.running || []);
+  // 브라우저 탭 제목에 스캔 중 표시
+  document.title = (runningSet.size > 0)
+    ? "● 스캔중 · Isilon 디렉터리 사용량 대시보드"
+    : "Isilon 디렉터리 사용량 대시보드";
   canScan = !!j.can_scan;
   mountBases = j.mount_bases || [];
   $("scanDisabledMsg").style.display = canScan ? "none" : "block";
@@ -1427,18 +1447,9 @@ function render(d) {
     $("mountRoRow").style.display = "none";   // 확인 끔 → 행 숨김
   }
 
-  $("currentDir").textContent = r.current_dir || (r.status === "done" ? "✅ 스캔 완료" : "—");
-
-  // 헤더 마퀴: 스캔 중이면 현재 디렉터리를 스크롤로 표시
-  const _mq = $("scanMarquee"), _mt = $("scanMarqueeTxt");
-  if (_mq && _mt) {
-    if ((r.status === "discovering" || r.status === "sizing") && r.current_dir) {
-      _mt.textContent = "🔎 스캔 중: " + r.current_dir + "          ";
-      _mq.style.display = "block";
-    } else {
-      _mq.style.display = "none";
-    }
-  }
+  // 지금 조사 중인 디렉터리 — 워커별 모두/1개 표시는 체크박스로 선택(renderCurrentDir)
+  _lastWD = r.worker_dirs || []; _lastCur = r.current_dir; _lastStatus = r.status;
+  renderCurrentDir();
 
   // 디렉터리 진행률
   const total = r.total_dirs || r.discovered_dirs || 0;
@@ -1556,6 +1567,9 @@ function schedule() {
 }
 $("refreshBtn").addEventListener("click", poll);
 $("autoChk").addEventListener("change", schedule);
+// 워커별 디렉터리 표시(모두/N개) — 즉시 반영
+$("showAllWorkers").addEventListener("change", renderCurrentDir);
+$("workerShowN").addEventListener("input", renderCurrentDir);
 $("scanSelect").addEventListener("change", () => {
   selectedScan = parseInt($("scanSelect").value);
   userPicked = true;

@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS scan_runs (
     total_files     INTEGER NOT NULL DEFAULT 0,
     error_dirs      INTEGER NOT NULL DEFAULT 0,
     current_dir     TEXT,
+    worker_dirs     TEXT,
     current_depth   INTEGER NOT NULL DEFAULT 0,
     max_depth       INTEGER NOT NULL DEFAULT 0,
     workers         INTEGER NOT NULL DEFAULT 0,
@@ -133,6 +134,7 @@ def init_db(db_path: str) -> None:
         ensure_column(conn, "scan_runs", "workers", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(conn, "scan_runs", "active_workers", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(conn, "scan_runs", "mount_readonly", "INTEGER NOT NULL DEFAULT 0")
+        ensure_column(conn, "scan_runs", "worker_dirs", "TEXT")
         ensure_column(conn, "resource_samples", "scanner_cpu", "REAL NOT NULL DEFAULT 0")
         ensure_column(conn, "resource_samples", "du_cpu", "REAL NOT NULL DEFAULT 0")
         conn.execute(f"PRAGMA user_version={int(SCHEMA_VERSION)}")

@@ -33,6 +33,7 @@
 
 from typing import List, Optional, Tuple
 
+import json
 import os
 import shutil
 import subprocess
@@ -105,6 +106,7 @@ class Scanner:
         self._dlock = threading.RLock()
         self._disc_conn = None
         self._disc_active = 0
+        self._worker_dirs = {}   # 워커 인덱스 → 현재 보고 있는 디렉터리(병렬 표시용)
         self._last_progress = 0.0
         self._mgr_conn = None
         self._phase = "discovering"
@@ -167,6 +169,11 @@ class Scanner:
             "error_dirs": self._error_dirs,
             "active_workers": self._disc_active,   # 지금 동시에 처리 중인 워커 수
         }
+        try:   # 워커별 현재 디렉터리(병렬 표시용). 탐색 단계에서만 채워짐.
+            fields["worker_dirs"] = json.dumps(
+                [p for p in list(self._worker_dirs.values()) if p], ensure_ascii=False)
+        except Exception:
+            pass
         self._current_dir = current_dir
         if current_dir is not None:
             fields["current_dir"] = current_dir
@@ -364,11 +371,12 @@ class Scanner:
         self._disc_conn = dbmod.connect(self.db_path)
         self._disc_active = 0
         n = max(1, int(self.workers))
+        self._worker_dirs = {i: None for i in range(n)}   # 워커별 현재 디렉터리
         try:
             if n == 1:
-                self._discover_worker()           # 현재 스레드에서 단독 실행
+                self._discover_worker(0)          # 현재 스레드에서 단독 실행
             else:
-                threads = [threading.Thread(target=self._discover_worker,
+                threads = [threading.Thread(target=self._discover_worker, args=(i,),
                                             name="disc-%d" % i, daemon=True)
                            for i in range(n)]
                 for t in threads:
@@ -383,6 +391,7 @@ class Scanner:
                 except Exception:
                     pass
                 self._disc_conn = None
+            self._worker_dirs = {}   # 탐색 종료 → 비움(집계 단계는 단일 current_dir)
 
         self._flush_progress(conn, force=True)
         dbmod.update_run(conn, self.run_id, total_dirs=self._discovered)
@@ -413,7 +422,7 @@ class Scanner:
             # pending 없음: 아무도 작업 중이 아니면 끝, 아니면 잠시 대기
             return None if self._disc_active == 0 else []
 
-    def _discover_worker(self) -> None:
+    def _discover_worker(self, widx: int = 0) -> None:
         while not self._stopped():
             batch = self._claim_batch()
             if batch is None:
@@ -425,8 +434,10 @@ class Scanner:
                 for row in batch:
                     if self._stopped():
                         break
+                    self._worker_dirs[widx] = row["path"]   # 이 워커가 지금 보는 디렉터리
                     self._discover_one(row["id"], row["path"], row["depth"])
             finally:
+                self._worker_dirs[widx] = None
                 with self._dlock:
                     self._disc_active -= 1
 
