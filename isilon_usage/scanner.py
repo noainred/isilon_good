@@ -108,6 +108,7 @@ class Scanner:
         self._disc_active = 0
         self._worker_dirs = {}   # 워커 인덱스 → 현재 보고 있는 디렉터리(병렬 표시용)
         self._last_progress = 0.0
+        self._last_wal_ckpt = 0.0
         self._mgr_conn = None
         self._phase = "discovering"
         self._status = "discovering"
@@ -187,6 +188,14 @@ class Scanner:
             self._status = status
         dbmod.update_run(conn, self.run_id, **fields)
         conn.commit()
+        # WAL 이 무한정 커지지 않도록 주기적으로 체크포인트(읽기 락이 없을 때 잘림).
+        # 느린 대시보드 조회가 긴 읽기 락을 잡으면 WAL 이 수 GB 까지 부푸는 것을 막는다.
+        if (now - self._last_wal_ckpt) > 30.0:
+            self._last_wal_ckpt = now
+            try:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception:
+                pass
         self._update_manager()
 
     def _update_manager(self, *, force: bool = False, finished: bool = False) -> None:

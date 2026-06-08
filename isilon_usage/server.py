@@ -191,15 +191,20 @@ def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 
     ).fetchone()
 
     # 상위 디렉터리(용량순). 집계 전이면 own_bytes 기준으로 대체 표시.
-    top_rows = conn.execute(
-        """SELECT id, path, name, depth, file_count, subdir_count,
-                  own_bytes, total_bytes, total_files, status
-           FROM directories WHERE run_id=?
-           ORDER BY (CASE WHEN total_bytes>0 THEN total_bytes ELSE own_bytes END) DESC
-           LIMIT ?""",
-        (run_id, top),
-    ).fetchall()
-    top_dirs = [dict(t) for t in top_rows]
+    # top<=0 이면 건너뛴다(대시보드는 /api/topdirs 를 따로 쓰므로, 거대 DB 에서
+    # 매 폴링마다 전체 정렬하는 이 쿼리를 생략해 /api/status 를 빠르게 유지).
+    if top and int(top) > 0:
+        top_rows = conn.execute(
+            """SELECT id, path, name, depth, file_count, subdir_count,
+                      own_bytes, total_bytes, total_files, status
+               FROM directories WHERE run_id=?
+               ORDER BY (CASE WHEN total_bytes>0 THEN total_bytes ELSE own_bytes END) DESC
+               LIMIT ?""",
+            (run_id, int(top)),
+        ).fetchall()
+        top_dirs = [dict(t) for t in top_rows]
+    else:
+        top_dirs = []
 
     return {
         "ok": True,
@@ -215,6 +220,7 @@ def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 
             "size_mode": r["size_mode"],
             "started_at": started,
             "finished_at": finished,
+            "updated_at": r.get("updated_at"),   # 마지막 진행 갱신(하트비트)
             "elapsed": elapsed,
             "discovered_dirs": discovered,
             "total_dirs": total_dirs,
@@ -1028,8 +1034,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     return
                 pconn = dbmod.connect(db_path)
                 try:
-                    top_n = int(self._current_settings().get("top_n", 20))
-                    payload = build_status(pconn, None, top=top_n)
+                    # top=0: 상위 디렉터리 정렬(거대 DB 에서 느림)은 생략한다.
+                    # 대시보드는 /api/topdirs(깊이 필터, 빠름)를 따로 쓰므로 불필요.
+                    payload = build_status(pconn, None, top=0)
                 except sqlite3.OperationalError:
                     # per-run DB 파일은 생겼지만 아직 테이블 생성 전(스캔 시작 직후 레이스).
                     # 500 대신 "초기화 중"으로 응답해 다음 폴링에 정상 표시되게 한다.

@@ -549,6 +549,7 @@
       <h2>요약</h2>
       <div class="kv"><span class="k">단계</span><span class="v" id="phaseTxt">—</span></div>
       <div class="kv" id="mountRoRow"><span class="k">마운트 상태</span><span class="v" id="mountRo">—</span></div>
+      <div class="kv" id="heartbeatRow"><span class="k">진행 갱신(하트비트)</span><span class="v" id="heartbeat">—</span></div>
       <div class="kv"><span class="k">탐색된 디렉터리</span><span class="v" id="discovered">0</span></div>
       <div class="kv"><span class="k">집계 완료 디렉터리</span><span class="v" id="processed">0</span></div>
       <div class="kv"><span class="k">총 파일 수</span><span class="v" id="totalFiles">0</span></div>
@@ -1569,6 +1570,19 @@ function render(d) {
   // Summary 진행 카드: 탐색 단계 안내(집계 시작 전)
   const _pn = $("progNotice");
   if (_pn) _pn.style.display = (r.phase === "discovering") ? "block" : "none";
+  // 하트비트: 스캔 진행 중이면 마지막 진행 갱신 경과로 생존 표시
+  const _hb = $("heartbeat");
+  if (_hb) {
+    const running = (r.status === "discovering" || r.status === "sizing");
+    if (running && r.updated_at && d.server_time) {
+      const ago = Math.max(0, Math.floor(d.server_time - r.updated_at));
+      _hb.innerHTML = (ago > 60)
+        ? `<span style="color:var(--danger)">🔴 ${ago}초째 갱신 없음 — 멈춤 의심</span>`
+        : `<span style="color:var(--ok)">🟢 ${ago}초 전 갱신 (정상 동작)</span>`;
+    } else {
+      _hb.textContent = "—";
+    }
+  }
 
   // 마운트 읽기전용(ro) 여부 — 설정(check_readonly)이 켜졌을 때만 표시
   if (r.readonly_checked) {
