@@ -49,7 +49,7 @@ def _add_scan_opts(p: argparse.ArgumentParser) -> None:
     p.add_argument("--batch-size", type=int, default=500,
                    help="DB 커밋 배치 크기 (기본: %(default)s)")
     p.add_argument("--workers", type=int, default=4,
-                   help="파일 stat 동시 처리 스레드 수(NFS 가속, 기본: %(default)s, 더 올릴수록 빠름)")
+                   help="동시 스캔 스레드 수(디렉터리 병렬, NFS 가속, 기본: %(default)s)")
     p.add_argument("--sample-interval", type=float, default=2.0,
                    help="자원 샘플링 주기(초) (기본: %(default)s)")
 

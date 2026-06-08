@@ -38,7 +38,6 @@ import shutil
 import subprocess
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 from . import db as dbmod
 from .monitor import ResourceMonitor
@@ -99,7 +98,11 @@ class Scanner:
         self.run_id: Optional[int] = None
         self._root_dev: Optional[int] = None
         self._seen_inodes: set = set()   # 하드링크(st_nlink>1) 중복 제거용
-        self._pool: Optional[ThreadPoolExecutor] = None
+        # 디렉터리 단위 병렬 탐색용: 단일 RLock 으로 DB(공유 conn)+카운터만 보호하고
+        # scandir/stat(느린 NFS I/O)는 락 밖에서 병렬 실행해 데드락 없이 가속.
+        self._dlock = threading.RLock()
+        self._disc_conn = None
+        self._disc_active = 0
         self._last_progress = 0.0
         self._mgr_conn = None
         self._phase = "discovering"
@@ -131,7 +134,17 @@ class Scanner:
 
     def _flush_progress(self, conn, *, force: bool = False, current_dir=None,
                         current_depth=None, phase=None, status=None) -> None:
-        """진행 상태를 DB(scan_runs)에 반영한다(과도한 쓰기를 막기 위해 스로틀)."""
+        """진행 상태를 DB(scan_runs)에 반영한다(과도한 쓰기를 막기 위해 스로틀).
+
+        병렬 탐색 시 여러 워커가 호출하므로 _dlock(RLock)으로 보호한다.
+        """
+        with self._dlock:
+            self._flush_progress_locked(
+                conn, force=force, current_dir=current_dir,
+                current_depth=current_depth, phase=phase, status=status)
+
+    def _flush_progress_locked(self, conn, *, force=False, current_dir=None,
+                               current_depth=None, phase=None, status=None) -> None:
         now = time.time()
         if not force and (now - self._last_progress) < self.progress_every:
             return
@@ -218,9 +231,6 @@ class Scanner:
             if self.monitor is not None:
                 self.monitor.run_id = self.run_id
 
-            if self.workers > 1:
-                self._pool = ThreadPoolExecutor(max_workers=self.workers)
-
             try:
                 self._root_dev = os.stat(self.root_path).st_dev
             except OSError:
@@ -264,9 +274,6 @@ class Scanner:
                 pass
             raise
         finally:
-            if self._pool is not None:
-                self._pool.shutdown(wait=True)
-                self._pool = None
             conn.close()
             if self._mgr_conn is not None:
                 try:
@@ -298,11 +305,11 @@ class Scanner:
         except OSError:
             return None
 
-    def _stat_many(self, entries: list):
-        """파일 엔트리 목록을 stat 한다(workers>1 이면 스레드풀로 동시 처리)."""
-        if self._pool is not None and len(entries) > 1:
-            return list(self._pool.map(self._safe_stat, entries))
-        return [self._safe_stat(e) for e in entries]
+    def _safe_stat_path(self, path: str):
+        try:
+            return os.stat(path)
+        except OSError:
+            return None
 
     def _finish(self, conn, status: str) -> None:
         # 총 디렉터리 수가 아직 0 이면 탐색 수치로 맞춘다.
@@ -326,77 +333,132 @@ class Scanner:
 
     # ------------------------------------------------------------- 1단계: 탐색
     def _discover(self, conn) -> None:
-        """DB 를 프론티어로 사용하는 반복적(비재귀) 너비우선 탐색.
+        """DB 를 프론티어로 사용하는 디렉터리 단위 병렬 탐색.
 
-        메모리에는 한 번에 한 디렉터리의 엔트리만 올라온다.
+        workers 개의 워커 스레드가 DB 의 'pending' 디렉터리를 나눠 맡아 동시에
+        scandir/stat 한다(느린 NFS I/O 가 병렬화됨). DB 접근과 진행 카운터는
+        단일 RLock(_dlock)으로 보호하고, scandir/stat 은 락 밖에서 실행해
+        데드락 없이 병렬성을 얻는다. 메모리에는 워커별로 한 디렉터리의 한 청크만
+        올라온다.
         """
         dbmod.update_run(conn, self.run_id, status="discovering", phase="discovering")
+        # 이전 실행에서 'claimed' 로 남은 것은 다시 pending 으로(재개 안전)
+        conn.execute("UPDATE directories SET status='pending' "
+                     "WHERE run_id=? AND status='claimed'", (self.run_id,))
         conn.commit()
 
-        read_conn = dbmod.connect(self.db_path)  # pending 목록 조회 전용
+        self._disc_conn = dbmod.connect(self.db_path)
+        self._disc_active = 0
+        n = max(1, int(self.workers))
         try:
-            while not self._stopped():
-                rows = read_conn.execute(
-                    """SELECT id, path, depth FROM directories
-                       WHERE run_id=? AND status='pending'
-                       ORDER BY depth ASC, id ASC LIMIT ?""",
-                    (self.run_id, self.batch_size),
-                ).fetchall()
-                if not rows:
-                    break
-                for row in rows:
+            if n == 1:
+                self._discover_worker()           # 현재 스레드에서 단독 실행
+            else:
+                threads = [threading.Thread(target=self._discover_worker,
+                                            name="disc-%d" % i, daemon=True)
+                           for i in range(n)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+        finally:
+            with self._dlock:
+                try:
+                    self._disc_conn.commit()
+                    self._disc_conn.close()
+                except Exception:
+                    pass
+                self._disc_conn = None
+
+        self._flush_progress(conn, force=True)
+        dbmod.update_run(conn, self.run_id, total_dirs=self._discovered)
+        conn.commit()
+        self._seen_inodes.clear()  # 집계 단계에선 불필요 — 메모리 회수
+
+    def _claim_batch(self):
+        """프론티어에서 pending 디렉터리 한 배치를 원자적으로 '맡는다'(claimed).
+
+        반환: 행 목록(맡은 것) / [] (지금은 없지만 다른 워커가 작업 중) /
+              None (더는 생길 일 없음 → 종료).
+        """
+        with self._dlock:
+            rows = self._disc_conn.execute(
+                """SELECT id, path, depth FROM directories
+                   WHERE run_id=? AND status='pending'
+                   ORDER BY depth ASC, id ASC LIMIT ?""",
+                (self.run_id, self.batch_size),
+            ).fetchall()
+            if rows:
+                ids = [r["id"] for r in rows]
+                ph = ",".join("?" * len(ids))
+                self._disc_conn.execute(
+                    "UPDATE directories SET status='claimed' WHERE id IN (%s)" % ph, ids)
+                self._disc_conn.commit()
+                self._disc_active += 1
+                return rows
+            # pending 없음: 아무도 작업 중이 아니면 끝, 아니면 잠시 대기
+            return None if self._disc_active == 0 else []
+
+    def _discover_worker(self) -> None:
+        while not self._stopped():
+            batch = self._claim_batch()
+            if batch is None:
+                break
+            if not batch:
+                self.stop_event.wait(0.02)
+                continue
+            try:
+                for row in batch:
                     if self._stopped():
                         break
-                    self._discover_one(conn, row["id"], row["path"], row["depth"])
-                conn.commit()
-                self._flush_progress(conn)
-            self._flush_progress(conn, force=True)
-            # 탐색이 끝나면 총 디렉터리 수가 확정된다.
-            dbmod.update_run(conn, self.run_id, total_dirs=self._discovered)
-            conn.commit()
-            self._seen_inodes.clear()  # 집계 단계에선 불필요 — 메모리 회수
-        finally:
-            read_conn.close()
+                    self._discover_one(row["id"], row["path"], row["depth"])
+            finally:
+                with self._dlock:
+                    self._disc_active -= 1
 
-    def _discover_one(self, conn, dir_id: int, path: str, depth: int) -> None:
+    def _discover_one(self, dir_id: int, path: str, depth: int) -> None:
+        """디렉터리 하나를 훑는다(병렬 워커가 호출).
+
+        scandir/stat(느린 I/O)은 락 밖에서 하고, DB 쓰기와 공유 카운터/하드링크
+        집합은 _dlock 안에서만 건드린다(데드락 없이 병렬 처리).
+        """
         own_bytes = 0
         file_count = 0
         subdir_count = 0
         children: List[tuple] = []
         err: Optional[str] = None
-
         file_chunk: list = []
 
         def flush_files():
-            # 청크를 (필요시 동시에) stat 한 뒤 용량/개수에 반영. 하드링크는
-            # (st_dev, st_ino) 로 1회만 계산(du 와 동일).
-            # 대용량 디렉터리에서도 진행 숫자가 멈춰 보이지 않도록, 청크마다
-            # 전역 카운터(self._total_files/_scanned_bytes)를 즉시 올리고
-            # 진행 상태를 갱신한다.
+            # 청크를 stat(락 밖) 한 뒤, _dlock 안에서 용량/개수/하드링크집합/진행을 갱신.
             nonlocal own_bytes, file_count
             if not file_chunk:
                 return
-            chunk_bytes = 0
-            chunk_files = 0
-            for st in self._stat_many(file_chunk):
-                if st is None:
-                    continue
-                chunk_files += 1
-                if st.st_nlink > 1:
-                    key = (st.st_dev, st.st_ino)
-                    if key in self._seen_inodes:
-                        continue  # 하드링크 중복 — 용량은 한 번만
-                    self._seen_inodes.add(key)
-                chunk_bytes += _entry_bytes(st, self.size_mode)
+            chunk = file_chunk[:]
             file_chunk.clear()
-            own_bytes += chunk_bytes
-            file_count += chunk_files
-            self._scanned_bytes += chunk_bytes
-            self._total_files += chunk_files
-            self._flush_progress(conn, current_dir=path, current_depth=depth)
+            stats = [self._safe_stat(e) for e in chunk]   # I/O — 락 밖
+            cb = 0
+            cf = 0
+            with self._dlock:
+                for st in stats:
+                    if st is None:
+                        continue
+                    cf += 1
+                    if st.st_nlink > 1:
+                        key = (st.st_dev, st.st_ino)
+                        if key in self._seen_inodes:
+                            continue  # 하드링크 중복 — 용량은 한 번만
+                        self._seen_inodes.add(key)
+                    cb += _entry_bytes(st, self.size_mode)
+                own_bytes += cb
+                file_count += cf
+                self._scanned_bytes += cb
+                self._total_files += cf
+                self._flush_progress_locked(self._disc_conn,
+                                            current_dir=path, current_depth=depth)
 
         try:
-            with os.scandir(path) as it:
+            with os.scandir(path) as it:                  # I/O — 락 밖
                 for entry in it:
                     if self._stopped():
                         break
@@ -414,47 +476,43 @@ class Scanner:
                                 continue
                         subdir_count += 1
                         children.append(
-                            (self.run_id, dir_id, entry.path, entry.name, depth + 1)
-                        )
+                            (self.run_id, dir_id, entry.path, entry.name, depth + 1))
                     else:
                         file_chunk.append(entry)
                         if len(file_chunk) >= STAT_CHUNK:
                             flush_files()
-            flush_files()  # 남은 청크 처리
+            flush_files()
         except OSError as exc:
-            err = f"{type(exc).__name__}: {exc}"
-            self._error_dirs += 1
+            err = "%s: %s" % (type(exc).__name__, exc)
+            with self._dlock:
+                self._error_dirs += 1
 
-        # 디렉터리 자기 자신의 inode 가 차지하는 블록도 포함(du 와 동일).
-        # 파일 분(own_bytes/file_count)은 이미 flush_files 에서 전역 카운터에
-        # 반영됐으므로, 여기서는 디렉터리 inode 분만 전역에 추가한다.
-        try:
-            dstat = os.stat(path)
-            dir_bytes = _entry_bytes(dstat, self.size_mode)
-        except OSError:
-            dir_bytes = 0
-        own_bytes += dir_bytes
-        self._scanned_bytes += dir_bytes
+        # 디렉터리 자기 inode 분(du 와 동일). 파일 분은 flush_files 에서 이미 반영됨.
+        dstat = self._safe_stat_path(path)                # I/O — 락 밖
+        dir_bytes = _entry_bytes(dstat, self.size_mode) if dstat is not None else 0
 
-        if children:
-            conn.executemany(
-                """INSERT OR IGNORE INTO directories
-                   (run_id, parent_id, path, name, depth, status)
-                   VALUES (?, ?, ?, ?, ?, 'pending')""",
-                children,
+        with self._dlock:
+            own_bytes += dir_bytes
+            self._scanned_bytes += dir_bytes
+            if children:
+                self._disc_conn.executemany(
+                    """INSERT OR IGNORE INTO directories
+                       (run_id, parent_id, path, name, depth, status)
+                       VALUES (?, ?, ?, ?, ?, 'pending')""",
+                    children,
+                )
+            self._disc_conn.execute(
+                """UPDATE directories
+                   SET status='discovered', own_bytes=?, file_count=?, subdir_count=?, error=?
+                   WHERE id=?""",
+                (own_bytes, file_count, subdir_count, err, dir_id),
             )
-        conn.execute(
-            """UPDATE directories
-               SET status='discovered', own_bytes=?, file_count=?, subdir_count=?, error=?
-               WHERE id=?""",
-            (own_bytes, file_count, subdir_count, err, dir_id),
-        )
-
-        # 디렉터리 1개 완료. (파일 수/용량은 flush_files 에서 실시간 반영됨)
-        self._discovered += 1
-        if depth > 0:
-            self._maybe_update_depth(conn, depth)
-        self._flush_progress(conn, current_dir=path, current_depth=depth)
+            self._disc_conn.commit()
+            self._discovered += 1
+            if depth > 0:
+                self._maybe_update_depth(self._disc_conn, depth)
+            self._flush_progress_locked(self._disc_conn,
+                                        current_dir=path, current_depth=depth)
 
     def _maybe_update_depth(self, conn, depth: int) -> None:
         # max_depth 는 가끔만 갱신해도 충분하다.
