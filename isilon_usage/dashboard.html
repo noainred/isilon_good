@@ -161,7 +161,7 @@
         <span><span class="dot" style="background:#4f9cff"></span>스캐너 프로세스</span>
         <span><span class="dot" style="background:#38d39f"></span>du 프로세스</span>
       </div>
-      <div class="kv" style="margin-top:8px;"><span class="k">⚡ 병렬 처리(동시 스캔 스레드)</span><span class="v" id="parWorkers">—</span></div>
+      <div class="kv" style="margin-top:8px;"><span class="k" id="parWorkersK" style="white-space:nowrap;">⚡ Multi Scan Thread</span><span class="v" id="parWorkers" style="white-space:nowrap;">—</span></div>
       <div class="kv"><span class="k">스캐너 CPU · RSS</span><span class="v"><span id="scanCpu">0%</span> · <span id="scanRss">0 B</span></span></div>
       <div class="kv"><span class="k">du 프로세스 CPU · RSS</span><span class="v"><span id="duCpu">—</span> · <span id="duRssRow">0 B</span></span></div>
       <div class="kv"><span class="k">최대(peak) du / 스캐너</span><span class="v" id="peakRss">0 B / 0 B</span></div>
@@ -1363,10 +1363,11 @@ function render(d) {
   // 병렬 처리(동시 스캔 스레드) — native 백엔드가 한 프로세스에서 여러 디렉터리를
   // 동시에 훑는 장점을 보여준다. 탐색 중엔 '현재 활성/설정' 을 함께 표시.
   const cfgW = r.workers || 0, actW = r.active_workers || 0;
+  $("parWorkersK").textContent = cfgW > 0 ? `⚡ Multi Scan ${cfgW} Thread` : "⚡ Multi Scan Thread";
   if (cfgW > 0) {
     $("parWorkers").innerHTML = (r.phase === "discovering" && actW > 0)
-      ? `<b style="color:var(--ok)">${actW}</b> / ${cfgW} 스레드 동시 처리 중`
-      : `${cfgW} 스레드 병렬`;
+      ? `<b style="color:var(--ok)">${actW}</b>개 스레드 동작중`
+      : "—";
   } else {
     $("parWorkers").textContent = "—";
   }
