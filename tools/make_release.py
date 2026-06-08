@@ -96,12 +96,15 @@ def build() -> list:
     out_dir = os.path.join(ROOT, "download")
     os.makedirs(out_dir, exist_ok=True)
     files = _collect(stage, name)
-    made = [
-        _make_targz(os.path.join(out_dir, f"{name}.tar.gz"), files),
-        _make_zip(os.path.join(out_dir, f"{name}.zip"), files),
-    ]
+    targz = _make_targz(os.path.join(out_dir, f"{name}.tar.gz"), files)
+    zipf = _make_zip(os.path.join(out_dir, f"{name}.zip"), files)
+    # 버전이 바뀌어도 wget 링크가 그대로이도록 고정 이름(latest) 사본도 둔다.
+    latest_targz = os.path.join(out_dir, "isilon_usage-latest.tar.gz")
+    latest_zip = os.path.join(out_dir, "isilon_usage-latest.zip")
+    shutil.copy2(targz, latest_targz)
+    shutil.copy2(zipf, latest_zip)
     shutil.rmtree(stage, ignore_errors=True)
-    return made
+    return [targz, zipf, latest_targz, latest_zip]
 
 
 if __name__ == "__main__":
