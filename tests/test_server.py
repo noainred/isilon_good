@@ -177,6 +177,20 @@ def main() -> int:
         bad = c.post("/api/benchmark-workers", {"path": "/etc", "budget": 1})
         assert not bad["ok"], bad
         assert rw["cpu_count"] >= 1 and rw["rationale"], rw
+        # 결과에 메모리 측정(peak RSS·배수)이 포함되어야
+        assert all("peak_rss_bytes" in r and "mem_ratio" in r for r in bw["results"]), bw
+
+        # 실측 보정 스트리밍(시작 → 단계별 폴링)
+        st = c.post("/api/benchmark-workers/start", {"path": root, "candidates": "1,2", "budget": 1})
+        assert st["ok"] and st.get("started"), st
+        bs = None
+        for _ in range(60):
+            bs = c.get("/api/benchmark-workers/status")
+            if bs.get("done"):
+                break
+            time.sleep(0.5)
+        assert bs and bs["done"] and bs["recommended"] in (1, 2), bs
+        assert len(bs["results"]) >= 1 and all("mem_ratio" in r for r in bs["results"]), bs
 
         # 스캔 2 → diff
         r2 = c.post("/api/scan/start", {"path": root})

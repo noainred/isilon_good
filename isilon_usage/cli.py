@@ -408,27 +408,33 @@ def cmd_tune(args: argparse.Namespace) -> int:
     print(f"  적용 예) python -m isilon_usage serve --workers {rec['recommended']}")
     print(f"          또는 설정 화면의 '동시 스캔 스레드'를 {rec['recommended']} 로 저장")
 
-    # --benchmark: 실제 경로에서 후보 스레드 수로 짧게 시범 탐색해 처리량 비교
+    # --benchmark: 실제 경로에서 후보 스레드 수로 짧게 시범 탐색해 처리량 비교.
+    # 스레드를 메모리 2배 한도까지 단계적으로 올리며, 각 단계 결과를 즉시 출력한다.
     if getattr(args, "benchmark", None):
         from . import tuning as tunmod
         cands = None
         if args.candidates:
             cands = [c for c in args.candidates.split(",") if c.strip()]
-        print("\n실측 보정(시범 탐색) — 잠시 측정합니다…")
+        print("\n실측 보정(시범 탐색) — 단계별로 출력합니다(메모리 %.0f배 한도까지)…"
+              % args.mem_factor)
         print(f"  대상   : {os.path.abspath(args.benchmark)}")
+        print("-" * 64)
+        print("  스레드 | 탐색 디렉터리 | 소요(s) | 초당 디렉터리 |  peak RSS  | mem×")
+        print("-" * 64)
+
+        def _on_result(r):
+            print("  %6d | %12d | %7.2f | %12.1f | %7.1f MB | ×%.2f%s" % (
+                r["workers"], r["discovered"], r["elapsed"], r["dirs_per_sec"],
+                r["peak_rss_bytes"] / 1048576.0, r["mem_ratio"],
+                "  ← 메모리 한도" if r.get("mem_stop") else ""))
+
         bench = tunmod.benchmark_workers(
-            args.benchmark, candidates=cands, budget_sec=args.budget)
+            args.benchmark, candidates=cands, budget_sec=args.budget,
+            mem_factor=args.mem_factor, on_result=_on_result)
         if not bench.get("ok"):
             print(f"  실패: {bench.get('error')}", file=sys.stderr)
             return 2
-        print("-" * 56)
-        print("  스레드 | 탐색 디렉터리 | 소요(s) | 초당 디렉터리")
-        for r in bench["results"]:
-            mark = " ◀ 권장" if r["workers"] == bench["recommended"] else ""
-            print("  %6d | %12d | %7.2f | %12.1f%s" % (
-                r["workers"], r["discovered"], r["elapsed"],
-                r["dirs_per_sec"], mark))
-        print("-" * 56)
+        print("-" * 64)
         print(f"  ▶ 실측 권장 스레드 : {bench['recommended']}")
         print(f"  {bench['note']}")
     return 0
@@ -516,6 +522,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="시범할 스레드 후보(쉼표, 기본 8,16,32)")
     ptu.add_argument("--budget", type=float, default=5.0,
                      help="후보당 측정 시간(초, 기본 5)")
+    ptu.add_argument("--mem-factor", type=float, default=2.0,
+                     help="스레드를 올릴 때 시작 대비 RSS 이 배수에 도달하면 중단(기본 2배)")
     ptu.set_defaults(func=cmd_tune)
 
     ppo = sub.add_parser("portal", help="글로벌 통합 포탈(HQ) — 여러 DC 를 한 화면에서 조망")

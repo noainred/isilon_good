@@ -860,43 +860,71 @@ async function tuneWorkers() {
   }
 }
 
-async function tuneBenchmark() {
+function _benchRender(j) {
   const out = $("benchResult");
-  const path = ($("scanPath") && $("scanPath").value.trim()) || "";
-  out.innerHTML = '<span style="color:var(--warn)">시범 탐색 측정 중… (후보 8/16/32 × 약 5초 + 워밍업, 20~30초 소요)</span>';
-  try {
-    const j = await (await fetch("/api/benchmark-workers", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(path ? {path: path} : {}),
-    })).json();
-    if (!j.ok) { out.innerHTML = '<span style="color:var(--danger)">실측 실패: ' + (j.error || "") + '</span>'; return; }
-    let rows = (j.results || []).map(r => {
-      const best = (r.workers === j.recommended);
-      return `<tr style="${best ? 'color:var(--ok);font-weight:700' : ''}">`
-        + `<td style="text-align:right;padding:1px 8px">${r.workers}</td>`
-        + `<td style="text-align:right;padding:1px 8px">${fmtNum(r.discovered)}</td>`
-        + `<td style="text-align:right;padding:1px 8px">${r.elapsed}s</td>`
-        + `<td style="text-align:right;padding:1px 8px">${fmtNum(r.dirs_per_sec)}/s</td>`
-        + `<td style="padding:1px 6px">${best ? "◀ 권장" : ""}</td></tr>`;
-    }).join("");
-    out.innerHTML =
-      `대상: <span class="mono">${j.sample_path}</span><br>`
-      + `<table style="border-collapse:collapse;margin:4px 0"><tr style="color:var(--muted)">`
-      + `<td style="padding:1px 8px">스레드</td><td style="padding:1px 8px">탐색 디렉터리</td>`
-      + `<td style="padding:1px 8px">소요</td><td style="padding:1px 8px">초당</td><td></td></tr>${rows}</table>`
-      + `<b style="color:var(--ok)">실측 권장 ${j.recommended} 스레드</b> `
+  const rec = j.recommended;
+  const rows = (j.results || []).map(r => {
+    const best = (rec != null && r.workers === rec);
+    const mem = (r.peak_rss_bytes != null)
+      ? `${fmtBytes(r.peak_rss_bytes)} <span style="color:var(--muted)">×${r.mem_ratio}</span>`
+        + (r.mem_stop ? ' <span style="color:var(--warn)">한도</span>' : "")
+      : "—";
+    return `<tr style="${best ? 'color:var(--ok);font-weight:700' : ''}">`
+      + `<td style="text-align:right;padding:1px 8px">${r.workers}</td>`
+      + `<td style="text-align:right;padding:1px 8px">${fmtNum(r.discovered)}</td>`
+      + `<td style="text-align:right;padding:1px 8px">${r.elapsed}s</td>`
+      + `<td style="text-align:right;padding:1px 8px">${fmtNum(r.dirs_per_sec)}/s</td>`
+      + `<td style="text-align:right;padding:1px 8px">${mem}</td>`
+      + `<td style="padding:1px 6px">${best ? "◀ 권장" : ""}</td></tr>`;
+  }).join("");
+  let html = `대상: <span class="mono">${j.sample_path || ""}</span>`
+    + (j.running ? ' <span style="color:var(--warn)">· 측정 중… (단계별로 추가됩니다)</span>' : "")
+    + `<table style="border-collapse:collapse;margin:4px 0"><tr style="color:var(--muted)">`
+    + `<td style="padding:1px 8px">스레드</td><td style="padding:1px 8px">탐색</td>`
+    + `<td style="padding:1px 8px">소요</td><td style="padding:1px 8px">초당</td>`
+    + `<td style="padding:1px 8px">peak RSS ×배</td><td></td></tr>${rows}</table>`;
+  if (j.done) {
+    html += `<b style="color:var(--ok)">실측 권장 ${rec} 스레드</b> `
       + `<a href="#" id="benchApply" style="color:var(--accent2)">→ 이 값 적용</a><br>`
-      + `<span style="color:var(--muted)">${j.note}</span>`;
+      + `<span style="color:var(--muted)">${j.note || ""}</span>`;
+    if (j.error) html += `<br><span style="color:var(--danger)">${j.error}</span>`;
+  }
+  out.innerHTML = html;
+  if (j.done && rec != null) {
     const ap = $("benchApply");
     if (ap) ap.addEventListener("click", (e) => {
       e.preventDefault();
-      $("setWorkers").value = j.recommended;
+      $("setWorkers").value = rec;
       if (!$("setBackend").disabled) $("saveSettingsBtn").disabled = false;
       out.innerHTML += ' <span style="color:var(--ok)">✓ 적용됨(저장 필요)</span>';
     });
-  } catch (e) {
-    out.innerHTML = '<span style="color:var(--danger)">실측 오류: ' + e + '</span>';
   }
+}
+
+let _benchTimer = null;
+async function tuneBenchmark() {
+  const out = $("benchResult");
+  const path = ($("scanPath") && $("scanPath").value.trim()) || "";
+  out.innerHTML = '<span style="color:var(--warn)">시범 탐색 시작 중… (스레드를 메모리 2배 한도까지 단계적으로 올립니다)</span>';
+  if (_benchTimer) { clearInterval(_benchTimer); _benchTimer = null; }
+  // 1) 백그라운드 시작
+  try {
+    const st = await (await fetch("/api/benchmark-workers/start", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(path ? {path: path} : {}),
+    })).json();
+    if (!st.ok) { out.innerHTML = '<span style="color:var(--danger)">실측 시작 실패: ' + (st.error || "") + '</span>'; return; }
+  } catch (e) { out.innerHTML = '<span style="color:var(--danger)">실측 시작 오류: ' + e + '</span>'; return; }
+  // 2) 단계별 폴링 — 각 후보 측정이 끝날 때마다 행이 추가된다
+  let tries = 0;
+  _benchTimer = setInterval(async () => {
+    tries++;
+    try {
+      const j = await (await fetch("/api/benchmark-workers/status", {cache: "no-store"})).json();
+      _benchRender(j);
+      if (j.done || tries > 180) { clearInterval(_benchTimer); _benchTimer = null; }
+    } catch (e) { /* 일시 오류 무시, 계속 폴링 */ }
+  }, 1000);
 }
 
 async function saveSettings() {

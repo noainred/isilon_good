@@ -543,6 +543,8 @@ class ScanController:
         self._lock = threading.Lock()
         self._storage_cache = None          # 스토리지 어레이(아이실론/PowerStore) 상태 캐시
         self._storage_ts = 0.0
+        self._bench = None                  # 실측 보정(시범 스캔) 진행 상태(단계별 표시용)
+        self._bench_lock = threading.Lock()
         self._reconcile_orphans()           # 이전 프로세스가 남긴 고아 스캔 정리
 
     def storage_status(self, force: bool = False) -> list:
@@ -696,6 +698,64 @@ class ScanController:
         except (TypeError, ValueError):
             budget = 5.0
         return tunmod.benchmark_workers(path, candidates=candidates, budget_sec=budget)
+
+    def benchmark_start(self, *, path=None, candidates=None, budget=5.0,
+                        mem_factor=2.0) -> dict:
+        """백그라운드로 시범 탐색을 시작한다. 각 단계가 끝날 때마다 부분 결과를
+        쌓아 두고, benchmark_status() 로 폴링해 단계별로 보여줄 수 있게 한다."""
+        from . import tuning as tunmod
+        if not path:
+            path = self.mount_bases[0] if self.mount_bases else None
+        if not path:
+            return {"ok": False, "error": "측정할 경로를 지정하세요(허용 경로 없음)."}
+        ok, why = self.path_allowed(path)
+        if not ok:
+            return {"ok": False, "error": why}
+        with self._bench_lock:
+            if self._bench and self._bench.get("running"):
+                return {"ok": False, "error": "이미 측정이 진행 중입니다."}
+            self._bench = {"running": True, "done": False, "results": [],
+                           "sample_path": os.path.abspath(path), "error": None,
+                           "recommended": None, "note": "", "started_at": time.time()}
+        if isinstance(candidates, str):
+            candidates = [c for c in candidates.split(",") if c.strip()]
+        try:
+            budget = float(budget)
+        except (TypeError, ValueError):
+            budget = 5.0
+
+        def _on_result(r):
+            with self._bench_lock:
+                if self._bench is not None:
+                    self._bench["results"].append(r)
+
+        def _run():
+            try:
+                res = tunmod.benchmark_workers(
+                    path, candidates=candidates, budget_sec=budget,
+                    mem_factor=mem_factor, on_result=_on_result)
+            except Exception as exc:  # noqa: BLE001
+                res = {"ok": False, "error": "측정 오류: %s" % exc}
+            with self._bench_lock:
+                if self._bench is not None:
+                    self._bench["running"] = False
+                    self._bench["done"] = True
+                    self._bench["recommended"] = res.get("recommended")
+                    self._bench["note"] = res.get("note", "")
+                    self._bench["mem_factor"] = res.get("mem_factor")
+                    self._bench["base_rss_bytes"] = res.get("base_rss_bytes")
+                    if not res.get("ok"):
+                        self._bench["error"] = res.get("error")
+
+        threading.Thread(target=_run, daemon=True).start()
+        return {"ok": True, "started": True}
+
+    def benchmark_status(self) -> dict:
+        """진행 중/완료된 시범 탐색의 현재 스냅샷(단계별 결과 포함)."""
+        with self._bench_lock:
+            if self._bench is None:
+                return {"ok": True, "running": False, "done": False, "results": []}
+            return {"ok": True, **{k: v for k, v in self._bench.items()}}
 
     # ----- 시작 -----
     def start_scan(self, path: str, *, backend=None, size_mode=None,
@@ -1053,6 +1113,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(rec)
                 return
 
+            if path == "/api/benchmark-workers/status":
+                # 진행 중/완료된 시범 탐색의 단계별 결과 스냅샷(폴링용)
+                self._send_json(self.controller.benchmark_status()
+                                if self.controller else
+                                {"ok": True, "running": False, "results": []})
+                return
+
             if path == "/api/settings":
                 self._send_json({
                     "ok": True,
@@ -1391,6 +1458,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     path=(body.get("path") or "").strip() or None,
                     candidates=body.get("candidates"),
                     budget=body.get("budget", 5.0),
+                )
+                self._send_json(res, status=200 if res.get("ok") else 400)
+                return
+
+            if path == "/api/benchmark-workers/start":
+                # 백그라운드 시작 → /api/benchmark-workers/status 로 단계별 폴링
+                res = self.controller.benchmark_start(
+                    path=(body.get("path") or "").strip() or None,
+                    candidates=body.get("candidates"),
+                    budget=body.get("budget", 5.0),
+                    mem_factor=body.get("mem_factor", 2.0),
                 )
                 self._send_json(res, status=200 if res.get("ok") else 400)
                 return
