@@ -569,7 +569,7 @@
       <div class="kv"><span class="k">단계</span><span class="v" id="phaseTxt">—</span></div>
       <div class="kv" id="mountRoRow"><span class="k">마운트 상태</span><span class="v" id="mountRo">—</span></div>
       <div class="kv" id="heartbeatRow"><span class="k">진행 갱신(하트비트)</span><span class="v" id="heartbeat">—</span></div>
-      <div class="kv" id="dbSizeRow"><span class="k">DB 크기(생존 지표)</span><span class="v" id="dbSize">—</span></div>
+      <div class="kv" id="dbSizeRow"><span class="k">DB 크기(생존 지표)</span><span class="v" id="dbSize" style="white-space:nowrap">—</span></div>
       <div class="kv" id="dbDetailRow"><span class="k">DB 구성 · 한도</span><span class="v" id="dbDetail">—</span></div>
       <div class="kv" id="dbDiskRow"><span class="k">DB 디스크 여유</span><span class="v" id="dbDisk">—</span></div>
       <div class="kv" id="logDiskRow"><span class="k">로그 디스크 여유</span><span class="v" id="logDisk">—</span></div>
@@ -727,6 +727,7 @@ let mountBases = [];
 // "지금 조사 중인 디렉터리" — 워커별 현재 디렉터리 표시(모두/N개는 사용자 지정)
 let _lastWD = [], _lastCur = null, _lastStatus = null;
 let _lastDbTotal = 0, _lastDbScan = null;   // DB 생존 지표(증감) 추적용
+let _cfgWorkers = 0;   // 저장된 동시 스캔 스레드 설정(실행 중 스캔과 비교용)
 function renderCurrentDir() {
   const wd = (_lastWD || []).filter(Boolean);
   const all = $("showAllWorkers") ? $("showAllWorkers").checked : true;
@@ -765,6 +766,7 @@ async function loadSettings() {
     $("setTopN").value = s.top_n;
     $("setRefresh").value = s.refresh_ms;
     $("setWorkers").value = s.scan_workers;
+    _cfgWorkers = parseInt(s.scan_workers) || 0;   // 실행 중 스캔과 비교용
     $("setFoldDepth").value = s.fold_depth || 0;
     $("setDbMaxGb").value = s.db_max_gb || 0;
     $("setMaxDepth").value = s.scan_max_depth || 0;
@@ -1786,13 +1788,14 @@ function render(d) {
     let trend = "";
     if (running) {
       if (delta > 0)
-        trend = ` <span style="color:var(--ok)">🟢 증가 중 (+${fmtBytes(delta)})</span>`;
+        trend = `<span style="color:var(--ok)">🟢 증가 중 (+${fmtBytes(delta)})</span> `;
       else if (delta < 0)
-        trend = ` <span style="color:var(--ok)">🟢 활성 (WAL 정리 ${fmtBytes(-delta)}↓)</span>`;
+        trend = `<span style="color:var(--ok)">🟢 활성 (WAL↓ ${fmtBytes(-delta)})</span> `;
       else
-        trend = ` <span style="color:var(--muted)">⚪ 변화 없음(멈춤이면 하트비트 확인)</span>`;
+        trend = `<span style="color:var(--muted)">⚪ 변화 없음(하트비트 확인)</span> `;
     }
-    _dsz.innerHTML = `<b>${fmtBytes(total)}</b>` + trend;
+    // 숫자(굵게)를 항상 맨 뒤(오른쪽 끝)에 둬 위치가 고정되게 한다. 상태 문구는 그 왼쪽.
+    _dsz.innerHTML = trend + `<b>${fmtBytes(total)}</b>`;
     let det = `.db ${fmtBytes(_du.db_bytes)} · WAL ${fmtBytes(_du.wal_bytes)}`;
     const lim = Number(_du.limit_bytes) || 0;
     if (lim > 0) {
@@ -1920,11 +1923,17 @@ function render(d) {
   // 병렬 처리(동시 스캔 스레드) — native 백엔드가 한 프로세스에서 여러 디렉터리를
   // 동시에 훑는 장점을 보여준다. 탐색 중엔 '현재 활성/설정' 을 함께 표시.
   const cfgW = r.workers || 0, actW = r.active_workers || 0;
+  const runningNow = (r.status === "discovering" || r.status === "sizing");
   $("parWorkersK").textContent = cfgW > 0 ? `⚡ Multi Scan ${cfgW} Thread` : "⚡ Multi Scan Thread";
   if (cfgW > 0) {
-    $("parWorkers").innerHTML = (r.phase === "discovering" && actW > 0)
+    let body = (r.phase === "discovering" && actW > 0)
       ? `<b style="color:var(--ok)">${actW}</b>개 스레드 동작중`
       : "—";
+    // 설정값과 실행 중 스캔의 스레드가 다르면: 설정은 새 스캔/재개부터 적용됨을 안내
+    if (runningNow && _cfgWorkers > 0 && _cfgWorkers !== cfgW) {
+      body += ` <span style="color:var(--warn)">· 설정 ${_cfgWorkers} (중지→재개 시 적용)</span>`;
+    }
+    $("parWorkers").innerHTML = body;
   } else {
     $("parWorkers").textContent = "—";
   }
