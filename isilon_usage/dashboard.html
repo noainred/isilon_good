@@ -1577,6 +1577,7 @@ async function loadStorage() {
 }
 
 let _statusInFlight = false;
+let _statusFailStreak = 0;   // 상세 연속 실패 횟수(일시 지연 깜빡임 방지)
 function fetchJsonTimeout(url, ms) {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), ms);
@@ -1595,22 +1596,41 @@ async function poll() {
   if (_statusInFlight) return;
   _statusInFlight = true;
   try {
-    const url = "/api/status" + (selectedScan != null ? ("?scan=" + selectedScan) : "");
-    const data = await fetchJsonTimeout(url, 25000);
-    $("errLine").textContent = "";
-    if (data.scan_meta) $("scanDbInfo").textContent = "DB 파일: " + (data.scan_meta.db_filename || "");
-    if (!data.ok) {
-      $("statusBadge").className = "badge " + (data.reason === "initializing" ? "discovering" : "paused");
-      $("statusBadge").textContent = data.reason === "initializing" ? "초기화 중" : "대기 중";
-      $("currentDir").textContent = (data.reason === "no_runs")
-        ? "아직 시작된 스캔이 없습니다. `python -m isilon_usage run <경로>` 로 시작하세요."
-        : (data.reason === "initializing" ? "스캔 초기화 중… (per-run DB 생성 대기)"
-           : ("상태 없음: " + (data.reason || data.error || "")));
-    } else {
-      render(data);
+    // (a) 데이터 수신 — 네트워크/타임아웃 실패는 '지연'으로 따로 처리
+    let data;
+    try {
+      const url = "/api/status" + (selectedScan != null ? ("?scan=" + selectedScan) : "");
+      data = await fetchJsonTimeout(url, 25000);
+    } catch (e) {
+      _statusFailStreak++;
+      const why = (e && e.name === "AbortError") ? "응답 시간 초과(25초)" : ("" + e);
+      // 한 번의 일시 지연은 무시(깜빡임 방지), 2회 연속부터 안내
+      if (_statusFailStreak >= 2) {
+        $("errLine").innerHTML = '<span style="color:var(--warn)">⏳ 상세 갱신 지연 중(개요는 정상) — '
+          + why + '. 거대 DB 에서는 정상적인 현상일 수 있습니다(잠시 후 자동 복구).</span>';
+      }
+      return;   // finally 에서 _statusInFlight 리셋
     }
-  } catch (e) {
-    $("errLine").textContent = "상세 갱신 지연/오류(개요는 정상): " + e;
+    _statusFailStreak = 0;
+    // (b) 화면 표시 — 렌더 코드 오류는 '지연'과 구분해 콘솔 로그 + 별도 안내
+    try {
+      if (data.scan_meta) $("scanDbInfo").textContent = "DB 파일: " + (data.scan_meta.db_filename || "");
+      if (!data.ok) {
+        $("statusBadge").className = "badge " + (data.reason === "initializing" ? "discovering" : "paused");
+        $("statusBadge").textContent = data.reason === "initializing" ? "초기화 중" : "대기 중";
+        $("currentDir").textContent = (data.reason === "no_runs")
+          ? "아직 시작된 스캔이 없습니다. `python -m isilon_usage run <경로>` 로 시작하세요."
+          : (data.reason === "initializing" ? "스캔 초기화 중… (per-run DB 생성 대기)"
+             : ("상태 없음: " + (data.reason || data.error || "")));
+      } else {
+        render(data);
+      }
+      $("errLine").textContent = "";   // 정상 처리되면 이전 오류/지연 안내 제거
+    } catch (e) {
+      console.error("대시보드 render 오류:", e);
+      $("errLine").innerHTML = '<span style="color:var(--danger)">화면 표시 중 오류: '
+        + e + ' (데이터는 정상 수신 — 콘솔 참고. 새로고침으로 복구될 수 있습니다)</span>';
+    }
   } finally {
     _statusInFlight = false;
   }
@@ -1653,13 +1673,13 @@ function render(d) {
 
   // DB 크기(생존 지표): 현재 쓰는 per-run DB(.db + WAL) 사용량.
   // 폴링마다 값이 커지면 스캐너가 실제로 쓰는 중 = 살아있음.
-  const _du = data.db_usage;
+  const _du = d.db_usage;
   const _dsz = $("dbSize"), _ddt = $("dbDetail");
   if (_du && _dsz && _ddt) {
     const total = Number(_du.total_bytes) || 0;
-    const sameScan = (_lastDbScan === data.scan_id);
+    const sameScan = (_lastDbScan === d.scan_id);
     const delta = sameScan ? (total - _lastDbTotal) : 0;
-    _lastDbScan = data.scan_id; _lastDbTotal = total;
+    _lastDbScan = d.scan_id; _lastDbTotal = total;
     const running = (r.status === "discovering" || r.status === "sizing");
     let trend = "";
     if (running) {
