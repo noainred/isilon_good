@@ -102,6 +102,10 @@ def main() -> int:
         du = d1.get("db_usage")
         assert du and du["db_bytes"] > 0 and du["total_bytes"] >= du["db_bytes"], du
         assert "limit_bytes" in du, du
+        # 누적 작업 시간 + 로컬 디스크 여유(DB 저장 위치)
+        assert d1["run"]["elapsed_accum"] >= 0 and "session_started_at" in d1["run"], d1["run"]
+        ldk = d1.get("local_disk") or {}
+        assert ldk.get("db") and ldk["db"]["free_bytes"] > 0 and ldk["db"]["total_bytes"] > 0, ldk
 
         # 드릴다운: 루트 → 자식
         ch = c.get(f"/api/children?scan={s1}")

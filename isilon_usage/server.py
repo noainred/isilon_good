@@ -99,6 +99,26 @@ def _db_disk_usage(db_path: str) -> dict:
             "total_bytes": db + wal + shm}
 
 
+def _dir_disk_free(path: str) -> Optional[dict]:
+    """경로가 속한 (로컬) 파일시스템의 총/여유/사용률을 반환. 실패 시 None."""
+    try:
+        # 파일 경로면 그 디렉터리, 없으면 가장 가까운 상위 존재 경로로 statvfs
+        p = path
+        for _ in range(8):
+            if p and os.path.exists(p):
+                break
+            p = os.path.dirname(p) or "/"
+        v = os.statvfs(p or "/")
+        total = v.f_blocks * v.f_frsize
+        free = v.f_bavail * v.f_frsize
+        used = max(0, total - free)
+        return {"path": path, "total_bytes": total, "free_bytes": free,
+                "used_bytes": used,
+                "used_pct": round(used / total * 100, 1) if total else 0.0}
+    except OSError:
+        return None
+
+
 def _public_settings(s: dict) -> dict:
     """화면/응답용 설정 — 비밀번호는 노출하지 않고 설정 여부만 알린다."""
     out = dict(s)
@@ -239,6 +259,8 @@ def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 
             "started_at": started,
             "finished_at": finished,
             "updated_at": r.get("updated_at"),   # 마지막 진행 갱신(하트비트)
+            "session_started_at": r.get("session_started_at"),  # 이번(재시작) 세션 시작
+            "elapsed_accum": r.get("elapsed_accum") or 0,       # 모든 세션 누적 활성시간
             "elapsed": elapsed,
             "discovered_dirs": discovered,
             "total_dirs": total_dirs,
@@ -1103,6 +1125,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 _st = self._current_settings() or {}
                 payload["db_usage"]["limit_bytes"] = (
                     int(_st.get("db_max_gb", 0) or 0) * (1024 ** 3))
+                # 로컬 저장 공간 여유: DB(데이터 폴더) + 로그 파일 위치
+                local = {"db": _dir_disk_free(self.data_dir)}
+                log_path = str(_st.get("log_path") or "").strip()
+                if log_path:
+                    log_disk = _dir_disk_free(log_path)
+                    # DB 와 같은 파일시스템이면 중복 표시 안 함
+                    if (log_disk and local["db"]
+                            and log_disk["total_bytes"] == local["db"]["total_bytes"]
+                            and log_disk["free_bytes"] == local["db"]["free_bytes"]):
+                        log_disk = None
+                    local["log"] = log_disk
+                payload["local_disk"] = local
                 self._send_json(payload)
                 return
 

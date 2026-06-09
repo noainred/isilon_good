@@ -571,12 +571,15 @@
       <div class="kv" id="heartbeatRow"><span class="k">진행 갱신(하트비트)</span><span class="v" id="heartbeat">—</span></div>
       <div class="kv" id="dbSizeRow"><span class="k">DB 크기(생존 지표)</span><span class="v" id="dbSize">—</span></div>
       <div class="kv" id="dbDetailRow"><span class="k">DB 구성 · 한도</span><span class="v" id="dbDetail">—</span></div>
+      <div class="kv" id="dbDiskRow"><span class="k">DB 디스크 여유</span><span class="v" id="dbDisk">—</span></div>
+      <div class="kv" id="logDiskRow"><span class="k">로그 디스크 여유</span><span class="v" id="logDisk">—</span></div>
       <div class="kv"><span class="k">탐색된 디렉터리</span><span class="v" id="discovered">0</span></div>
       <div class="kv"><span class="k">집계 완료 디렉터리</span><span class="v" id="processed">0</span></div>
       <div class="kv"><span class="k">총 파일 수</span><span class="v" id="totalFiles">0</span></div>
       <div class="kv"><span class="k">최대 깊이</span><span class="v" id="maxDepth">0</span></div>
       <div class="kv"><span class="k">오류(접근불가) 디렉터리</span><span class="v" id="errDirs">0</span></div>
-      <div class="kv"><span class="k">경과 시간</span><span class="v" id="elapsed">0s</span></div>
+      <div class="kv"><span class="k">경과 시간(누적 작업)</span><span class="v" id="elapsed">0s</span></div>
+      <div class="kv" id="sessionElapsedRow"><span class="k">이번 재시작 후</span><span class="v" id="sessionElapsed">—</span></div>
       <div class="kv"><span class="k">예상 잔여(ETA)</span><span class="v" id="eta">—</span></div>
     </div>
   </div>
@@ -1740,7 +1743,8 @@ function render(d) {
       const col = pct >= 80 ? "var(--danger)" : (pct >= 60 ? "var(--warn)" : "var(--muted)");
       det += ` · 한도 ${fmtBytes(lim)} <span style="color:${col}">(${pct}%)</span>`;
     } else {
-      det += ` · 한도 없음(설정에서 DB 최대 GB 지정 가능)`;
+      det += ` · 한도 없음`
+          + `<br><span style="color:var(--muted); font-size:0.9em">(설정에서 DB 최대 GB 지정 가능)</span>`;
     }
     _ddt.innerHTML = det;
     $("dbSizeRow").style.display = "flex";
@@ -1789,8 +1793,37 @@ function render(d) {
   $("totalFiles").textContent = fmtNum(r.total_files);
   $("maxDepth").textContent = fmtNum(r.max_depth);
   $("errDirs").textContent = fmtNum(r.error_dirs);
-  $("elapsed").textContent = fmtDur(r.elapsed);
+  // 경과 시간(누적 작업): 모든 세션의 활성 작업 시간(일시정지 갭 제외). 없으면 폴백.
+  const totalActive = (r.elapsed_accum && r.elapsed_accum > 0) ? r.elapsed_accum : r.elapsed;
+  $("elapsed").textContent = fmtDur(totalActive);
+  // 이번 재시작 후: 재개된 스캔일 때만(처음 시작과 이번 세션 시작이 다를 때) 표시
+  const running = (r.status === "discovering" || r.status === "sizing");
+  const resumed = r.session_started_at && r.started_at
+                  && (r.session_started_at - r.started_at > 1.0);
+  if (resumed) {
+    const end = running ? (d.server_time || (Date.now()/1000)) : (r.finished_at || d.server_time);
+    const sess = Math.max(0, end - r.session_started_at);
+    const firstAt = new Date(r.started_at * 1000).toLocaleString("ko-KR");
+    $("sessionElapsed").innerHTML = fmtDur(sess)
+      + ` <span style="color:var(--muted)">(처음 시작: ${firstAt})</span>`;
+    $("sessionElapsedRow").style.display = "flex";
+  } else {
+    $("sessionElapsedRow").style.display = "none";
+  }
   $("eta").textContent = p.eta_seconds == null ? "—" : fmtDur(p.eta_seconds);
+
+  // 로컬 저장 공간 여유(DB 데이터 폴더 / 로그 위치) — DB 폭증·디스크 부족 조기 감지
+  const ld = d.local_disk || {};
+  function _renderDisk(rowId, valId, info) {
+    if (!info) { $(rowId).style.display = "none"; return; }
+    const pct = info.used_pct || 0;
+    const col = pct >= 90 ? "var(--danger)" : (pct >= 80 ? "var(--warn)" : "var(--ok)");
+    $(valId).innerHTML = `<span style="color:${col}">${fmtBytes(info.free_bytes)} 여유</span>`
+      + ` <span style="color:var(--muted)">/ ${fmtBytes(info.total_bytes)} (${pct}% 사용)</span>`;
+    $(rowId).style.display = "flex";
+  }
+  _renderDisk("dbDiskRow", "dbDisk", ld.db);
+  _renderDisk("logDiskRow", "logDisk", ld.log);
 
   // 자원
   const L = rs.latest;

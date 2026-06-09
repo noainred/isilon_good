@@ -124,6 +124,10 @@ class Scanner:
         self._worker_dirs = {}   # 워커 인덱스 → 현재 보고 있는 디렉터리(병렬 표시용)
         self._last_progress = 0.0
         self._last_wal_ckpt = 0.0
+        # 재개 시간 추적: elapsed_accum=모든 세션 누적 '활성' 시간(일시정지 갭 제외),
+        # _elapsed_mark=마지막으로 누적한 시각(kill -9 에도 마지막 flush 까지 보존).
+        self._elapsed_accum = 0.0
+        self._elapsed_mark = 0.0
         self._mgr_conn = None
         self._phase = "discovering"
         self._status = "discovering"
@@ -177,6 +181,11 @@ class Scanner:
         if not force and (now - self._last_progress) < self.progress_every:
             return
         self._last_progress = now
+        # 활성 작업 시간 누적(마지막 flush 이후 경과분). 일시정지 중엔 flush 가 없어
+        # 멈추고, kill -9 에도 마지막 flush 까지는 보존된다.
+        if self._elapsed_mark:
+            self._elapsed_accum += max(0.0, now - self._elapsed_mark)
+        self._elapsed_mark = now
         fields = {
             "discovered_dirs": self._discovered,
             "processed_dirs": self._processed,
@@ -184,6 +193,7 @@ class Scanner:
             "total_files": self._total_files,
             "error_dirs": self._error_dirs,
             "active_workers": self._disc_active,   # 지금 동시에 처리 중인 워커 수
+            "elapsed_accum": self._elapsed_accum,
         }
         try:   # 워커별 현재 디렉터리(병렬 표시용). 탐색 단계에서만 채워짐.
             fields["worker_dirs"] = json.dumps(
@@ -291,10 +301,14 @@ class Scanner:
                     backend=self.backend, size_mode=self.size_mode,
                     scanner_pid=os.getpid(),
                 )
+            # 이번 세션(재시작) 시작 시각 기록 + 누적 시간 마크 초기화.
+            # (재개면 _load_progress 가 이미 elapsed_accum 을 복원했고, 갭은 안 센다)
+            self._elapsed_mark = time.time()
             dbmod.update_run(
                 conn, self.run_id,
                 fs_total_bytes=total, fs_used_bytes=used, fs_free_bytes=free,
                 workers=self.workers,   # 설정된 동시 스캔 스레드 수(병렬도)
+                session_started_at=self._elapsed_mark,
                 # 마운트 읽기전용(ro) 여부 — 검사 끔이면 -1(확인 안 함)
                 mount_readonly=(int(self._is_readonly()) if self.check_readonly else -1),
             )
@@ -370,6 +384,10 @@ class Scanner:
         self._scanned_bytes = int(row["b"])
         self._total_files = int(row["f"])
         self._error_dirs = int(row["e"])
+        # 이전 세션들의 누적 활성 시간 복원(이번 세션은 그 위에 더해진다)
+        r2 = conn.execute(
+            "SELECT elapsed_accum FROM scan_runs WHERE id=?", (self.run_id,)).fetchone()
+        self._elapsed_accum = float(r2["elapsed_accum"] or 0) if r2 else 0.0
 
     def _safe_stat(self, entry):
         try:
@@ -388,15 +406,21 @@ class Scanner:
         self._status = status
         self._phase = status
         self._current_dir = None
+        now = time.time()
+        # 종료 시 마지막 활성 시간 확정 누적
+        if self._elapsed_mark:
+            self._elapsed_accum += max(0.0, now - self._elapsed_mark)
+        self._elapsed_mark = now
         fields = dict(
             status=status, phase=status,
-            finished_at=time.time(),
+            finished_at=now,
             discovered_dirs=self._discovered,
             total_dirs=self._discovered,
             processed_dirs=self._processed,
             scanned_bytes=self._scanned_bytes,
             total_files=self._total_files,
             error_dirs=self._error_dirs,
+            elapsed_accum=self._elapsed_accum,
             current_dir=None,
         )
         if self._stop_reason:   # 디스크 부족 등으로 자동 정지된 경우 사유 기록
