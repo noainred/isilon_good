@@ -146,13 +146,15 @@ def benchmark_workers(sample_path: str, candidates=None, budget_sec: float = 5.0
     mem_factor = max(1.1, min(8.0, mem_factor))
     cands = _normalize_candidates(candidates)
 
-    base_rss = max(1, _self_rss())   # 메모리 2배 판정 기준(시작 시점)
-
-    # 워밍업: 캐시 상태를 비슷하게 맞춰 후보 간 공정성을 높인다(결과는 버림).
+    # 메모리 2배 판정 '기준'은 '유휴 RSS'가 아니라 '한 번 스캔했을 때의 메모리'로 잡는다.
+    # (유휴 기준이면 첫 측정만으로도 2배를 넘어 8 스레드에서 멈춰버린다.)
+    base_rss = None
     if warmup and not (stop_event is not None and stop_event.is_set()):
         if progress_cb:
             progress_cb("warmup", None)
-        _probe(sample_path, cands[0], min(budget_sec, 3.0), stop_event)
+        wp = _probe(sample_path, cands[0], min(budget_sec, 3.0), stop_event)
+        if wp:
+            base_rss = max(1, wp["peak_rss_bytes"])   # 첫 후보 스캔의 메모리 = 기준(×1.0)
 
     results = []
     mem_hit = False
@@ -164,8 +166,11 @@ def benchmark_workers(sample_path: str, candidates=None, budget_sec: float = 5.0
         r = _probe(sample_path, w, budget_sec, stop_event)
         if r is None:
             continue
+        if base_rss is None:           # 워밍업 없으면 첫 실측을 기준으로
+            base_rss = max(1, r["peak_rss_bytes"])
         r["mem_ratio"] = round(r["peak_rss_bytes"] / base_rss, 2)
-        if r["mem_ratio"] >= mem_factor:
+        # 메모리 2배 도달 시 중단(단, 최소 1개 후보는 측정 후에만 — 8 에서 막히지 않게)
+        if r["mem_ratio"] >= mem_factor and len(results) >= 1:
             r["mem_stop"] = True
             mem_hit = True
         results.append(r)
@@ -196,7 +201,7 @@ def benchmark_workers(sample_path: str, candidates=None, budget_sec: float = 5.0
         "ok": True,
         "sample_path": sample_path,
         "budget_sec": budget_sec,
-        "base_rss_bytes": base_rss,
+        "base_rss_bytes": int(base_rss or 0),
         "mem_factor": mem_factor,
         "candidates": cands,
         "results": results,
