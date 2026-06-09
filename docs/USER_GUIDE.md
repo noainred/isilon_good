@@ -287,11 +287,16 @@ python3 -m isilon_usage resume <scan_id> --data-dir DIR
 ```bash
 python3 -m isilon_usage tune                 # native(기본)
 python3 -m isilon_usage tune --backend du     # du 백엔드 기준
+# 실측 보정: 실제 경로에서 후보 스레드로 짧게 시범 탐색해 처리량 비교
+python3 -m isilon_usage tune --benchmark /mnt/hadoop --candidates 8,16,32 --budget 5
 ```
 서버의 논리 CPU 수·가용 메모리를 보고 권장 스레드 수와 근거를 출력합니다. native
 스캔은 NFS I/O 대기가 대부분이라 코어 수보다 많은 스레드(≈코어×4)가 유리하고,
-du 백엔드는 코어 수 근처가 적당합니다. 대시보드 설정 화면의 **'서버 사양 기반 권장
-계산'** 버튼으로도 같은 값을 계산해 바로 적용할 수 있습니다.
+du 백엔드는 코어 수 근처가 적당합니다. `--benchmark` 를 주면 실제 경로에서 후보
+스레드 수로 **짧게 시범 탐색**해 초당 처리량을 비교하고 실측 권장값을 알려줍니다
+(같은 경로를 반복 탐색하므로 NFS 캐시 영향이 있는 추정치 — 대표 하위 경로에서,
+다른 스캔이 없을 때 측정 권장). 대시보드 설정 화면의 **'서버 사양 기반 권장 계산'**
+/ **'실측 보정(시범 스캔)'** 버튼으로도 같은 값을 계산해 바로 적용할 수 있습니다.
 
 ### `version` / `--version` — 버전·환경 정보
 ```bash

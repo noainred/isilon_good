@@ -212,9 +212,9 @@
   </div>
 
   <!-- 스토리지 어레이 상태(아이실론 OneFS / Dell PowerStore) -->
-  <div class="card" id="storageCard" style="margin-bottom:14px;">
+  <div class="card" id="storageCard" style="margin-bottom:14px; display:none;">
     <h2>스토리지 어레이 상태 (Isilon / PowerStore)</h2>
-    <div id="storageBody" class="sub">설정에서 아이실론·PowerStore 주소·계정을 입력하면 표시됩니다.</div>
+    <div id="storageBody" class="sub"></div>
   </div>
 
   <!-- 전체 용량 관리 개요 -->
@@ -357,7 +357,9 @@
         <label>동시 스캔 스레드(디렉터리 병렬, NFS 가속)
           <input id="setWorkers" type="number" min="1" max="64" class="setinput" />
           <button type="button" id="tuneBtn" class="btn" style="margin-top:4px;">서버 사양 기반 권장 계산</button>
+          <button type="button" id="benchBtn" class="btn" style="margin-top:4px;">실측 보정(시범 스캔)</button>
           <span id="tuneResult" class="sub" style="display:block; margin-top:4px;"></span>
+          <span id="benchResult" class="sub" style="display:block; margin-top:4px;"></span>
         </label>
         <label>깊이 접기 N(0=끔) — 추천: N까지만 저장·아래는 용량만 합산(합계 정확)
           <input id="setFoldDepth" type="number" min="0" max="100000" class="setinput" />
@@ -850,6 +852,45 @@ async function tuneWorkers() {
     });
   } catch (e) {
     out.textContent = "권장값 계산 오류: " + e;
+  }
+}
+
+async function tuneBenchmark() {
+  const out = $("benchResult");
+  const path = ($("scanPath") && $("scanPath").value.trim()) || "";
+  out.innerHTML = '<span style="color:var(--warn)">시범 탐색 측정 중… (후보 8/16/32 × 약 5초 + 워밍업, 20~30초 소요)</span>';
+  try {
+    const j = await (await fetch("/api/benchmark-workers", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(path ? {path: path} : {}),
+    })).json();
+    if (!j.ok) { out.innerHTML = '<span style="color:var(--danger)">실측 실패: ' + (j.error || "") + '</span>'; return; }
+    let rows = (j.results || []).map(r => {
+      const best = (r.workers === j.recommended);
+      return `<tr style="${best ? 'color:var(--ok);font-weight:700' : ''}">`
+        + `<td style="text-align:right;padding:1px 8px">${r.workers}</td>`
+        + `<td style="text-align:right;padding:1px 8px">${fmtNum(r.discovered)}</td>`
+        + `<td style="text-align:right;padding:1px 8px">${r.elapsed}s</td>`
+        + `<td style="text-align:right;padding:1px 8px">${fmtNum(r.dirs_per_sec)}/s</td>`
+        + `<td style="padding:1px 6px">${best ? "◀ 권장" : ""}</td></tr>`;
+    }).join("");
+    out.innerHTML =
+      `대상: <span class="mono">${j.sample_path}</span><br>`
+      + `<table style="border-collapse:collapse;margin:4px 0"><tr style="color:var(--muted)">`
+      + `<td style="padding:1px 8px">스레드</td><td style="padding:1px 8px">탐색 디렉터리</td>`
+      + `<td style="padding:1px 8px">소요</td><td style="padding:1px 8px">초당</td><td></td></tr>${rows}</table>`
+      + `<b style="color:var(--ok)">실측 권장 ${j.recommended} 스레드</b> `
+      + `<a href="#" id="benchApply" style="color:var(--accent2)">→ 이 값 적용</a><br>`
+      + `<span style="color:var(--muted)">${j.note}</span>`;
+    const ap = $("benchApply");
+    if (ap) ap.addEventListener("click", (e) => {
+      e.preventDefault();
+      $("setWorkers").value = j.recommended;
+      if (!$("setBackend").disabled) $("saveSettingsBtn").disabled = false;
+      out.innerHTML += ' <span style="color:var(--ok)">✓ 적용됨(저장 필요)</span>';
+    });
+  } catch (e) {
+    out.innerHTML = '<span style="color:var(--danger)">실측 오류: ' + e + '</span>';
   }
 }
 
@@ -1569,10 +1610,11 @@ async function loadStorage() {
   try {
     const j = await (await fetch("/api/storage", {cache: "no-store"})).json();
     const arrays = (j.arrays || []).filter(a => a && a.configured !== false);
+    const card = $("storageCard");
     const el = $("storageBody");
-    if (!el) return;
-    el.innerHTML = arrays.length ? arrays.map(renderArrayHtml).join("")
-      : '<span class="sub">미설정 — “⚙ 설정”에서 아이실론/PowerStore 주소·계정을 입력하세요.</span>';
+    // 설정된 스토리지가 하나도 없으면 카드 자체를 숨긴다(설정하면 다시 나타남).
+    if (card) card.style.display = arrays.length ? "" : "none";
+    if (el && arrays.length) el.innerHTML = arrays.map(renderArrayHtml).join("");
   } catch (e) { /* 무시 */ }
 }
 
@@ -1856,6 +1898,7 @@ $("startBtn").addEventListener("click", startScan);
 $("saveSettingsBtn").addEventListener("click", saveSettings);
 $("reloadSettingsBtn").addEventListener("click", loadSettings);
 $("tuneBtn").addEventListener("click", tuneWorkers);
+$("benchBtn").addEventListener("click", tuneBenchmark);
 // 디스크 사용량 파이: 캔버스 슬라이스 클릭(히트테스트) · 루트로
 $("pieChart").addEventListener("click", (e) => {
   const canvas = $("pieChart");

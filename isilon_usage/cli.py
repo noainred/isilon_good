@@ -407,6 +407,30 @@ def cmd_tune(args: argparse.Namespace) -> int:
     print("=" * 56)
     print(f"  적용 예) python -m isilon_usage serve --workers {rec['recommended']}")
     print(f"          또는 설정 화면의 '동시 스캔 스레드'를 {rec['recommended']} 로 저장")
+
+    # --benchmark: 실제 경로에서 후보 스레드 수로 짧게 시범 탐색해 처리량 비교
+    if getattr(args, "benchmark", None):
+        from . import tuning as tunmod
+        cands = None
+        if args.candidates:
+            cands = [c for c in args.candidates.split(",") if c.strip()]
+        print("\n실측 보정(시범 탐색) — 잠시 측정합니다…")
+        print(f"  대상   : {os.path.abspath(args.benchmark)}")
+        bench = tunmod.benchmark_workers(
+            args.benchmark, candidates=cands, budget_sec=args.budget)
+        if not bench.get("ok"):
+            print(f"  실패: {bench.get('error')}", file=sys.stderr)
+            return 2
+        print("-" * 56)
+        print("  스레드 | 탐색 디렉터리 | 소요(s) | 초당 디렉터리")
+        for r in bench["results"]:
+            mark = " ◀ 권장" if r["workers"] == bench["recommended"] else ""
+            print("  %6d | %12d | %7.2f | %12.1f%s" % (
+                r["workers"], r["discovered"], r["elapsed"],
+                r["dirs_per_sec"], mark))
+        print("-" * 56)
+        print(f"  ▶ 실측 권장 스레드 : {bench['recommended']}")
+        print(f"  {bench['note']}")
     return 0
 
 
@@ -486,6 +510,12 @@ def build_parser() -> argparse.ArgumentParser:
     ptu = sub.add_parser("tune", help="서버 사양을 보고 권장 동시 스캔 스레드 수 계산")
     ptu.add_argument("--backend", choices=["native", "du"], default="native",
                      help="대상 백엔드(기본: native)")
+    ptu.add_argument("--benchmark", metavar="PATH", default=None,
+                     help="이 경로에서 후보 스레드 수로 짧게 시범 탐색해 실측 처리량 비교")
+    ptu.add_argument("--candidates", default=None,
+                     help="시범할 스레드 후보(쉼표, 기본 8,16,32)")
+    ptu.add_argument("--budget", type=float, default=5.0,
+                     help="후보당 측정 시간(초, 기본 5)")
     ptu.set_defaults(func=cmd_tune)
 
     ppo = sub.add_parser("portal", help="글로벌 통합 포탈(HQ) — 여러 DC 를 한 화면에서 조망")

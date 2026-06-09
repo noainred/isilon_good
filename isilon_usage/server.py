@@ -656,6 +656,25 @@ class ScanController:
                            + ", ".join(self.mount_bases))
         return True, None
 
+    # ----- 실측 워커 보정(시범 탐색) -----
+    def benchmark_workers(self, *, path=None, candidates=None, budget=5.0) -> dict:
+        """대상 경로에서 후보 스레드 수로 짧게 시범 탐색해 처리량을 비교한다."""
+        from . import tuning as tunmod
+        if not path:
+            path = self.mount_bases[0] if self.mount_bases else None
+        if not path:
+            return {"ok": False, "error": "측정할 경로를 지정하세요(허용 경로 없음)."}
+        ok, why = self.path_allowed(path)
+        if not ok:
+            return {"ok": False, "error": why}
+        if isinstance(candidates, str):
+            candidates = [c for c in candidates.split(",") if c.strip()]
+        try:
+            budget = float(budget)
+        except (TypeError, ValueError):
+            budget = 5.0
+        return tunmod.benchmark_workers(path, candidates=candidates, budget_sec=budget)
+
     # ----- 시작 -----
     def start_scan(self, path: str, *, backend=None, size_mode=None,
                    one_file_system=None) -> dict:
@@ -1330,6 +1349,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     one_file_system=None if ofs is None else bool(ofs),
                 )
                 self._send_json(result, status=200 if result.get("ok") else 400)
+                return
+
+            if path == "/api/benchmark-workers":
+                # 후보 스레드 수로 짧게 시범 탐색(블로킹 ~수십 초, 스레드 서버라 무방)
+                res = self.controller.benchmark_workers(
+                    path=(body.get("path") or "").strip() or None,
+                    candidates=body.get("candidates"),
+                    budget=body.get("budget", 5.0),
+                )
+                self._send_json(res, status=200 if res.get("ok") else 400)
                 return
 
             if path in ("/api/scan/stop", "/api/scan/resume", "/api/scan/delete"):

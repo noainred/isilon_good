@@ -164,6 +164,14 @@ def main() -> int:
         # 서버 사양 기반 권장 스레드 계산
         rw = c.get("/api/recommend-workers")
         assert rw["ok"] and 1 <= rw["min"] <= rw["recommended"] <= rw["max"] <= 64, rw
+
+        # 실측 보정(시범 탐색) — 작은 후보/예산으로 빠르게
+        bw = c.post("/api/benchmark-workers", {"path": root, "candidates": "1,2", "budget": 1})
+        assert bw["ok"] and bw["recommended"] in (1, 2), bw
+        assert len(bw["results"]) >= 1 and all(r["dirs_per_sec"] >= 0 for r in bw["results"]), bw
+        # 허용 경로 밖은 거부
+        bad = c.post("/api/benchmark-workers", {"path": "/etc", "budget": 1})
+        assert not bad["ok"], bad
         assert rw["cpu_count"] >= 1 and rw["rationale"], rw
 
         # 스캔 2 → diff
