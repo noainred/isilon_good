@@ -389,6 +389,27 @@ def cmd_version(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tune(args: argparse.Namespace) -> int:
+    specs = monmod.system_specs()
+    rec = monmod.recommend_workers(specs, backend=args.backend)
+    print("서버 사양 기반 권장 동시 스캔 스레드 수")
+    print("=" * 56)
+    print(f"  논리 CPU    : {specs['cpu_count']} 개")
+    print(f"  메모리      : 총 {_human(specs['mem_total_bytes'])} / "
+          f"가용 {_human(specs['mem_avail_bytes'])}")
+    print(f"  자원 수집   : {'psutil' if specs.get('have_psutil') else '/proc 폴백'}")
+    print(f"  백엔드      : {rec['backend']}")
+    print("-" * 56)
+    print(f"  ▶ 권장 스레드 : {rec['recommended']}  (범위 {rec['min']}–{rec['max']})")
+    print(f"  근거        : {rec['rationale']}")
+    for n in rec["notes"]:
+        print(f"   · {n}")
+    print("=" * 56)
+    print(f"  적용 예) python -m isilon_usage serve --workers {rec['recommended']}")
+    print(f"          또는 설정 화면의 '동시 스캔 스레드'를 {rec['recommended']} 로 저장")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="isilon_usage",
@@ -461,6 +482,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     pvr = sub.add_parser("version", help="버전/환경 정보 출력")
     pvr.set_defaults(func=cmd_version)
+
+    ptu = sub.add_parser("tune", help="서버 사양을 보고 권장 동시 스캔 스레드 수 계산")
+    ptu.add_argument("--backend", choices=["native", "du"], default="native",
+                     help="대상 백엔드(기본: native)")
+    ptu.set_defaults(func=cmd_tune)
 
     ppo = sub.add_parser("portal", help="글로벌 통합 포탈(HQ) — 여러 DC 를 한 화면에서 조망")
     ppo.add_argument("--data-dir", default="isilon_portal_data",

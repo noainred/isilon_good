@@ -81,6 +81,24 @@ def _parse_worker_dirs(s):
         return []
 
 
+def _db_disk_usage(db_path: str) -> dict:
+    """per-run DB 의 디스크 사용량(.db + -wal + -shm)을 바이트로 반환.
+
+    이 값이 폴링마다 커지면 스캐너가 실제로 DB 에 쓰는 중(=살아있음)이라는
+    구체적 지표가 된다. db_max_gb 한도와 함께 보면 DB 폭증도 감지할 수 있다.
+    """
+    def _sz(p):
+        try:
+            return os.path.getsize(p)
+        except OSError:
+            return 0
+    db = _sz(db_path)
+    wal = _sz(db_path + "-wal")
+    shm = _sz(db_path + "-shm")
+    return {"db_bytes": db, "wal_bytes": wal, "shm_bytes": shm,
+            "total_bytes": db + wal + shm}
+
+
 def _public_settings(s: dict) -> dict:
     """화면/응답용 설정 — 비밀번호는 노출하지 않고 설정 여부만 알린다."""
     out = dict(s)
@@ -985,6 +1003,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "arrays": arrays})
                 return
 
+            if path == "/api/recommend-workers":
+                # 서버 사양(CPU/메모리)을 보고 권장 동시 스캔 스레드 수를 계산.
+                specs = monmod.system_specs()
+                backend = (self._current_settings() or {}).get("default_backend", "native")
+                rec = monmod.recommend_workers(specs, backend=backend)
+                rec["ok"] = True
+                self._send_json(rec)
+                return
+
             if path == "/api/settings":
                 self._send_json({
                     "ok": True,
@@ -1052,6 +1079,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     pconn.close()
                 payload["scan_id"] = scan_id
                 payload["scan_meta"] = scan_meta
+                # DB 디스크 사용량 + 한도 — 'DB 살아있는지' 지표로 요약에 표시
+                payload["db_usage"] = _db_disk_usage(db_path)
+                _st = self._current_settings() or {}
+                payload["db_usage"]["limit_bytes"] = (
+                    int(_st.get("db_max_gb", 0) or 0) * (1024 ** 3))
                 self._send_json(payload)
                 return
 

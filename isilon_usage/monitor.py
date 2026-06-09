@@ -317,3 +317,80 @@ class ResourceMonitor(threading.Thread):
 
 def have_psutil() -> bool:
     return _HAVE_PSUTIL
+
+
+def system_specs() -> dict:
+    """서버 사양(논리 CPU 수, 총/가용 메모리 바이트)을 반환."""
+    cpu = os.cpu_count() or 1
+    total = 0
+    avail = 0
+    if _HAVE_PSUTIL:
+        try:
+            vm = psutil.virtual_memory()
+            total = int(vm.total)
+            avail = int(vm.available)
+        except Exception:  # noqa: BLE001
+            total = 0
+    if not total:
+        t, used, _swap = _read_meminfo()
+        total = t
+        avail = max(0, t - used)
+    return {
+        "cpu_count": int(cpu),
+        "mem_total_bytes": int(total),
+        "mem_avail_bytes": int(avail),
+        "have_psutil": _HAVE_PSUTIL,
+    }
+
+
+def recommend_workers(specs: dict, backend: str = "native") -> dict:
+    """서버 사양 기반 '권장 동시 스캔 스레드 수'를 계산해 근거와 함께 반환.
+
+    이 스캔의 병목은 CPU 가 아니라 NFS 메타데이터 I/O(scandir/stat) 대기다.
+    스레드가 syscall 로 대기하는 동안 GIL 이 풀리므로, native 백엔드는 코어
+    수보다 많은 스레드가 '동시 진행 중 RPC 수'를 늘려 처리량을 키운다. 반대로
+    du 백엔드는 디렉터리마다 du 프로세스를 띄워 CPU·프로세스 부하가 커서 코어
+    수 근처가 적당하다. 실제 최적값은 NAS/네트워크/지연에 따라 달라지므로 이
+    값은 '권장 출발점'이며, 대시보드 처리량을 보며 ±조정하는 것을 권한다.
+    """
+    cores = max(1, int(specs.get("cpu_count") or 1))
+    avail_gb = (specs.get("mem_avail_bytes") or 0) / (1024 ** 3)
+    hard_cap = 64  # settings 의 scan_workers 상한과 일치
+    if backend == "du":
+        base = cores * 2
+        lo = cores
+        hi = cores * 3
+        why = ("du 백엔드는 디렉터리마다 du 프로세스를 띄워 CPU·프로세스 부하가 "
+               "커서 코어 수 근처가 적당합니다.")
+    else:
+        base = cores * 4
+        lo = max(8, cores * 2)
+        hi = cores * 6
+        why = ("native 스캔은 NFS 메타데이터 I/O 대기가 대부분이라(대기 중 GIL 이 "
+               "풀림) 코어 수보다 많은 스레드가 동시 RPC 를 늘려 더 빨라집니다.")
+    # 메모리 가드: 스레드당 약 16MB(스택+버퍼) 여유로 잡아 가용 메모리로 상한을 둔다.
+    mem_cap = int(avail_gb * 1024 / 16) if avail_gb > 0 else hard_cap
+    mem_cap = max(1, mem_cap)
+    eff_cap = min(hard_cap, mem_cap)           # 설정 상한 + 메모리 상한
+    lo = max(1, min(lo, eff_cap))
+    hi = max(lo, min(hi, eff_cap))
+    rec = max(1, min(max(base, lo), hi, eff_cap))   # base 를 [lo, hi]·상한 안으로
+    notes = []
+    if mem_cap < hard_cap:
+        notes.append("가용 메모리가 적어 메모리 기준으로 상한을 %d 로 낮췄습니다." % mem_cap)
+    if rec >= hard_cap:
+        notes.append("설정 상한(64)에 도달했습니다. 더 높이려면 NAS·네트워크 여력을 "
+                     "먼저 확인하세요.")
+    notes.append("실제 최적값은 NAS/네트워크에 따라 다릅니다. 이 값으로 시작해 "
+                 "처리량(초당 디렉터리)을 보며 조정하세요.")
+    return {
+        "recommended": int(rec),
+        "min": int(max(1, lo)),
+        "max": int(min(hi, hard_cap)),
+        "backend": backend,
+        "cpu_count": cores,
+        "mem_total_bytes": int(specs.get("mem_total_bytes") or 0),
+        "mem_avail_bytes": int(specs.get("mem_avail_bytes") or 0),
+        "rationale": why,
+        "notes": notes,
+    }

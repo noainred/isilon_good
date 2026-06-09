@@ -98,6 +98,10 @@ def main() -> int:
         assert d1["run"]["status"] == "done"
         assert d1["run"]["total_files"] == 4, d1["run"]["total_files"]
         assert isinstance(d1["run"]["mount_readonly"], bool), d1["run"]  # 상태에도 노출
+        # DB 생존 지표: per-run DB 사용량(.db+WAL)이 상태에 포함되어야 함
+        du = d1.get("db_usage")
+        assert du and du["db_bytes"] > 0 and du["total_bytes"] >= du["db_bytes"], du
+        assert "limit_bytes" in du, du
 
         # 드릴다운: 루트 → 자식
         ch = c.get(f"/api/children?scan={s1}")
@@ -156,6 +160,11 @@ def main() -> int:
         up = c.post("/api/settings", {"settings": {"top_n": 3, "scan_workers": 2, "check_readonly": False}})
         assert up["ok"] and up["settings"]["top_n"] == 3 and up["settings"]["scan_workers"] == 2
         assert up["settings"]["check_readonly"] is False, up["settings"]
+
+        # 서버 사양 기반 권장 스레드 계산
+        rw = c.get("/api/recommend-workers")
+        assert rw["ok"] and 1 <= rw["min"] <= rw["recommended"] <= rw["max"] <= 64, rw
+        assert rw["cpu_count"] >= 1 and rw["rationale"], rw
 
         # 스캔 2 → diff
         r2 = c.post("/api/scan/start", {"path": root})

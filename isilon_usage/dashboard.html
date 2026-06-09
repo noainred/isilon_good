@@ -356,6 +356,8 @@
         </label>
         <label>동시 스캔 스레드(디렉터리 병렬, NFS 가속)
           <input id="setWorkers" type="number" min="1" max="64" class="setinput" />
+          <button type="button" id="tuneBtn" class="btn" style="margin-top:4px;">서버 사양 기반 권장 계산</button>
+          <span id="tuneResult" class="sub" style="display:block; margin-top:4px;"></span>
         </label>
         <label>깊이 접기 N(0=끔) — 추천: N까지만 저장·아래는 용량만 합산(합계 정확)
           <input id="setFoldDepth" type="number" min="0" max="100000" class="setinput" />
@@ -565,6 +567,8 @@
       <div class="kv"><span class="k">단계</span><span class="v" id="phaseTxt">—</span></div>
       <div class="kv" id="mountRoRow"><span class="k">마운트 상태</span><span class="v" id="mountRo">—</span></div>
       <div class="kv" id="heartbeatRow"><span class="k">진행 갱신(하트비트)</span><span class="v" id="heartbeat">—</span></div>
+      <div class="kv" id="dbSizeRow"><span class="k">DB 크기(생존 지표)</span><span class="v" id="dbSize">—</span></div>
+      <div class="kv" id="dbDetailRow"><span class="k">DB 구성 · 한도</span><span class="v" id="dbDetail">—</span></div>
       <div class="kv"><span class="k">탐색된 디렉터리</span><span class="v" id="discovered">0</span></div>
       <div class="kv"><span class="k">집계 완료 디렉터리</span><span class="v" id="processed">0</span></div>
       <div class="kv"><span class="k">총 파일 수</span><span class="v" id="totalFiles">0</span></div>
@@ -717,6 +721,7 @@ let mountBases = [];
 
 // "지금 조사 중인 디렉터리" — 워커별 현재 디렉터리 표시(모두/N개는 사용자 지정)
 let _lastWD = [], _lastCur = null, _lastStatus = null;
+let _lastDbTotal = 0, _lastDbScan = null;   // DB 생존 지표(증감) 추적용
 function renderCurrentDir() {
   const wd = (_lastWD || []).filter(Boolean);
   const all = $("showAllWorkers") ? $("showAllWorkers").checked : true;
@@ -822,6 +827,30 @@ async function loadSettings() {
       ` <span class="sub">(host·port·data-dir 는 실행 시 고정이라 읽기 전용)</span>`;
     settingsLoaded = true;
   } catch (e) { /* 무시 */ }
+}
+
+async function tuneWorkers() {
+  const out = $("tuneResult");
+  out.textContent = "서버 사양 확인 중…";
+  try {
+    const j = await fetchJsonTimeout("/api/recommend-workers", 8000);
+    if (!j.ok) { out.textContent = "권장값 계산 실패"; return; }
+    const memT = fmtBytes(j.mem_total_bytes), memA = fmtBytes(j.mem_avail_bytes);
+    out.innerHTML =
+      `<b style="color:var(--ok)">권장 ${j.recommended} 스레드</b> (범위 ${j.min}–${j.max}) · ` +
+      `CPU ${j.cpu_count}코어 · 메모리 ${memA}/${memT} · 백엔드 ${j.backend}<br>` +
+      `<span style="color:var(--muted)">${j.rationale}</span> ` +
+      `<a href="#" id="tuneApply" style="color:var(--accent2)">→ 이 값 적용</a>`;
+    const ap = $("tuneApply");
+    if (ap) ap.addEventListener("click", (e) => {
+      e.preventDefault();
+      $("setWorkers").value = j.recommended;
+      if (!$("setBackend").disabled) $("saveSettingsBtn").disabled = false;
+      out.innerHTML += ' <span style="color:var(--ok)">✓ 적용됨(저장 필요)</span>';
+    });
+  } catch (e) {
+    out.textContent = "권장값 계산 오류: " + e;
+  }
 }
 
 async function saveSettings() {
@@ -1622,6 +1651,43 @@ function render(d) {
     }
   }
 
+  // DB 크기(생존 지표): 현재 쓰는 per-run DB(.db + WAL) 사용량.
+  // 폴링마다 값이 커지면 스캐너가 실제로 쓰는 중 = 살아있음.
+  const _du = data.db_usage;
+  const _dsz = $("dbSize"), _ddt = $("dbDetail");
+  if (_du && _dsz && _ddt) {
+    const total = Number(_du.total_bytes) || 0;
+    const sameScan = (_lastDbScan === data.scan_id);
+    const delta = sameScan ? (total - _lastDbTotal) : 0;
+    _lastDbScan = data.scan_id; _lastDbTotal = total;
+    const running = (r.status === "discovering" || r.status === "sizing");
+    let trend = "";
+    if (running) {
+      if (delta > 0)
+        trend = ` <span style="color:var(--ok)">🟢 증가 중 (+${fmtBytes(delta)})</span>`;
+      else if (delta < 0)
+        trend = ` <span style="color:var(--ok)">🟢 활성 (WAL 정리 ${fmtBytes(-delta)}↓)</span>`;
+      else
+        trend = ` <span style="color:var(--muted)">⚪ 변화 없음(멈춤이면 하트비트 확인)</span>`;
+    }
+    _dsz.innerHTML = `<b>${fmtBytes(total)}</b>` + trend;
+    let det = `.db ${fmtBytes(_du.db_bytes)} · WAL ${fmtBytes(_du.wal_bytes)}`;
+    const lim = Number(_du.limit_bytes) || 0;
+    if (lim > 0) {
+      const pct = Math.round(total / lim * 100);
+      const col = pct >= 80 ? "var(--danger)" : (pct >= 60 ? "var(--warn)" : "var(--muted)");
+      det += ` · 한도 ${fmtBytes(lim)} <span style="color:${col}">(${pct}%)</span>`;
+    } else {
+      det += ` · 한도 없음(설정에서 DB 최대 GB 지정 가능)`;
+    }
+    _ddt.innerHTML = det;
+    $("dbSizeRow").style.display = "flex";
+    $("dbDetailRow").style.display = "flex";
+  } else if (_dsz) {
+    $("dbSizeRow").style.display = "none";
+    $("dbDetailRow").style.display = "none";
+  }
+
   // 마운트 읽기전용(ro) 여부 — 설정(check_readonly)이 켜졌을 때만 표시
   if (r.readonly_checked) {
     $("mountRoRow").style.display = "flex";
@@ -1769,6 +1835,7 @@ $("startBtn").addEventListener("click", startScan);
 // 설정 카드
 $("saveSettingsBtn").addEventListener("click", saveSettings);
 $("reloadSettingsBtn").addEventListener("click", loadSettings);
+$("tuneBtn").addEventListener("click", tuneWorkers);
 // 디스크 사용량 파이: 캔버스 슬라이스 클릭(히트테스트) · 루트로
 $("pieChart").addEventListener("click", (e) => {
   const canvas = $("pieChart");
