@@ -166,6 +166,65 @@ def run_permission_case() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def run_fold_case(workers: int = 2) -> None:
+    """깊이 접기(fold_depth): N까지만 행 저장하되 합계는 무제한과 '정확히 동일'.
+
+    또 DB 크기 가드(db_max_bytes)가 자동 일시정지하는지도 확인한다.
+    """
+    tmp = tempfile.mkdtemp(prefix="isilon_fold_")
+    try:
+        root = os.path.join(tmp, "data")
+        _make_tree(root)   # root(0) → sub1(1) → deep(2), sub2(1)
+        exp_bytes, exp_files = _expected_disk_bytes(root)
+
+        # fold_depth=1: 행은 깊이 0·1 만, deep(2)은 sub1 own_bytes 로 접힘
+        db_path = os.path.join(tmp, "fold.db")
+        dbmod.init_db(db_path)
+        sc = Scanner(db_path, root, backend="native", batch_size=2,
+                     workers=workers, fold_depth=1)
+        run_id = sc.run()
+        conn = dbmod.connect(db_path)
+        try:
+            run = dbmod.get_run(conn, run_id)
+            assert run["status"] == "done", run["status"]
+            rr = conn.execute(
+                "SELECT total_bytes, total_files FROM directories "
+                "WHERE run_id=? AND parent_id IS NULL", (run_id,)).fetchone()
+            # 핵심: 접어도 합계는 무제한(정확값)과 같아야 한다
+            assert rr["total_bytes"] == exp_bytes, \
+                "접기 합계 불일치: %d != %d" % (rr["total_bytes"], exp_bytes)
+            assert rr["total_files"] == exp_files, \
+                "접기 파일수 불일치: %d != %d" % (rr["total_files"], exp_files)
+            ndirs = conn.execute(
+                "SELECT COUNT(*) c FROM directories WHERE run_id=?", (run_id,)).fetchone()["c"]
+            maxd = conn.execute(
+                "SELECT COALESCE(MAX(depth),0) d FROM directories WHERE run_id=?",
+                (run_id,)).fetchone()["d"]
+            assert ndirs == 3, "접기 후 디렉터리 수 %d != 3(root,sub1,sub2)" % ndirs
+            assert maxd == 1, "접기 후 최대 깊이 %d != 1" % maxd
+            print("[fold] OK  합계=%d(무제한과 동일) 파일=%d 행=%d 깊이=%d"
+                  % (rr["total_bytes"], rr["total_files"], ndirs, maxd))
+        finally:
+            conn.close()
+
+        # DB 크기 가드: 1바이트 한도 → 자동 일시정지 + 사유 기록
+        g_path = os.path.join(tmp, "guard.db")
+        dbmod.init_db(g_path)
+        scg = Scanner(g_path, root, backend="native", batch_size=2,
+                      workers=workers, db_max_bytes=1)
+        gid = scg.run()
+        gconn = dbmod.connect(g_path)
+        try:
+            grun = dbmod.get_run(gconn, gid)
+            assert grun["status"] == "paused", grun["status"]
+            assert grun["error"] and "DB 크기 초과" in grun["error"], grun["error"]
+            print("[db-guard] OK  자동 일시정지: %s" % grun["error"])
+        finally:
+            gconn.close()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main() -> int:
     run_case("native")
     run_case("native", workers=4)   # stat 동시 처리해도 결과 동일해야 함
@@ -173,6 +232,7 @@ def main() -> int:
         run_case("du")
     else:
         print("[du] 건너뜀 (du 명령 없음)")
+    run_fold_case()
     run_permission_case()
     print("모든 테스트 통과 ✅")
     return 0

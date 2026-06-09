@@ -686,6 +686,8 @@ class ScanController:
                     batch_size=self.batch_size, workers=self.workers,
                     check_readonly=bool(self.settings.get("check_readonly", True)),
                     max_depth=int(self.settings.get("scan_max_depth", 0) or 0),
+                    fold_depth=int(self.settings.get("fold_depth", 0) or 0),
+                    db_max_bytes=int(self.settings.get("db_max_gb", 0) or 0) * (1024 ** 3),
                     hardlink_dedup=bool(self.settings.get("hardlink_dedup", True)),
                     min_free_bytes=int(self.settings.get("min_free_gb", 0) or 0) * (1024 ** 3),
                     resume=resume, sample_interval=self.sample_interval,

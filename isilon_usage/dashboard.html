@@ -357,7 +357,13 @@
         <label>동시 스캔 스레드(디렉터리 병렬, NFS 가속)
           <input id="setWorkers" type="number" min="1" max="64" class="setinput" />
         </label>
-        <label>탐색 최대 깊이(0=무제한) — 거대 트리 DB 크기 제한
+        <label>깊이 접기 N(0=끔) — 추천: N까지만 저장·아래는 용량만 합산(합계 정확)
+          <input id="setFoldDepth" type="number" min="0" max="100000" class="setinput" />
+        </label>
+        <label>DB 최대 GB 초과 시 자동 일시정지(0=off)
+          <input id="setDbMaxGb" type="number" min="0" max="1000000" class="setinput" />
+        </label>
+        <label>탐색 최대 깊이(0=무제한, 빠른 컷) — 그 아래 용량은 합계에서 빠짐
           <input id="setMaxDepth" type="number" min="0" max="100000" class="setinput" />
         </label>
         <label>디스크 여유 GB 미만이면 자동 일시정지(0=off)
@@ -747,6 +753,8 @@ async function loadSettings() {
     $("setTopN").value = s.top_n;
     $("setRefresh").value = s.refresh_ms;
     $("setWorkers").value = s.scan_workers;
+    $("setFoldDepth").value = s.fold_depth || 0;
+    $("setDbMaxGb").value = s.db_max_gb || 0;
     $("setMaxDepth").value = s.scan_max_depth || 0;
     $("setMinFreeGb").value = s.min_free_gb || 0;
     $("setHardlink").value = String(s.hardlink_dedup !== false);
@@ -798,7 +806,7 @@ async function loadSettings() {
     // 편집 가능 여부
     $("settingsLockMsg").style.display = j.locked ? "block" : "none";
     ["setBackend","setSize","setOFS","setReadonly","setBatch","setSample","setTopN","setRefresh",
-     "setWorkers","setMaxDepth","setMinFreeGb","setHardlink","setRetention","setWebhook","setApiToken",
+     "setWorkers","setFoldDepth","setDbMaxGb","setMaxDepth","setMinFreeGb","setHardlink","setRetention","setWebhook","setApiToken",
      "setIsilonUrl","setIsilonUser","setIsilonPass","setIsilonVerify",
      "setPsUrl","setPsUser","setPsPass","setPsVerify",
      "arrType","arrName","arrUrl","arrUser","arrPass","arrVerify","arrAdd","setMounts","saveSettingsBtn",
@@ -828,6 +836,8 @@ async function saveSettings() {
     refresh_ms: parseInt($("setRefresh").value),
     scan_workers: parseInt($("setWorkers").value),
     scan_max_depth: parseInt($("setMaxDepth").value) || 0,
+    fold_depth: parseInt($("setFoldDepth").value) || 0,
+    db_max_gb: parseInt($("setDbMaxGb").value) || 0,
     min_free_gb: parseInt($("setMinFreeGb").value) || 0,
     hardlink_dedup: $("setHardlink").value === "true",
     retention_per_root: parseInt($("setRetention").value),

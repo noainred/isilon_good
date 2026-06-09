@@ -78,6 +78,8 @@ class Scanner:
         resume: bool = False,
         check_readonly: bool = True,
         max_depth: int = 0,
+        fold_depth: int = 0,
+        db_max_bytes: int = 0,
         hardlink_dedup: bool = True,
         min_free_bytes: int = 0,
         stop_event: Optional[threading.Event] = None,
@@ -96,7 +98,12 @@ class Scanner:
         self.resume = resume
         self.check_readonly = bool(check_readonly)
         # 초대용량(수십억 파일) 안전장치
-        self.max_depth = max(0, int(max_depth or 0))         # 0=무제한, N=그 깊이까지만 탐색
+        self.max_depth = max(0, int(max_depth or 0))         # 0=무제한, N=그 깊이까지만 탐색(깊은 용량 미포함·빠른 컷)
+        # 깊이 접기: 깊이 N 까지만 행을 저장하고, 그 아래는 내려가서 용량은 다 세되
+        # N 디렉터리의 own_bytes 에 합산한다 → DB 행 수(=크기) 묶임 + 합계 정확.
+        self.fold_depth = max(0, int(fold_depth or 0))       # 0=off
+        # DB 크기 가드: per-run DB(.db + -wal)가 이 바이트를 넘으면 자동 일시정지.
+        self.db_max_bytes = max(0, int(db_max_bytes or 0))   # 0=off
         self.hardlink_dedup = bool(hardlink_dedup)           # False 면 메모리 절약(하드링크 중복 셈)
         self.min_free_bytes = max(0, int(min_free_bytes or 0))  # 0=off. 데이터 디스크 여유가 이 미만이면 자동 일시정지
         self.stop_event = stop_event or threading.Event()
@@ -213,6 +220,21 @@ class Scanner:
                         self._stop_reason = (
                             "디스크 공간 부족(여유 %d < 기준 %d) — 자동 일시정지"
                             % (free, self.min_free_bytes))
+                        self.stop_event.set()
+                except OSError:
+                    pass
+            # DB 크기 가드: per-run DB(.db + -wal)가 한도를 넘으면 자동 일시정지.
+            # 체크포인트 직후라 -wal 이 작아져 '실제 영속 크기'에 가깝게 측정된다.
+            if self.db_max_bytes and not self.stop_event.is_set():
+                try:
+                    sz = os.path.getsize(self.db_path)
+                    wal = self.db_path + "-wal"
+                    if os.path.exists(wal):
+                        sz += os.path.getsize(wal)
+                    if sz > self.db_max_bytes:
+                        self._stop_reason = (
+                            "DB 크기 초과(%d > 기준 %d) — 자동 일시정지(깊이 접기 권장)"
+                            % (sz, self.db_max_bytes))
                         self.stop_event.set()
                 except OSError:
                     pass
@@ -535,6 +557,14 @@ class Scanner:
                         # 최대 깊이 제한(옵션): 그 아래는 탐색/저장하지 않아 DB 크기를 묶는다.
                         if self.max_depth and (depth + 1) > self.max_depth:
                             continue
+                        # 깊이 접기(옵션): 깊이 N 초과 디렉터리는 행을 만들지 않고,
+                        # 하위 전체 용량을 이 디렉터리 own_bytes 에 합산한다.
+                        # → DB 행 수(=크기)는 묶이고 상위 합계는 정확하다(상세만 N까지).
+                        if self.fold_depth and (depth + 1) > self.fold_depth:
+                            fb, ff = self._fold_subtree(entry.path)
+                            own_bytes += fb
+                            file_count += ff
+                            continue
                         children.append(
                             (self.run_id, dir_id, entry.path, entry.name, depth + 1))
                     else:
@@ -573,6 +603,78 @@ class Scanner:
                 self._maybe_update_depth(self._disc_conn, depth)
             self._flush_progress_locked(self._disc_conn,
                                         current_dir=path, current_depth=depth)
+
+    def _fold_subtree(self, root: str):
+        """fold_depth 초과 하위 트리를 '행 없이' walk 하여 (bytes, files) 합을 반환.
+
+        디렉터리 행을 만들지 않으므로 DB 가 커지지 않으면서, 용량/개수는 모두
+        세어 상위(깊이 N) own_bytes 에 합산된다 → 합계가 정확하다. scandir/stat 는
+        락 밖에서 하고, 공유 카운터/하드링크집합/진행 갱신만 _dlock 안에서 한다.
+        """
+        total_b = 0
+        total_f = 0
+        stack = [root]
+        while stack:
+            if self._stopped():
+                break
+            d = stack.pop()
+            ds = self._safe_stat_path(d)            # 디렉터리 자기 inode 분(du 동일)
+            if ds is not None:
+                total_b += _entry_bytes(ds, self.size_mode)
+            files_chunk: list = []
+            try:
+                with os.scandir(d) as it:           # I/O — 락 밖
+                    for entry in it:
+                        if self._stopped():
+                            break
+                        try:
+                            is_dir = entry.is_dir(follow_symlinks=False)
+                        except OSError:
+                            is_dir = False
+                        if is_dir:
+                            if self.one_file_system and self._root_dev is not None:
+                                try:
+                                    if entry.stat(follow_symlinks=False).st_dev != self._root_dev:
+                                        continue
+                                except OSError:
+                                    continue
+                            stack.append(entry.path)
+                        else:
+                            files_chunk.append(entry)
+                            if len(files_chunk) >= STAT_CHUNK:
+                                b, f = self._fold_flush(files_chunk, d)
+                                total_b += b
+                                total_f += f
+                                files_chunk = []
+                if files_chunk:
+                    b, f = self._fold_flush(files_chunk, d)
+                    total_b += b
+                    total_f += f
+            except OSError:
+                with self._dlock:
+                    self._error_dirs += 1
+        return total_b, total_f
+
+    def _fold_flush(self, entries: list, cur_dir: str):
+        """접기 walk 의 파일 청크: stat(락 밖) 후 _dlock 안에서 용량/하드링크/진행 갱신."""
+        stats = [self._safe_stat(e) for e in entries]   # I/O — 락 밖
+        cb = 0
+        cf = 0
+        with self._dlock:
+            for st in stats:
+                if st is None:
+                    continue
+                cf += 1
+                if self.hardlink_dedup and st.st_nlink > 1:
+                    key = (st.st_dev, st.st_ino)
+                    if key in self._seen_inodes:
+                        continue
+                    self._seen_inodes.add(key)
+                cb += _entry_bytes(st, self.size_mode)
+            self._scanned_bytes += cb
+            self._total_files += cf
+            self._flush_progress_locked(self._disc_conn, current_dir=cur_dir)
+        return cb, cf
 
     def _maybe_update_depth(self, conn, depth: int) -> None:
         # max_depth 는 가끔만 갱신해도 충분하다.
@@ -712,6 +814,8 @@ def run_scan(
     resume: bool = False,
     check_readonly: bool = True,
     max_depth: int = 0,
+    fold_depth: int = 0,
+    db_max_bytes: int = 0,
     hardlink_dedup: bool = True,
     min_free_bytes: int = 0,
     sample_interval: float = 2.0,
@@ -743,7 +847,8 @@ def run_scan(
         backend=backend, size_mode=size_mode,
         one_file_system=one_file_system, batch_size=batch_size,
         workers=workers, resume=resume, check_readonly=check_readonly,
-        max_depth=max_depth, hardlink_dedup=hardlink_dedup, min_free_bytes=min_free_bytes,
+        max_depth=max_depth, fold_depth=fold_depth, db_max_bytes=db_max_bytes,
+        hardlink_dedup=hardlink_dedup, min_free_bytes=min_free_bytes,
         stop_event=stop_event, monitor=monitor,
         manager_db=manager_db, manager_scan_id=manager_scan_id,
     )

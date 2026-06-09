@@ -51,7 +51,12 @@ def _add_scan_opts(p: argparse.ArgumentParser) -> None:
     p.add_argument("--workers", type=int, default=8,
                    help="동시 스캔 스레드 수(디렉터리 병렬, NFS 가속, 기본: %(default)s)")
     p.add_argument("--max-depth", type=int, default=0,
-                   help="탐색 최대 깊이(0=무제한). 거대 트리 DB 크기 제한용")
+                   help="탐색 최대 깊이(0=무제한, 빠른 컷). 그 아래 용량은 합계에서 빠짐")
+    p.add_argument("--fold-depth", type=int, default=0,
+                   help="깊이 접기(0=끔). 깊이 N까지만 행 저장, 그 아래는 용량만 N에 "
+                        "합산 → DB 크기 묶임 + 합계 정확(N 아래 디렉터리별 상세는 없음)")
+    p.add_argument("--db-max-gb", type=int, default=0,
+                   help="per-run DB(.db+-wal)가 이 GB 초과하면 자동 일시정지(0=끔)")
     p.add_argument("--min-free-gb", type=int, default=0,
                    help="데이터 디스크 여유가 이 GB 미만이면 자동 일시정지(0=끔). "
                         "DB/WAL 이 디스크를 채워 서버가 죽기 전에 안전하게 멈춘다")
@@ -108,6 +113,8 @@ def _run_server(args, *, initial_path: Optional[str]) -> int:
         "batch_size": args.batch_size,
         "scan_workers": getattr(args, "workers", 1),
         "scan_max_depth": getattr(args, "max_depth", 0),
+        "fold_depth": getattr(args, "fold_depth", 0),
+        "db_max_gb": getattr(args, "db_max_gb", 0),
         "min_free_gb": getattr(args, "min_free_gb", 0),
         "hardlink_dedup": not getattr(args, "no_hardlink_dedup", False),
         "sample_interval": args.sample_interval,
@@ -200,6 +207,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
         one_file_system=args.one_file_system,
         batch_size=args.batch_size, workers=args.workers,
         max_depth=args.max_depth,
+        fold_depth=args.fold_depth,
+        db_max_bytes=int(args.db_max_gb or 0) * (1024 ** 3),
         hardlink_dedup=not args.no_hardlink_dedup,
         min_free_bytes=int(args.min_free_gb or 0) * (1024 ** 3),
         sample_interval=args.sample_interval,
@@ -249,6 +258,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
         backend=row["backend"], size_mode=row["size_mode"],
         batch_size=s["batch_size"], workers=s["scan_workers"],
         max_depth=int(s.get("scan_max_depth", 0) or 0),
+        fold_depth=int(s.get("fold_depth", 0) or 0),
+        db_max_bytes=int(s.get("db_max_gb", 0) or 0) * (1024 ** 3),
         hardlink_dedup=bool(s.get("hardlink_dedup", True)),
         min_free_bytes=int(s.get("min_free_gb", 0) or 0) * (1024 ** 3),
         sample_interval=s["sample_interval"], resume=True,
