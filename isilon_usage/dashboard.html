@@ -131,6 +131,7 @@
     <button class="navbtn" data-view="analysis">디렉터리</button>
     <button class="navbtn" data-view="trends">추세·비교</button>
     <button class="navbtn" data-view="settings">⚙ 설정</button>
+    <button class="navbtn" data-view="gentest">🧪 테스트 데이터</button>
     <button class="navbtn" data-view="history">📖 버전 기록</button>
   </nav>
   <div class="spacer"></div>
@@ -662,6 +663,54 @@
   <h2 style="margin:0 0 14px;">⚙ 설정</h2>
 </div>
 
+<!-- 테스트 데이터 생성 페이지 -->
+<div class="wrap view" id="view-gentest" style="display:none;">
+  <h2 style="margin:0 0 8px;">🧪 테스트 데이터 생성</h2>
+  <div class="card">
+    <p class="sub" style="margin:0 0 12px;">스캐너 시험용 샘플 트리를 만듭니다.
+      대상 디렉터리 아래에 <b>N개 디렉터리</b> → 각각 <b>M개 하위 디렉터리</b> →
+      각 폴더에 <b>K개 파일</b>(크기 S)을 생성합니다.
+      <span style="color:var(--warn)">⚠ 실제로 파일을 씁니다 — 쓰기 가능한 경로를 지정하세요(읽기전용 NAS·시스템 경로 불가).</span></p>
+    <label style="display:block;">대상 디렉터리
+      <input id="gtPath" type="text" class="setinput mono" style="width:100%;"
+             placeholder="/data/iutest 처럼 쓰기 가능한 경로" />
+    </label>
+    <div class="setgrid" style="margin-top:10px;">
+      <label>디렉터리 수 (N)
+        <input id="gtDirs" type="number" min="1" max="100000" value="10" class="setinput" />
+      </label>
+      <label>하위 디렉터리 수 (각 N마다, M)
+        <input id="gtSub" type="number" min="0" max="100000" value="5" class="setinput" />
+      </label>
+      <label>각 폴더의 파일 수 (K)
+        <input id="gtFiles" type="number" min="0" max="100000" value="10" class="setinput" />
+      </label>
+      <label>파일 크기
+        <span style="display:flex; gap:6px;">
+          <input id="gtSize" type="number" min="0" step="1" value="4" class="setinput" style="flex:1;" />
+          <select id="gtUnit" class="optsel">
+            <option value="1">B</option>
+            <option value="1024" selected>KB</option>
+            <option value="1048576">MB</option>
+            <option value="1073741824">GB</option>
+          </select>
+        </span>
+      </label>
+    </div>
+    <div class="kv" style="margin-top:12px;"><span class="k">생성 예정</span>
+      <span class="v" id="gtPlan">—</span></div>
+    <div style="margin-top:12px; display:flex; gap:8px; align-items:center;">
+      <button id="gtStart" style="border-color:var(--accent2); color:#cfe; font-weight:700; padding:8px 16px;">생성 시작</button>
+      <button id="gtStop" style="display:none;">중지</button>
+      <span id="gtMsg" class="sub"></span>
+    </div>
+    <div id="gtProgWrap" style="display:none; margin-top:12px;">
+      <div class="bar"><span id="gtBar" style="width:0%"></span></div>
+      <div class="sub" id="gtProg" style="margin-top:6px;">—</div>
+    </div>
+  </div>
+</div>
+
 <!-- 버전 기록 페이지 -->
 <div class="wrap view" id="view-history" style="display:none;">
   <div class="card">
@@ -928,6 +977,70 @@ async function tuneBenchmark() {
     } catch (e) { /* 일시 오류 무시, 계속 폴링 */ }
   }, 1000);
 }
+
+// ----- 테스트 데이터 생성 -----
+function gtSizeBytes() {
+  return (parseInt($("gtSize").value) || 0) * (parseInt($("gtUnit").value) || 1);
+}
+function gtCompute() {
+  const N = parseInt($("gtDirs").value) || 0, M = parseInt($("gtSub").value) || 0,
+        K = parseInt($("gtFiles").value) || 0, S = gtSizeBytes();
+  const dirs = N + N * M, files = dirs * K, bytes = files * S;
+  $("gtPlan").innerHTML = `디렉터리 <b>${fmtNum(dirs)}</b>개 · 파일 <b>${fmtNum(files)}</b>개 · 용량 <b>${fmtBytes(bytes)}</b>`;
+  return {dirs, files, bytes};
+}
+let _gtTimer = null;
+async function gtStart() {
+  const body = {
+    path: $("gtPath").value.trim(),
+    n_dirs: parseInt($("gtDirs").value) || 0,
+    n_subdirs: parseInt($("gtSub").value) || 0,
+    n_files: parseInt($("gtFiles").value) || 0,
+    file_size: gtSizeBytes(),
+  };
+  if (!body.path) { $("gtMsg").innerHTML = '<span style="color:var(--danger)">대상 디렉터리를 입력하세요.</span>'; return; }
+  const plan = gtCompute();
+  if (!confirm(`디렉터리 ${fmtNum(plan.dirs)}개, 파일 ${fmtNum(plan.files)}개(${fmtBytes(plan.bytes)})를\n${body.path}\n에 생성합니다. 진행할까요?`)) return;
+  $("gtMsg").textContent = "시작 중…";
+  try {
+    const j = await (await fetch("/api/gentest/start", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body)})).json();
+    if (!j.ok) { $("gtMsg").innerHTML = '<span style="color:var(--danger)">시작 실패: ' + (j.error || "") + '</span>'; return; }
+  } catch (e) { $("gtMsg").innerHTML = '<span style="color:var(--danger)">오류: ' + e + '</span>'; return; }
+  $("gtStart").disabled = true; $("gtStop").style.display = "";
+  $("gtProgWrap").style.display = "block"; $("gtMsg").textContent = "";
+  if (_gtTimer) clearInterval(_gtTimer);
+  _gtTimer = setInterval(gtPoll, 700);
+  gtPoll();
+}
+async function gtPoll() {
+  try {
+    const j = await (await fetch("/api/gentest/status", {cache: "no-store"})).json();
+    const plan = j.plan || {}, tf = plan.total_files || 0, td = plan.total_dirs || 0;
+    const cf = j.created_files || 0, cd = j.created_dirs || 0, wb = j.written_bytes || 0;
+    const pct = tf > 0 ? Math.min(100, cf / tf * 100) : (j.done ? 100 : 0);
+    $("gtBar").style.width = pct + "%";
+    $("gtProg").innerHTML = `디렉터리 ${fmtNum(cd)}/${fmtNum(td)} · 파일 ${fmtNum(cf)}/${fmtNum(tf)} · ${fmtBytes(wb)} (${pct.toFixed(1)}%)`;
+    if (j.done) {
+      clearInterval(_gtTimer); _gtTimer = null;
+      $("gtStart").disabled = false; $("gtStop").style.display = "none";
+      $("gtMsg").innerHTML = j.error ? ('<span style="color:var(--danger)">' + j.error + '</span>')
+        : (j.stopped ? '<span style="color:var(--warn)">중지됨</span>'
+        : '<span style="color:var(--ok)">✓ 완료 — 이제 이 경로를 스캔해 보세요.</span>');
+    }
+  } catch (e) { /* 폴링 일시 오류 무시 */ }
+}
+async function gtStop() {
+  try { await fetch("/api/gentest/stop", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"}); } catch (e) {}
+  $("gtMsg").textContent = "중지 요청됨…";
+}
+["gtDirs", "gtSub", "gtFiles", "gtSize", "gtUnit"].forEach(id => {
+  const el = $(id); if (el) el.addEventListener("input", gtCompute);
+});
+if ($("gtStart")) $("gtStart").addEventListener("click", gtStart);
+if ($("gtStop")) $("gtStop").addEventListener("click", gtStop);
+if ($("gtPlan")) gtCompute();
 
 async function saveSettings() {
   const payload = {
@@ -2079,7 +2192,7 @@ buildSchWeekdays(); fillSchSel("schMonth", 12, "월"); fillSchSel("schDay", 31, 
     });
   }
 })();
-const VIEWS = ["summary", "analysis", "trends", "settings", "history"];
+const VIEWS = ["summary", "analysis", "trends", "settings", "gentest", "history"];
 let changelogLoaded = false;
 function showView(name) {
   if (VIEWS.indexOf(name) < 0) name = "summary";

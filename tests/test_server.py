@@ -192,6 +192,28 @@ def main() -> int:
         assert bs and bs["done"] and bs["recommended"] in (1, 2), bs
         assert len(bs["results"]) >= 1 and all("mem_ratio" in r for r in bs["results"]), bs
 
+        # 테스트 데이터 생성: N=2, M=2, K=3, 100B → 디렉터리 6, 파일 18
+        gtdir = os.path.join(tmp, "gtsample")
+        gv = c.post("/api/gentest/validate",
+                    {"path": gtdir, "n_dirs": 2, "n_subdirs": 2, "n_files": 3, "file_size": 100})
+        assert gv["ok"] and gv["plan"]["total_dirs"] == 6 and gv["plan"]["total_files"] == 18, gv
+        gs = c.post("/api/gentest/start",
+                    {"path": gtdir, "n_dirs": 2, "n_subdirs": 2, "n_files": 3, "file_size": 100})
+        assert gs["ok"] and gs.get("started"), gs
+        gst = None
+        for _ in range(60):
+            gst = c.get("/api/gentest/status")
+            if gst.get("done"):
+                break
+            time.sleep(0.3)
+        assert gst and gst["done"] and not gst.get("error"), gst
+        assert gst["created_dirs"] == 6 and gst["created_files"] == 18, gst
+        nfiles = sum(len(f) for _, _, f in os.walk(gtdir))
+        assert nfiles == 18, nfiles
+        # 시스템 경로는 거부
+        gbad = c.post("/api/gentest/start", {"path": "/etc", "n_dirs": 1})
+        assert not gbad["ok"], gbad
+
         # 스캔 2 → diff
         r2 = c.post("/api/scan/start", {"path": root})
         _wait_done(c, r2["scan_id"])

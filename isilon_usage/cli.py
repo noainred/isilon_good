@@ -440,6 +440,51 @@ def cmd_tune(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_size(s) -> int:
+    """'0', '4K', '1M', '10M', '2G' 등을 바이트로."""
+    s = str(s).strip().upper().rstrip("B")
+    mult = 1
+    for suf, m in (("K", 1024), ("M", 1024 ** 2), ("G", 1024 ** 3), ("T", 1024 ** 4)):
+        if s.endswith(suf):
+            mult = m
+            s = s[:-1]
+            break
+    try:
+        return int(float(s) * mult)
+    except ValueError:
+        return 0
+
+
+def cmd_gentest(args: argparse.Namespace) -> int:
+    from . import gentest as genmod
+    size = _parse_size(args.size)
+    ok, why, plan = genmod.validate(args.path, args.dirs, args.subdirs, args.files, size)
+    print("테스트 데이터 생성")
+    print(f"  대상: {plan['base']}")
+    print(f"  계획: 디렉터리 {plan['total_dirs']:,}개 · 파일 {plan['total_files']:,}개 "
+          f"· 용량 {_human(plan['total_bytes'])} (파일당 {_human(plan['file_size'])})")
+    if not ok:
+        print(f"  거부: {why}", file=sys.stderr)
+        return 2
+    if not args.yes:
+        try:
+            ans = input("  생성할까요? [y/N] ").strip().lower()
+        except EOFError:
+            ans = "n"
+        if ans not in ("y", "yes"):
+            print("  취소했습니다.")
+            return 1
+    t0 = time.time()
+    res = genmod.generate(plan["base"], plan["n_dirs"], plan["n_subdirs"],
+                          plan["n_files"], plan["file_size"])
+    if not res.get("ok"):
+        print(f"  실패: {res.get('error')}", file=sys.stderr)
+        return 2
+    print(f"  완료: 디렉터리 {res['created_dirs']:,} · 파일 {res['created_files']:,} "
+          f"· {_human(res['written_bytes'])} ({time.time() - t0:.1f}s)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="isilon_usage",
@@ -525,6 +570,16 @@ def build_parser() -> argparse.ArgumentParser:
     ptu.add_argument("--mem-factor", type=float, default=2.0,
                      help="스레드를 올릴 때 시작 대비 RSS 이 배수에 도달하면 중단(기본 2배)")
     ptu.set_defaults(func=cmd_tune)
+
+    pg = sub.add_parser("gentest", help="테스트용 샘플 디렉터리/파일 생성")
+    pg.add_argument("path", help="생성할 대상 디렉터리")
+    pg.add_argument("--dirs", type=int, default=10, help="대상에 만들 디렉터리 수(기본 10)")
+    pg.add_argument("--subdirs", type=int, default=5,
+                    help="각 디렉터리의 하위 디렉터리 수(기본 5)")
+    pg.add_argument("--files", type=int, default=10, help="각 폴더의 파일 수(기본 10)")
+    pg.add_argument("--size", default="1K", help="파일 크기(예: 0, 4K, 1M, 10M; 기본 1K)")
+    pg.add_argument("-y", "--yes", action="store_true", help="확인 없이 바로 생성")
+    pg.set_defaults(func=cmd_gentest)
 
     ppo = sub.add_parser("portal", help="글로벌 통합 포탈(HQ) — 여러 DC 를 한 화면에서 조망")
     ppo.add_argument("--data-dir", default="isilon_portal_data",

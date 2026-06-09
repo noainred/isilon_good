@@ -545,6 +545,9 @@ class ScanController:
         self._storage_ts = 0.0
         self._bench = None                  # 실측 보정(시범 스캔) 진행 상태(단계별 표시용)
         self._bench_lock = threading.Lock()
+        self._gen = None                    # 테스트 데이터 생성 진행 상태
+        self._gen_lock = threading.Lock()
+        self._gen_stop = None
         self._reconcile_orphans()           # 이전 프로세스가 남긴 고아 스캔 정리
 
     def storage_status(self, force: bool = False) -> list:
@@ -756,6 +759,67 @@ class ScanController:
             if self._bench is None:
                 return {"ok": True, "running": False, "done": False, "results": []}
             return {"ok": True, **{k: v for k, v in self._bench.items()}}
+
+    # ----- 테스트 데이터 생성 -----
+    def gentest_validate(self, *, path, n_dirs, n_subdirs, n_files, file_size) -> dict:
+        from . import gentest as genmod
+        ok, why, plan = genmod.validate(path, n_dirs, n_subdirs, n_files, file_size)
+        return {"ok": ok, "error": why, "plan": plan}
+
+    def gentest_start(self, *, path, n_dirs, n_subdirs, n_files, file_size) -> dict:
+        """백그라운드로 샘플 디렉터리/파일을 생성한다(진행 폴링용)."""
+        from . import gentest as genmod
+        ok, why, plan = genmod.validate(path, n_dirs, n_subdirs, n_files, file_size)
+        if not ok:
+            return {"ok": False, "error": why, "plan": plan}
+        with self._gen_lock:
+            if self._gen and self._gen.get("running"):
+                return {"ok": False, "error": "이미 생성이 진행 중입니다."}
+            self._gen_stop = threading.Event()
+            self._gen = {"running": True, "done": False, "error": None,
+                         "base": plan["base"], "plan": plan,
+                         "created_dirs": 0, "created_files": 0, "written_bytes": 0,
+                         "started_at": time.time()}
+        stop = self._gen_stop
+
+        def _progress(st):
+            with self._gen_lock:
+                if self._gen is not None:
+                    self._gen.update(st)
+
+        def _run():
+            try:
+                res = genmod.generate(
+                    plan["base"], plan["n_dirs"], plan["n_subdirs"],
+                    plan["n_files"], plan["file_size"],
+                    progress_cb=_progress, stop_event=stop)
+            except Exception as exc:  # noqa: BLE001
+                res = {"ok": False, "error": "생성 오류: %s" % exc}
+            with self._gen_lock:
+                if self._gen is not None:
+                    self._gen.update({k: res[k] for k in
+                                      ("created_dirs", "created_files", "written_bytes")
+                                      if k in res})
+                    self._gen["running"] = False
+                    self._gen["done"] = True
+                    self._gen["stopped"] = bool(res.get("stopped"))
+                    if not res.get("ok"):
+                        self._gen["error"] = res.get("error")
+
+        threading.Thread(target=_run, name="gentest", daemon=True).start()
+        return {"ok": True, "started": True, "plan": plan}
+
+    def gentest_status(self) -> dict:
+        with self._gen_lock:
+            if self._gen is None:
+                return {"ok": True, "running": False, "done": False}
+            return {"ok": True, **{k: v for k, v in self._gen.items()}}
+
+    def gentest_stop(self) -> dict:
+        with self._gen_lock:
+            if self._gen_stop is not None:
+                self._gen_stop.set()
+        return {"ok": True}
 
     # ----- 시작 -----
     def start_scan(self, path: str, *, backend=None, size_mode=None,
@@ -1120,6 +1184,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                                 {"ok": True, "running": False, "results": []})
                 return
 
+            if path == "/api/gentest/status":
+                self._send_json(self.controller.gentest_status()
+                                if self.controller else
+                                {"ok": True, "running": False, "done": False})
+                return
+
             if path == "/api/settings":
                 self._send_json({
                     "ok": True,
@@ -1471,6 +1541,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     mem_factor=body.get("mem_factor", 2.0),
                 )
                 self._send_json(res, status=200 if res.get("ok") else 400)
+                return
+
+            if path in ("/api/gentest/validate", "/api/gentest/start"):
+                kw = dict(
+                    path=(body.get("path") or "").strip(),
+                    n_dirs=body.get("n_dirs", 0), n_subdirs=body.get("n_subdirs", 0),
+                    n_files=body.get("n_files", 0), file_size=body.get("file_size", 0),
+                )
+                if path == "/api/gentest/validate":
+                    res = self.controller.gentest_validate(**kw)
+                else:
+                    res = self.controller.gentest_start(**kw)
+                self._send_json(res, status=200 if res.get("ok") else 400)
+                return
+
+            if path == "/api/gentest/stop":
+                self._send_json(self.controller.gentest_stop())
                 return
 
             if path in ("/api/scan/stop", "/api/scan/resume", "/api/scan/delete"):
