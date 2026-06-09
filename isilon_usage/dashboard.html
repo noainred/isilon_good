@@ -743,6 +743,8 @@ function renderCurrentDir() {
 }
 let mountsLoaded = false;
 let refreshMs = 1500;
+// 하트비트(0.5초 틱으로 라이브 갱신): 마지막 체크 시각 + 다음 새로고침 카운트다운
+let _hbRunning = false, _hbAgeBase = 0, _hbPollClientMs = null, _nextRefreshAt = 0;
 let settingsLoaded = false;
 let currentRoot = null;
 let lastDetailScan = null;
@@ -1629,7 +1631,34 @@ function fetchJsonTimeout(url, ms) {
   return fetch(url, {cache: "no-store", signal: ac.signal})
     .then(r => r.json()).finally(() => clearTimeout(t));
 }
+// 하트비트 라이브 갱신(0.5초마다): 마지막 체크 시각 + 다음 새로고침 카운트다운.
+function tickHeartbeat() {
+  const hb = $("heartbeat");
+  if (!hb) return;
+  // 다음 새로고침까지 남은 초(자동일 때만). 카운트다운이 멈추면 프론트가 멈춘 것.
+  let nextTxt = " · <span style=\"color:var(--muted)\">자동 새로고침 꺼짐</span>";
+  if ($("autoChk") && $("autoChk").checked && _nextRefreshAt) {
+    const left = Math.max(0, (_nextRefreshAt - Date.now()) / 1000);
+    nextTxt = ` · 다음 새로고침 <b>${left.toFixed(1)}초</b> 후`;
+  }
+  if (!_hbRunning || _hbPollClientMs == null) {
+    hb.innerHTML = "—" + (($("autoChk") && $("autoChk").checked) ? nextTxt : "");
+    return;
+  }
+  const age = Math.max(0, _hbAgeBase + (Date.now() - _hbPollClientMs) / 1000);
+  const agoI = Math.floor(age);
+  // 마지막 체크(스캐너 갱신) 절대 시각 — 경과시간을 브라우저 시계에 매핑(시간대 안전)
+  const lastClock = new Date(_hbPollClientMs - _hbAgeBase * 1000).toLocaleTimeString("ko-KR");
+  if (agoI > 60) {
+    hb.innerHTML = `<span style="color:var(--danger)">🔴 마지막 체크 ${lastClock} (${agoI}초 전) — 멈춤 의심</span>` + nextTxt;
+  } else {
+    hb.innerHTML = `<span style="color:var(--ok)">🟢 마지막 체크 ${lastClock} (${agoI}초 전, 정상)</span>` + nextTxt;
+  }
+}
+
 async function poll() {
+  // 다음 새로고침 예정 시각(카운트다운 기준) — 자동 주기에 맞춤
+  _nextRefreshAt = Date.now() + refreshMs;
   loadStorage();   // 스토리지 어레이 상태(서버 60초 캐시라 가벼움)
   // 1) 관리 개요(가벼움) — 항상 먼저 갱신. 상세가 느려도 개요는 막히지 않는다.
   try {
@@ -1667,6 +1696,7 @@ async function poll() {
           ? "아직 시작된 스캔이 없습니다. `python -m isilon_usage run <경로>` 로 시작하세요."
           : (data.reason === "initializing" ? "스캔 초기화 중… (per-run DB 생성 대기)"
              : ("상태 없음: " + (data.reason || data.error || "")));
+        _hbRunning = false; tickHeartbeat();   // 진행 중 아님 → 하트비트 비활성
       } else {
         render(data);
       }
@@ -1702,19 +1732,18 @@ function render(d) {
   // Summary 진행 카드: 탐색 단계 안내(집계 시작 전)
   const _pn = $("progNotice");
   if (_pn) _pn.style.display = (r.phase === "discovering") ? "block" : "none";
-  // 하트비트: 스캔 진행 중이면 마지막 진행 갱신 경과로 생존 표시
-  const _hb = $("heartbeat");
-  if (_hb) {
-    const running = (r.status === "discovering" || r.status === "sizing");
-    if (running && r.updated_at && d.server_time) {
-      const ago = Math.max(0, Math.floor(d.server_time - r.updated_at));
-      _hb.innerHTML = (ago > 60)
-        ? `<span style="color:var(--danger)">🔴 ${ago}초째 갱신 없음 — 멈춤 의심</span>`
-        : `<span style="color:var(--ok)">🟢 ${ago}초 전 갱신 (정상 동작)</span>`;
-    } else {
-      _hb.textContent = "—";
-    }
+  // 하트비트: 마지막 체크(스캐너 갱신) 시각 + 다음 새로고침 카운트다운.
+  // 실제 표시는 0.5초 틱(tickHeartbeat)이 라이브로 갱신한다 — 카운트다운이 멈추면
+  // 브라우저(프론트)가 멈춘 것이고, '초 전'이 계속 늘면 스캐너가 멈춘 것이다.
+  const _hbRun = (r.status === "discovering" || r.status === "sizing");
+  if (_hbRun && r.updated_at && d.server_time) {
+    _hbRunning = true;
+    _hbAgeBase = Math.max(0, d.server_time - r.updated_at);
+    _hbPollClientMs = Date.now();
+  } else {
+    _hbRunning = false;
   }
+  tickHeartbeat();
 
   // DB 크기(생존 지표): 현재 쓰는 per-run DB(.db + WAL) 사용량.
   // 폴링마다 값이 커지면 스캐너가 실제로 쓰는 중 = 살아있음.
@@ -2043,6 +2072,7 @@ async function loadChangelog() {
 loadMounts();
 loadSettings();
 poll(); schedule();
+setInterval(tickHeartbeat, 500);   // 마지막 체크 시각·다음 새로고침 카운트다운 라이브 갱신
 // 초기 뷰(URL 해시) — 기본 Summary
 showView(VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "summary");
 </script>
