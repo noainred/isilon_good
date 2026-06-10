@@ -741,14 +741,56 @@ const $ = (id) => document.getElementById(id);
 // 모든 POST(작업)에 X-Op-Token 을 붙이고, 잠겨 있으면(401) 비밀번호를 물어 자동 해제 후 1회 재시도.
 // GET(보기)은 토큰 없이 자유. fetch 를 감싸 기존 코드를 거의 손대지 않는다.
 let _opRequired = false;
+let _opExpiry = 0;            // 토큰 만료 시각(ms). 입력 후 TTL 초.
+let _opCountTimer = null;
 const _origFetch = window.fetch.bind(window);
 function _opToken() { try { return sessionStorage.getItem("opToken") || ""; } catch (e) { return ""; } }
+function _opLeft() { return Math.max(0, Math.ceil((_opExpiry - Date.now()) / 1000)); }
+function showToast(msg, ms) {
+  let t = document.getElementById("opToast");
+  if (!t) {
+    t = document.createElement("div");
+    t.id = "opToast";
+    t.style.cssText = "position:fixed; top:16px; left:50%; transform:translateX(-50%);"
+      + "background:#11304a; color:#e8f0ff; border:1px solid #4f9cff; padding:10px 18px;"
+      + "border-radius:10px; z-index:9999; font-weight:700; box-shadow:0 8px 28px rgba(0,0,0,.45);";
+    document.body.appendChild(t);
+  }
+  t.innerHTML = msg; t.style.display = "block";
+  clearTimeout(t._tmr); t._tmr = setTimeout(() => { t.style.display = "none"; }, ms || 3000);
+  return t;
+}
 function updateLockBadge() {
   const el = $("lockPill"); if (!el) return;
   if (!_opRequired) { el.style.display = "none"; return; }
   el.style.display = "";
-  if (_opToken()) { el.textContent = "🔓 잠금해제됨"; el.title = "클릭하면 다시 잠급니다"; }
-  else { el.textContent = "🔒 잠김(작업하려면 클릭)"; el.title = "클릭해 비밀번호로 잠금 해제"; }
+  if (_opToken() && _opLeft() > 0) {
+    el.textContent = "🔓 자동입력 " + _opLeft() + "초";
+    el.title = "이 시간 동안 비밀번호 자동 입력(클릭 시 즉시 잠금)";
+  } else {
+    el.textContent = "🔒 잠김(작업하려면 클릭)";
+    el.title = "클릭해 비밀번호로 잠금 해제";
+  }
+}
+function startOpCountdown(ttl) {
+  _opExpiry = Date.now() + (ttl || 10) * 1000;
+  showToast("🔓 비밀번호 입력됨 — <b>" + (ttl || 10) + "초</b> 동안 비밀번호 자동 입력됩니다", (ttl || 10) * 1000);
+  if (_opCountTimer) clearInterval(_opCountTimer);
+  _opCountTimer = setInterval(() => {
+    if (_opLeft() <= 0) {
+      clearInterval(_opCountTimer); _opCountTimer = null;
+      try { sessionStorage.removeItem("opToken"); } catch (e) {}
+      updateLockBadge();
+      showToast("🔒 자동 입력 시간이 끝나 다시 잠겼습니다", 3000);
+    } else { updateLockBadge(); }
+  }, 1000);
+  updateLockBadge();
+}
+function opRelock() {
+  if (_opCountTimer) { clearInterval(_opCountTimer); _opCountTimer = null; }
+  _opExpiry = 0;
+  try { sessionStorage.removeItem("opToken"); } catch (e) {}
+  updateLockBadge();
 }
 async function promptUnlock() {
   const pw = window.prompt("작업하려면 비밀번호를 입력하세요:");
@@ -757,7 +799,11 @@ async function promptUnlock() {
     const r = await _origFetch("/api/unlock", {method: "POST",
       headers: {"Content-Type": "application/json"}, body: JSON.stringify({password: pw})});
     const j = await r.json();
-    if (j.ok && j.token) { try { sessionStorage.setItem("opToken", j.token); } catch (e) {} updateLockBadge(); return true; }
+    if (j.ok && j.token) {
+      try { sessionStorage.setItem("opToken", j.token); } catch (e) {}
+      startOpCountdown(j.ttl || 10);
+      return true;
+    }
   } catch (e) {}
   window.alert("비밀번호가 올바르지 않습니다.");
   return false;
@@ -2158,7 +2204,7 @@ $("refreshBtn").addEventListener("click", poll);
 $("autoChk").addEventListener("change", schedule);
 // 잠금 배지: 잠겨 있으면 비밀번호로 해제, 해제됨이면 다시 잠금(토큰 제거)
 $("lockPill").addEventListener("click", async () => {
-  if (_opToken()) { try { sessionStorage.removeItem("opToken"); } catch (e) {} updateLockBadge(); }
+  if (_opToken() && _opLeft() > 0) { opRelock(); }
   else { await promptUnlock(); }
 });
 // 워커별 디렉터리 표시(모두/N개) — 즉시 반영

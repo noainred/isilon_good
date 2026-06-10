@@ -48,6 +48,7 @@ from .scanner import run_scan
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DASHBOARD_HTML = os.path.join(HERE, "dashboard.html")
+OP_TOKEN_TTL = 10   # 작업 잠금 해제 토큰 유효시간(초). 입력 후 이 시간 동안만 자동 통과.
 
 
 def _safe_pct(num: float, den: float) -> float:
@@ -650,11 +651,11 @@ class ScanController:
         token = uuid.uuid4().hex
         now = time.time()
         with self._op_lock:
-            # 오래된(24시간+) 토큰 정리 후 추가
+            # 만료된 토큰 정리 후 추가
             self._op_tokens = {t: ts for t, ts in self._op_tokens.items()
-                               if now - ts < 86400}
+                               if now - ts < OP_TOKEN_TTL}
             self._op_tokens[token] = now
-        return {"ok": True, "token": token, "op_required": True}
+        return {"ok": True, "token": token, "op_required": True, "ttl": OP_TOKEN_TTL}
 
     def op_token_valid(self, token) -> bool:
         token = str(token or "")
@@ -664,7 +665,7 @@ class ScanController:
             ts = self._op_tokens.get(token)
             if ts is None:
                 return False
-            if time.time() - ts >= 86400:
+            if time.time() - ts >= OP_TOKEN_TTL:   # 입력 후 OP_TOKEN_TTL 초만 유효
                 self._op_tokens.pop(token, None)
                 return False
             return True
