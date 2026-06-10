@@ -45,14 +45,19 @@ class Client:
     def get_raw(self, path):
         return urllib.request.urlopen(self.base + path, timeout=5).read()
 
-    def post(self, path, data):
+    def post(self, path, data, headers=None, want_status=False):
+        h = {"Content-Type": "application/json"}
+        h.update(headers or {})
         req = urllib.request.Request(
             self.base + path, data=json.dumps(data).encode(),
-            headers={"Content-Type": "application/json"}, method="POST")
+            headers=h, method="POST")
         try:
-            return json.load(urllib.request.urlopen(req, timeout=10))
+            r = urllib.request.urlopen(req, timeout=10)
+            j = json.load(r)
+            return (j, r.getcode()) if want_status else j
         except urllib.error.HTTPError as e:
-            return json.loads(e.read())
+            j = json.loads(e.read())
+            return (j, e.code) if want_status else j
 
 
 def _wait_done(client, scan_id, timeout=15):
@@ -71,6 +76,8 @@ def main() -> int:
     _make_tree(root)
     data_dir = os.path.join(tmp, "data")
 
+    _orig_cwd = os.getcwd()
+    os.chdir(tmp)   # info.MD(작업 비번 기록)가 repo 가 아닌 임시 폴더에 생성되도록
     httpd = serve(data_dir, host="127.0.0.1", port=0,
                   initial_settings={"mount_bases": [tmp]}, enable_scan=True)
     port = httpd.server_address[1]
@@ -214,6 +221,28 @@ def main() -> int:
         gbad = c.post("/api/gentest/start", {"path": "/etc", "n_dirs": 1})
         assert not gbad["ok"], gbad
 
+        # 작업 보호(비밀번호): 미설정이면 op_required 거짓
+        assert c.get("/api/scans")["op_required"] is False
+        sp = c.post("/api/settings", {"settings": {"op_lock": True, "op_password": "pw1234"}})
+        assert sp["ok"] and sp["settings"]["op_password"] == "" and sp["settings"]["op_password_set"] is True, sp
+        assert c.get("/api/scans")["op_required"] is True
+        # 토큰 없이 POST → 401 잠김 (보기 GET 은 여전히 동작)
+        lk, st = c.post("/api/settings", {"settings": {"top_n": 9}}, want_status=True)
+        assert st == 401 and lk.get("op_required"), (st, lk)
+        assert c.get("/api/scans")["ok"] is True   # 보기는 자유
+        # 틀린 비번 → 실패, 맞는 비번 → 토큰
+        assert c.post("/api/unlock", {"password": "nope"}).get("ok") is False
+        tok = c.post("/api/unlock", {"password": "pw1234"})
+        assert tok["ok"] and tok["token"], tok
+        # 토큰으로 POST → 동작
+        okp = c.post("/api/settings", {"settings": {"top_n": 9}},
+                     headers={"X-Op-Token": tok["token"]})
+        assert okp["ok"] and okp["settings"]["top_n"] == 9, okp
+        # 보호 해제(op_lock False) — 토큰 필요
+        c.post("/api/settings", {"settings": {"op_lock": False}},
+               headers={"X-Op-Token": tok["token"]})
+        assert c.get("/api/scans")["op_required"] is False
+
         # 스캔 2 → diff
         r2 = c.post("/api/scan/start", {"path": root})
         _wait_done(c, r2["scan_id"])
@@ -237,6 +266,7 @@ def main() -> int:
     finally:
         httpd.shutdown()
         httpd.server_close()
+        os.chdir(_orig_cwd)
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
 

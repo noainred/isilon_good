@@ -20,3 +20,6 @@ env/
 .vscode/
 .DS_Store
 *.swp
+
+# 작업 보호 비밀번호 기록(런타임 생성, 절대 커밋 금지)
+info.MD

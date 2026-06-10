@@ -23,6 +23,7 @@ import sqlite3
 import tarfile
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -126,6 +127,8 @@ def _public_settings(s: dict) -> dict:
     out["smtp_password_set"] = bool((s or {}).get("smtp_password"))
     out["api_token"] = ""
     out["api_token_set"] = bool((s or {}).get("api_token"))
+    out["op_password"] = ""
+    out["op_password_set"] = bool((s or {}).get("op_password"))
     out["isilon_password"] = ""
     out["isilon_password_set"] = bool((s or {}).get("isilon_password"))
     out["powerstore_password"] = ""
@@ -548,6 +551,9 @@ class ScanController:
         self._gen = None                    # 테스트 데이터 생성 진행 상태
         self._gen_lock = threading.Lock()
         self._gen_stop = None
+        self._op_tokens = {}                # 작업 잠금 해제 토큰 → 발급 시각
+        self._op_lock = threading.Lock()
+        self._launch_cwd = os.getcwd()      # info.MD 를 저장할 '실행한 디렉터리'
         self._reconcile_orphans()           # 이전 프로세스가 남긴 고아 스캔 정리
 
     def storage_status(self, force: bool = False) -> list:
@@ -629,11 +635,85 @@ class ScanController:
     def batch_size(self) -> int:
         return int(self.settings.get("batch_size", 500))
 
+    # ----- 작업 보호(비밀번호) -----
+    def op_required(self) -> bool:
+        """작업(POST)에 비밀번호가 필요한가(= op_password 가 설정됨)."""
+        return bool(str(self.settings.get("op_password") or ""))
+
+    def unlock(self, password: str) -> dict:
+        """비밀번호를 확인하고 맞으면 작업 토큰을 발급한다."""
+        pw = str(self.settings.get("op_password") or "")
+        if not pw:
+            return {"ok": True, "token": "", "op_required": False}
+        if str(password or "") != pw:
+            return {"ok": False, "reason": "비밀번호가 올바르지 않습니다."}
+        token = uuid.uuid4().hex
+        now = time.time()
+        with self._op_lock:
+            # 오래된(24시간+) 토큰 정리 후 추가
+            self._op_tokens = {t: ts for t, ts in self._op_tokens.items()
+                               if now - ts < 86400}
+            self._op_tokens[token] = now
+        return {"ok": True, "token": token, "op_required": True}
+
+    def op_token_valid(self, token) -> bool:
+        token = str(token or "")
+        if not token:
+            return False
+        with self._op_lock:
+            ts = self._op_tokens.get(token)
+            if ts is None:
+                return False
+            if time.time() - ts >= 86400:
+                self._op_tokens.pop(token, None)
+                return False
+            return True
+
+    def _write_info_md(self, password: str) -> None:
+        """설정한 비밀번호를 실행한 디렉터리의 info.MD 로 저장(권한 600)."""
+        from . import __version__
+        try:
+            path = os.path.join(self._launch_cwd, "info.MD")
+            ts = time.strftime("%Y-%m-%d %H:%M:%S")
+            body = (
+                "# isilon_usage 운영 정보\n\n"
+                "이 파일은 작업 보호 비밀번호를 기록합니다. **민감 정보이므로 공유하지 마세요.**\n\n"
+                "| 항목 | 값 |\n|---|---|\n"
+                "| 버전 | %s |\n| 데이터 폴더 | %s |\n| 실행 폴더 | %s |\n"
+                "| 작업 비밀번호 | `%s` |\n| 갱신 시각 | %s |\n\n"
+                "> 보기는 비밀번호 없이 가능하고, 버튼/설정 변경 등 작업에는 위 비밀번호가 필요합니다.\n"
+                "> 비밀번호를 잊었다면 이 파일에서 확인하거나, settings.json 의 op_password 를 비우세요.\n"
+            ) % (__version__, os.path.abspath(self.data_dir), self._launch_cwd,
+                 password, ts)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(body)
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+        except OSError:
+            pass
+
     def update_settings(self, new: dict) -> dict:
         """설정을 저장하고 갱신된 설정을 반환한다(잠겨 있으면 거부)."""
         if self.lock_settings:
             return {"ok": False, "reason": "설정이 잠겨 있습니다(--lock-settings)."}
         new = dict(new or {})
+        # 작업 보호 비밀번호: op_lock(체크) + op_password(새 비번)
+        #  - op_lock 거짓 → 보호 해제(비밀번호 제거)
+        #  - op_lock 참 + 새 비번 있음 → 설정/변경(+info.MD 기록)
+        #  - op_lock 참 + 빈칸 → 기존 유지
+        op_changed = None
+        if "op_lock" in new or "op_password" in new:
+            want_lock = bool(new.get("op_lock", True))
+            newpw = str(new.get("op_password") or "")
+            if not want_lock:
+                if self.settings.get("op_password"):
+                    op_changed = ""   # 해제
+            elif newpw.strip():
+                op_changed = newpw    # 설정/변경
+            new.pop("op_lock", None)
+            new.pop("op_password", None)
         # 비밀번호/토큰은 화면에 노출하지 않으므로(마스킹), 빈 값으로 오면 기존 값 유지
         if not (new.get("smtp_password") or "").strip():
             new.pop("smtp_password", None)
@@ -653,7 +733,11 @@ class ScanController:
                         a["password"] = old.get("password", "")
         merged = dict(self.settings)
         merged.update({k: v for k, v in new.items() if k in setmod.EDITABLE_KEYS})
+        if op_changed is not None:        # 작업 비밀번호 설정/변경/해제
+            merged["op_password"] = op_changed
         self.settings = setmod.save(self.data_dir, merged)
+        if op_changed:                    # 새 비밀번호를 info.MD 로 기록(권한 600)
+            self._write_info_md(op_changed)
         return {"ok": True, "settings": _public_settings(self.settings)}
 
     def _log(self, msg: str) -> None:
@@ -1142,6 +1226,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "mount_bases": ctrl.mount_bases if ctrl else [],
                     "can_scan": ctrl is not None,
                     "have_psutil": monmod.have_psutil(),
+                    "op_required": bool(ctrl and ctrl.op_required()),
                 })
                 return
 
@@ -1506,6 +1591,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         body = self._read_json_body()
         try:
+            # 작업 잠금 해제: 비밀번호 → 토큰
+            if path == "/api/unlock":
+                res = self.controller.unlock(body.get("password") or "")
+                self._send_json(res, status=200 if res.get("ok") else 401)
+                return
+            # 작업(POST) 보호: 비밀번호가 설정돼 있으면 유효한 토큰이 필요(보기=GET 은 자유)
+            if self.controller.op_required() and not self.controller.op_token_valid(
+                    self.headers.get("X-Op-Token")):
+                self._send_json({"ok": False, "reason": "locked", "op_required": True,
+                                 "error": "작업하려면 비밀번호로 잠금을 해제하세요."},
+                                status=401)
+                return
+
             if path == "/api/scan/start":
                 target = (body.get("path") or "").strip()
                 if not target:
