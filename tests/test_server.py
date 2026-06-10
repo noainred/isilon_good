@@ -114,6 +114,14 @@ def main() -> int:
         ldk = d1.get("local_disk") or {}
         assert ldk.get("db") and ldk["db"]["free_bytes"] > 0 and ldk["db"]["total_bytes"] > 0, ldk
 
+        # 분석 리포트(나이/소유자/확장자)
+        rep = c.get(f"/api/stats?scan={s1}")
+        assert rep["ok"], rep
+        assert rep["age"] and sum(a["files"] for a in rep["age"]) == 4, rep["age"]
+        assert rep["owners"] and sum(o["files"] for o in rep["owners"]) == 4, rep["owners"]
+        exts = {e["key"]: e["files"] for e in rep["extensions"]}
+        assert exts.get(".bin", 0) >= 1, rep["extensions"]   # _make_tree 는 .bin 파일
+
         # 드릴다운: 루트 → 자식
         ch = c.get(f"/api/children?scan={s1}")
         assert ch["children"], ch

@@ -52,6 +52,22 @@ BLOCK_UNIT = 512
 # 수천만 파일이 있어도 메모리가 이 청크만큼만 쓰이도록 스트리밍 처리한다.
 STAT_CHUNK = 2000
 
+# 파일 나이(mtime) 버킷 — (상한 일수, 라벨). 마지막은 상한 None(그 이상 전부).
+AGE_BUCKETS = [
+    (30, "30일 이내"), (90, "30~90일"), (365, "90일~1년"),
+    (730, "1~2년"), (1825, "2~5년"), (None, "5년+"),
+]
+# 집계 dict 가 무한정 커지지 않도록 distinct 키 상한(초과분은 '(기타)'로 합산)
+STAT_KEY_CAP = 5000
+
+
+def _age_bucket(ref: float, mtime: float) -> str:
+    days = (ref - mtime) / 86400.0
+    for lim, label in AGE_BUCKETS:
+        if lim is None or days < lim:
+            return label
+    return "5년+"
+
 
 def _entry_bytes(stat_result, size_mode: str) -> int:
     """size_mode 에 따라 한 파일이 차지하는 바이트를 계산."""
@@ -124,6 +140,12 @@ class Scanner:
         self._worker_dirs = {}   # 워커 인덱스 → 현재 보고 있는 디렉터리(병렬 표시용)
         self._last_progress = 0.0
         self._last_wal_ckpt = 0.0
+        # 집계 리포트: 파일 나이/소유자(uid)/확장자별 [bytes, files]. 메모리 누적 후 DB 저장.
+        self._stat_age: dict = {}
+        self._stat_uid: dict = {}
+        self._stat_ext: dict = {}
+        self._stats_ref = 0.0       # 나이 계산 기준 시각(스캔 시작)
+        self._last_stats_write = 0.0
         # 재개 시간 추적: elapsed_accum=모든 세션 누적 '활성' 시간(일시정지 갭 제외),
         # _elapsed_mark=마지막으로 누적한 시각(kill -9 에도 마지막 flush 까지 보존).
         self._elapsed_accum = 0.0
@@ -213,6 +235,10 @@ class Scanner:
             self._status = status
         dbmod.update_run(conn, self.run_id, **fields)
         conn.commit()
+        # 집계 리포트(나이/소유자/확장자)를 주기적으로 저장(재개 안전).
+        if (now - self._last_stats_write) > 20.0:
+            self._last_stats_write = now
+            self._write_stats(conn)
         # WAL 이 무한정 커지지 않도록 주기적으로 체크포인트(읽기 락이 없을 때 잘림).
         # 느린 대시보드 조회가 긴 읽기 락을 잡으면 WAL 이 수 GB 까지 부푸는 것을 막는다.
         if (now - self._last_wal_ckpt) > 30.0:
@@ -304,6 +330,8 @@ class Scanner:
             # 이번 세션(재시작) 시작 시각 기록 + 누적 시간 마크 초기화.
             # (재개면 _load_progress 가 이미 elapsed_accum 을 복원했고, 갭은 안 센다)
             self._elapsed_mark = time.time()
+            if not self._stats_ref:
+                self._stats_ref = self._elapsed_mark   # 파일 나이 계산 기준 시각
             dbmod.update_run(
                 conn, self.run_id,
                 fs_total_bytes=total, fs_used_bytes=used, fs_free_bytes=free,
@@ -388,6 +416,56 @@ class Scanner:
         r2 = conn.execute(
             "SELECT elapsed_accum FROM scan_runs WHERE id=?", (self.run_id,)).fetchone()
         self._elapsed_accum = float(r2["elapsed_accum"] or 0) if r2 else 0.0
+        self._load_stats(conn)   # 나이/소유자/확장자 집계도 복원
+
+    # ----- 집계 리포트(나이/소유자/확장자) -----
+    @staticmethod
+    def _stat_bump(d: dict, key: str, eb: int, fcount: int, cap: int = STAT_KEY_CAP) -> None:
+        e = d.get(key)
+        if e is None:
+            if len(d) >= cap:        # distinct 키 폭증 방지 — 초과분은 '(기타)'로
+                key = "(기타)"
+                e = d.get(key)
+            if e is None:
+                e = [0, 0]
+                d[key] = e
+        e[0] += eb
+        e[1] += fcount
+
+    def _accum_stats(self, name: str, st, eb: int, fcount: int) -> None:
+        """파일 하나를 나이/소유자/확장자 집계에 더한다(_dlock 안에서 호출)."""
+        self._stat_bump(self._stat_age, _age_bucket(self._stats_ref, st.st_mtime), eb, fcount)
+        self._stat_bump(self._stat_uid, str(st.st_uid), eb, fcount, cap=50000)
+        ext = os.path.splitext(name)[1].lower() or "(없음)"
+        if len(ext) > 24:
+            ext = ext[:24]
+        self._stat_bump(self._stat_ext, ext, eb, fcount)
+
+    def _write_stats(self, conn) -> None:
+        """집계를 scan_stats 에 저장(이 run 행 교체). 확장자는 상위 500개만."""
+        if self.run_id is None:
+            return
+        try:
+            dbmod.replace_scan_stats(conn, self.run_id, "age",
+                                     [(k, v[0], v[1]) for k, v in self._stat_age.items()])
+            dbmod.replace_scan_stats(conn, self.run_id, "owner",
+                                     [(k, v[0], v[1]) for k, v in self._stat_uid.items()])
+            ext_top = sorted(self._stat_ext.items(), key=lambda kv: kv[1][0],
+                             reverse=True)[:500]
+            dbmod.replace_scan_stats(conn, self.run_id, "ext",
+                                     [(k, v[0], v[1]) for k, v in ext_top])
+            conn.commit()
+        except Exception:
+            pass
+
+    def _load_stats(self, conn) -> None:
+        for kind, d in (("age", self._stat_age), ("owner", self._stat_uid),
+                        ("ext", self._stat_ext)):
+            try:
+                for r in dbmod.get_scan_stats(conn, self.run_id, kind):
+                    d[r["key"]] = [int(r["bytes"]), int(r["files"])]
+            except Exception:
+                pass
 
     def _safe_stat(self, entry):
         try:
@@ -427,6 +505,7 @@ class Scanner:
             fields["error"] = self._stop_reason
         dbmod.update_run(conn, self.run_id, **fields)
         conn.commit()
+        self._write_stats(conn)   # 집계 리포트 최종 저장
         self._update_manager(force=True, finished=True)
 
     # ------------------------------------------------------------- 1단계: 탐색
@@ -542,17 +621,23 @@ class Scanner:
             cb = 0
             cf = 0
             with self._dlock:
-                for st in stats:
+                for entry, st in zip(chunk, stats):
                     if st is None:
                         continue
                     cf += 1
+                    eb = _entry_bytes(st, self.size_mode)
+                    counted = True
                     # 하드링크 중복 제거(용량 한 번만). dedup 끄면 메모리 절약(수십억 파일 대비).
                     if self.hardlink_dedup and st.st_nlink > 1:
                         key = (st.st_dev, st.st_ino)
                         if key in self._seen_inodes:
-                            continue
-                        self._seen_inodes.add(key)
-                    cb += _entry_bytes(st, self.size_mode)
+                            counted = False    # 용량은 한 번만(개수는 셈)
+                        else:
+                            self._seen_inodes.add(key)
+                    if counted:
+                        cb += eb
+                    # 집계 리포트(나이/소유자/확장자): 개수는 모두, 용량은 dedup 반영
+                    self._accum_stats(entry.name, st, eb if counted else 0, 1)
                 own_bytes += cb
                 file_count += cf
                 self._scanned_bytes += cb
@@ -685,16 +770,21 @@ class Scanner:
         cb = 0
         cf = 0
         with self._dlock:
-            for st in stats:
+            for entry, st in zip(entries, stats):
                 if st is None:
                     continue
                 cf += 1
+                eb = _entry_bytes(st, self.size_mode)
+                counted = True
                 if self.hardlink_dedup and st.st_nlink > 1:
                     key = (st.st_dev, st.st_ino)
                     if key in self._seen_inodes:
-                        continue
-                    self._seen_inodes.add(key)
-                cb += _entry_bytes(st, self.size_mode)
+                        counted = False
+                    else:
+                        self._seen_inodes.add(key)
+                if counted:
+                    cb += eb
+                self._accum_stats(entry.name, st, eb if counted else 0, 1)
             self._scanned_bytes += cb
             self._total_files += cf
             self._flush_progress_locked(self._disc_conn, current_dir=cur_dir)

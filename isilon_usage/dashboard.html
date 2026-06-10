@@ -130,6 +130,7 @@
     <button class="navbtn active" data-view="summary">Summary</button>
     <button class="navbtn" data-view="analysis">디렉터리</button>
     <button class="navbtn" data-view="trends">추세·비교</button>
+    <button class="navbtn" data-view="report">📊 분석 리포트</button>
     <button class="navbtn" data-view="settings">⚙ 설정</button>
     <button class="navbtn" data-view="gentest">🧪 테스트 데이터</button>
     <button class="navbtn" data-view="history">📖 버전 기록</button>
@@ -674,6 +675,28 @@
 <!-- 설정 페이지(여기로 #settingsCard 를 JS 가 옮긴다) -->
 <div class="wrap view" id="view-settings" style="display:none;">
   <h2 style="margin:0 0 14px;">⚙ 설정</h2>
+</div>
+
+<!-- 분석 리포트 페이지: 파일 나이 / 소유자 / 확장자 -->
+<div class="wrap view" id="view-report" style="display:none;">
+  <h2 style="margin:0 0 8px;">📊 분석 리포트 <span class="sub" id="reportScan"></span></h2>
+  <div class="grid cols-3" style="gap:14px;">
+    <div class="card">
+      <h2>🕒 파일 나이(콜드 데이터)</h2>
+      <div class="sub" style="margin-bottom:8px;">수정 시각(mtime) 기준. 오래된 데이터 = 아카이브·정리 후보.</div>
+      <div id="repAge">—</div>
+    </div>
+    <div class="card">
+      <h2>👤 소유자별 사용량 Top</h2>
+      <div class="sub" style="margin-bottom:8px;">누가 공간을 쓰는지(차지백/쇼백).</div>
+      <div id="repOwner">—</div>
+    </div>
+    <div class="card">
+      <h2>🗂 확장자별 사용량 Top</h2>
+      <div class="sub" style="margin-bottom:8px;">무엇이 공간을 쓰는지(로그·이미지·백업 등).</div>
+      <div id="repExt">—</div>
+    </div>
+  </div>
 </div>
 
 <!-- 테스트 데이터 생성 페이지 -->
@@ -1638,6 +1661,33 @@ function drawTrend(rootPath) {
     ? `${rootPath} — ${pts.length}회 스캔, 최신 ${fmtBytes(pts[pts.length-1].scanned_bytes)}`
     : "같은 루트의 과거 스캔이 없습니다.";
 }
+// ===== 분석 리포트(파일 나이/소유자/확장자) =====
+function _statBarList(items, labelFn, maxN) {
+  if (!items || !items.length)
+    return '<span class="sub">데이터 없음(스캔이 진행/완료되면 표시됩니다).</span>';
+  const max = Math.max.apply(null, items.map(i => i.bytes).concat([1]));
+  return items.slice(0, maxN || 20).map(i => {
+    const pct = Math.min(100, i.bytes / max * 100);
+    return '<div style="margin:5px 0;">'
+      + '<div style="display:flex; justify-content:space-between; gap:8px; font-size:0.92em;">'
+      + '<span class="mono" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + labelFn(i) + '</span>'
+      + '<span style="white-space:nowrap;"><b>' + fmtBytes(i.bytes) + '</b> <span class="sub">· ' + fmtNum(i.files) + '개</span></span>'
+      + '</div><div class="bar" style="height:7px; margin-top:2px;"><span style="width:' + pct + '%"></span></div></div>';
+  }).join("");
+}
+async function loadReport() {
+  const url = "/api/stats" + (selectedScan != null ? ("?scan=" + selectedScan) : "");
+  try {
+    const j = await (await fetch(url, {cache: "no-store"})).json();
+    if (!j.ok) return;
+    if ($("reportScan")) $("reportScan").textContent = (selectedScan != null ? ("· scan #" + selectedScan) : "· 최신 스캔");
+    $("repAge").innerHTML = _statBarList(j.age, i => i.key, 10);
+    $("repOwner").innerHTML = _statBarList(j.owners,
+      i => (i.name ? (i.name + ' <span class="sub">(uid ' + i.key + ')</span>') : ("uid " + i.key)), 25);
+    $("repExt").innerHTML = _statBarList(j.extensions, i => i.key, 25);
+  } catch (e) { /* 무시 */ }
+}
+
 function populateDiff(rootPath) {
   const opts = allScans.filter(s => s.root_path === rootPath)
     .map(s => `<option value="${s.id}">#${s.id} · ${s.started_at ? new Date(s.started_at*1000).toLocaleString("ko-KR") : ""}</option>`).join("");
@@ -1913,6 +1963,7 @@ async function poll() {
   // 다음 새로고침 예정 시각(카운트다운 기준) — 자동 주기에 맞춤
   _nextRefreshAt = Date.now() + refreshMs;
   loadStorage();   // 스토리지 어레이 상태(서버 60초 캐시라 가벼움)
+  if ($("view-report") && $("view-report").style.display !== "none") loadReport();   // 리포트 열려 있으면 갱신
   // 1) 관리 개요(가벼움) — 항상 먼저 갱신. 상세가 느려도 개요는 막히지 않는다.
   try {
     const sj = await fetchJsonTimeout("/api/scans", 8000);
@@ -2307,7 +2358,7 @@ buildSchWeekdays(); fillSchSel("schMonth", 12, "월"); fillSchSel("schDay", 31, 
     });
   }
 })();
-const VIEWS = ["summary", "analysis", "trends", "settings", "gentest", "history"];
+const VIEWS = ["summary", "analysis", "trends", "report", "settings", "gentest", "history"];
 let changelogLoaded = false;
 function showView(name) {
   if (VIEWS.indexOf(name) < 0) name = "summary";
@@ -2318,6 +2369,7 @@ function showView(name) {
   document.querySelectorAll(".navbtn").forEach(b => b.classList.toggle("active", b.dataset.view === name));
   try { history.replaceState(null, "", "#" + name); } catch (e) { location.hash = name; }
   if (name === "history" && !changelogLoaded) loadChangelog();
+  if (name === "report") loadReport();
 }
 document.querySelectorAll(".navbtn").forEach(b => b.addEventListener("click", () => showView(b.dataset.view)));
 window.addEventListener("hashchange", () => {

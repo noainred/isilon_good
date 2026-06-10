@@ -485,6 +485,49 @@ def cmd_gentest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_stats(args: argparse.Namespace) -> int:
+    data_dir = os.path.abspath(args.data_dir)
+    mconn = dbmod.connect(mgrmod.manager_db_path(data_dir))
+    try:
+        if args.scan:
+            row = mgrmod.get_scan(mconn, args.scan)
+        else:
+            scans = mgrmod.list_scans(mconn)
+            row = mgrmod.get_scan(mconn, scans[0]["id"]) if scans else None
+    finally:
+        mconn.close()
+    if not row or not os.path.exists(row["db_path"]):
+        print("스캔/per-run DB 가 없습니다.", file=sys.stderr)
+        return 2
+    conn = dbmod.connect(row["db_path"])
+    try:
+        rid = dbmod.latest_run_id(conn)
+        print(f"분석 리포트 — scan #{row['id']}  {row['root_path']}")
+
+        def _show(title, kind, limit, label=lambda k: k):
+            print("\n  " + title)
+            rows = dbmod.get_scan_stats(conn, rid, kind, limit=limit)
+            if not rows:
+                print("    (데이터 없음)")
+            for r in rows:
+                print("    %-30s %12s  %s개"
+                      % (str(label(r["key"]))[:30], _human(r["bytes"]), format(r["files"], ",")))
+
+        def _owner(uid):
+            try:
+                import pwd
+                return "%s (uid %s)" % (pwd.getpwuid(int(uid)).pw_name, uid)
+            except Exception:  # noqa: BLE001
+                return "uid %s" % uid
+
+        _show("🕒 파일 나이(콜드 데이터)", "age", 0)
+        _show("👤 소유자별 사용량 Top", "owner", 20, _owner)
+        _show("🗂 확장자별 사용량 Top", "ext", 20)
+    finally:
+        conn.close()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="isilon_usage",
@@ -580,6 +623,11 @@ def build_parser() -> argparse.ArgumentParser:
     pg.add_argument("--size", default="1K", help="파일 크기(예: 0, 4K, 1M, 10M; 기본 1K)")
     pg.add_argument("-y", "--yes", action="store_true", help="확인 없이 바로 생성")
     pg.set_defaults(func=cmd_gentest)
+
+    pst2 = sub.add_parser("stats", help="분석 리포트(파일 나이/소유자/확장자) 콘솔 출력")
+    pst2.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
+    pst2.add_argument("--scan", type=int, default=None, help="스캔 id(생략 시 최신)")
+    pst2.set_defaults(func=cmd_stats)
 
     ppo = sub.add_parser("portal", help="글로벌 통합 포탈(HQ) — 여러 DC 를 한 화면에서 조망")
     ppo.add_argument("--data-dir", default="isilon_portal_data",

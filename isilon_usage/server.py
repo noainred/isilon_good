@@ -101,6 +101,30 @@ def _db_disk_usage(db_path: str) -> dict:
             "total_bytes": db + wal + shm}
 
 
+_UID_NAME_CACHE: dict = {}
+
+
+def _uid_name(uid) -> Optional[str]:
+    """uid → 사용자 이름(있으면). NFS uid 가 로컬에 없으면 None."""
+    try:
+        u = int(uid)
+    except (TypeError, ValueError):
+        return None
+    if u in _UID_NAME_CACHE:
+        return _UID_NAME_CACHE[u]
+    name = None
+    try:
+        import pwd
+        name = pwd.getpwuid(u).pw_name
+    except (KeyError, ImportError, OSError):
+        name = None
+    _UID_NAME_CACHE[u] = name
+    return name
+
+
+_AGE_ORDER = ["30일 이내", "30~90일", "90일~1년", "1~2년", "2~5년", "5년+"]
+
+
 def _dir_disk_free(path: str) -> Optional[dict]:
     """경로가 속한 (로컬) 파일시스템의 총/여유/사용률을 반환. 실패 시 None."""
     try:
@@ -1424,6 +1448,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
                                         else {"ok": True, "results": []})
                     else:
                         self._send_json(list_errors(pconn, run_id))
+                finally:
+                    pconn.close()
+                return
+
+            if path == "/api/stats":
+                # 파일 나이/소유자/확장자별 집계 리포트
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
+                if row is None or not os.path.exists(row["db_path"]):
+                    self._send_json({"ok": True, "age": [], "owners": [], "extensions": []})
+                    return
+                pconn = dbmod.connect(row["db_path"])
+                try:
+                    rid = dbmod.latest_run_id(pconn)
+                    age = dbmod.get_scan_stats(pconn, rid, "age")
+                    age.sort(key=lambda r: _AGE_ORDER.index(r["key"])
+                             if r["key"] in _AGE_ORDER else 99)
+                    owners = dbmod.get_scan_stats(pconn, rid, "owner", limit=200)
+                    for o in owners:
+                        o["name"] = _uid_name(o["key"])
+                    exts = dbmod.get_scan_stats(pconn, rid, "ext", limit=200)
+                    self._send_json({"ok": True, "scan_id": scan_id, "age": age,
+                                     "owners": owners, "extensions": exts})
                 finally:
                     pconn.close()
                 return

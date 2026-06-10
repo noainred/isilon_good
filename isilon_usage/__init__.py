@@ -5,7 +5,7 @@
 """
 
 # 애플리케이션 버전(릴리즈노트 CHANGELOG.md 와 git 태그 v<버전>에 대응)
-__version__ = "1.21.1"
+__version__ = "1.22.0"
 
 # DB 스키마 버전. 스키마가 바뀌면 1씩 올리고 마이그레이션을 추가한다.
 # (per-run DB / manager DB 의 PRAGMA user_version 에 기록된다)
@@ -13,4 +13,5 @@ __version__ = "1.21.1"
 # 4: scan_runs 에 mount_readonly(대상 마운트 읽기전용 여부) 컬럼 추가
 # 5: scan_runs 에 worker_dirs(워커별 현재 디렉터리, JSON) 컬럼 추가
 # 6: scan_runs 에 session_started_at/elapsed_accum(재개 누적 시간) 컬럼 추가
-SCHEMA_VERSION = 6
+# 7: scan_stats 테이블 추가(파일 나이/소유자/확장자별 집계 리포트)
+SCHEMA_VERSION = 7

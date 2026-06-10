@@ -94,6 +94,16 @@ CREATE TABLE IF NOT EXISTS resource_samples (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sample_run_ts ON resource_samples(run_id, ts);
+
+-- 집계 리포트: 파일 나이(age)/소유자(owner)/확장자(ext)별 용량·개수
+CREATE TABLE IF NOT EXISTS scan_stats (
+    run_id  INTEGER NOT NULL,
+    kind    TEXT    NOT NULL,   -- 'age' | 'owner' | 'ext'
+    key     TEXT    NOT NULL,
+    bytes   INTEGER NOT NULL DEFAULT 0,
+    files   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (run_id, kind, key)
+);
 """
 
 
@@ -207,3 +217,22 @@ def prune_samples(conn: sqlite3.Connection, run_id: int, keep: int = 2000) -> No
         """,
         (run_id, run_id, keep),
     )
+
+
+def replace_scan_stats(conn, run_id, kind, items) -> None:
+    """집계 통계(kind)의 이 run 행을 통째로 교체한다. items: [(key, bytes, files), ...]"""
+    conn.execute("DELETE FROM scan_stats WHERE run_id=? AND kind=?", (run_id, kind))
+    if items:
+        conn.executemany(
+            "INSERT INTO scan_stats(run_id, kind, key, bytes, files) VALUES (?,?,?,?,?)",
+            [(run_id, kind, str(k), int(b), int(f)) for (k, b, f) in items])
+
+
+def get_scan_stats(conn, run_id, kind, limit: int = 0):
+    """집계 통계를 용량 내림차순으로 반환."""
+    q = ("SELECT key, bytes, files FROM scan_stats WHERE run_id=? AND kind=? "
+         "ORDER BY bytes DESC")
+    if limit:
+        q += " LIMIT %d" % int(limit)
+    return [dict(r) for r in conn.execute(q, (run_id, kind))]
+
