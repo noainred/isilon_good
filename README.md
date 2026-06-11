@@ -9,12 +9,27 @@
 진행 상황과 서버 자원(특히 메모리/`du` 프로세스 메모리)을 실시간으로 보여줍니다.
 
 표준 라이브러리만으로 동작하므로(웹서버·DB·자원수집 모두 내장), 패키지 설치가
-제한된 폐쇄망 서버에도 그대로 올려서 쓸 수 있습니다.
+제한된 폐쇄망 서버에도 그대로 올려서 쓸 수 있습니다. (Python 3.6+)
 
-주요 기능: 메모리 최소 스캔(native/du) · **하드링크 중복 제거**(du와 일치) ·
-**stat 동시 처리**(NFS 가속) · 실행별 DB + 관리 DB · **웹에서 디렉터리 지정 스캔/중지/재개** ·
-**드릴다운 트리 + 검색** · **용량 추세·스캔 비교(diff)** · **CSV/JSON 내보내기** ·
-**보존 정책·예약 스캔·완료 웹훅 알림** · **모든 설정 웹 편집** · 자원(메모리/du) 모니터링.
+### 기능 한눈에
+
+- **메모리 최소 스캔** — 2단계(탐색→상향식 집계) `native`/`du` 백엔드, **하드링크
+  중복 제거**(du와 일치), **stat 동시 처리**(N 스레드, NFS 가속), disk/apparent 기준.
+- **초대용량(수십억 파일) 안전장치** — **깊이 접기**(DB 크기 묶고 합계는 정확),
+  최대 깊이, **DB 크기 가드**·**디스크 여유 자동 일시정지**, 주기적 WAL 체크포인트.
+- **웹 대시보드** — 웹에서 디렉터리 지정 **스캔 시작/중지/재개**, 드릴다운 트리+검색,
+  디스크 파이차트, **DB 생존 지표·하트비트(마지막 체크+카운트다운)·로그/DB 디스크
+  여유**, 워커별 현재 디렉터리, 재개 누적/세션 시간, 자원(메모리/CPU/du) 모니터링.
+- **📊 분석 리포트** — 파일 **나이(콜드 데이터)·소유자·확장자별** 사용량,
+  **최대 파일 Top**, **용량 소진 예측**(추세→90%/가득 참 예상일), **변화 Top**(직전 대비).
+- **운영** — 실행별 DB + 관리 DB, 보존 정책, **예약 스캔(시작+반복주기)**,
+  완료/오류 **웹훅·메일** 알림, **CSV/JSON 내보내기**, 스캔 **비교(diff)**, 모든 설정 웹 편집.
+- **통합·모니터링** — **글로벌 통합 포탈(HQ)**: 여러 DC를 DB 복제로 한 화면 조망 +
+  Cross-DC 경로 비교 · **스토리지 어레이 상태**(Isilon/PowerStore/Unity/PowerMax/VMAX/
+  XtremIO/VPLEX) · **Prometheus `/metrics`**.
+- **튜닝** — 서버 사양 기반 **권장 스레드 계산** + **실측 보정(시범 스캔)**.
+- **보안·도구** — **작업 보호 비밀번호**(보기는 자유, 작업은 비밀번호), 설정 잠금,
+  **테스트 데이터 생성기**.
 
 > 처음 설치/운영은 **[사용 설명서(docs/USER_GUIDE.md)](docs/USER_GUIDE.md)** 를,
 > 버전별 변경점은 **[CHANGELOG.md](CHANGELOG.md)** 를 보세요.
@@ -165,6 +180,20 @@ python3 -m isilon_usage status --data-dir /var/lib/isilon_usage
 python3 -m isilon_usage status --data-dir /var/lib/isilon_usage --scan 3   # 특정 스캔 상세
 ```
 
+### 4) 그 밖의 명령
+
+```bash
+python3 -m isilon_usage tune --benchmark /mnt/isilon   # 권장 스레드(사양+실측)
+python3 -m isilon_usage stats --data-dir DIR --top 20  # 분석 리포트(나이/소유자/확장자/최대 파일)
+python3 -m isilon_usage gentest /data/iutest --dirs 10 --subdirs 5 --files 10 --size 4K -y  # 테스트 트리 생성
+python3 -m isilon_usage resume <scan_id> --data-dir DIR   # 중단된 스캔 이어하기
+python3 -m isilon_usage prune --data-dir DIR --keep-per-root 5  # 오래된 스캔 정리
+python3 -m isilon_usage portal --data-dir isilon_portal_data   # 글로벌 통합 포탈(HQ)
+```
+
+전체 서브커맨드: `run · scan · serve · status · resume · prune · tune · gentest · stats · portal · version`
+(자세한 옵션은 [USER_GUIDE](docs/USER_GUIDE.md) 6장 CLI 레퍼런스).
+
 ---
 
 ## 데이터 구조 — 실행마다 별도 DB + 관리 DB
@@ -219,6 +248,14 @@ python3 -m isilon_usage status --data-dir /var/lib/isilon_usage --scan 3   # 특
     RSS, `native` 면 스캐너 프로세스 RSS. 스캐너 RSS·peak 도 함께 표시.
   - CPU 사용률, load average, 파일시스템 전체/사용/여유 용량
 - **용량 상위 디렉터리(실시간)**: 재귀 용량 기준 상위 디렉터리 표
+- **스토리지 어레이 상태** — 설정 시 Isilon/PowerStore/Unity/PowerMax/VMAX/
+  XtremIO/VPLEX 의 용량·노드·이벤트 상태(미설정이면 카드 숨김).
+- **🔒 작업 보호** — 비밀번호를 걸면 보기는 자유, 작업(버튼·설정 변경)에는 비밀번호.
+
+상단 탭으로 화면을 전환합니다:
+**Summary**(진행/요약/자원) · **디렉터리**(드릴다운·검색·상위 디렉터리) ·
+**추세·비교**(용량 추세·diff) · **📊 분석 리포트**(나이/소유자/확장자/최대 파일/예측/변화) ·
+**⚙ 설정** · **🧪 테스트 데이터** · **📖 버전 기록**.
 
 > 대시보드 서버가 스캐너와 **같은 호스트**에서 돌고 스캔이 진행 중이면, 헤드라인
 > 게이지(시스템 메모리/CPU/스캐너 RSS)는 매 폴링마다 실시간으로 갱신됩니다.
@@ -230,23 +267,34 @@ python3 -m isilon_usage status --data-dir /var/lib/isilon_usage --scan 3   # 특
 
 ```
 isilon_usage/
-├── db.py          per-run DB 스키마/헬퍼 (WAL: 스캔 쓰기 + 대시보드 읽기 동시)
-├── manager.py     관리 DB (모든 스캔 카탈로그 + 전체 용량 집계)
-├── monitor.py     자원 모니터 스레드 (psutil 또는 /proc)
-├── scanner.py     스캐너 (1단계 탐색 + 2단계 상향식 집계, native/du)
-├── server.py      대시보드 HTTP 서버 + JSON API
-├── dashboard.html 단일 페이지 대시보드(외부 CDN 없음, vanilla JS)
-└── cli.py         명령행 인터페이스 (run/scan/serve/status)
-tools/make_tree.py    테스트용 합성 디렉터리 트리 생성기
-tests/test_scanner.py 스캐너 정확성 테스트 (native/du == 참조값)
-tests/test_manager.py 관리 DB 통합 테스트 (per-run 분리 + 전체 집계)
+├── db.py            per-run DB 스키마/헬퍼 (WAL: 스캔 쓰기 + 대시보드 읽기 동시)
+├── manager.py       관리 DB (모든 스캔 카탈로그 + 전체 용량 집계)
+├── monitor.py       자원 모니터 + 시스템 사양/권장 스레드 계산
+├── scanner.py       스캐너 (탐색 + 상향식 집계, native/du, 안전장치, 집계 리포트)
+├── tuning.py        실측 보정(시범 스캔으로 스레드 처리량 비교)
+├── gentest.py       테스트용 샘플 디렉터리/파일 생성기
+├── settings.py      런타임 설정(웹 편집) + 예약(반복주기)
+├── notify.py        완료/오류 웹훅·메일 알림
+├── isilon_api.py    Isilon(OneFS) PAPI 상태
+├── powerstore_api.py Dell PowerStore REST 상태
+├── storage_status.py 어레이 상태 디스패처(Unity/PowerMax/VMAX/XtremIO/VPLEX)
+├── portal.py        글로벌 통합 포탈(HQ) — DB 복제 + Cross-DC 조망
+├── server.py        대시보드 HTTP 서버 + JSON API + /metrics(Prometheus)
+├── dashboard.html   단일 페이지 대시보드(외부 CDN 없음, vanilla JS)
+└── cli.py           명령행 인터페이스 (run/scan/serve/status/resume/prune/tune/gentest/stats/portal)
+tests/                스캐너·관리·서버·예약·포탈·아이실론 테스트(스크립트 실행)
+tools/make_release.py 결정적 릴리스 아카이브 빌드(download/)
 ```
 
 데이터 모델(요약):
 - 관리 DB `scans` — 스캔별 요약 한 줄(루트, 상태, 조사 용량, 디스크 용량 등)
-- per-run `scan_runs` — 그 스캔의 메타데이터 + 실시간 진행 상태
+- per-run `scan_runs` — 그 스캔의 메타데이터 + 실시간 진행 상태(워커·하트비트·누적시간 등)
 - per-run `directories` — 디렉터리별 집계(파일 수, `own_bytes`, 재귀 `total_bytes` 등)
 - per-run `resource_samples` — 자원 사용 시계열(메모리/CPU/RSS 등)
+- per-run `scan_stats` — 파일 나이/소유자/확장자별 집계(분석 리포트)
+- per-run `top_files` — 최대 파일 Top-N
+
+> 현재 DB 스키마 버전 **8** (`PRAGMA user_version`). 구버전 DB 는 자동 마이그레이션.
 
 ### 재시작/이어하기
 모든 진행 상태가 SQLite 에 있으므로 중간에 멈춰도 데이터가 남습니다. 같은
@@ -259,15 +307,16 @@ tests/test_manager.py 관리 DB 통합 테스트 (per-run 분리 + 전체 집계
 실제 NAS 없이도 합성 트리로 시험할 수 있습니다.
 
 ```bash
-# 디렉터리 1,365개 / 파일 54,600개짜리 트리 생성
-python3 tools/make_tree.py /tmp/isilon_demo --depth 5 --breadth 4 --files 40 --size 16384
+# 테스트 트리 생성(내장 명령): 디렉터리 60개 / 파일 600개
+python3 -m isilon_usage gentest /tmp/isilon_demo --dirs 10 --subdirs 5 --files 10 --size 16K -y
+#   (대시보드 '🧪 테스트 데이터' 탭에서도 진행 막대로 생성 가능)
 
 # 스캔 + 대시보드
 python3 -m isilon_usage run /tmp/isilon_demo --port 8765
-# 브라우저로 http://localhost:8765/
+# 브라우저로 http://localhost:8765/  → '📊 분석 리포트' 탭도 확인
 
-# 정확성 테스트
-python3 tests/test_scanner.py
+# 테스트(스크립트 실행)
+for t in tests/test_*.py; do python3 "$t"; done
 ```
 
 ---
