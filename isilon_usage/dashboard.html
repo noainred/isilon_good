@@ -129,6 +129,7 @@
   <nav id="nav">
     <button class="navbtn active" data-view="summary">Summary</button>
     <button class="navbtn" data-view="analysis">디렉터리</button>
+    <button class="navbtn" data-view="depth">🧭 대상 분석</button>
     <button class="navbtn" data-view="trends">추세·비교</button>
     <button class="navbtn" data-view="report">📊 분석 리포트</button>
     <button class="navbtn" data-view="settings">⚙ 설정</button>
@@ -765,6 +766,75 @@
   </div>
 </div>
 
+<!-- 대상 분석(디렉터리 깊이 구조 측정) 페이지 -->
+<div class="wrap view" id="view-depth" style="display:none;">
+  <h2 style="margin:0 0 8px;">🧭 대상 분석 — 폴더가 몇 단계까지 있나</h2>
+  <div class="card">
+    <p class="sub" style="margin:0 0 12px;">풀스캔 <b>전에</b> 디렉터리 깊이 구조만 빠르게 잽니다
+      (<b>파일 stat·DB 없이</b> 폴더만 훑어 풀스캔보다 훨씬 빠름). 각 깊이에 디렉터리가
+      몇 개인지 보고 <b>적절한 fold-depth</b> 를 고르는 데 씁니다.</p>
+
+    <label style="display:block;">대상 경로
+      <input id="depPath" type="text" class="setinput mono" style="width:100%;"
+             placeholder="/mnt/hadoop 처럼 분석할 경로" />
+    </label>
+
+    <!-- ★ 샘플 수집 시간(시간/분/초): 디렉터리가 너무 많아도 이 시간만 보고 멈춤 -->
+    <div class="card" style="margin-top:12px; border-color:var(--accent2); background:#0e1a1e;">
+      <div style="font-weight:700; margin-bottom:8px;">⏱ 샘플 수집 시간 — 이 시간 동안만 측정하고 그 데이터로 분석</div>
+      <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+        <label>시간 <input id="depH" type="number" min="0" max="999" value="0" class="setinput" style="width:80px;" /></label>
+        <label>분 <input id="depM" type="number" min="0" max="59" value="5" class="setinput" style="width:80px;" /></label>
+        <label>초 <input id="depS" type="number" min="0" max="59" value="0" class="setinput" style="width:80px;" /></label>
+        <span class="sub" id="depBudgetTxt" style="margin-bottom:6px;">—</span>
+      </div>
+      <div class="sub" style="margin-top:6px;">
+        디렉터리가 수천만 개여도 <b>지정한 시간만</b> 수집하고 멈춥니다(초과 시 '하한 추정치'로 표시).
+        <b>0/0/0 = 무제한</b>(끝까지 — 거대 트리는 오래 걸릴 수 있음).
+      </div>
+    </div>
+
+    <details style="margin-top:10px;">
+      <summary class="sub" style="cursor:pointer;">고급 옵션</summary>
+      <div class="setgrid" style="margin-top:8px;">
+        <label>최대 깊이(0=무제한)
+          <input id="depMaxDepth" type="number" min="0" max="100" value="0" class="setinput" />
+        </label>
+        <label>동시 워커 수
+          <input id="depWorkers" type="number" min="1" max="64" value="8" class="setinput" />
+        </label>
+      </div>
+    </details>
+
+    <div style="margin-top:12px; display:flex; gap:8px; align-items:center;">
+      <button id="depStartBtn" style="border-color:var(--accent2); color:#cfe; font-weight:700; padding:8px 16px;">분석 시작</button>
+      <button id="depStopBtn" style="display:none;">중지</button>
+      <span id="depMsg" class="sub"></span>
+    </div>
+
+    <div id="depProgWrap" style="display:none; margin-top:12px;">
+      <div class="bar"><span id="depBar" style="width:0%"></span></div>
+      <div class="sub" id="depProg" style="margin-top:6px;">—</div>
+    </div>
+  </div>
+
+  <!-- 결과 -->
+  <div id="depResult" class="card" style="display:none; margin-top:14px;">
+    <div id="depSummary" style="margin-bottom:10px;"></div>
+    <div id="depSuggest" style="margin-bottom:12px;"></div>
+    <table style="width:100%; border-collapse:collapse;" class="mono">
+      <thead><tr style="text-align:left; border-bottom:1px solid var(--line);">
+        <th style="padding:4px 8px;">깊이</th>
+        <th style="padding:4px 8px;">디렉터리 수</th>
+        <th style="padding:4px 8px; width:40%;">분포</th>
+        <th style="padding:4px 8px;">누적(fold 시 보존)</th>
+        <th style="padding:4px 8px;">예시 경로</th>
+      </tr></thead>
+      <tbody id="depRows"></tbody>
+    </table>
+  </div>
+</div>
+
 <!-- 버전 기록 페이지 -->
 <div class="wrap view" id="view-history" style="display:none;">
   <div class="card">
@@ -1188,6 +1258,103 @@ async function gtStop() {
 if ($("gtStart")) $("gtStart").addEventListener("click", gtStart);
 if ($("gtStop")) $("gtStop").addEventListener("click", gtStop);
 if ($("gtPlan")) gtCompute();
+
+// ---- 대상 분석(디렉터리 깊이 구조 측정) ----
+let _depTimer = null;
+function depBudgetSec() {
+  const h = parseInt($("depH").value) || 0, m = parseInt($("depM").value) || 0, s = parseInt($("depS").value) || 0;
+  return Math.max(0, h * 3600 + m * 60 + s);
+}
+function depBudgetTxt() {
+  const el = $("depBudgetTxt"); if (!el) return;
+  const t = depBudgetSec();
+  if (!t) { el.innerHTML = '→ <b style="color:var(--warn)">무제한</b>(끝까지 — 거대 트리는 오래 걸릴 수 있음)'; return; }
+  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+  const p = []; if (h) p.push(h + "시간"); if (m) p.push(m + "분"); if (s) p.push(s + "초");
+  el.innerHTML = '→ <b style="color:var(--ok)">' + p.join(" ") + '</b> 동안만 수집';
+}
+["depH", "depM", "depS"].forEach(id => { const el = $(id); if (el) el.addEventListener("input", depBudgetTxt); });
+
+async function depStart() {
+  const body = {
+    path: $("depPath").value.trim(),
+    timeout: depBudgetSec(),
+    max_depth: parseInt($("depMaxDepth").value) || 0,
+    workers: parseInt($("depWorkers").value) || 8,
+  };
+  if (!body.path) { $("depMsg").innerHTML = '<span style="color:var(--danger)">대상 경로를 입력하세요.</span>'; return; }
+  $("depMsg").textContent = "시작 중…"; $("depResult").style.display = "none";
+  try {
+    const j = await (await fetch("/api/analyze/start", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})).json();
+    if (!j.ok) { $("depMsg").innerHTML = '<span style="color:var(--danger)">시작 실패: ' + (j.error || "") + '</span>'; return; }
+  } catch (e) { $("depMsg").innerHTML = '<span style="color:var(--danger)">오류: ' + e + '</span>'; return; }
+  $("depStartBtn").disabled = true; $("depStopBtn").style.display = "";
+  $("depProgWrap").style.display = "block"; $("depMsg").textContent = "";
+  if (_depTimer) clearInterval(_depTimer);
+  _depTimer = setInterval(depPoll, 700); depPoll();
+}
+async function depPoll() {
+  try {
+    const j = await (await fetch("/api/analyze/status", {cache: "no-store"})).json();
+    const el = parseFloat(j.elapsed || 0);
+    $("depProg").innerHTML = '디렉터리 <b>' + fmtNum(j.total_dirs || 0) + '</b>개 · 파일 ' + fmtNum(j.total_files || 0)
+      + '개 · 최대깊이 <b>' + (j.max_depth || 0) + '</b> · ' + el.toFixed(1) + 's';
+    const bud = depBudgetSec();
+    $("depBar").style.width = (bud ? Math.min(100, el / bud * 100) : (j.done ? 100 : 60)) + "%";
+    if (j.done) {
+      clearInterval(_depTimer); _depTimer = null;
+      $("depStartBtn").disabled = false; $("depStopBtn").style.display = "none";
+      if (j.error) { $("depMsg").innerHTML = '<span style="color:var(--danger)">' + j.error + '</span>'; return; }
+      $("depMsg").innerHTML = '<span style="color:var(--ok)">✓ 분석 완료</span>';
+      if (j.result) depRender(j.result);
+    }
+  } catch (e) { /* 폴링 일시 오류 무시 */ }
+}
+async function depStop() {
+  try { await fetch("/api/analyze/stop", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"}); } catch (e) {}
+  $("depMsg").textContent = "중지 요청됨 — 지금까지 수집한 데이터로 분석합니다…";
+}
+function depRender(r) {
+  $("depResult").style.display = "block";
+  const maxDirs = Math.max(1, ...r.levels.map(L => L.dirs));
+  let rows = "";
+  r.levels.forEach(L => {
+    const w = Math.round(L.dirs / maxDirs * 100);
+    const hot = (L.depth === r.suggested_fold_depth) ? ' style="background:#0e1e12;"' : '';
+    rows += '<tr' + hot + '>'
+      + '<td style="padding:4px 8px;">' + L.depth + '</td>'
+      + '<td style="padding:4px 8px;">' + fmtNum(L.dirs) + '</td>'
+      + '<td style="padding:4px 8px;"><div class="bar" style="height:10px;"><span style="width:' + w + '%"></span></div></td>'
+      + '<td style="padding:4px 8px;">' + fmtNum(L.cumulative) + '</td>'
+      + '<td style="padding:4px 8px;"><span class="sub">' + (L.sample || "").replace(/</g, "&lt;") + '</span></td>'
+      + '</tr>';
+  });
+  $("depRows").innerHTML = rows;
+  let warn = "";
+  if (r.truncated) warn += '<span style="color:var(--warn)">⚠ 시간 초과로 중단 — 하한 추정치(실제는 더 큼)</span> &nbsp; ';
+  if (r.capped) warn += '<span style="color:var(--warn)">⚠ 최대깊이에서 멈춤(더 깊을 수 있음)</span>';
+  $("depSummary").innerHTML = '최대 깊이 <b>' + r.max_depth + '</b> · 측정 디렉터리 <b>' + fmtNum(r.total_dirs)
+    + '</b>개 · 파일 ' + fmtNum(r.total_files) + '개 · ' + (r.elapsed || 0).toFixed(1) + 's<br>' + warn;
+  const fold = r.suggested_fold_depth;
+  if (fold) {
+    const kv = (r.levels.find(L => L.depth === fold) || {}).cumulative;
+    $("depSuggest").innerHTML = '<div class="card" style="border-color:var(--ok); background:#0e1e12;">'
+      + '▶ 추천 <b style="font-size:1.1em;">fold-depth ' + fold + '</b>' + (kv != null ? ' (보존 행 ≈ <b>' + fmtNum(kv) + '</b>개)' : '')
+      + ' &nbsp; <button id="depApply">이 값으로 설정에 적용</button>'
+      + '<div class="sub mono" style="margin-top:8px;">python3 -m isilon_usage scan ' + (r.root || "")
+      + ' --fold-depth ' + fold + ' --min-free-gb 5 --db-max-gb 30</div></div>';
+    const ab = $("depApply");
+    if (ab) ab.addEventListener("click", () => {
+      const f = $("setFoldDepth"); if (f) f.value = fold;
+      showView("settings");
+      alert("설정의 'fold-depth'에 " + fold + " 를 넣었습니다. 저장하면 새 스캔에 적용됩니다.");
+    });
+  } else { $("depSuggest").innerHTML = ''; }
+}
+if ($("depStartBtn")) $("depStartBtn").addEventListener("click", depStart);
+if ($("depStopBtn")) $("depStopBtn").addEventListener("click", depStop);
+depBudgetTxt();
 
 async function saveSettings() {
   const payload = {
@@ -2450,7 +2617,7 @@ buildSchWeekdays(); fillSchSel("schMonth", 12, "월"); fillSchSel("schDay", 31, 
     });
   }
 })();
-const VIEWS = ["summary", "analysis", "trends", "report", "settings", "gentest", "history"];
+const VIEWS = ["summary", "analysis", "depth", "trends", "report", "settings", "gentest", "history"];
 let changelogLoaded = false;
 function showView(name) {
   if (VIEWS.indexOf(name) < 0) name = "summary";

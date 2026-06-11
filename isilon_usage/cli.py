@@ -379,6 +379,56 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_analyze(args: argparse.Namespace) -> int:
+    """대상 분석 — 풀스캔 전에 디렉터리 깊이 구조만 빠르게 측정(파일 stat·DB 없이)."""
+    from . import analyzer as anamod
+    path = os.path.abspath(args.path)
+    print("대상 분석 — 디렉터리 깊이 구조 측정(파일 stat 없이)")
+    print(f"  대상: {path}")
+    budget = []
+    if args.max_depth:
+        budget.append(f"최대깊이 {args.max_depth}")
+    if args.limit:
+        budget.append(f"디렉터리 {args.limit:,}개")
+    if args.timeout:
+        budget.append(f"{args.timeout:g}초")
+    print(f"  예산: {', '.join(budget) if budget else '무제한(끝까지)'}  ·  워커 {args.workers}")
+    print("-" * 64)
+    res = anamod.analyze_depth(path, max_depth=args.max_depth, dir_limit=args.limit,
+                               time_budget=args.timeout, workers=args.workers)
+    if not res.get("ok"):
+        print(f"  실패: {res.get('error')}", file=sys.stderr)
+        return 2
+    if getattr(args, "json", False):
+        import json
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return 0
+    print("  깊이 | 디렉터리 수 | 누적(fold 시 보존) | 예시 경로")
+    print("  " + "-" * 62)
+    for L in res["levels"]:
+        print("  %4d | %11s | %18s | %s" % (
+            L["depth"], f"{L['dirs']:,}", f"{L['cumulative']:,}", L["sample"]))
+    print("  " + "-" * 62)
+    print(f"  최대 깊이      : {res['max_depth']}")
+    print(f"  총 디렉터리    : {res['total_dirs']:,}   총 파일(개수): {res['total_files']:,}"
+          f"   오류: {res['error_dirs']:,}")
+    print(f"  소요 시간      : {res['elapsed']:.2f}s")
+    if res["truncated"]:
+        print("  ⚠ 예산 초과로 중단됨 — 결과는 '하한 추정치'입니다(실제는 더 큼).")
+    if res["capped"]:
+        print(f"  ⚠ 최대깊이({args.max_depth})에서 멈춤 — 더 깊은 단계가 있을 수 있습니다.")
+    fold = res["suggested_fold_depth"]
+    if fold:
+        kept = next((L["cumulative"] for L in res["levels"] if L["depth"] == fold), None)
+        print("=" * 64)
+        print(f"  ▶ 추천 fold-depth : {fold}"
+              + (f"  (보존 행 ≈ {kept:,}개)" if kept is not None else ""))
+        print(f"  적용 예) python -m isilon_usage scan {path} \\")
+        print(f"            --fold-depth {fold} --min-free-gb 5 --db-max-gb 30")
+    print("=" * 64)
+    return 0
+
+
 def cmd_version(args: argparse.Namespace) -> int:
     import platform
     print(f"isilon_usage {__version__}")
@@ -606,6 +656,19 @@ def build_parser() -> argparse.ArgumentParser:
     prs.add_argument("scan", type=int, help="재개할 scan id")
     prs.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
     prs.set_defaults(func=cmd_resume)
+
+    pan = sub.add_parser("analyze", help="대상 분석 — 디렉터리 깊이 구조만 빠르게 측정"
+                                         "(풀스캔 전 fold-depth 결정용)")
+    pan.add_argument("path", help="분석할 대상 경로")
+    pan.add_argument("--max-depth", type=int, default=0,
+                     help="이 깊이까지만 측정(0=무제한). 거대 트리 빠른 컷")
+    pan.add_argument("--limit", type=int, default=0,
+                     help="디렉터리 이만큼 방문하면 중단(0=무제한)")
+    pan.add_argument("--timeout", type=float, default=0.0,
+                     help="이 초만큼 지나면 중단(0=무제한). 빠른 추정에 유용")
+    pan.add_argument("--workers", type=int, default=8, help="동시 디렉터리 워커 수")
+    pan.add_argument("--json", action="store_true", help="결과를 JSON 으로 출력")
+    pan.set_defaults(func=cmd_analyze)
 
     pvr = sub.add_parser("version", help="버전/환경 정보 출력")
     pvr.set_defaults(func=cmd_version)

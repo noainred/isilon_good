@@ -617,6 +617,9 @@ class ScanController:
         self._gen = None                    # 테스트 데이터 생성 진행 상태
         self._gen_lock = threading.Lock()
         self._gen_stop = None
+        self._analyze = None                # 대상 분석(깊이 구조 측정) 진행 상태
+        self._analyze_lock = threading.Lock()
+        self._analyze_stop = None
         self._op_tokens = {}                # 작업 잠금 해제 토큰 → 발급 시각
         self._op_lock = threading.Lock()
         self._launch_cwd = os.getcwd()      # info.MD 를 저장할 '실행한 디렉터리'
@@ -909,6 +912,85 @@ class ScanController:
             if self._bench is None:
                 return {"ok": True, "running": False, "done": False, "results": []}
             return {"ok": True, **{k: v for k, v in self._bench.items()}}
+
+    # ----- 대상 분석(디렉터리 깊이 구조 측정) -----
+    def analyze_start(self, *, path=None, max_depth=0, dir_limit=0,
+                      time_budget=0.0, workers=8) -> dict:
+        """백그라운드로 깊이 구조 분석을 시작한다(파일 stat·DB 없이, 빠름).
+
+        analyze_status() 로 폴링해 진행/결과를 보여준다.
+        """
+        from . import analyzer as anamod
+        if not path:
+            path = self.mount_bases[0] if self.mount_bases else None
+        if not path:
+            return {"ok": False, "error": "분석할 경로를 지정하세요(허용 경로 없음)."}
+        ok, why = self.path_allowed(path)
+        if not ok:
+            return {"ok": False, "error": why}
+        try:
+            max_depth = max(0, int(max_depth or 0))
+            dir_limit = max(0, int(dir_limit or 0))
+            time_budget = max(0.0, float(time_budget or 0.0))
+            workers = max(1, int(workers or 8))
+        except (TypeError, ValueError):
+            max_depth, dir_limit, time_budget, workers = 0, 0, 0.0, 8
+        with self._analyze_lock:
+            if self._analyze and self._analyze.get("running"):
+                return {"ok": False, "error": "이미 분석이 진행 중입니다."}
+            self._analyze_stop = threading.Event()
+            self._analyze = {"running": True, "done": False, "error": None,
+                             "root": os.path.abspath(path), "started_at": time.time(),
+                             "total_dirs": 0, "total_files": 0, "max_depth": 0,
+                             "error_dirs": 0, "elapsed": 0.0, "result": None}
+        stop_event = self._analyze_stop
+
+        def _on_progress(p):
+            with self._analyze_lock:
+                if self._analyze is not None and self._analyze.get("running"):
+                    self._analyze.update(
+                        total_dirs=p.get("total", 0), total_files=p.get("files", 0),
+                        max_depth=p.get("max_depth", 0), error_dirs=p.get("errors", 0),
+                        elapsed=p.get("elapsed", 0.0))
+
+        def _run():
+            try:
+                res = anamod.analyze_depth(
+                    path, max_depth=max_depth, dir_limit=dir_limit,
+                    time_budget=time_budget, workers=workers,
+                    stop_event=stop_event, on_progress=_on_progress)
+            except Exception as exc:  # noqa: BLE001
+                res = {"ok": False, "error": "분석 오류: %s" % exc}
+            with self._analyze_lock:
+                if self._analyze is not None:
+                    self._analyze["running"] = False
+                    self._analyze["done"] = True
+                    if res.get("ok"):
+                        self._analyze["result"] = res
+                        self._analyze.update(
+                            total_dirs=res.get("total_dirs", 0),
+                            total_files=res.get("total_files", 0),
+                            max_depth=res.get("max_depth", 0),
+                            error_dirs=res.get("error_dirs", 0),
+                            elapsed=res.get("elapsed", 0.0))
+                    else:
+                        self._analyze["error"] = res.get("error")
+
+        threading.Thread(target=_run, name="analyze", daemon=True).start()
+        return {"ok": True, "started": True}
+
+    def analyze_status(self) -> dict:
+        """진행 중/완료된 대상 분석의 현재 스냅샷(완료 시 result 포함)."""
+        with self._analyze_lock:
+            if self._analyze is None:
+                return {"ok": True, "running": False, "done": False, "result": None}
+            return {"ok": True, **{k: v for k, v in self._analyze.items()}}
+
+    def analyze_stop(self) -> dict:
+        with self._analyze_lock:
+            if self._analyze_stop is not None:
+                self._analyze_stop.set()
+        return {"ok": True}
 
     # ----- 테스트 데이터 생성 -----
     def gentest_validate(self, *, path, n_dirs, n_subdirs, n_files, file_size) -> dict:
@@ -1411,6 +1493,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                                 {"ok": True, "running": False, "done": False})
                 return
 
+            if path == "/api/analyze/status":
+                self._send_json(self.controller.analyze_status()
+                                if self.controller else
+                                {"ok": True, "running": False, "done": False, "result": None})
+                return
+
             if path == "/api/settings":
                 self._send_json({
                     "ok": True,
@@ -1862,6 +1950,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             if path == "/api/gentest/stop":
                 self._send_json(self.controller.gentest_stop())
+                return
+
+            if path == "/api/analyze/start":
+                res = self.controller.analyze_start(
+                    path=(body.get("path") or "").strip() or None,
+                    max_depth=body.get("max_depth", 0),
+                    dir_limit=body.get("limit", 0),
+                    time_budget=body.get("timeout", 0.0),
+                    workers=body.get("workers", 8),
+                )
+                self._send_json(res, status=200 if res.get("ok") else 400)
+                return
+
+            if path == "/api/analyze/stop":
+                self._send_json(self.controller.analyze_stop())
                 return
 
             if path in ("/api/scan/stop", "/api/scan/resume", "/api/scan/delete"):
