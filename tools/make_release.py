@@ -32,7 +32,8 @@ sys.path.insert(0, ROOT)
 from isilon_usage import __version__  # noqa: E402
 
 # 압축본에 담을 "최종 파일"(실행에 필요한 것 + 문서)
-INCLUDE_FILES = ["README.md", "CHANGELOG.md", "requirements.txt",
+INCLUDE_FILES = ["README.md", "CHANGELOG.md", "LICENSE", "SECURITY.md",
+                 "requirements.txt",
                  "pyproject.toml", "setup.cfg", "setup.py", "MANIFEST.in", "Dockerfile"]
 INCLUDE_DIRS = ["docs", "tools"]   # isilon_usage 패키지는 별도 처리
 
@@ -81,6 +82,7 @@ HISTORY = {
     "1.21.1": "2b1d9e2",
     "1.22.0": "a0174e9",
     "1.23.0": "ed8c40a",
+    "1.23.1": "26650d1",
 }
 # 버전별 파이썬 호환(없으면 기본값). 1.1.1 부터 3.6 호환.
 PY_COMPAT = {"1.0.0": "Python 3.7+", "1.1.0": "Python 3.7+"}

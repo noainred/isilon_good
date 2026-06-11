@@ -13,6 +13,18 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.23.2] - 2026-06-09
+
+### 추가됨 (Added) — 외부 배포 준비
+- **MIT License** 추가(`LICENSE`) — 외부 배포의 법적 전제. `setup.cfg` 에 license
+  메타/분류자, `MANIFEST.in`·릴리스 아카이브에 포함.
+- **`SECURITY.md` 하드닝 가이드** — 위협 모델·기본 동작 주의점·외부 노출 시 필수
+  조치(로컬 바인드+SSH 터널, `--mount-base`, `--lock-settings`, 작업 보호 비밀번호,
+  TLS 프록시, 읽기전용 마운트, 최소 권한)·민감 파일(`info.MD`/`settings.json`).
+- README 헤더에 보안 가이드·MIT License 링크.
+
+---
+
 ## [1.23.1] - 2026-06-09
 
 ### 추가됨 (Added)
