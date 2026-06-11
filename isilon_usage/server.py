@@ -620,6 +620,7 @@ class ScanController:
         self._analyze = None                # 대상 분석(깊이 구조 측정) 진행 상태
         self._analyze_lock = threading.Lock()
         self._analyze_stop = None
+        self._ts_hist_lock = threading.Lock()  # 트러블슈팅 진단 이력 파일 보호
         self._op_tokens = {}                # 작업 잠금 해제 토큰 → 발급 시각
         self._op_lock = threading.Lock()
         self._launch_cwd = os.getcwd()      # info.MD 를 저장할 '실행한 디렉터리'
@@ -1005,12 +1006,31 @@ class ScanController:
 
     # ----- 트러블슈팅(실행 중 스캔 병목 진단) -----
     def troubleshoot(self, *, sample_sec: float = 1.2) -> dict:
-        """실행 중인 스캔의 '어느 구간이 느린지'를 진단한다(워커 구간·처리량·프론티어)."""
+        """실행 중인 스캔의 '어느 구간이 느린지'를 진단한다(워커 구간·처리량·프론티어).
+
+        OK 가 아닌 결과는 자동으로 진단 이력(History)에 저장한다.
+        """
         from . import troubleshoot as troubmod
         try:
-            return troubmod.diagnose(self, sample_sec=sample_sec)
+            res = troubmod.diagnose(self, sample_sec=sample_sec)
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": "진단 오류: %s" % exc}
+        try:
+            with self._ts_hist_lock:
+                troubmod.record_if_problem(self.data_dir, res)
+        except Exception:  # noqa: BLE001
+            pass
+        return res
+
+    def troubleshoot_history(self, limit: int = 200) -> dict:
+        from . import troubleshoot as troubmod
+        with self._ts_hist_lock:
+            return {"ok": True, "events": troubmod.load_history(self.data_dir, limit=limit)}
+
+    def troubleshoot_history_clear(self) -> dict:
+        from . import troubleshoot as troubmod
+        with self._ts_hist_lock:
+            return troubmod.clear_history(self.data_dir)
 
     # ----- 테스트 데이터 생성 -----
     def gentest_validate(self, *, path, n_dirs, n_subdirs, n_files, file_size) -> dict:
@@ -1527,6 +1547,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     scan_root=qs.get("path", [None])[0]))
                 return
 
+            if path == "/api/troubleshoot/history":
+                self._send_json(self.controller.troubleshoot_history(
+                    limit=int(qs.get("limit", ["200"])[0] or 200))
+                    if self.controller else {"ok": True, "events": []})
+                return
+
             if path == "/api/troubleshoot":
                 if not self.controller:
                     self._send_json({"ok": False, "error": "웹 스캔 비활성(진단 불가)."})
@@ -2005,6 +2031,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             if path == "/api/analyze/stop":
                 self._send_json(self.controller.analyze_stop())
+                return
+
+            if path == "/api/troubleshoot/history/clear":
+                self._send_json(self.controller.troubleshoot_history_clear())
                 return
 
             if path in ("/api/scan/stop", "/api/scan/resume", "/api/scan/delete"):

@@ -12,6 +12,7 @@ import os
 import sys
 import threading
 import time
+import json
 
 from . import db as dbmod
 from . import manager as mgrmod
@@ -352,7 +353,6 @@ def diagnose(controller, *, sample_sec: float = 1.2) -> dict:
     # 워커별 현재 경로(병렬 표시용 JSON) 파싱
     worker_dirs = []
     try:
-        import json
         worker_dirs = json.loads(r2.get("worker_dirs") or "[]")
     except Exception:
         worker_dirs = []
@@ -371,3 +371,107 @@ def diagnose(controller, *, sample_sec: float = 1.2) -> dict:
         "recommendations": recs,
         "resources": resources, "resource_bottleneck": resource_bottleneck,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 진단 이력(History) — OK 가 아닌 진단을 자동 저장하고 조회한다.
+# data-dir 의 troubleshoot_history.json (배열)에 누적. 같은 문제가 반복되면
+# 새 줄을 쌓지 않고 '횟수+최근시각'을 갱신(merge_window 안)해 노이즈를 막는다.
+# ─────────────────────────────────────────────────────────────────────────
+
+# OK 가 아닌(=이력에 남길) 등급. 'info'(롱테일=거의 끝남)와 'na'(측정불가)는 제외.
+_PROBLEM_VERDICT = {"warn", "danger", "bad"}
+_PROBLEM_RES = {"warn", "bad"}
+
+
+def _history_path(data_dir):
+    return os.path.join(data_dir, "troubleshoot_history.json")
+
+
+def is_problem(result) -> bool:
+    """진단 결과가 '이력에 남길 문제'인지(OK 이외)."""
+    if not result or not result.get("ok") or not result.get("running"):
+        return False
+    if (result.get("verdict") or {}).get("level") in _PROBLEM_VERDICT:
+        return True
+    if (result.get("resource_bottleneck") or {}).get("level") in _PROBLEM_RES:
+        return True
+    for r in result.get("resources", []):
+        if r.get("level") in _PROBLEM_RES:
+            return True
+    return False
+
+
+def _signature(result) -> str:
+    """같은 문제 묶기용 시그니처(판정 제목 + 자원 병목 + 나쁜 자원 집합)."""
+    v = (result.get("verdict") or {}).get("title", "")
+    rb = result.get("resource_bottleneck") or {}
+    bad = ",".join(sorted(
+        "%s:%s" % (r.get("name"), r.get("level"))
+        for r in result.get("resources", []) if r.get("level") in _PROBLEM_RES))
+    return "%s|%s:%s|%s" % (v, rb.get("name", ""), rb.get("level", ""), bad)
+
+
+def _compact(result) -> dict:
+    return {
+        "verdict": result.get("verdict"),
+        "resource_bottleneck": result.get("resource_bottleneck"),
+        "bad_resources": [
+            {"name": r["name"], "level": r["level"], "value": r["value"], "note": r["note"]}
+            for r in result.get("resources", []) if r.get("level") in _PROBLEM_RES],
+        "rate_dirs": result.get("rate_dirs"), "rate_files": result.get("rate_files"),
+        "heartbeat_age": result.get("heartbeat_age"), "pending_est": result.get("pending_est"),
+        "root_path": result.get("root_path"), "status": result.get("status"),
+        "phase": result.get("phase"),
+    }
+
+
+def _load_events(data_dir):
+    try:
+        with open(_history_path(data_dir), "r", encoding="utf-8") as fh:
+            return (json.load(fh) or {}).get("events", [])
+    except (OSError, ValueError):
+        return []
+
+
+def load_history(data_dir, limit: int = 200):
+    """저장된 진단 이력을 최신순으로 반환."""
+    events = sorted(_load_events(data_dir), key=lambda e: e.get("ts", 0), reverse=True)
+    return events[:limit] if limit else events
+
+
+def record_if_problem(data_dir, result, *, merge_window: float = 600.0, keep: int = 500) -> bool:
+    """OK 가 아니면 이력에 저장한다(같은 문제는 merge_window 안에서 횟수만 증가)."""
+    if not is_problem(result):
+        return False
+    events = _load_events(data_dir)
+    now = time.time()
+    sig = _signature(result)
+    tstr = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
+    comp = _compact(result)
+    last = events[-1] if events else None
+    if last and last.get("sig") == sig and (now - last.get("ts", 0)) < merge_window:
+        last.update(comp)
+        last["ts"] = now
+        last["last_seen"] = tstr
+        last["count"] = int(last.get("count", 1)) + 1
+    else:
+        ev = {"sig": sig, "ts": now, "first_seen": tstr, "last_seen": tstr, "count": 1}
+        ev.update(comp)
+        events.append(ev)
+    if len(events) > keep:
+        events = events[-keep:]
+    try:
+        with open(_history_path(data_dir), "w", encoding="utf-8") as fh:
+            json.dump({"events": events}, fh, ensure_ascii=False)
+    except OSError:
+        return False
+    return True
+
+
+def clear_history(data_dir) -> dict:
+    try:
+        os.remove(_history_path(data_dir))
+    except OSError:
+        pass
+    return {"ok": True}

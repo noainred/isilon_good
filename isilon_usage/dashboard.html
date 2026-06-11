@@ -878,6 +878,10 @@
       <div class="card">
         <h3 style="margin:0 0 8px;">처리량 · 진행</h3>
         <div id="tsRates" class="mono" style="line-height:1.9;"></div>
+        <div style="margin-top:10px;">
+          <div class="sub" id="tsRateLegend" style="margin-bottom:4px;">디렉터리 읽기 속도 변화 — <b>자동(3초)</b>을 켜면 누적됩니다.</div>
+          <canvas id="tsRateChart" width="380" height="110" style="width:100%; background:#0c1116; border-radius:6px;"></canvas>
+        </div>
       </div>
     </div>
 
@@ -889,6 +893,18 @@
 
     <!-- 처방 -->
     <div id="tsRecs" class="card" style="margin-top:14px; display:none;"></div>
+  </div>
+
+  <!-- 진단 이력(History) — OK 가 아닌 진단을 자동 저장 -->
+  <div class="card" style="margin-top:14px;">
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+      <h3 style="margin:0;">📜 진단 이력 (History)</h3>
+      <span class="sub">— OK 이외(주의/위험)인 진단을 자동 저장합니다.</span>
+      <div class="spacer" style="flex:1;"></div>
+      <button id="tsHistRefresh">새로고침</button>
+      <button id="tsHistClear">이력 비우기</button>
+    </div>
+    <div id="tsHistBody"><span class="sub">불러오는 중…</span></div>
   </div>
 </div>
 
@@ -1448,7 +1464,7 @@ async function tsRun() {
     const j = await (await fetch("/api/troubleshoot?sample=1.0", {cache: "no-store"})).json();
     if (!j.ok) { $("tsMsg").innerHTML = '<span style="color:var(--danger)">' + (j.error || "진단 불가") + '</span>'; return; }
     if (!j.running) { $("tsMsg").innerHTML = '<span class="sub">' + (j.msg || "실행 중인 스캔이 없습니다.") + '</span>'; $("tsResult").style.display = "none"; return; }
-    $("tsMsg").textContent = ""; tsRender(j);
+    $("tsMsg").textContent = ""; tsRender(j); tsPushRate(j); tsHistLoad();
   } catch (e) { $("tsMsg").innerHTML = '<span style="color:var(--danger)">오류: ' + e + '</span>'; }
   finally { _tsBusy = false; }
 }
@@ -1503,6 +1519,66 @@ function tsAutoToggle() {
 }
 if ($("tsRun")) $("tsRun").addEventListener("click", tsRun);
 if ($("tsAuto")) $("tsAuto").addEventListener("change", tsAutoToggle);
+
+// ---- 디렉터리 읽기 속도 변화 차트(시계열) ----
+let _tsRateHist = [];
+function tsPushRate(j) {
+  if (!j || !j.running) return;
+  _tsRateHist.push({rd: Math.max(0, j.rate_dirs || 0), rf: Math.max(0, j.rate_files || 0)});
+  if (_tsRateHist.length > 120) _tsRateHist = _tsRateHist.slice(-120);
+  tsDrawRateChart();
+}
+function tsDrawRateChart() {
+  const cv = $("tsRateChart");
+  if (!cv || typeof drawSeries !== "function" || !_tsRateHist.length) return;
+  // drawSeries 는 각 선을 '자기 최댓값' 기준으로 그려 변화량 비교에 적합.
+  drawSeries(cv, _tsRateHist, {lines: [
+    {get: p => p.rd, color: "#5cc8ff"},   // 디렉터리/초 (주)
+    {get: p => p.rf, color: "#7ad99a"},   // 파일/초 (보조)
+  ]});
+  const last = _tsRateHist[_tsRateHist.length - 1] || {rd: 0, rf: 0};
+  const peakD = Math.max(0, ..._tsRateHist.map(p => p.rd));
+  const peakF = Math.max(0, ..._tsRateHist.map(p => p.rf));
+  if ($("tsRateLegend")) $("tsRateLegend").innerHTML =
+    '<span style="color:#5cc8ff">● 디렉터리 <b>' + Math.round(last.rd) + '</b>/s</span> (피크 ' + Math.round(peakD) + ') · '
+    + '<span style="color:#7ad99a">● 파일 <b>' + Math.round(last.rf) + '</b>/s</span> (피크 ' + Math.round(peakF) + ')'
+    + ' <span class="sub">— 각 선은 자기 최댓값 기준(변화량). ' + _tsRateHist.length + '개 표본</span>';
+}
+
+// ---- 트러블슈팅 진단 이력(History) ----
+async function tsHistLoad() {
+  if (!$("tsHistBody")) return;
+  try {
+    const j = await (await fetch("/api/troubleshoot/history?limit=200", {cache: "no-store"})).json();
+    const ev = (j.events || []);
+    if (!ev.length) { $("tsHistBody").innerHTML = '<span class="sub">저장된 이력이 없습니다(아직 OK 이외 진단이 없거나 비움).</span>'; return; }
+    const rows = ev.map(e => {
+      const v = e.verdict || {}, rb = e.resource_bottleneck || {};
+      const bads = (e.bad_resources || []).map(b =>
+        '<span style="color:' + (TS_COLOR[b.level] || "") + '">' + (TS_DOT[b.level] || "") + ' ' + b.name + '</span>').join(" ");
+      return '<tr style="border-bottom:1px solid var(--line);">'
+        + '<td style="padding:5px 8px; white-space:nowrap;" class="mono sub">' + (e.last_seen || "")
+        + (e.count > 1 ? ' <b style="color:var(--warn)">×' + e.count + '</b>' : '') + '</td>'
+        + '<td style="padding:5px 8px; color:' + (TS_COLOR[v.level] || "") + '">' + (v.title || "") + '</td>'
+        + '<td style="padding:5px 8px;">' + (bads || '<span class="sub">-</span>') + '</td>'
+        + '<td style="padding:5px 8px;" class="mono sub">dirs ' + Math.round(e.rate_dirs || 0) + '/s · files ' + Math.round(e.rate_files || 0) + '/s · 대기 ' + fmtNum(e.pending_est || 0) + '</td>'
+        + '<td style="padding:5px 8px;"><span class="sub">' + (e.root_path || "").replace(/</g, "&lt;") + '</span></td></tr>';
+    }).join("");
+    $("tsHistBody").innerHTML =
+      '<div class="sub" style="margin-bottom:6px;">총 ' + ev.length + '건 (같은 문제는 횟수로 병합)</div>'
+      + '<table style="width:100%; border-collapse:collapse;"><thead><tr style="text-align:left; border-bottom:1px solid var(--line);">'
+      + '<th style="padding:4px 8px;">시각</th><th style="padding:4px 8px;">판정</th><th style="padding:4px 8px;">자원</th>'
+      + '<th style="padding:4px 8px;">그때 처리량</th><th style="padding:4px 8px;">루트</th></tr></thead><tbody>'
+      + rows + '</tbody></table>';
+  } catch (e) { $("tsHistBody").innerHTML = '<span style="color:var(--danger)">이력 로드 오류: ' + e + '</span>'; }
+}
+async function tsHistClear() {
+  if (!confirm("저장된 진단 이력을 모두 비울까요?")) return;
+  try { await fetch("/api/troubleshoot/history/clear", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"}); } catch (e) {}
+  tsHistLoad();
+}
+if ($("tsHistRefresh")) $("tsHistRefresh").addEventListener("click", tsHistLoad);
+if ($("tsHistClear")) $("tsHistClear").addEventListener("click", tsHistClear);
 
 // ---- 튜닝 점검(OS 커널/마운트 설정) ----
 const TUNE_GLYPH = {ok: "🟢", warn: "🟠", tip: "🟡", na: "⚪"};
@@ -2816,7 +2892,7 @@ function showView(name) {
   try { history.replaceState(null, "", "#" + name); } catch (e) { location.hash = name; }
   if (name === "history" && !changelogLoaded) loadChangelog();
   if (name === "report") loadReport();
-  if (name === "trouble") { if (typeof tsRun === "function") tsRun(); }
+  if (name === "trouble") { if (typeof tsRun === "function") tsRun(); if (typeof tsHistLoad === "function") tsHistLoad(); }
   if (name === "tune") { if (typeof tuneRun === "function" && $("tuneResult") && $("tuneResult").style.display === "none") tuneRun(); }
   else if (typeof _tsAutoTimer !== "undefined" && _tsAutoTimer) {
     clearInterval(_tsAutoTimer); _tsAutoTimer = null;
