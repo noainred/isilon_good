@@ -454,6 +454,62 @@ def cmd_tunecheck(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_pscan(args: argparse.Namespace) -> int:
+    """pscan(PoC) — 멀티프로세스 병렬 스캔(GIL/단일 락 직렬화 회피)."""
+    from . import pscan as psmod
+    root = os.path.abspath(args.path)
+    node_mounts = args.node_mount or None
+
+    if getattr(args, "compare", False):
+        print("멀티프로세스 확장성 비교(처리량) — %s" % root)
+        print("-" * 56)
+        print("  프로세스 | 소요(s) | 디렉터리/초 | 파일/초 | 1→N 속도향상")
+        base = None
+        for p in (1, 2, 4, 8):
+            r = psmod.parallel_scan(root, processes=p, size_mode=args.size_mode)
+            if not r.get("ok"):
+                print("  실패: %s" % r.get("error"), file=sys.stderr)
+                return 2
+            base = base or r["elapsed"]
+            print("  %8d | %7.2f | %11.0f | %8.0f | %.2f배" % (
+                p, r["elapsed"], r["dirs_per_sec"], r["files_per_sec"],
+                base / r["elapsed"] if r["elapsed"] else 0))
+        print("-" * 56)
+        print("  (NAS 에서는 프로세스 수만큼 메타데이터 처리량이 늘어야 정상)")
+        return 0
+
+    print("pscan(PoC) — 멀티프로세스 병렬 스캔")
+    print("  대상: %s  ·  프로세스: %d  ·  size-mode: %s%s" % (
+        root, args.processes, args.size_mode,
+        ("  ·  노드마운트 %d개" % len(node_mounts)) if node_mounts else ""))
+
+    def _prog(p):
+        sys.stdout.write("\r  진행: %d/%d 단위  (%.1fs)" % (p["done"], p["units"], p["elapsed"]))
+        sys.stdout.flush()
+    res = psmod.parallel_scan(root, processes=args.processes, size_mode=args.size_mode,
+                              node_mounts=node_mounts, on_progress=_prog)
+    print()
+    if not res.get("ok"):
+        print("  실패: %s" % res.get("error"), file=sys.stderr)
+        return 2
+    if getattr(args, "json", False):
+        import json
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return 0
+    print("-" * 56)
+    print("  총 용량      : %s" % _human(res["total_bytes"]))
+    print("  총 파일/디렉터리: %d / %d   오류: %d" % (
+        res["total_files"], res["total_dirs"], res["error_count"]))
+    print("  소요/처리량  : %.2fs  ·  %.0f 디렉터리/초  ·  %.0f 파일/초" % (
+        res["elapsed"], res["dirs_per_sec"], res["files_per_sec"]))
+    if res["per_top"]:
+        print("  상위 디렉터리(용량순):")
+        for t in res["per_top"][:10]:
+            print("    %10s  %s  (파일 %d)" % (_human(t["bytes"]), t["path"], t["files"]))
+    print("-" * 56)
+    return 0
+
+
 def cmd_version(args: argparse.Namespace) -> int:
     import platform
     print(f"isilon_usage {__version__}")
@@ -701,6 +757,18 @@ def build_parser() -> argparse.ArgumentParser:
     ptc.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
     ptc.add_argument("--json", action="store_true", help="결과를 JSON 으로 출력")
     ptc.set_defaults(func=cmd_tunecheck)
+
+    pps = sub.add_parser("pscan", help="[PoC] 멀티프로세스 병렬 스캔"
+                                       "(GIL/단일 락 회피 — 프로세스 수만큼 확장)")
+    pps.add_argument("path", help="스캔할 루트 경로")
+    pps.add_argument("--processes", "-P", type=int, default=4, help="동시 프로세스 수")
+    pps.add_argument("--size-mode", choices=["disk", "apparent"], default="disk")
+    pps.add_argument("--node-mount", action="append", default=None,
+                     help="멀티노드: 같은 트리의 다른 노드 마운트(여러 번 지정 → 라운드로빈 분산)")
+    pps.add_argument("--compare", action="store_true",
+                     help="프로세스 1·2·4·8 로 확장성(처리량) 비교")
+    pps.add_argument("--json", action="store_true", help="결과를 JSON 으로 출력")
+    pps.set_defaults(func=cmd_pscan)
 
     pvr = sub.add_parser("version", help="버전/환경 정보 출력")
     pvr.set_defaults(func=cmd_version)
