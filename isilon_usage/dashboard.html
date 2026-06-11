@@ -861,11 +861,13 @@
         <h3 style="margin:0;">처리량 · 진행</h3>
         <div class="spacer" style="flex:1;"></div>
         <span class="sub">표시 구간:</span>
-        <div id="tsRangeBtns" style="display:flex; gap:4px;">
+        <div id="tsRangeBtns" style="display:flex; gap:4px; flex-wrap:wrap;">
           <button class="tsRangeBtn" data-sec="5" data-poll="1000">5초</button>
           <button class="tsRangeBtn" data-sec="30" data-poll="2000">30초</button>
           <button class="tsRangeBtn" data-sec="60" data-poll="3000">1분</button>
           <button class="tsRangeBtn" data-sec="600" data-poll="5000">10분</button>
+          <button class="tsRangeBtn" data-sec="3600" data-poll="15000">1시간</button>
+          <button class="tsRangeBtn" data-sec="86400" data-poll="30000">24시간</button>
         </div>
       </div>
       <div id="tsRates" class="mono" style="line-height:1.9; margin-top:8px;"></div>
@@ -1474,7 +1476,9 @@ async function tsRun() {
     const j = await (await fetch("/api/troubleshoot?sample=1.0", {cache: "no-store"})).json();
     if (!j.ok) { $("tsMsg").innerHTML = '<span style="color:var(--danger)">' + (j.error || "진단 불가") + '</span>'; return; }
     if (!j.running) { $("tsMsg").innerHTML = '<span class="sub">' + (j.msg || "실행 중인 스캔이 없습니다.") + '</span>'; $("tsResult").style.display = "none"; return; }
-    $("tsMsg").textContent = ""; tsRender(j); tsPushRate(j); tsHistLoad();
+    $("tsMsg").textContent = ""; tsRender(j); tsPushRate(j);
+    if (_tsWindowSec > 600) tsLoadServerSamples();   // 긴 구간이면 서버 24h 표본 갱신
+    tsHistLoad();
   } catch (e) { $("tsMsg").innerHTML = '<span style="color:var(--danger)">오류: ' + e + '</span>'; }
   finally { _tsBusy = false; }
 }
@@ -1537,18 +1541,27 @@ function tsWindowed() {
   const cut = Date.now() / 1000 - _tsWindowSec;
   return _tsRateHist.filter(p => p.t >= cut);
 }
+let _tsServerSamples = [];     // 서버 metrics.db 에서 불러온 표본(긴 구간용)
 function tsPushRate(j) {
   if (!j || !j.running) return;
   _tsRateHist.push({t: Date.now() / 1000, rd: Math.max(0, j.rate_dirs || 0), rf: Math.max(0, j.rate_files || 0)});
-  const cut = Date.now() / 1000 - 600;          // 최대 10분치 보관
+  const cut = Date.now() / 1000 - 600;          // 라이브 버퍼는 최대 10분치
   _tsRateHist = _tsRateHist.filter(p => p.t >= cut);
+  if (_tsWindowSec <= 600) tsDrawRateChart();    // 짧은 구간은 라이브로 즉시 갱신
+}
+async function tsLoadServerSamples() {
+  try {
+    const j = await (await fetch("/api/troubleshoot/samples?seconds=" + _tsWindowSec + "&max=600", {cache: "no-store"})).json();
+    _tsServerSamples = (j.samples || []).map(p => ({t: p.t, rd: p.rd, rf: p.rf}));
+  } catch (e) { /* 기존값 유지 */ }
   tsDrawRateChart();
 }
 function tsDrawRateChart() {
   const cv = $("tsRateChart");
   if (!cv || typeof drawSeries !== "function") return;
-  // drawSeries 는 각 선을 '자기 최댓값' 기준으로 그려 변화량 비교에 적합.
-  const pts = tsWindowed();
+  // 짧은 구간(≤10분)=브라우저 라이브 버퍼, 긴 구간(≥1시간)=서버 metrics.db 표본(24h 저장).
+  const pts = (_tsWindowSec <= 600) ? tsWindowed()
+            : _tsServerSamples.filter(p => p.t >= Date.now() / 1000 - _tsWindowSec);
   drawSeries(cv, pts, {lines: [
     {get: p => p.rd, color: "#5cc8ff"},   // 디렉터리/초 (주)
     {get: p => p.rf, color: "#7ad99a"},   // 파일/초 (보조)
@@ -1556,11 +1569,13 @@ function tsDrawRateChart() {
   const last = pts[pts.length - 1] || {rd: 0, rf: 0};
   const peakD = Math.max(0, ...pts.map(p => p.rd));
   const peakF = Math.max(0, ...pts.map(p => p.rf));
-  const wlabel = _tsWindowSec >= 60 ? (_tsWindowSec / 60) + "분" : _tsWindowSec + "초";
+  const wlabel = _tsWindowSec >= 3600 ? (_tsWindowSec / 3600) + "시간"
+              : (_tsWindowSec >= 60 ? (_tsWindowSec / 60) + "분" : _tsWindowSec + "초");
+  const src = _tsWindowSec > 600 ? "서버 저장(metrics.db)" : "라이브";
   if ($("tsRateLegend")) $("tsRateLegend").innerHTML =
     '<span style="color:#5cc8ff">● 디렉터리 <b>' + Math.round(last.rd) + '</b>/s</span> (피크 ' + Math.round(peakD) + ') · '
     + '<span style="color:#7ad99a">● 파일 <b>' + Math.round(last.rf) + '</b>/s</span> (피크 ' + Math.round(peakF) + ')'
-    + ' <span class="sub">— 최근 ' + wlabel + ' · ' + pts.length + '표본 · 각 선 자기 최댓값 기준</span>';
+    + ' <span class="sub">— 최근 ' + wlabel + ' · ' + pts.length + '표본 · ' + src + '</span>';
 }
 function tsSetRange(sec, pollMs) {
   _tsWindowSec = sec; _tsPollMs = pollMs;
@@ -1570,7 +1585,8 @@ function tsSetRange(sec, pollMs) {
     b.style.color = on ? "#06231a" : "";
     b.style.fontWeight = on ? "700" : "";
   });
-  tsDrawRateChart();
+  if (sec > 600) tsLoadServerSamples();   // 긴 구간 → 서버 24h 표본 로드
+  else tsDrawRateChart();
   if ($("tsAuto") && $("tsAuto").checked) tsAutoToggle();   // 새 폴링 간격으로 재시작
 }
 document.querySelectorAll(".tsRangeBtn").forEach(b =>

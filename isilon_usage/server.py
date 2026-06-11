@@ -621,6 +621,12 @@ class ScanController:
         self._analyze_lock = threading.Lock()
         self._analyze_stop = None
         self._ts_hist_lock = threading.Lock()  # 트러블슈팅 진단 이력 파일 보호
+        self._rate_lock = threading.Lock()     # 처리량 표본 DB 보호
+        self._rate_prev = None                 # (scan_id, ts, discovered, files)
+        self._rate_stop = threading.Event()
+        self._rate_thread = threading.Thread(
+            target=self._rate_sampler_loop, name="rate-sampler", daemon=True)
+        self._rate_thread.start()
         self._op_tokens = {}                # 작업 잠금 해제 토큰 → 발급 시각
         self._op_lock = threading.Lock()
         self._launch_cwd = os.getcwd()      # info.MD 를 저장할 '실행한 디렉터리'
@@ -1031,6 +1037,43 @@ class ScanController:
         from . import troubleshoot as troubmod
         with self._ts_hist_lock:
             return troubmod.clear_history(self.data_dir)
+
+    # ----- 처리량 표본 24시간 저장(전용 metrics.db) -----
+    def _rate_sampler_loop(self) -> None:
+        """10초마다 진행값 델타로 처리량(초당 디렉터리/파일)을 계산해 metrics.db 에
+        기록한다(대시보드가 닫혀 있어도 24시간치가 쌓인다)."""
+        from . import troubleshoot as troubmod
+        n = 0
+        while not self._rate_stop.wait(10):
+            try:
+                prog = troubmod.latest_progress(self.data_dir)
+                now = time.time()
+                if prog and prog["status"] in ("discovering", "sizing", "running"):
+                    prev = self._rate_prev
+                    if prev and prev[0] == prog["scan_id"]:
+                        dt = now - prev[1]
+                        if dt >= 1:
+                            rd = max(0, prog["discovered"] - prev[2]) / dt
+                            rf = max(0, prog["files"] - prev[3]) / dt
+                            with self._rate_lock:
+                                troubmod.append_rate_sample(
+                                    self.data_dir, now, rd, rf, prog["scan_id"])
+                    self._rate_prev = (prog["scan_id"], now, prog["discovered"], prog["files"])
+                else:
+                    self._rate_prev = None
+                n += 1
+                if n % 30 == 0:            # 약 5분마다 24시간 초과분 정리
+                    with self._rate_lock:
+                        troubmod.trim_rate_samples(self.data_dir, keep_seconds=86400)
+            except Exception:             # noqa: BLE001 — 샘플러가 죽으면 안 됨
+                pass
+
+    def rate_samples(self, *, seconds: int = 86400, max_points: int = 600) -> dict:
+        from . import troubleshoot as troubmod
+        with self._rate_lock:
+            return {"ok": True, "seconds": seconds,
+                    "samples": troubmod.load_rate_samples(
+                        self.data_dir, seconds=seconds, max_points=max_points)}
 
     # ----- 테스트 데이터 생성 -----
     def gentest_validate(self, *, path, n_dirs, n_subdirs, n_files, file_size) -> dict:
@@ -1551,6 +1594,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(self.controller.troubleshoot_history(
                     limit=int(qs.get("limit", ["200"])[0] or 200))
                     if self.controller else {"ok": True, "events": []})
+                return
+
+            if path == "/api/troubleshoot/samples":
+                if not self.controller:
+                    self._send_json({"ok": True, "samples": []})
+                    return
+                try:
+                    secs = int(qs.get("seconds", ["86400"])[0])
+                    mx = int(qs.get("max", ["600"])[0])
+                except (TypeError, ValueError):
+                    secs, mx = 86400, 600
+                self._send_json(self.controller.rate_samples(
+                    seconds=max(5, min(86400, secs)), max_points=max(10, min(2000, mx))))
                 return
 
             if path == "/api/troubleshoot":

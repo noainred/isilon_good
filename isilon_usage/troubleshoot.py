@@ -475,3 +475,107 @@ def clear_history(data_dir) -> dict:
     except OSError:
         pass
     return {"ok": True}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 처리량 표본(24시간) — 전용 DB(<data-dir>/metrics.db)에 저장한다.
+# 서버 백그라운드 샘플러가 주기적으로 기록하므로 대시보드가 닫혀 있어도 쌓이며,
+# 차트의 긴 구간(1시간/24시간)에서 읽는다. 관리 DB의 미러된 진행값으로 rate를
+# 계산해 per-run DB와 락 경합이 없고, 시간 인덱스로 윈도우 조회/정리가 빠르다.
+# ─────────────────────────────────────────────────────────────────────────
+
+def metrics_db_path(data_dir):
+    return os.path.join(data_dir, "metrics.db")
+
+
+def _metrics_conn(data_dir):
+    conn = dbmod.connect(metrics_db_path(data_dir))
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS rate_samples ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  ts REAL NOT NULL, rd REAL, rf REAL, scan_id INTEGER)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rate_ts ON rate_samples(ts)")
+    return conn
+
+
+def latest_progress(data_dir):
+    """관리 DB에서 최신/진행중 스캔의 진행값(rate 계산용)을 읽는다."""
+    mpath = mgrmod.manager_db_path(data_dir)
+    if not os.path.exists(mpath):
+        return None
+    conn = dbmod.connect(mpath)
+    try:
+        sid = mgrmod.pick_default_scan(conn)
+        row = mgrmod.get_scan(conn, sid) if sid is not None else None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+    if not row:
+        return None
+    return {"scan_id": sid, "discovered": row["discovered_dirs"] or 0,
+            "files": row["total_files"] or 0, "status": row["status"]}
+
+
+def append_rate_sample(data_dir, t, rd, rf, scan_id=None):
+    try:
+        conn = _metrics_conn(data_dir)
+        try:
+            conn.execute("INSERT INTO rate_samples(ts, rd, rf, scan_id) VALUES(?,?,?,?)",
+                         (round(t, 1), round(rd, 1), round(rf, 1), scan_id))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
+def load_rate_samples(data_dir, seconds=86400, max_points=600):
+    """최근 seconds초 표본을 반환(많으면 max_points로 균등 다운샘플)."""
+    if not os.path.exists(metrics_db_path(data_dir)):
+        return []
+    cut = time.time() - max(1, seconds)
+    try:
+        conn = _metrics_conn(data_dir)
+        try:
+            rows = conn.execute(
+                "SELECT ts, rd, rf FROM rate_samples WHERE ts >= ? ORDER BY ts",
+                (cut,)).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return []
+    out = [{"t": r["ts"], "rd": r["rd"], "rf": r["rf"]} for r in rows]
+    if max_points and len(out) > max_points:
+        step = len(out) / float(max_points)
+        out = [out[int(i * step)] for i in range(max_points)]
+    return out
+
+
+def trim_rate_samples(data_dir, keep_seconds=86400):
+    """24시간(기본) 초과 표본 삭제."""
+    if not os.path.exists(metrics_db_path(data_dir)):
+        return
+    cut = time.time() - keep_seconds
+    try:
+        conn = _metrics_conn(data_dir)
+        try:
+            conn.execute("DELETE FROM rate_samples WHERE ts < ?", (cut,))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
+def clear_rate_samples(data_dir):
+    try:
+        conn = _metrics_conn(data_dir)
+        try:
+            conn.execute("DELETE FROM rate_samples")
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return {"ok": True}

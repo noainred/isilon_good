@@ -1,0 +1,88 @@
+"""트러블슈팅 — 처리량 표본 DB(metrics.db) + 진단 이력 판정 검증.
+
+진단 자체는 실행 중 스캔이 필요하므로, 여기서는 순수 함수(표본 저장/조회/정리,
+문제 판정)를 점검한다. 표준 라이브러리만 사용.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import sys
+import tempfile
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from isilon_usage import troubleshoot as t  # noqa: E402
+
+
+def run_rate_samples() -> None:
+    dd = tempfile.mkdtemp(prefix="iu_ts_")
+    try:
+        now = time.time()
+        for i in range(6):
+            t.append_rate_sample(dd, now - (5 - i) * 10, 1000 + i * 50, 20000 + i, 1)
+        t.append_rate_sample(dd, now - 90000, 1, 1, 1)        # 25시간 전(24h 창 밖)
+        assert os.path.exists(t.metrics_db_path(dd)), "metrics.db 생성 안 됨"
+        # 24h 창: 오래된 1건은 제외되어 6건
+        assert len(t.load_rate_samples(dd, seconds=86400)) == 6, "24h 창 필터 오류"
+        # 넓은 창: DB 에는 7건 모두 있음
+        wide = t.load_rate_samples(dd, seconds=200000, max_points=600)
+        assert len(wide) == 7, len(wide)
+        assert wide[0]["t"] <= wide[-1]["t"], "시간 정렬 안 됨"
+        # trim: 24시간 초과 1건을 DB 에서 실제 삭제
+        t.trim_rate_samples(dd, keep_seconds=86400)
+        assert len(t.load_rate_samples(dd, seconds=200000)) == 6, "trim 미동작"
+        # 창(window) 필터: 최근 30초만
+        recent = t.load_rate_samples(dd, seconds=35)
+        assert all(now - x["t"] <= 36 for x in recent), recent
+        # 다운샘플 상한
+        for i in range(1000):
+            t.append_rate_sample(dd, now - 3000 + i, i, i, 1)
+        big = t.load_rate_samples(dd, seconds=86400, max_points=200)
+        assert len(big) == 200, len(big)
+        # 비우기
+        t.clear_rate_samples(dd)
+        assert t.load_rate_samples(dd) == [], "clear 후에도 남음"
+        print("[rate_samples] OK  저장/창조회/trim/다운샘플/clear")
+    finally:
+        shutil.rmtree(dd, ignore_errors=True)
+
+
+def run_is_problem() -> None:
+    base = {"ok": True, "running": True, "verdict": {"level": "ok"},
+            "resource_bottleneck": {"level": "ok"}, "resources": []}
+    assert not t.is_problem(base), "정상인데 문제로 판정"
+    assert t.is_problem({**base, "verdict": {"level": "warn", "title": "x"}})
+    assert t.is_problem({**base, "resources": [{"name": "CPU", "level": "bad"}]})
+    assert not t.is_problem({**base, "running": False})        # 미실행은 기록 안 함
+    # info(롱테일) 단독은 문제 아님
+    assert not t.is_problem({**base, "verdict": {"level": "info", "title": "롱테일"}})
+    print("[is_problem] OK  OK/warn/bad/info/미실행 판정")
+
+
+def run_history() -> None:
+    dd = tempfile.mkdtemp(prefix="iu_ts_")
+    try:
+        prob = {"ok": True, "running": True, "verdict": {"level": "warn", "title": "직렬화"},
+                "resource_bottleneck": {"level": "warn", "name": "CPU"},
+                "resources": [{"name": "CPU", "level": "bad", "value": "150%", "note": "x"}],
+                "rate_dirs": 10, "rate_files": 100, "pending_est": 5, "root_path": "/m"}
+        assert t.record_if_problem(dd, prob)
+        assert t.record_if_problem(dd, prob)                  # 같은 문제 → 병합
+        ev = t.load_history(dd)
+        assert len(ev) == 1, len(ev)
+        assert ev[0]["count"] == 2, ev[0]["count"]
+        t.clear_history(dd)
+        assert t.load_history(dd) == []
+        print("[history] OK  문제 저장·병합(count)·clear")
+    finally:
+        shutil.rmtree(dd, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    run_rate_samples()
+    run_is_problem()
+    run_history()
+    print("모든 테스트 통과 ✅")
