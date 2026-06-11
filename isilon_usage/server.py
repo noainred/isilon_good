@@ -1055,10 +1055,12 @@ class ScanController:
                         if dt >= 1:
                             rd = max(0, prog["discovered"] - prev[2]) / dt
                             rf = max(0, prog["files"] - prev[3]) / dt
+                            rb = max(0, prog["bytes"] - prev[4]) / dt   # 처리 용량(B/s)
                             with self._rate_lock:
                                 troubmod.append_rate_sample(
-                                    self.data_dir, now, rd, rf, prog["scan_id"])
-                    self._rate_prev = (prog["scan_id"], now, prog["discovered"], prog["files"])
+                                    self.data_dir, now, rd, rf, rb, prog["scan_id"])
+                    self._rate_prev = (prog["scan_id"], now, prog["discovered"],
+                                       prog["files"], prog["bytes"])
                 else:
                     self._rate_prev = None
                 n += 1
@@ -1074,6 +1076,18 @@ class ScanController:
             return {"ok": True, "seconds": seconds,
                     "samples": troubmod.load_rate_samples(
                         self.data_dir, seconds=seconds, max_points=max_points)}
+
+    def throughput(self, *, bucket_sec: int = 60, max_buckets: int = 60) -> dict:
+        """버킷별(1분/5분/10분/1시간) 처리량(용량·파일·디렉터리)."""
+        from . import troubleshoot as troubmod
+        with self._rate_lock:
+            buckets = troubmod.throughput_buckets(
+                self.data_dir, bucket_sec=bucket_sec, max_buckets=max_buckets)
+        tb = sum(b["bytes"] for b in buckets)
+        tf = sum(b["files"] for b in buckets)
+        td = sum(b["dirs"] for b in buckets)
+        return {"ok": True, "bucket_sec": bucket_sec, "buckets": buckets,
+                "total_bytes": tb, "total_files": tf, "total_dirs": td}
 
     # ----- 테스트 데이터 생성 -----
     def gentest_validate(self, *, path, n_dirs, n_subdirs, n_files, file_size) -> dict:
@@ -1607,6 +1621,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     secs, mx = 86400, 600
                 self._send_json(self.controller.rate_samples(
                     seconds=max(5, min(86400, secs)), max_points=max(10, min(2000, mx))))
+                return
+
+            if path == "/api/troubleshoot/throughput":
+                if not self.controller:
+                    self._send_json({"ok": True, "buckets": []})
+                    return
+                try:
+                    bk = int(qs.get("bucket", ["60"])[0])
+                    mx = int(qs.get("max", ["60"])[0])
+                except (TypeError, ValueError):
+                    bk, mx = 60, 60
+                self._send_json(self.controller.throughput(
+                    bucket_sec=max(60, min(3600, bk)), max_buckets=max(2, min(200, mx))))
                 return
 
             if path == "/api/troubleshoot":

@@ -132,6 +132,7 @@
     <button class="navbtn" data-view="depth">🧭 대상 분석</button>
     <button class="navbtn" data-view="trouble">🩺 트러블슈팅</button>
     <button class="navbtn" data-view="tune">🔧 튜닝 점검</button>
+    <button class="navbtn" data-view="throughput">📈 처리량 추이</button>
     <button class="navbtn" data-view="trends">추세·비교</button>
     <button class="navbtn" data-view="report">📊 분석 리포트</button>
     <button class="navbtn" data-view="settings">⚙ 설정</button>
@@ -940,6 +941,44 @@
   </div>
 </div>
 
+<!-- 처리량 추이(버킷별 처리 용량/파일/디렉터리) 페이지 -->
+<div class="wrap view" id="view-throughput" style="display:none;">
+  <h2 style="margin:0 0 8px;">📈 처리량 추이 — 시간당 얼마나 처리하나</h2>
+  <div class="card">
+    <p class="sub" style="margin:0 0 10px;">서버가 24시간치 표본(<span class="mono">metrics.db</span>)을 누적합니다.
+      버킷 단위로 <b>그 시간에 처리한 용량(TB/GB)·파일·디렉터리</b>를 봅니다(대시보드가 닫혀 있어도 쌓임).</p>
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <span class="sub">버킷:</span>
+      <div id="tpBtns" style="display:flex; gap:4px;">
+        <button class="tpBtn" data-bk="60">1분</button>
+        <button class="tpBtn" data-bk="300">5분</button>
+        <button class="tpBtn" data-bk="600">10분</button>
+        <button class="tpBtn" data-bk="3600">1시간</button>
+      </div>
+      <label><input type="checkbox" id="tpAuto" /> 자동(30초)</label>
+      <button id="tpRefresh">새로고침</button>
+      <span id="tpMsg" class="sub"></span>
+    </div>
+    <div id="tpSummary" class="sub" style="margin-top:8px;">—</div>
+  </div>
+
+  <div class="card" style="margin-top:14px;">
+    <h3 style="margin:0 0 6px;">처리 용량 (버킷당, TB/GB)</h3>
+    <div class="sub" id="tpBytesLegend" style="margin-bottom:4px;">—</div>
+    <canvas id="tpBytesChart" width="1040" height="130" style="width:100%; background:#0c1116; border-radius:6px;"></canvas>
+  </div>
+  <div class="card" style="margin-top:14px;">
+    <h3 style="margin:0 0 6px;">처리 파일 수 (버킷당)</h3>
+    <div class="sub" id="tpFilesLegend" style="margin-bottom:4px;">—</div>
+    <canvas id="tpFilesChart" width="1040" height="130" style="width:100%; background:#0c1116; border-radius:6px;"></canvas>
+  </div>
+  <div class="card" style="margin-top:14px;">
+    <h3 style="margin:0 0 6px;">처리 디렉터리 수 (버킷당)</h3>
+    <div class="sub" id="tpDirsLegend" style="margin-bottom:4px;">—</div>
+    <canvas id="tpDirsChart" width="1040" height="130" style="width:100%; background:#0c1116; border-radius:6px;"></canvas>
+  </div>
+</div>
+
 <!-- 버전 기록 페이지 -->
 <div class="wrap view" id="view-history" style="display:none;">
   <div class="card">
@@ -1627,6 +1666,57 @@ async function tsHistClear() {
 }
 if ($("tsHistRefresh")) $("tsHistRefresh").addEventListener("click", tsHistLoad);
 if ($("tsHistClear")) $("tsHistClear").addEventListener("click", tsHistClear);
+
+// ---- 처리량 추이(버킷별 처리 용량/파일/디렉터리) ----
+let _tpBucket = 60, _tpAutoTimer = null;
+function tpLabel() { return _tpBucket >= 3600 ? (_tpBucket / 3600) + "시간" : (_tpBucket / 60) + "분"; }
+async function tpLoad() {
+  if (!$("tpSummary")) return;
+  $("tpMsg").textContent = "불러오는 중…";
+  try {
+    const j = await (await fetch("/api/troubleshoot/throughput?bucket=" + _tpBucket + "&max=60", {cache: "no-store"})).json();
+    $("tpMsg").textContent = "";
+    tpRender(j);
+  } catch (e) { $("tpMsg").innerHTML = '<span style="color:var(--danger)">오류: ' + e + '</span>'; }
+}
+function tpRender(j) {
+  const bks = j.buckets || [], lab = tpLabel();
+  if (!bks.length) {
+    $("tpSummary").innerHTML = '<span class="sub">아직 표본이 없습니다 — 스캔이 돌고 ~1분 지나면 쌓입니다(서버 샘플러 10초 간격).</span>';
+  } else {
+    $("tpSummary").innerHTML = '표시 구간 합계: <b>' + fmtBytes(j.total_bytes || 0) + '</b> · 파일 <b>'
+      + fmtNum(Math.round(j.total_files || 0)) + '</b> · 디렉터리 <b>' + fmtNum(Math.round(j.total_dirs || 0))
+      + '</b>  <span class="sub">(' + bks.length + '개 ' + lab + ' 버킷)</span>';
+  }
+  if (typeof drawSeries === "function") {
+    drawSeries($("tpBytesChart"), bks, {lines: [{get: p => p.bytes, color: "#5cc8ff"}]});
+    drawSeries($("tpFilesChart"), bks, {lines: [{get: p => p.files, color: "#7ad99a"}]});
+    drawSeries($("tpDirsChart"), bks, {lines: [{get: p => p.dirs, color: "#f5a623"}]});
+  }
+  const last = bks[bks.length - 1] || {bytes: 0, files: 0, dirs: 0};
+  const pk = k => Math.max(0, ...bks.map(p => p[k]));
+  $("tpBytesLegend").innerHTML = '최근 ' + lab + ': <b style="color:#5cc8ff">' + fmtBytes(last.bytes) + '</b> · 최대 ' + fmtBytes(pk("bytes")) + ' / 버킷';
+  $("tpFilesLegend").innerHTML = '최근 ' + lab + ': <b style="color:#7ad99a">' + fmtNum(Math.round(last.files)) + '</b> 파일 · 최대 ' + fmtNum(Math.round(pk("files")));
+  $("tpDirsLegend").innerHTML = '최근 ' + lab + ': <b style="color:#f5a623">' + fmtNum(Math.round(last.dirs)) + '</b> 디렉터리 · 최대 ' + fmtNum(Math.round(pk("dirs")));
+}
+function tpSetBucket(bk) {
+  _tpBucket = bk;
+  document.querySelectorAll(".tpBtn").forEach(b => {
+    const on = parseInt(b.dataset.bk) === bk;
+    b.style.background = on ? "var(--accent2)" : "";
+    b.style.color = on ? "#06231a" : "";
+    b.style.fontWeight = on ? "700" : "";
+  });
+  tpLoad();
+}
+function tpAutoToggle() {
+  if (_tpAutoTimer) { clearInterval(_tpAutoTimer); _tpAutoTimer = null; }
+  if ($("tpAuto") && $("tpAuto").checked) { _tpAutoTimer = setInterval(tpLoad, 30000); tpLoad(); }
+}
+document.querySelectorAll(".tpBtn").forEach(b => b.addEventListener("click", () => tpSetBucket(parseInt(b.dataset.bk))));
+if ($("tpAuto")) $("tpAuto").addEventListener("change", tpAutoToggle);
+if ($("tpRefresh")) $("tpRefresh").addEventListener("click", tpLoad);
+tpSetBucket(60);   // 기본 1분
 
 // ---- 튜닝 점검(OS 커널/마운트 설정) ----
 const TUNE_GLYPH = {ok: "🟢", warn: "🟠", tip: "🟡", na: "⚪"};
@@ -2928,7 +3018,7 @@ buildSchWeekdays(); fillSchSel("schMonth", 12, "월"); fillSchSel("schDay", 31, 
     });
   }
 })();
-const VIEWS = ["summary", "analysis", "depth", "trouble", "tune", "trends", "report", "settings", "gentest", "history"];
+const VIEWS = ["summary", "analysis", "depth", "trouble", "tune", "throughput", "trends", "report", "settings", "gentest", "history"];
 let changelogLoaded = false;
 function showView(name) {
   if (VIEWS.indexOf(name) < 0) name = "summary";
@@ -2942,6 +3032,11 @@ function showView(name) {
   if (name === "report") loadReport();
   if (name === "trouble") { if (typeof tsRun === "function") tsRun(); if (typeof tsHistLoad === "function") tsHistLoad(); }
   if (name === "tune") { if (typeof tuneRun === "function" && $("tuneResult") && $("tuneResult").style.display === "none") tuneRun(); }
+  if (name === "throughput") { if (typeof tpLoad === "function") tpLoad(); }
+  else if (typeof _tpAutoTimer !== "undefined" && _tpAutoTimer) {
+    clearInterval(_tpAutoTimer); _tpAutoTimer = null;
+    if ($("tpAuto")) $("tpAuto").checked = false;
+  }
   else if (typeof _tsAutoTimer !== "undefined" && _tsAutoTimer) {
     clearInterval(_tsAutoTimer); _tsAutoTimer = null;
     if ($("tsAuto")) $("tsAuto").checked = false;

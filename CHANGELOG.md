@@ -13,6 +13,19 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.30.0] - 2026-06-12
+
+### 추가됨 (Added) — "📈 처리량 추이" 메뉴 (버킷별 처리 용량/파일/디렉터리)
+- 표본 DB(`metrics.db`)에 **처리 용량(bytes/s)** 도 기록(`rate_samples.rb` 컬럼, 기존
+  DB 자동 마이그레이션). 서버 백그라운드 샘플러가 관리 DB의 `scanned_bytes` 델타로 계산.
+- **새 메뉴 `📈 처리량 추이`** — **1분 / 5분 / 10분 / 1시간** 버킷으로 *그 시간에 처리한*
+  **용량(TB/GB)·파일 수·디렉터리 수**를 추이 차트로 본다(대시보드 닫혀 있어도 24h 누적).
+  표본 rate × 시간차를 버킷에 적분해 정확한 버킷별 처리량 산출. 표시 구간 합계도 표시.
+- 서버 `GET /api/troubleshoot/throughput?bucket=&max=` (버킷 60~3600초).
+  `troubleshoot.throughput_buckets()` + `tests/test_troubleshoot.py` 검증.
+
+---
+
 ## [1.29.1] - 2026-06-12
 
 ### 변경됨 (Changed) — 트러블슈팅 판정 정확도(디렉터리 진행 정체 감지)

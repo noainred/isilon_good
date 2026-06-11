@@ -519,8 +519,12 @@ def _metrics_conn(data_dir):
     conn.execute(
         "CREATE TABLE IF NOT EXISTS rate_samples ("
         "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        "  ts REAL NOT NULL, rd REAL, rf REAL, scan_id INTEGER)")
+        "  ts REAL NOT NULL, rd REAL, rf REAL, rb REAL, scan_id INTEGER)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rate_ts ON rate_samples(ts)")
+    # 기존 DB(rb 컬럼 없던 버전) 마이그레이션
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(rate_samples)")}
+    if "rb" not in cols:
+        conn.execute("ALTER TABLE rate_samples ADD COLUMN rb REAL")
     return conn
 
 
@@ -540,15 +544,17 @@ def latest_progress(data_dir):
     if not row:
         return None
     return {"scan_id": sid, "discovered": row["discovered_dirs"] or 0,
-            "files": row["total_files"] or 0, "status": row["status"]}
+            "files": row["total_files"] or 0, "bytes": row["scanned_bytes"] or 0,
+            "status": row["status"]}
 
 
-def append_rate_sample(data_dir, t, rd, rf, scan_id=None):
+def append_rate_sample(data_dir, t, rd, rf, rb=0, scan_id=None):
     try:
         conn = _metrics_conn(data_dir)
         try:
-            conn.execute("INSERT INTO rate_samples(ts, rd, rf, scan_id) VALUES(?,?,?,?)",
-                         (round(t, 1), round(rd, 1), round(rf, 1), scan_id))
+            conn.execute(
+                "INSERT INTO rate_samples(ts, rd, rf, rb, scan_id) VALUES(?,?,?,?,?)",
+                (round(t, 1), round(rd, 1), round(rf, 1), round(rb, 1), scan_id))
             conn.commit()
         finally:
             conn.close()
@@ -565,17 +571,55 @@ def load_rate_samples(data_dir, seconds=86400, max_points=600):
         conn = _metrics_conn(data_dir)
         try:
             rows = conn.execute(
-                "SELECT ts, rd, rf FROM rate_samples WHERE ts >= ? ORDER BY ts",
+                "SELECT ts, rd, rf, rb FROM rate_samples WHERE ts >= ? ORDER BY ts",
                 (cut,)).fetchall()
         finally:
             conn.close()
     except Exception:
         return []
-    out = [{"t": r["ts"], "rd": r["rd"], "rf": r["rf"]} for r in rows]
+    out = [{"t": r["ts"], "rd": r["rd"], "rf": r["rf"], "rb": r["rb"] or 0} for r in rows]
     if max_points and len(out) > max_points:
         step = len(out) / float(max_points)
         out = [out[int(i * step)] for i in range(max_points)]
     return out
+
+
+def throughput_buckets(data_dir, bucket_sec, max_buckets=60):
+    """표본 rate 를 bucket_sec 단위로 적분해 '버킷별 처리량'을 낸다.
+
+    각 표본의 rate × (직전 표본과의 시간차) = 그 구간 처리량(정확값). 이를 버킷에
+    합산한다. 반환: [{t(버킷 시작 epoch), bytes, files, dirs}] (최근 max_buckets 개).
+    """
+    if not os.path.exists(metrics_db_path(data_dir)):
+        return []
+    span = bucket_sec * (max_buckets + 1)
+    cut = time.time() - span
+    try:
+        conn = _metrics_conn(data_dir)
+        try:
+            rows = conn.execute(
+                "SELECT ts, rd, rf, rb FROM rate_samples WHERE ts >= ? ORDER BY ts",
+                (cut,)).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return []
+    buckets = {}
+    prev_ts = None
+    for r in rows:
+        ts = r["ts"]
+        if prev_ts is not None:
+            dt = ts - prev_ts
+            if 0 < dt <= 60:                # 60초 넘는 공백(폴링/스캔 중단)은 적분 제외
+                bk = int(ts // bucket_sec) * bucket_sec
+                acc = buckets.setdefault(bk, [0.0, 0.0, 0.0])
+                acc[0] += (r["rb"] or 0) * dt
+                acc[1] += (r["rf"] or 0) * dt
+                acc[2] += (r["rd"] or 0) * dt
+        prev_ts = ts
+    out = [{"t": bk, "bytes": v[0], "files": v[1], "dirs": v[2]}
+           for bk, v in sorted(buckets.items())]
+    return out[-max_buckets:]
 
 
 def trim_rate_samples(data_dir, keep_seconds=86400):

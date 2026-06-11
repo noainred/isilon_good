@@ -81,6 +81,27 @@ def run_history() -> None:
         shutil.rmtree(dd, ignore_errors=True)
 
 
+def run_throughput() -> None:
+    dd = tempfile.mkdtemp(prefix="iu_ts_")
+    try:
+        now = time.time()
+        gb = 1024 ** 3
+        # 10초 간격 표본 60개: rb=1GB/s, rf=1000/s, rd=10/s
+        for i in range(60):
+            t.append_rate_sample(dd, now - (60 - i) * 10, 10, 1000, gb, 1)
+        b = t.throughput_buckets(dd, bucket_sec=60, max_buckets=60)
+        assert b, "버킷 없음"
+        # 적분 총합 = 59구간 × 10초 × 1GB/s = 590 GB (±오차)
+        total_gb = sum(x["bytes"] for x in b) / gb
+        assert 580 <= total_gb <= 600, total_gb
+        # 1시간 버킷이면 하나로 합쳐짐(데이터가 10분치라)
+        b1h = t.throughput_buckets(dd, bucket_sec=3600, max_buckets=60)
+        assert len(b1h) <= 2, len(b1h)
+        print("[throughput] OK  버킷 적분 총 %.0f GB(이론 590), 1분/1시간 버킷" % total_gb)
+    finally:
+        shutil.rmtree(dd, ignore_errors=True)
+
+
 def run_verdict() -> None:
     from isilon_usage.troubleshoot import _verdict
     busy = {"readdir": 1, "stat": 5, "fold": 0, "db": 2, "claim": 0, "idle": 0, "other": 0, "total": 8}
@@ -104,5 +125,6 @@ if __name__ == "__main__":
     run_rate_samples()
     run_is_problem()
     run_history()
+    run_throughput()
     run_verdict()
     print("모든 테스트 통과 ✅")
