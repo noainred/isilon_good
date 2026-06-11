@@ -220,13 +220,20 @@ def _build_resources(*, proc_cpu, sys_cpu, ncpu, load1, mem_percent, mem_avail,
 
 
 def _verdict(w, rate_dirs, rate_files, hb_age, pending, db_bytes, disk_free):
-    """구간 분포 + 처리량 + 하트비트 + 프론티어로 병목 구간과 처방을 낸다."""
+    """구간 분포 + 처리량 + 하트비트 + 프론티어로 병목 구간과 처방을 낸다.
+
+    핵심: 파일 stat 이 돌아도(files/s>0) **디렉터리 완료가 안 되면(dirs/s≈0) 정체**다.
+    대기 일감이 많은데 dirs/s≈0 이면 '정상'이 아니라 롱테일/직렬화로 판정한다.
+    """
     total = w.get("total", 0) or 1
     idle = w.get("idle", 0) + w.get("claim", 0)
     nas = w.get("readdir", 0) + w.get("stat", 0) + w.get("fold", 0)
     db = w.get("db", 0)
+    # '디렉터리 진행 정체' 임계값: 완료가 1/초 미만이고 대기가 1만 초과.
+    STALL_DIRS, STALL_PENDING = 1.0, 10000
     recs = []
 
+    # 1) NAS 행(hang) — 진행 갱신이 60초+ 끊김
     if hb_age > 60 and nas > 0 and rate_dirs < 1 and rate_files < 5:
         recs = ["아래 '워커별 현재 경로'에서 멈춘 디렉터리 확인",
                 "NAS/마운트·네트워크(NFS) 상태 점검 — 느린/행 걸린 경로 의심",
@@ -235,41 +242,60 @@ def _verdict(w, rate_dirs, rate_files, hb_age, pending, db_bytes, disk_free):
                 "워커가 디렉터리 읽기/stat 구간에 있는데 진행 갱신이 %d초째 없습니다. "
                 "NAS 응답 지연 또는 행(hang)으로 보입니다." % int(hb_age), recs)
 
-    if idle >= total * 0.5 and pending > 100000:
-        recs = ["▶ '대상 분석' 메뉴로 추천 fold-depth 를 구해 backlog 폭발 차단",
-                "원인은 단일 락+GIL 직렬화 — DB 엔진 교체로는 해결 안 됨",
+    # 2) ★디렉터리 진행 정체 — dirs/s≈0 인데 대기 일감이 많다(롱테일/직렬화/굶주림).
+    #    파일 stat 이 돌아도(files/s>0) 디렉터리 완료가 안 되면 사실상 정체로 본다.
+    if rate_dirs < STALL_DIRS and pending > STALL_PENDING:
+        recs = ["▶ '대상 분석'으로 추천 fold-depth 를 구해 거대 트리를 묶기(즉효)",
+                "원인은 단일 락+GIL 직렬화 — DB 엔진/저장형식 교체로는 해결 안 됨",
+                "장기: 멀티프로세스 병렬(pscan)로 직렬화 자체를 제거",
                 "--min-free-gb / --db-max-gb 안전망 설정"]
-        return ("warn", "🟠 직렬화·굶주림 — 워커가 일감을 못 빼가는 중",
-                "대기 일감(pending≈%s)은 많은데 워커 %d/%d개가 유휴입니다. 모든 DB 접근이 "
-                "단일 락+단일 커넥션으로 직렬화돼(+GIL) 처리량이 묶입니다." % (
-                    f"{pending:,}", idle, total), recs)
+        if idle >= total * 0.5:
+            return ("warn", "🟠 디렉터리 진행 정체 — 굶주림(일감 못 빼감)",
+                    "대기 %s개인데 워커 %d/%d 유휴 · 디렉터리 완료 %.1f/초. 단일 락+GIL "
+                    "직렬화로 일감을 못 빼갑니다." % (
+                        f"{pending:,}", idle, total, rate_dirs), recs)
+        if db >= max(1, total * 0.4):
+            return ("warn", "🟠 디렉터리 진행 정체 — DB 커밋 집중",
+                    "대기 %s개 · 디렉터리 완료 %.1f/초인데 워커 %d/%d가 DB 쓰기 구간. "
+                    "커밋 직렬화가 발목을 잡습니다." % (
+                        f"{pending:,}", rate_dirs, db, total), recs)
+        return ("warn", "🟠 디렉터리 진행 정체 — 롱테일(거대 디렉터리)",
+                "파일 stat 은 도는데(%.0f 파일/초) 디렉터리 완료가 %.1f/초로 정체 · 대기 "
+                "%s개. 소수 거대 디렉터리를 워커가 직렬로 훑는 중입니다." % (
+                    rate_files, rate_dirs, f"{pending:,}"), recs)
 
-    if idle >= total * 0.5 and pending < 10000:
+    # 3) 롱테일(거의 끝남) — 대기 적음 + 유휴
+    if idle >= total * 0.5 and pending < STALL_PENDING:
         recs = ["거의 끝났습니다 — 남은 소수 디렉터리 처리 대기",
                 "특정 거대 폴더 때문이면 '워커별 현재 경로'에서 확인"]
         return ("info", "🟡 롱테일(거의 끝남)",
                 "일감이 거의 없어(pending≈%s) 워커 대부분이 유휴입니다. 남은 소수를 "
                 "처리 중입니다." % f"{pending:,}", recs)
 
-    if db >= max(1, total * 0.5):
+    # 4) DB 바운드 — 진행은 되는데 DB 구간에 몰림
+    if db >= max(1, total * 0.5) and rate_dirs >= STALL_DIRS:
         recs = ["DB 커밋이 잦음 — fold-depth 로 행 수/커밋량 축소",
                 "per-run DB를 더 빠른 로컬 디스크(SSD)로"]
         return ("warn", "🟠 DB 쓰기/커밋 구간 집중",
                 "워커 %d/%d개가 DB 쓰기/커밋 구간에 있습니다. 커밋이 병목일 수 있습니다." % (
                     db, total), recs)
 
-    if w.get("stat", 0) >= max(1, w.get("readdir", 0)) and rate_files > 0:
+    # 5) 파일 stat 바운드(정상) — 디렉터리도 실제로 진행될 때만 '정상'
+    if (w.get("stat", 0) >= max(1, w.get("readdir", 0))
+            and rate_files > 0 and rate_dirs >= STALL_DIRS):
         recs = ["정상 측정 중 — 파일 stat 가 주 작업",
                 "더 빠르게: 거대 폴더는 '대상 분석'으로 깊이 확인 후 fold-depth"]
         return ("ok", "🟢 파일 stat 바운드(정상 측정 중)",
                 "NAS 파일 용량을 측정 중입니다 · 처리량 약 %.0f 파일/초, %.1f 디렉터리/초." % (
                     rate_files, rate_dirs), recs)
 
-    if w.get("readdir", 0) > 0:
+    # 6) 디렉터리 읽기 — 실제로 진행될 때만 '정상'
+    if w.get("readdir", 0) > 0 and rate_dirs >= 0.5:
         return ("ok", "🟢 디렉터리 읽기 중(정상)",
                 "NAS readdir(디렉터리 나열) 중 · 약 %.1f 디렉터리/초." % rate_dirs,
                 ["깊고 넓은 트리 — '대상 분석'으로 깊이 구조 확인 권장"])
 
+    # 7) 진행이 매우 느림(대기 적은데도 느림)
     if rate_dirs < 0.5 and rate_files < 1 and hb_age > 30:
         return ("warn", "🟠 진행이 매우 느림",
                 "처리량이 거의 0이고 하트비트가 %d초째입니다. 아래 구간/경로를 확인하세요." % int(hb_age),

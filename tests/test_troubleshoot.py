@@ -81,8 +81,28 @@ def run_history() -> None:
         shutil.rmtree(dd, ignore_errors=True)
 
 
+def run_verdict() -> None:
+    from isilon_usage.troubleshoot import _verdict
+    busy = {"readdir": 1, "stat": 5, "fold": 0, "db": 2, "claim": 0, "idle": 0, "other": 0, "total": 8}
+    # dirs/s≈0 + 대기 많음 + 파일 stat 도는 중 → '정상' 아니라 '정체(롱테일)'
+    lvl, title, _d, _r = _verdict(busy, 0.0, 5000, 2, 229086, 0, 10 ** 11)
+    assert lvl == "warn" and "정체" in title, (lvl, title)
+    # dirs/s 가 실제로 진행되면 정상
+    lvl2, title2, _, _ = _verdict(busy, 50, 8000, 1, 229000, 0, 10 ** 11)
+    assert lvl2 == "ok" and "정상" in title2, (lvl2, title2)
+    # 유휴 + 대기 많음 → 굶주림(정체)
+    idlew = {"readdir": 0, "stat": 0, "fold": 0, "db": 0, "claim": 1, "idle": 6, "other": 1, "total": 8}
+    lvl3, title3, _, _ = _verdict(idlew, 0.0, 0, 2, 500000, 0, 10 ** 11)
+    assert lvl3 == "warn" and "굶주림" in title3, (lvl3, title3)
+    # 대기 적음 + 유휴 → 거의 끝남(info)
+    lvl4, _t, _, _ = _verdict(idlew, 0, 0, 2, 200, 0, 10 ** 11)
+    assert lvl4 == "info", lvl4
+    print("[verdict] OK  dirs/s≈0+대기많음=정체(warn), 진행=정상, 유휴+대기=굶주림, 대기적음=거의끝남")
+
+
 if __name__ == "__main__":
     run_rate_samples()
     run_is_problem()
     run_history()
+    run_verdict()
     print("모든 테스트 통과 ✅")
