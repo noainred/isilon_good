@@ -257,6 +257,28 @@ def main() -> int:
         df = c.get(f"/api/diff?base={s1}&target={r2['scan_id']}")
         assert df["ok"] and df["total_delta"] == 0, df
 
+        # 최대 파일 Top — /api/stats 에 포함(파일 4개 전부, 크기 내림차순)
+        tf = c.get(f"/api/stats?scan={r2['scan_id']}")["top_files"]
+        assert len(tf) == 4, tf
+        assert all(tf[i]["bytes"] >= tf[i + 1]["bytes"] for i in range(len(tf) - 1)), tf
+        assert "mtime" in tf[0] and "uid" in tf[0] and tf[0]["path"].endswith(".bin"), tf[0]
+
+        # 용량 소진 예측 — 완료 스캔 2회라 추세 계산 가능(증가 0 → 소진 없음)
+        fc = c.get(f"/api/forecast?scan={r2['scan_id']}")
+        assert fc["ok"] and fc["enough"] and fc["points"] >= 2, fc
+        assert fc["growth_per_day"] is not None and fc["fs_total_bytes"] > 0, fc
+
+        # 변화 리포트 — 직전 스캔 대비(변화 없음이어도 구조는 정상)
+        gw = c.get(f"/api/growers?scan={r2['scan_id']}")
+        assert gw["ok"] and gw["has_base"] and gw["total_delta"] == 0, gw
+        assert "growers" in gw and "added" in gw and "removed" in gw, gw
+
+        # Prometheus /metrics
+        mtx = c.get_raw("/metrics").decode("utf-8")
+        assert "isilon_usage_info{" in mtx, mtx[:200]
+        assert "isilon_usage_root_scanned_bytes{" in mtx, mtx[:400]
+        assert 'root="%s"' % root in mtx, mtx[:400]
+
         # prune keep_per_root=1 → 오래된 s1 삭제
         pr = c.post("/api/prune", {"keep_per_root": 1})
         assert s1 in pr["deleted"], pr

@@ -33,6 +33,7 @@
 
 from typing import List, Optional, Tuple
 
+import heapq
 import json
 import os
 import shutil
@@ -59,6 +60,9 @@ AGE_BUCKETS = [
 ]
 # 집계 dict 가 무한정 커지지 않도록 distinct 키 상한(초과분은 '(기타)'로 합산)
 STAT_KEY_CAP = 5000
+
+# 최대 파일 Top-N(힙으로 유지) — 메모리 약 N×(경로 길이) 수준
+TOP_FILES_N = 200
 
 
 def _age_bucket(ref: float, mtime: float) -> str:
@@ -146,6 +150,8 @@ class Scanner:
         self._stat_ext: dict = {}
         self._stats_ref = 0.0       # 나이 계산 기준 시각(스캔 시작)
         self._last_stats_write = 0.0
+        # 최대 파일 Top-N: (bytes, path, mtime, uid) 최소힙 — 가장 작은 게 루트
+        self._top_files: list = []
         # 재개 시간 추적: elapsed_accum=모든 세션 누적 '활성' 시간(일시정지 갭 제외),
         # _elapsed_mark=마지막으로 누적한 시각(kill -9 에도 마지막 flush 까지 보존).
         self._elapsed_accum = 0.0
@@ -441,6 +447,14 @@ class Scanner:
             ext = ext[:24]
         self._stat_bump(self._stat_ext, ext, eb, fcount)
 
+    def _top_push(self, path: str, eb: int, st) -> None:
+        """최대 파일 Top-N 힙 갱신(_dlock 안에서 호출)."""
+        h = self._top_files
+        if len(h) < TOP_FILES_N:
+            heapq.heappush(h, (eb, path, st.st_mtime, st.st_uid))
+        elif eb > h[0][0]:
+            heapq.heapreplace(h, (eb, path, st.st_mtime, st.st_uid))
+
     def _write_stats(self, conn) -> None:
         """집계를 scan_stats 에 저장(이 run 행 교체). 확장자는 상위 500개만."""
         if self.run_id is None:
@@ -454,6 +468,9 @@ class Scanner:
                              reverse=True)[:500]
             dbmod.replace_scan_stats(conn, self.run_id, "ext",
                                      [(k, v[0], v[1]) for k, v in ext_top])
+            dbmod.replace_top_files(
+                conn, self.run_id,
+                [(p, b, m, u) for (b, p, m, u) in self._top_files])
             conn.commit()
         except Exception:
             pass
@@ -466,6 +483,13 @@ class Scanner:
                     d[r["key"]] = [int(r["bytes"]), int(r["files"])]
             except Exception:
                 pass
+        try:   # 최대 파일 힙 복원
+            self._top_files = [
+                (int(r["bytes"]), r["path"], r["mtime"], r["uid"])
+                for r in dbmod.get_top_files(conn, self.run_id)]
+            heapq.heapify(self._top_files)
+        except Exception:
+            pass
 
     def _safe_stat(self, entry):
         try:
@@ -636,6 +660,7 @@ class Scanner:
                             self._seen_inodes.add(key)
                     if counted:
                         cb += eb
+                        self._top_push(entry.path, eb, st)   # 최대 파일 Top-N
                     # 집계 리포트(나이/소유자/확장자): 개수는 모두, 용량은 dedup 반영
                     self._accum_stats(entry.name, st, eb if counted else 0, 1)
                 own_bytes += cb
@@ -784,6 +809,7 @@ class Scanner:
                         self._seen_inodes.add(key)
                 if counted:
                     cb += eb
+                    self._top_push(entry.path, eb, st)   # 최대 파일 Top-N
                 self._accum_stats(entry.name, st, eb if counted else 0, 1)
             self._scanned_bytes += cb
             self._total_files += cf

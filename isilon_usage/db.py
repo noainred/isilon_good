@@ -104,6 +104,16 @@ CREATE TABLE IF NOT EXISTS scan_stats (
     files   INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (run_id, kind, key)
 );
+
+-- 최대 파일 Top-N (스캔 중 힙으로 유지한 상위 파일)
+CREATE TABLE IF NOT EXISTS top_files (
+    run_id  INTEGER NOT NULL,
+    path    TEXT    NOT NULL,
+    bytes   INTEGER NOT NULL DEFAULT 0,
+    mtime   REAL,
+    uid     INTEGER,
+    PRIMARY KEY (run_id, path)
+);
 """
 
 
@@ -235,4 +245,23 @@ def get_scan_stats(conn, run_id, kind, limit: int = 0):
     if limit:
         q += " LIMIT %d" % int(limit)
     return [dict(r) for r in conn.execute(q, (run_id, kind))]
+
+
+def replace_top_files(conn, run_id, items) -> None:
+    """최대 파일 Top-N 행을 통째로 교체. items: [(path, bytes, mtime, uid), ...]"""
+    conn.execute("DELETE FROM top_files WHERE run_id=?", (run_id,))
+    if items:
+        conn.executemany(
+            "INSERT OR REPLACE INTO top_files(run_id, path, bytes, mtime, uid) "
+            "VALUES (?,?,?,?,?)",
+            [(run_id, str(p), int(b), float(m or 0), int(u or 0))
+             for (p, b, m, u) in items])
+
+
+def get_top_files(conn, run_id, limit: int = 0):
+    """최대 파일 목록(용량 내림차순)."""
+    q = "SELECT path, bytes, mtime, uid FROM top_files WHERE run_id=? ORDER BY bytes DESC"
+    if limit:
+        q += " LIMIT %d" % int(limit)
+    return [dict(r) for r in conn.execute(q, (run_id,))]
 

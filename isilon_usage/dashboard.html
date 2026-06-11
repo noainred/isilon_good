@@ -697,6 +697,23 @@
       <div id="repExt">—</div>
     </div>
   </div>
+  <div class="grid cols-2" style="gap:14px; margin-top:14px;">
+    <div class="card">
+      <h2>📈 용량 소진 예측</h2>
+      <div class="sub" style="margin-bottom:8px;">같은 루트의 완료 스캔 이력으로 증가 추세를 계산합니다(스캔 2회+ 필요).</div>
+      <div id="repForecast">—</div>
+    </div>
+    <div class="card">
+      <h2>🔀 변화 Top (직전 스캔 대비)</h2>
+      <div class="sub" style="margin-bottom:8px;">가장 많이 커진/줄어든/신규/삭제 디렉터리.</div>
+      <div id="repGrowers">—</div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:14px;">
+    <h2>🐘 최대 파일 Top</h2>
+    <div class="sub" style="margin-bottom:8px;">가장 큰 파일(경로·크기·수정시각·소유자) — 정리 1순위 후보.</div>
+    <div id="repTopFiles" style="overflow-x:auto;">—</div>
+  </div>
 </div>
 
 <!-- 테스트 데이터 생성 페이지 -->
@@ -1676,15 +1693,77 @@ function _statBarList(items, labelFn, maxN) {
   }).join("");
 }
 async function loadReport() {
-  const url = "/api/stats" + (selectedScan != null ? ("?scan=" + selectedScan) : "");
+  const q = (selectedScan != null ? ("?scan=" + selectedScan) : "");
   try {
-    const j = await (await fetch(url, {cache: "no-store"})).json();
+    const j = await (await fetch("/api/stats" + q, {cache: "no-store"})).json();
     if (!j.ok) return;
     if ($("reportScan")) $("reportScan").textContent = (selectedScan != null ? ("· scan #" + selectedScan) : "· 최신 스캔");
     $("repAge").innerHTML = _statBarList(j.age, i => i.key, 10);
     $("repOwner").innerHTML = _statBarList(j.owners,
       i => (i.name ? (i.name + ' <span class="sub">(uid ' + i.key + ')</span>') : ("uid " + i.key)), 25);
     $("repExt").innerHTML = _statBarList(j.extensions, i => i.key, 25);
+    // 최대 파일 Top — 표
+    const tf = j.top_files || [];
+    $("repTopFiles").innerHTML = !tf.length
+      ? '<span class="sub">데이터 없음(스캔이 진행/완료되면 표시됩니다).</span>'
+      : '<table style="border-collapse:collapse; width:100%;"><tr style="color:var(--muted)">'
+        + '<td style="padding:2px 8px">파일</td><td style="padding:2px 8px; text-align:right">크기</td>'
+        + '<td style="padding:2px 8px">수정</td><td style="padding:2px 8px">소유자</td></tr>'
+        + tf.slice(0, 30).map(f =>
+          '<tr><td class="mono" style="padding:2px 8px; max-width:560px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + f.path + '">' + f.path + '</td>'
+          + '<td style="padding:2px 8px; text-align:right;"><b>' + fmtBytes(f.bytes) + '</b></td>'
+          + '<td style="padding:2px 8px; white-space:nowrap;">' + (f.mtime ? new Date(f.mtime * 1000).toLocaleDateString("ko-KR") : "—") + '</td>'
+          + '<td style="padding:2px 8px;">' + (f.owner || ("uid " + (f.uid != null ? f.uid : "?"))) + '</td></tr>').join("")
+        + '</table>';
+  } catch (e) { /* 무시 */ }
+  // 용량 소진 예측
+  try {
+    const fc = await (await fetch("/api/forecast" + q, {cache: "no-store"})).json();
+    const el = $("repForecast");
+    if (fc.ok && el) {
+      if (!fc.enough) {
+        el.innerHTML = '<span class="sub">완료 스캔이 ' + (fc.points || 0) + '회뿐입니다 — 같은 루트를 2회 이상 스캔하면 추세가 계산됩니다.</span>';
+      } else {
+        const g = fc.growth_per_day || 0;
+        let html = '증가 추세: <b style="color:' + (g > 0 ? "var(--warn)" : "var(--ok)") + '">'
+          + (g >= 0 ? "+" : "−") + fmtBytes(Math.abs(g)) + '/일</b>'
+          + ' <span class="sub">(' + fc.points + '회 스캔 기준)</span><br>';
+        if (g > 0 && fc.days_to_90pct != null) {
+          const d90 = new Date(Date.now() + fc.days_to_90pct * 86400000).toLocaleDateString("ko-KR");
+          html += 'FS 90% 도달: <b style="color:var(--warn)">약 ' + Math.round(fc.days_to_90pct) + '일 후</b> (' + d90 + ')<br>';
+          if (fc.days_to_full != null) {
+            const dF = new Date(Date.now() + fc.days_to_full * 86400000).toLocaleDateString("ko-KR");
+            html += 'FS 가득 참: <b style="color:var(--danger)">약 ' + Math.round(fc.days_to_full) + '일 후</b> (' + dF + ')';
+          }
+        } else {
+          html += '<span style="color:var(--ok)">증가 추세 없음 — 당분간 소진 위험 낮음</span>';
+        }
+        el.innerHTML = html;
+      }
+    }
+  } catch (e) { /* 무시 */ }
+  // 변화 Top (직전 스캔 대비)
+  try {
+    const gw = await (await fetch("/api/growers" + q, {cache: "no-store"})).json();
+    const el = $("repGrowers");
+    if (el) {
+      if (!gw.ok || !gw.has_base) {
+        el.innerHTML = '<span class="sub">' + (gw.reason || "비교할 이전 완료 스캔이 없습니다.") + '</span>';
+      } else {
+        const row = (r, col) => '<div style="display:flex; justify-content:space-between; gap:8px; margin:3px 0; font-size:0.92em;">'
+          + '<span class="mono" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + r.path + '">' + r.path + '</span>'
+          + '<b style="color:' + col + '; white-space:nowrap;">' + (r.delta >= 0 ? "+" : "−") + fmtBytes(Math.abs(r.delta)) + '</b></div>';
+        let html = '<div class="sub" style="margin-bottom:4px;">전체 변화: <b>'
+          + (gw.total_delta >= 0 ? "+" : "−") + fmtBytes(Math.abs(gw.total_delta)) + '</b></div>';
+        html += (gw.growers || []).slice(0, 8).map(r => row(r, "var(--warn)")).join("");
+        html += (gw.shrinkers || []).slice(0, 5).map(r => row(r, "var(--ok)")).join("");
+        if ((gw.added || []).length)
+          html += '<div class="sub" style="margin-top:6px;">신규: ' + gw.added.slice(0, 5).map(r => r.path.split("/").pop()).join(", ") + '</div>';
+        if ((gw.removed || []).length)
+          html += '<div class="sub">삭제: ' + gw.removed.slice(0, 5).map(r => r.path.split("/").pop()).join(", ") + '</div>';
+        el.innerHTML = html || '<span class="sub">변화 없음</span>';
+      }
+    }
   } catch (e) { /* 무시 */ }
 }
 

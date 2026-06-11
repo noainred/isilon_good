@@ -523,6 +523,15 @@ def cmd_stats(args: argparse.Namespace) -> int:
         _show("🕒 파일 나이(콜드 데이터)", "age", 0)
         _show("👤 소유자별 사용량 Top", "owner", 20, _owner)
         _show("🗂 확장자별 사용량 Top", "ext", 20)
+
+        print("\n  🐘 최대 파일 Top")
+        tops = dbmod.get_top_files(conn, rid, limit=args.top)
+        if not tops:
+            print("    (데이터 없음)")
+        for f in tops:
+            when = time.strftime("%Y-%m-%d", time.localtime(f["mtime"])) if f["mtime"] else "—"
+            print("    %12s  %s  (수정 %s, uid %s)"
+                  % (_human(f["bytes"]), f["path"], when, f["uid"]))
     finally:
         conn.close()
     return 0
@@ -624,9 +633,10 @@ def build_parser() -> argparse.ArgumentParser:
     pg.add_argument("-y", "--yes", action="store_true", help="확인 없이 바로 생성")
     pg.set_defaults(func=cmd_gentest)
 
-    pst2 = sub.add_parser("stats", help="분석 리포트(파일 나이/소유자/확장자) 콘솔 출력")
+    pst2 = sub.add_parser("stats", help="분석 리포트(파일 나이/소유자/확장자/최대 파일) 콘솔 출력")
     pst2.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
     pst2.add_argument("--scan", type=int, default=None, help="스캔 id(생략 시 최신)")
+    pst2.add_argument("--top", type=int, default=10, help="최대 파일 표시 개수(기본 10)")
     pst2.set_defaults(func=cmd_stats)
 
     ppo = sub.add_parser("portal", help="글로벌 통합 포탈(HQ) — 여러 DC 를 한 화면에서 조망")

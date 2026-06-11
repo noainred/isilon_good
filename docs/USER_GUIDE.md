@@ -309,14 +309,23 @@ python3 -m isilon_usage gentest /data/iutest --dirs 10 --subdirs 5 --files 10 --
 메뉴**에서도 입력값을 넣고 진행 막대로 생성할 수 있습니다. ⚠ 실제로 파일을 쓰므로
 쓰기 가능한 경로(읽기전용 NAS·시스템 경로 불가)를 지정하세요.
 
-### `stats` — 분석 리포트(파일 나이/소유자/확장자)
+### `stats` — 분석 리포트(파일 나이/소유자/확장자/최대 파일)
 ```bash
 python3 -m isilon_usage stats --data-dir DIR            # 최신 스캔
-python3 -m isilon_usage stats --data-dir DIR --scan 3   # 특정 스캔
+python3 -m isilon_usage stats --data-dir DIR --scan 3 --top 20
 ```
-스캔 중 수집한 **파일 나이(콜드 데이터)·소유자(uid)별·확장자별 용량/개수**를 출력합니다.
-대시보드의 **`📊 분석 리포트`** 탭에서도 막대 그래프로 볼 수 있습니다(누가/무엇이/언제의
-데이터가 공간을 쓰는지 — 차지백·아카이브 대상 파악용).
+스캔 중 수집한 **파일 나이(콜드 데이터)·소유자(uid)별·확장자별 용량/개수**와
+**최대 파일 Top**(경로·크기·수정시각·소유자)을 출력합니다. 대시보드의
+**`📊 분석 리포트`** 탭에서는 추가로 **용량 소진 예측**(같은 루트 2회+ 스캔 시
+증가 추세와 90%/가득 참 예상일)과 **변화 Top**(직전 스캔 대비 급증/감소·신규·삭제
+디렉터리)도 보여줍니다.
+
+### Prometheus 연동 — `/metrics`
+서버가 떠 있으면 `http://서버:포트/metrics` 에서 Prometheus 텍스트 포맷 지표를
+제공합니다(인증 없음·읽기 전용): 루트별 `isilon_usage_root_scanned_bytes`,
+`..._total_files`, `..._running`, `..._heartbeat_age_seconds`, `..._fs_{total,used,free}_bytes`
+와 `isilon_usage_info{version}`. prometheus.yml 의 `scrape_configs` 에 추가해
+기존 Grafana 대시보드에서 함께 보세요.
 
 ### `version` / `--version` — 버전·환경 정보
 ```bash

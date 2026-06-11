@@ -439,6 +439,47 @@ def list_errors(pconn, run_id: int, *, limit: int = 1000) -> dict:
     return {"ok": True, "errors": [dict(r) for r in rows]}
 
 
+def forecast_capacity(mconn, scan_row) -> dict:
+    """같은 루트의 완료 스캔 이력으로 증가 추세(선형 회귀)와 소진 예상일을 계산."""
+    root = scan_row["root_path"]
+    pts = [dict(r) for r in mconn.execute(
+        """SELECT id, COALESCE(finished_at, started_at) AS ts, scanned_bytes
+           FROM scans WHERE root_path=? AND status='done' AND scanned_bytes>0
+           ORDER BY id""", (root,))]
+    latest = mconn.execute(
+        "SELECT fs_total_bytes, fs_used_bytes, fs_free_bytes FROM scans "
+        "WHERE root_path=? ORDER BY id DESC LIMIT 1", (root,)).fetchone()
+    fs_total = int(latest["fs_total_bytes"] or 0) if latest else 0
+    fs_used = int(latest["fs_used_bytes"] or 0) if latest else 0
+    fs_free = int(latest["fs_free_bytes"] or 0) if latest else 0
+    out = {"ok": True, "root_path": root, "points": len(pts),
+           "history": [{"ts": p["ts"], "bytes": p["scanned_bytes"]} for p in pts[-50:]],
+           "fs_total_bytes": fs_total, "fs_used_bytes": fs_used,
+           "fs_free_bytes": fs_free,
+           "enough": len(pts) >= 2, "growth_per_day": None,
+           "days_to_90pct": None, "days_to_full": None}
+    if len(pts) < 2:
+        return out
+    # 최소제곱 기울기(bytes/sec). 시각 범위가 0 이면 추세 없음.
+    n = len(pts)
+    xs = [float(p["ts"]) for p in pts]
+    ys = [float(p["scanned_bytes"]) for p in pts]
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    denom = sum((x - mx) ** 2 for x in xs)
+    if denom <= 0:
+        return out
+    slope = sum((xs[i] - mx) * (ys[i] - my) for i in range(n)) / denom  # bytes/sec
+    per_day = slope * 86400.0
+    out["growth_per_day"] = int(per_day)
+    if per_day > 0 and fs_total > 0:
+        to90 = (fs_total * 0.9 - fs_used) / per_day
+        out["days_to_90pct"] = round(max(0.0, to90), 1)
+        if fs_free > 0:
+            out["days_to_full"] = round(max(0.0, fs_free / per_day), 1)
+    return out
+
+
 def diff_scans(data_dir: str, base_id: int, target_id: int, *,
                limit: int = 100, max_depth: Optional[int] = None) -> dict:
     """두 스캔(같은/다른 per-run DB)의 디렉터리별 재귀 용량 변화를 비교한다."""
@@ -1190,6 +1231,72 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except OSError:
             pass  # 클라이언트 연결 끊김 — 무시
 
+    def _send_metrics(self) -> None:
+        """Prometheus 텍스트 포맷(/metrics) — 루트별 최신 스캔 지표 + 서버 정보."""
+        def esc(v):
+            return str(v).replace("\\", r"\\").replace('"', r'\"').replace("\n", r"\n")
+
+        lines = [
+            "# HELP isilon_usage_info 앱 정보(버전 라벨)",
+            "# TYPE isilon_usage_info gauge",
+            'isilon_usage_info{version="%s"} 1' % esc(__version__),
+        ]
+        try:
+            mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+            try:
+                now = time.time()
+                seen = set()
+                metr = {
+                    "scanned_bytes": [], "total_files": [], "running": [],
+                    "heartbeat_age_seconds": [], "fs_total_bytes": [],
+                    "fs_used_bytes": [], "fs_free_bytes": [],
+                }
+                for s in mgrmod.list_scans(mconn):
+                    root = s["root_path"]
+                    if root in seen:    # 루트별 최신 스캔 1개만
+                        continue
+                    seen.add(root)
+                    lbl = '{root="%s"}' % esc(root)
+                    running = 1 if s["status"] in ("discovering", "sizing") else 0
+                    metr["scanned_bytes"].append((lbl, int(s["scanned_bytes"] or 0)))
+                    metr["total_files"].append((lbl, int(s["total_files"] or 0)))
+                    metr["running"].append((lbl, running))
+                    if s.get("updated_at"):
+                        metr["heartbeat_age_seconds"].append(
+                            (lbl, max(0, int(now - s["updated_at"]))))
+                    metr["fs_total_bytes"].append((lbl, int(s["fs_total_bytes"] or 0)))
+                    metr["fs_used_bytes"].append((lbl, int(s["fs_used_bytes"] or 0)))
+                    metr["fs_free_bytes"].append((lbl, int(s["fs_free_bytes"] or 0)))
+                helps = {
+                    "scanned_bytes": "루트별 최신 스캔의 조사 용량(바이트)",
+                    "total_files": "루트별 최신 스캔의 총 파일 수",
+                    "running": "스캔 진행 중 여부(1=진행)",
+                    "heartbeat_age_seconds": "마지막 진행 갱신 경과(초)",
+                    "fs_total_bytes": "대상 FS 전체 크기",
+                    "fs_used_bytes": "대상 FS 사용량",
+                    "fs_free_bytes": "대상 FS 여유",
+                }
+                for name, rows in metr.items():
+                    full = "isilon_usage_root_" + name
+                    lines.append("# HELP %s %s" % (full, helps[name]))
+                    lines.append("# TYPE %s gauge" % full)
+                    for lbl, val in rows:
+                        lines.append("%s%s %d" % (full, lbl, val))
+            finally:
+                mconn.close()
+        except Exception:
+            pass
+        body = ("\n".join(lines) + "\n").encode("utf-8")
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type",
+                             "text/plain; version=0.0.4; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except OSError:
+            pass
+
     def _query_int(self, qs: dict, key: str):
         if key in qs and qs[key]:
             try:
@@ -1232,6 +1339,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         if path in ("/", "/index.html"):
             self._send_html(DASHBOARD_HTML)
+            return
+
+        if path == "/metrics":
+            self._send_metrics()
             return
 
         if not path.startswith("/api/"):
@@ -1468,10 +1579,58 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     for o in owners:
                         o["name"] = _uid_name(o["key"])
                     exts = dbmod.get_scan_stats(pconn, rid, "ext", limit=200)
+                    topf = dbmod.get_top_files(pconn, rid, limit=100)
+                    for f in topf:
+                        f["owner"] = _uid_name(f.get("uid"))
                     self._send_json({"ok": True, "scan_id": scan_id, "age": age,
-                                     "owners": owners, "extensions": exts})
+                                     "owners": owners, "extensions": exts,
+                                     "top_files": topf})
                 finally:
                     pconn.close()
+                return
+
+            if path == "/api/forecast":
+                # 용량 소진 예측: 같은 루트의 완료 스캔 이력으로 선형 추세 계산
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
+                if row is None:
+                    self._send_json({"ok": False, "reason": "no_runs"})
+                    return
+                self._send_json(forecast_capacity(mconn, row))
+                return
+
+            if path == "/api/growers":
+                # 변화 리포트: 직전 완료 스캔 대비 가장 많이 커진/줄어든/신규/삭제
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
+                if row is None:
+                    self._send_json({"ok": False, "reason": "no_runs"})
+                    return
+                prev = mconn.execute(
+                    """SELECT id FROM scans WHERE root_path=? AND id<? AND status='done'
+                       ORDER BY id DESC LIMIT 1""",
+                    (row["root_path"], scan_id)).fetchone()
+                if not prev:
+                    self._send_json({"ok": True, "has_base": False,
+                                     "reason": "비교할 이전 완료 스캔이 없습니다."})
+                    return
+                limit = self._query_int(qs, "limit") or 15
+                d = diff_scans(self.data_dir, int(prev["id"]), scan_id,
+                               limit=400, max_depth=self._query_int(qs, "max_depth"))
+                if not d.get("ok"):
+                    self._send_json(d)
+                    return
+                rows = d["rows"]
+                out = {
+                    "ok": True, "has_base": True,
+                    "base_scan": d["base"], "target_scan": d["target"],
+                    "total_delta": d["total_delta"],
+                    "growers": [r for r in rows if r["delta"] > 0][:limit],
+                    "shrinkers": [r for r in rows if r["delta"] < 0][:limit],
+                    "added": [r for r in rows if r["base_bytes"] == 0
+                              and r["target_bytes"] > 0][:limit],
+                    "removed": [r for r in rows if r["target_bytes"] == 0
+                                and r["base_bytes"] > 0][:limit],
+                }
+                self._send_json(out)
                 return
 
             if path == "/api/diff":

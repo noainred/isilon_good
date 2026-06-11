@@ -9,7 +9,24 @@
 - MINOR — 호환되는 기능 추가
 - PATCH — 호환되는 버그 수정
 
-DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재 스키마 버전은 **7** 입니다.
+DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재 스키마 버전은 **8** 입니다.
+
+---
+
+## [1.23.0] - 2026-06-09
+
+### 추가됨 (Added) — 커뮤니티 추천 #4·#5·#8·#10
+- **🐘 최대 파일 Top-N**: 스캔 중 상위 200개 파일을 힙으로 유지(메모리 미미),
+  주기 저장·재개 복원. 분석 리포트에 표(경로·크기·수정시각·소유자), `/api/stats`
+  의 `top_files`, CLI `stats --top N`. 스키마 8(`top_files` 테이블).
+- **📈 용량 소진 예측**: 같은 루트의 완료 스캔 이력으로 선형 추세(증가/일)를
+  계산해 **FS 90% 도달·가득 참 예상일**을 보여준다(2회+ 스캔 필요).
+  `GET /api/forecast?scan=ID`.
+- **🔀 변화 Top(직전 스캔 대비)**: 기존 diff 를 발전 — 가장 많이 **커진/줄어든/
+  신규/삭제** 디렉터리를 자동으로 골라 보여준다. `GET /api/growers?scan=ID`.
+- **Prometheus `/metrics`**: 루트별 `scanned_bytes`/`total_files`/`running`/
+  `heartbeat_age_seconds`/`fs_{total,used,free}_bytes` + `isilon_usage_info{version}`
+  를 텍스트 포맷으로 노출(stdlib 구현) — 기존 Grafana 에 바로 연동.
 
 ---
 
