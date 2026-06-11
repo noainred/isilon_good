@@ -429,6 +429,31 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tunecheck(args: argparse.Namespace) -> int:
+    """튜닝 점검 — OS 커널/마운트 설정을 보고 스캔 가속 튜닝 포인트를 체크."""
+    from . import systune as sysmod
+    rep = sysmod.check(scan_root=getattr(args, "path", None),
+                       data_dir=os.path.abspath(args.data_dir))
+    if getattr(args, "json", False):
+        import json
+        print(json.dumps(rep, ensure_ascii=False, indent=2))
+        return 0
+    print("튜닝 점검 — OS 커널/마운트 설정 분석")
+    if rep.get("nfs_mounts"):
+        print("  NFS 마운트: " + ", ".join(m["mount"] for m in rep["nfs_mounts"]))
+    c = rep["summary"]
+    print(f"  요약: ok {c['ok']} · 주의 {c['warn']} · 권장 {c['tip']} · 측정불가 {c['na']}")
+    glyph = {"ok": "🟢", "warn": "🟠", "tip": "🟡", "na": "⚪"}
+    for s in rep["sections"]:
+        print("\n[" + s["name"] + "]")
+        for it in s["items"]:
+            print("  %s %-30s 현재: %s" % (glyph.get(it["level"], "·"), it["key"], it["current"]))
+            print("     권장: %s — %s" % (it["recommended"], it["note"]))
+            if it.get("fix") and it["level"] in ("warn", "tip"):
+                print("     적용: %s" % it["fix"])
+    return 0
+
+
 def cmd_version(args: argparse.Namespace) -> int:
     import platform
     print(f"isilon_usage {__version__}")
@@ -669,6 +694,13 @@ def build_parser() -> argparse.ArgumentParser:
     pan.add_argument("--workers", type=int, default=8, help="동시 디렉터리 워커 수")
     pan.add_argument("--json", action="store_true", help="결과를 JSON 으로 출력")
     pan.set_defaults(func=cmd_analyze)
+
+    ptc = sub.add_parser("tunecheck", help="튜닝 점검 — OS 커널/마운트 설정 분석"
+                                           "(NFS nconnect·RPC 슬롯·캐시 등)")
+    ptc.add_argument("path", nargs="?", default=None, help="대상 경로(NFS 마운트 식별용, 선택)")
+    ptc.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
+    ptc.add_argument("--json", action="store_true", help="결과를 JSON 으로 출력")
+    ptc.set_defaults(func=cmd_tunecheck)
 
     pvr = sub.add_parser("version", help="버전/환경 정보 출력")
     pvr.set_defaults(func=cmd_version)

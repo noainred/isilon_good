@@ -131,6 +131,7 @@
     <button class="navbtn" data-view="analysis">디렉터리</button>
     <button class="navbtn" data-view="depth">🧭 대상 분석</button>
     <button class="navbtn" data-view="trouble">🩺 트러블슈팅</button>
+    <button class="navbtn" data-view="tune">🔧 튜닝 점검</button>
     <button class="navbtn" data-view="trends">추세·비교</button>
     <button class="navbtn" data-view="report">📊 분석 리포트</button>
     <button class="navbtn" data-view="settings">⚙ 설정</button>
@@ -891,6 +892,26 @@
   </div>
 </div>
 
+<!-- 튜닝 점검(OS 커널/마운트 설정 분석) 페이지 -->
+<div class="wrap view" id="view-tune" style="display:none;">
+  <h2 style="margin:0 0 8px;">🔧 튜닝 점검 — OS·마운트 설정으로 스캔 가속</h2>
+  <div class="card">
+    <p class="sub" style="margin:0 0 10px;">거대 NAS(아이실론) 스캔은 NFS 메타데이터(수억 stat/readdir)
+      처리량이 좌우합니다. <b>NFS 동시성(nconnect·RPC 슬롯)·속성 캐시·페이지/덴트리 캐시·CPU 거버너·
+      open files 한도</b> 등을 점검해 튜닝 포인트를 짚어 줍니다.</p>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <input id="tunePath" type="text" class="setinput mono" style="flex:1; min-width:200px;"
+             placeholder="대상 경로(선택) — NFS 마운트 식별용. 비우면 허용 경로 사용" />
+      <button id="tuneRun" style="border-color:var(--accent2); color:#cfe; font-weight:700; padding:8px 16px;">점검 실행</button>
+      <span id="tuneMsg" class="sub"></span>
+    </div>
+  </div>
+  <div id="tuneResult" style="display:none;">
+    <div id="tuneSummary" class="card" style="margin-top:14px;"></div>
+    <div id="tuneSections"></div>
+  </div>
+</div>
+
 <!-- 버전 기록 페이지 -->
 <div class="wrap view" id="view-history" style="display:none;">
   <div class="card">
@@ -1482,6 +1503,45 @@ function tsAutoToggle() {
 }
 if ($("tsRun")) $("tsRun").addEventListener("click", tsRun);
 if ($("tsAuto")) $("tsAuto").addEventListener("change", tsAutoToggle);
+
+// ---- 튜닝 점검(OS 커널/마운트 설정) ----
+const TUNE_GLYPH = {ok: "🟢", warn: "🟠", tip: "🟡", na: "⚪"};
+const TUNE_COLOR = {ok: "var(--ok)", warn: "var(--danger)", tip: "var(--warn)", na: "var(--muted)"};
+async function tuneRun() {
+  $("tuneMsg").textContent = "점검 중…";
+  const p = $("tunePath").value.trim();
+  try {
+    const j = await (await fetch("/api/systune" + (p ? "?path=" + encodeURIComponent(p) : ""), {cache: "no-store"})).json();
+    if (!j.ok) { $("tuneMsg").innerHTML = '<span style="color:var(--danger)">' + (j.error || "점검 불가") + '</span>'; return; }
+    $("tuneMsg").textContent = ""; tuneRender(j);
+  } catch (e) { $("tuneMsg").innerHTML = '<span style="color:var(--danger)">오류: ' + e + '</span>'; }
+}
+function tuneRender(j) {
+  $("tuneResult").style.display = "block";
+  const c = j.summary || {};
+  const mounts = (j.nfs_mounts || []).map(m => m.mount).join(", ") || "없음(로컬 FS)";
+  $("tuneSummary").innerHTML =
+    '<div style="font-weight:700; margin-bottom:6px;">요약 — '
+    + '🟢 ok ' + (c.ok || 0) + ' · 🟠 주의 ' + (c.warn || 0) + ' · 🟡 권장 ' + (c.tip || 0) + ' · ⚪ 측정불가 ' + (c.na || 0) + '</div>'
+    + '<div class="sub">감지된 NFS 마운트: ' + mounts + (j.target_mount ? ' · 대상: <b>' + j.target_mount + '</b>' : '') + '</div>';
+  $("tuneSections").innerHTML = (j.sections || []).map(s => {
+    const rows = s.items.map(it =>
+      '<tr style="border-bottom:1px solid var(--line);">'
+      + '<td style="padding:5px 8px; vertical-align:top;">' + (TUNE_GLYPH[it.level] || "") + '</td>'
+      + '<td style="padding:5px 8px; vertical-align:top;"><b>' + it.key + '</b></td>'
+      + '<td style="padding:5px 8px; vertical-align:top;" class="mono" style="color:' + (TUNE_COLOR[it.level] || "") + '">' + String(it.current).replace(/</g, "&lt;") + '</td>'
+      + '<td style="padding:5px 8px; vertical-align:top;" class="mono sub">' + String(it.recommended).replace(/</g, "&lt;") + '</td>'
+      + '<td style="padding:5px 8px; vertical-align:top;"><span class="sub">' + it.note.replace(/</g, "&lt;")
+      + (it.fix && (it.level === "warn" || it.level === "tip") ? '<br><span class="mono" style="color:var(--accent2)">적용: ' + it.fix.replace(/</g, "&lt;") + '</span>' : '')
+      + '</span></td></tr>').join("");
+    return '<div class="card" style="margin-top:14px;"><h3 style="margin:0 0 8px;">' + s.name + '</h3>'
+      + '<table style="width:100%; border-collapse:collapse;"><thead><tr style="text-align:left; border-bottom:1px solid var(--line);">'
+      + '<th style="padding:4px 8px;"></th><th style="padding:4px 8px;">항목</th><th style="padding:4px 8px;">현재</th>'
+      + '<th style="padding:4px 8px;">권장</th><th style="padding:4px 8px;">해석 · 적용법</th></tr></thead><tbody>'
+      + rows + '</tbody></table></div>';
+  }).join("");
+}
+if ($("tuneRun")) $("tuneRun").addEventListener("click", tuneRun);
 
 async function saveSettings() {
   const payload = {
@@ -2744,7 +2804,7 @@ buildSchWeekdays(); fillSchSel("schMonth", 12, "월"); fillSchSel("schDay", 31, 
     });
   }
 })();
-const VIEWS = ["summary", "analysis", "depth", "trouble", "trends", "report", "settings", "gentest", "history"];
+const VIEWS = ["summary", "analysis", "depth", "trouble", "tune", "trends", "report", "settings", "gentest", "history"];
 let changelogLoaded = false;
 function showView(name) {
   if (VIEWS.indexOf(name) < 0) name = "summary";
@@ -2757,6 +2817,7 @@ function showView(name) {
   if (name === "history" && !changelogLoaded) loadChangelog();
   if (name === "report") loadReport();
   if (name === "trouble") { if (typeof tsRun === "function") tsRun(); }
+  if (name === "tune") { if (typeof tuneRun === "function" && $("tuneResult") && $("tuneResult").style.display === "none") tuneRun(); }
   else if (typeof _tsAutoTimer !== "undefined" && _tsAutoTimer) {
     clearInterval(_tsAutoTimer); _tsAutoTimer = null;
     if ($("tsAuto")) $("tsAuto").checked = false;

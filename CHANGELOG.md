@@ -13,6 +13,21 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.26.0] - 2026-06-11
+
+### 추가됨 (Added) — "튜닝 점검" 메뉴 (OS·마운트 가속 분석)
+- **`🔧 튜닝 점검`** 메뉴 + **`tunecheck` CLI** — 거대 NAS 스캔을 빠르게 만드는
+  OS/마운트 설정을 분석해 항목별 현재값·권장값·상태(ok/주의/권장)·적용 명령을 낸다.
+- **NFS 마운트(대상)**: `nconnect`(서버당 TCP 다중화 — 메타데이터 병렬의 핵심),
+  NFS 버전, `rsize/wsize`, 속성 캐시(`actimeo`/`noac`), `hard/soft`, `noatime`.
+- **커널/sysctl**: `sunrpc.tcp_slot_table_entries`(동시 in-flight RPC), `vm.swappiness`,
+  `vm.vfs_cache_pressure`, `fs.file-max`, `net.core.rmem_max`.
+- **프로세스 한도**(open files), **CPU 거버너**(performance), **로컬 DB 디스크**
+  (SSD 여부·DB가 NFS 위에 있으면 경고).
+- `isilon_usage/systune.py` + `tests/test_systune.py`. 서버 `GET /api/systune`.
+
+---
+
 ## [1.25.0] - 2026-06-11
 
 ### 추가됨 (Added) — "트러블슈팅" 메뉴 (실행 중 병목 진단)

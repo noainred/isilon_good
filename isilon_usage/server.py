@@ -992,6 +992,17 @@ class ScanController:
                 self._analyze_stop.set()
         return {"ok": True}
 
+    # ----- 튜닝 점검(OS 커널/마운트 설정 분석) -----
+    def systune_check(self, *, scan_root=None) -> dict:
+        """OS 커널/NFS 마운트 설정을 분석해 스캔 가속 튜닝 포인트를 점검한다."""
+        from . import systune as sysmod
+        if not scan_root:
+            scan_root = self.mount_bases[0] if self.mount_bases else None
+        try:
+            return sysmod.check(scan_root=scan_root, data_dir=self.data_dir)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": "점검 오류: %s" % exc}
+
     # ----- 트러블슈팅(실행 중 스캔 병목 진단) -----
     def troubleshoot(self, *, sample_sec: float = 1.2) -> dict:
         """실행 중인 스캔의 '어느 구간이 느린지'를 진단한다(워커 구간·처리량·프론티어)."""
@@ -1506,6 +1517,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(self.controller.analyze_status()
                                 if self.controller else
                                 {"ok": True, "running": False, "done": False, "result": None})
+                return
+
+            if path == "/api/systune":
+                if not self.controller:
+                    self._send_json({"ok": False, "error": "웹 스캔 비활성(점검 불가)."})
+                    return
+                self._send_json(self.controller.systune_check(
+                    scan_root=qs.get("path", [None])[0]))
                 return
 
             if path == "/api/troubleshoot":
