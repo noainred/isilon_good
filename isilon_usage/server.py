@@ -992,6 +992,15 @@ class ScanController:
                 self._analyze_stop.set()
         return {"ok": True}
 
+    # ----- 트러블슈팅(실행 중 스캔 병목 진단) -----
+    def troubleshoot(self, *, sample_sec: float = 1.2) -> dict:
+        """실행 중인 스캔의 '어느 구간이 느린지'를 진단한다(워커 구간·처리량·프론티어)."""
+        from . import troubleshoot as troubmod
+        try:
+            return troubmod.diagnose(self, sample_sec=sample_sec)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": "진단 오류: %s" % exc}
+
     # ----- 테스트 데이터 생성 -----
     def gentest_validate(self, *, path, n_dirs, n_subdirs, n_files, file_size) -> dict:
         from . import gentest as genmod
@@ -1497,6 +1506,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(self.controller.analyze_status()
                                 if self.controller else
                                 {"ok": True, "running": False, "done": False, "result": None})
+                return
+
+            if path == "/api/troubleshoot":
+                if not self.controller:
+                    self._send_json({"ok": False, "error": "웹 스캔 비활성(진단 불가)."})
+                    return
+                try:
+                    secs = float(qs.get("sample", ["1.2"])[0])
+                except (TypeError, ValueError):
+                    secs = 1.2
+                self._send_json(self.controller.troubleshoot(
+                    sample_sec=max(0.2, min(5.0, secs))))
                 return
 
             if path == "/api/settings":

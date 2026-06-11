@@ -130,6 +130,7 @@
     <button class="navbtn active" data-view="summary">Summary</button>
     <button class="navbtn" data-view="analysis">디렉터리</button>
     <button class="navbtn" data-view="depth">🧭 대상 분석</button>
+    <button class="navbtn" data-view="trouble">🩺 트러블슈팅</button>
     <button class="navbtn" data-view="trends">추세·비교</button>
     <button class="navbtn" data-view="report">📊 분석 리포트</button>
     <button class="navbtn" data-view="settings">⚙ 설정</button>
@@ -835,6 +836,61 @@
   </div>
 </div>
 
+<!-- 트러블슈팅(실행 중 스캔 병목 진단) 페이지 -->
+<div class="wrap view" id="view-trouble" style="display:none;">
+  <h2 style="margin:0 0 8px;">🩺 트러블슈팅 — 어느 구간이 느린가</h2>
+  <div class="card">
+    <p class="sub" style="margin:0 0 10px;">"검색이 느리다"고 느낄 때 누릅니다. 실행 중인 스캔을
+      약 1초간 들여다보며 <b>워커가 지금 어느 구간</b>(디렉터리 읽기/파일 stat/DB/유휴)에 있고,
+      <b>CPU·메모리·디스크·NAS</b> 중 무엇이 제약인지, <b>처리량·대기 일감</b>은 어떤지 진단합니다.</p>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <button id="tsRun" style="border-color:var(--accent2); color:#cfe; font-weight:700; padding:8px 16px;">지금 진단</button>
+      <label><input type="checkbox" id="tsAuto" /> 자동(3초)</label>
+      <span id="tsMsg" class="sub"></span>
+    </div>
+  </div>
+
+  <div id="tsResult" style="display:none;">
+    <!-- 종합 판정 -->
+    <div id="tsVerdict" class="card" style="margin-top:14px;"></div>
+
+    <!-- 자원 병목(CPU/메모리/디스크/NAS) -->
+    <div class="card" style="margin-top:14px;">
+      <h3 style="margin:0 0 8px;">자원 병목 점검 (CPU · 메모리 · 디스크 · NAS)</h3>
+      <div id="tsResBottleneck" class="sub" style="margin-bottom:8px;"></div>
+      <table style="width:100%; border-collapse:collapse;">
+        <thead><tr style="text-align:left; border-bottom:1px solid var(--line);">
+          <th style="padding:4px 8px;">자원</th><th style="padding:4px 8px;">상태</th>
+          <th style="padding:4px 8px;">측정값</th><th style="padding:4px 8px;">해석</th>
+        </tr></thead>
+        <tbody id="tsResRows"></tbody>
+      </table>
+    </div>
+
+    <!-- 워커 구간 분포 + 처리량/프론티어 -->
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:14px; margin-top:14px;">
+      <div class="card">
+        <h3 style="margin:0 0 8px;">워커 구간 분포 (지금 무엇을 하나)</h3>
+        <div id="tsSegs"></div>
+        <div class="sub" id="tsSegNote" style="margin-top:8px;"></div>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 8px;">처리량 · 진행</h3>
+        <div id="tsRates" class="mono" style="line-height:1.9;"></div>
+      </div>
+    </div>
+
+    <!-- 워커별 현재 경로 -->
+    <div class="card" style="margin-top:14px;">
+      <h3 style="margin:0 0 8px;">워커별 현재 경로 (멈춘 경로 찾기)</h3>
+      <div id="tsWorkerDirs" class="mono sub"></div>
+    </div>
+
+    <!-- 처방 -->
+    <div id="tsRecs" class="card" style="margin-top:14px; display:none;"></div>
+  </div>
+</div>
+
 <!-- 버전 기록 페이지 -->
 <div class="wrap view" id="view-history" style="display:none;">
   <div class="card">
@@ -1355,6 +1411,77 @@ function depRender(r) {
 if ($("depStartBtn")) $("depStartBtn").addEventListener("click", depStart);
 if ($("depStopBtn")) $("depStopBtn").addEventListener("click", depStop);
 depBudgetTxt();
+
+// ---- 트러블슈팅(실행 중 스캔 병목 진단) ----
+let _tsAutoTimer = null, _tsBusy = false;
+const TS_COLOR = {ok: "var(--ok)", warn: "var(--warn)", bad: "var(--danger)", info: "var(--accent2)", danger: "var(--danger)"};
+const TS_DOT = {ok: "🟢", warn: "🟠", bad: "🔴", info: "🟡", danger: "🔴"};
+const SEG_LABEL = {
+  readdir: "디렉터리 읽기(NAS)", stat: "파일 stat(NAS)", fold: "하위 합산(NAS)",
+  db: "DB 쓰기/커밋", claim: "일감 가져오기", idle: "유휴(대기)", other: "기타",
+};
+async function tsRun() {
+  if (_tsBusy) return;
+  _tsBusy = true; $("tsMsg").textContent = "진단 중… (약 1초)";
+  try {
+    const j = await (await fetch("/api/troubleshoot?sample=1.0", {cache: "no-store"})).json();
+    if (!j.ok) { $("tsMsg").innerHTML = '<span style="color:var(--danger)">' + (j.error || "진단 불가") + '</span>'; return; }
+    if (!j.running) { $("tsMsg").innerHTML = '<span class="sub">' + (j.msg || "실행 중인 스캔이 없습니다.") + '</span>'; $("tsResult").style.display = "none"; return; }
+    $("tsMsg").textContent = ""; tsRender(j);
+  } catch (e) { $("tsMsg").innerHTML = '<span style="color:var(--danger)">오류: ' + e + '</span>'; }
+  finally { _tsBusy = false; }
+}
+function tsRender(j) {
+  $("tsResult").style.display = "block";
+  const v = j.verdict || {};
+  $("tsVerdict").style.borderColor = TS_COLOR[v.level] || "var(--line)";
+  $("tsVerdict").innerHTML = '<div style="font-size:1.15em; font-weight:700; margin-bottom:4px;">' + (v.title || "") + '</div>'
+    + '<div class="sub">' + (v.desc || "") + '</div>';
+  // 자원 병목
+  const rb = j.resource_bottleneck || {};
+  $("tsResBottleneck").innerHTML = '<b style="color:' + (TS_COLOR[rb.level] || "var(--ok)") + '">' + (rb.summary || "") + '</b>';
+  $("tsResRows").innerHTML = (j.resources || []).map(r =>
+    '<tr style="border-bottom:1px solid var(--line);">'
+    + '<td style="padding:4px 8px;"><b>' + r.name + '</b></td>'
+    + '<td style="padding:4px 8px; color:' + (TS_COLOR[r.level] || "") + '">' + (TS_DOT[r.level] || "") + ' ' + r.level.toUpperCase() + '</td>'
+    + '<td style="padding:4px 8px;" class="mono">' + r.value + '</td>'
+    + '<td style="padding:4px 8px;"><span class="sub">' + r.note + '</span></td></tr>').join("");
+  // 워커 구간 분포
+  const w = j.workers || {}, tot = w.total || 1;
+  let segs = "";
+  ["readdir", "stat", "fold", "db", "claim", "idle", "other"].forEach(k => {
+    if (!w[k]) return;
+    const pct = Math.round(w[k] / tot * 100);
+    segs += '<div style="margin-bottom:6px;"><div class="sub">' + SEG_LABEL[k] + ' — <b>' + w[k] + '</b>/' + tot + '</div>'
+      + '<div class="bar" style="height:12px;"><span style="width:' + pct + '%"></span></div></div>';
+  });
+  $("tsSegs").innerHTML = segs || '<span class="sub">워커 없음(집계 단계이거나 유휴).</span>';
+  $("tsSegNote").innerHTML = '동시 워커 ' + (j.active_workers || 0) + ' / 설정 ' + (j.configured_workers || 0) + '개';
+  // 처리량/진행
+  $("tsRates").innerHTML =
+    '디렉터리 <b>' + Math.round(j.rate_dirs || 0) + '</b>/초 · 파일 <b>' + Math.round(j.rate_files || 0) + '</b>/초<br>'
+    + '하트비트(진행 갱신) <b>' + (j.heartbeat_age || 0).toFixed(1) + 's</b> 전<br>'
+    + '처리완료 <b>' + fmtNum(j.discovered || 0) + '</b> · 대기(추정) <b>' + fmtNum(j.pending_est || 0) + '</b>개<br>'
+    + 'DB ' + fmtBytes(j.db_bytes || 0) + ' (WAL ' + fmtBytes(j.wal_bytes || 0) + ') · 디스크 여유 ' + fmtBytes(j.disk_free || 0);
+  // 워커별 현재 경로
+  const wd = j.worker_dirs || [];
+  $("tsWorkerDirs").innerHTML = wd.length
+    ? wd.map(p => '· ' + (p || "").replace(/</g, "&lt;")).join("<br>")
+    : '<span class="sub">표시할 경로 없음(유휴이거나 집계 단계).</span>';
+  // 처방
+  const recs = j.recommendations || [];
+  if (recs.length) {
+    $("tsRecs").style.display = "block";
+    $("tsRecs").innerHTML = '<h3 style="margin:0 0 8px;">처방</h3><ul style="margin:0; padding-left:20px; line-height:1.8;">'
+      + recs.map(r => '<li>' + r.replace(/</g, "&lt;") + '</li>').join("") + '</ul>';
+  } else { $("tsRecs").style.display = "none"; }
+}
+function tsAutoToggle() {
+  if (_tsAutoTimer) { clearInterval(_tsAutoTimer); _tsAutoTimer = null; }
+  if ($("tsAuto") && $("tsAuto").checked) { _tsAutoTimer = setInterval(tsRun, 3000); tsRun(); }
+}
+if ($("tsRun")) $("tsRun").addEventListener("click", tsRun);
+if ($("tsAuto")) $("tsAuto").addEventListener("change", tsAutoToggle);
 
 async function saveSettings() {
   const payload = {
@@ -2617,7 +2744,7 @@ buildSchWeekdays(); fillSchSel("schMonth", 12, "월"); fillSchSel("schDay", 31, 
     });
   }
 })();
-const VIEWS = ["summary", "analysis", "depth", "trends", "report", "settings", "gentest", "history"];
+const VIEWS = ["summary", "analysis", "depth", "trouble", "trends", "report", "settings", "gentest", "history"];
 let changelogLoaded = false;
 function showView(name) {
   if (VIEWS.indexOf(name) < 0) name = "summary";
@@ -2629,6 +2756,11 @@ function showView(name) {
   try { history.replaceState(null, "", "#" + name); } catch (e) { location.hash = name; }
   if (name === "history" && !changelogLoaded) loadChangelog();
   if (name === "report") loadReport();
+  if (name === "trouble") { if (typeof tsRun === "function") tsRun(); }
+  else if (typeof _tsAutoTimer !== "undefined" && _tsAutoTimer) {
+    clearInterval(_tsAutoTimer); _tsAutoTimer = null;
+    if ($("tsAuto")) $("tsAuto").checked = false;
+  }
 }
 document.querySelectorAll(".navbtn").forEach(b => b.addEventListener("click", () => showView(b.dataset.view)));
 window.addEventListener("hashchange", () => {
