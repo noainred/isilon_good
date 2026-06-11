@@ -596,6 +596,7 @@
       <div class="kv"><span class="k">경과 시간(누적 작업)</span><span class="v" id="elapsed">0s</span></div>
       <div class="kv" id="sessionElapsedRow"><span class="k">이번 재시작 후</span><span class="v" id="sessionElapsed">—</span></div>
       <div class="kv"><span class="k">예상 잔여(ETA)</span><span class="v" id="eta">—</span></div>
+      <div class="kv"><span class="k">완료 예상시각</span><span class="v" id="etaClock">—</span></div>
     </div>
   </div>
 
@@ -2224,6 +2225,18 @@ function render(d) {
     $("sessionElapsedRow").style.display = "none";
   }
   $("eta").textContent = p.eta_seconds == null ? "—" : fmtDur(p.eta_seconds);
+  // 완료 예상시각: 지금 + 남은 시간 → 절대 시계 시각(오늘이면 'HH:MM', 다른 날이면 'M/D HH:MM')
+  if (p.eta_seconds == null || !running) {
+    $("etaClock").textContent = "—";
+  } else {
+    const end = new Date(Date.now() + p.eta_seconds * 1000);
+    const hm = end.toLocaleTimeString("ko-KR", {hour: "2-digit", minute: "2-digit"});
+    const today = new Date();
+    const sameDay = end.toDateString() === today.toDateString();
+    $("etaClock").textContent = sameDay
+      ? ("오늘 " + hm)
+      : ((end.getMonth() + 1) + "/" + end.getDate() + " " + hm);
+  }
 
   // 로컬 저장 공간 여유(DB 데이터 폴더 / 로그 위치) — DB 폭증·디스크 부족 조기 감지
   const ld = d.local_disk || {};
