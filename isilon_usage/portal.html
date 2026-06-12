@@ -88,9 +88,9 @@
         <th class="sortable" data-nsort="region" data-label="지역">지역</th>
         <th class="num sortable" data-nsort="storages" data-label="스토리지">스토리지</th>
         <th class="num sortable" data-nsort="used_bytes" data-label="사용">사용</th>
-        <th>버전</th><th>마지막 동기화</th>
+        <th>버전</th><th>마지막 동기화</th><th>마지막 스캔</th>
         <th class="sortable" data-nsort="status" data-label="상태">상태</th><th></th></tr></thead>
-      <tbody id="nodeRows"><tr><td colspan="8" class="sub">불러오는 중…</td></tr></tbody>
+      <tbody id="nodeRows"><tr><td colspan="9" class="sub">불러오는 중…</td></tr></tbody>
     </table>
     <div class="sub" id="dashNote" style="margin-top:8px;"></div>
   </div>
@@ -190,6 +190,15 @@ async function loadOverview(){
   } catch(e){ /* 무시 */ }
 }
 function statRank(n){ return n.online ? (n.active_scans>0?2:1) : 0; }
+function scanProgress(r){   // 루트별 스캔 단계/진행률
+  if(!r) return "";
+  if(r.status==="done") return "✅ 완료";
+  if(r.status==="paused") return "⏸ 일시정지";
+  if(r.status==="error") return "⚠ 오류";
+  if(r.phase==="sizing"){ const t=r.total_dirs||0,p=r.processed_dirs||0; return "📦 집계 "+(t?Math.round(p/t*100):0)+"% ("+fmtNum(p)+"/"+fmtNum(t)+")"; }
+  if(r.status==="discovering"||r.phase==="discovering") return "🔄 탐색 중 ("+fmtNum(r.discovered_dirs||0)+"개)";
+  return r.status||"";
+}
 function renderPortalDash(){
   const j=pOverview; if(!j) return;
   if(j.version) $("ver").textContent = "v"+j.version;
@@ -232,20 +241,21 @@ function renderPortalDash(){
           : ` <span class="badge" style="background:#3f3516;color:#f0c86a" title="${a.label||a.type} 주의">${lab} ⚠</span>`)
         : ` <span class="badge b-offline" title="${a.label||a.type} 연결 실패">${lab} ✕</span>`;
     }).join("");
-    const arrRows = cfgArr.map(a => `<tr class="rr-${idx}" style="display:none; background:#101a26;"><td></td><td colspan="7" class="sub">${
+    const arrRows = cfgArr.map(a => `<tr class="rr-${idx}" style="display:none; background:#101a26;"><td></td><td colspan="8" class="sub">${
       a.type === "isilon" ? "🟦" : "🟧"} ${a.label||a.type} ${
       a.ok ? `<b>${a.name||"?"}</b> · ${a.version||""} · 노드 ${(a.nodes&&a.nodes.online)!=null?a.nodes.online:"?"}/${(a.nodes&&a.nodes.total)!=null?a.nodes.total:"?"} · 용량 ${(a.capacity&&a.capacity.used_pct!=null)?a.capacity.used_pct+"%":"—"} · 이벤트/알림 ${a.events_unresolved!=null?a.events_unresolved:"—"} · ${a.health==="ok"?"정상":"주의"}`
            : `연결 실패: ${a.error||""}`}</td></tr>`).join("");
     const roots = arrRows + (n.roots||[]).map(r=>
       `<tr class="rr-${idx}" style="display:none; background:#121a24;"><td></td>
-        <td colspan="7" class="sub mono">📁 ${r.root_path} — 사용 ${fmtBytes(r.scanned_bytes)} / fs ${fmtBytes(r.fs_used_bytes)} · ${r.status||""}</td></tr>`).join("");
+        <td colspan="8" class="sub mono">📁 ${r.root_path} — 사용 ${fmtBytes(r.scanned_bytes)} / fs ${fmtBytes(r.fs_used_bytes)} · ${scanProgress(r)}${r.finished_at?(" · 완료 "+ago(r.finished_at)):(r.updated_at?(" · 갱신 "+ago(r.updated_at)):"")}</td></tr>`).join("");
     return `<tr class="noderow" data-idx="${idx}" style="cursor:pointer;" title="클릭하면 스토리지/어레이 펼침">
       <td><b>${n.id}</b>${arrBadges} <span class="sub mono">${n.hostname||""}</span></td><td>${n.region||"—"}</td>
       <td class="num">▸ ${fmtNum(n.storages)}</td><td class="num">${fmtBytes(n.used_bytes)}</td>
       <td class="sub">${n.version?("v"+n.version):"—"}</td><td class="sub">${ago(n.last_poll)}</td>
+      <td class="sub">${ago(n.last_scan_at)}</td>
       <td>${st}</td><td>${open}</td></tr>` + roots +
-      (n.last_error ? `<tr><td colspan="8" class="sub" style="color:#ff9a9a">${n.id}: ${n.last_error}</td></tr>` : "");
-  }).join("") : '<tr><td colspan="8" class="sub">표시할 노드가 없습니다.</td></tr>';
+      (n.last_error ? `<tr><td colspan="9" class="sub" style="color:#ff9a9a">${n.id}: ${n.last_error}</td></tr>` : "");
+  }).join("") : '<tr><td colspan="9" class="sub">표시할 노드가 없습니다.</td></tr>';
   $("nodeRows").querySelectorAll("tr.noderow").forEach(tr=>tr.addEventListener("click",e=>{
     if(e.target.closest("a")) return;
     $("nodeRows").querySelectorAll(".rr-"+tr.dataset.idx).forEach(r=>r.style.display = r.style.display==="none"?"table-row":"none");

@@ -13,6 +13,17 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.31.3] - 2026-06-12
+
+### 추가됨 (Added) — 포탈 노드별 스캔 진행률 + 마지막 스캔 시각
+- 포탈 메인 표에 **'마지막 스캔' 열** 추가(그 DC가 마지막으로 스캔/갱신한 시각 =
+  데이터 신선도). 노드 행을 펼치면 루트별 **스캔 단계/진행률**: 🔄 탐색 중(N개) /
+  📦 집계 N%(processed/total) / ✅ 완료 / ⏸ 일시정지 + 완료·갱신 시각.
+- `manager.overall_capacity` 의 roots 에 `discovered_dirs·processed_dirs` 추가,
+  `portal.overview` 에 노드별 `last_scan_at` 추가.
+
+---
+
 ## [1.31.2] - 2026-06-12
 
 ### 변경됨 (Changed) — 글로벌 포탈: 노드별 스캔 상태 일관성

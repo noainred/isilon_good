@@ -262,6 +262,8 @@ def overall_capacity(conn) -> dict:
             "phase": s["phase"],
             "scanned_bytes": s.get("scanned_bytes") or 0,
             "total_dirs": s.get("total_dirs") or 0,
+            "discovered_dirs": s.get("discovered_dirs") or 0,
+            "processed_dirs": s.get("processed_dirs") or 0,
             "total_files": s.get("total_files") or 0,
             "fs_total_bytes": s.get("fs_total_bytes") or 0,
             "fs_used_bytes": s.get("fs_used_bytes") or 0,

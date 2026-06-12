@@ -426,15 +426,19 @@ class PortalController:
             r = regions.setdefault(reg, {"region": reg, "used_bytes": 0, "storages": 0})
             r["used_bytes"] += used
             r["storages"] += st
+            roots_l = ov.get("roots") or []
+            last_scan = max([0] + [max(rt.get("finished_at") or 0, rt.get("updated_at") or 0)
+                                   for rt in roots_l])     # 그 DC 가 마지막으로 스캔한 시각
             out_nodes.append({
                 "id": n["id"], "region": n.get("region"), "url": n["url"],
                 "enabled": n.get("enabled"), "online": is_on,
                 "version": c.get("version"), "hostname": c.get("hostname"),
                 "last_poll": n.get("last_poll"), "last_sync": n.get("last_sync"),
+                "last_scan_at": last_scan or None,
                 "last_error": n.get("last_error") or c.get("error") or "",
                 "used_bytes": used, "storages": st,
                 "active_scans": int(ov.get("active_scans") or 0),
-                "roots": ov.get("roots") or [],
+                "roots": roots_l,
                 "isilon": c.get("isilon") or {"configured": False},
                 "storage": c.get("storage") or [],
             })
