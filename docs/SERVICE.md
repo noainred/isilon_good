@@ -93,6 +93,48 @@ Restart=no
 ```
 (`run` 은 scan 옵션을 직접 받습니다. 끝나면 종료되므로 `Restart=no`.)
 
+## HQ에서 포탈과 스캐너 분리 운영 (업그레이드 격리)
+
+HQ 서버가 **로컬 디스크 스캔(`serve`)** 과 **글로벌 집계 포탈(`portal`)** 을 둘 다
+돌릴 때, **포탈을 업그레이드/재시작해도 스캔이 중단되지 않게** 하려면 둘을 완전히
+분리합니다. 둘은 원래 별도 프로세스이지만, **코드 디렉터리·data-dir·포트·서비스**를
+나눠 두면 한쪽을 건드려도 다른 쪽에 절대 영향이 없습니다.
+
+```
+HQ 서버
+├── /opt/isilon_edge/isilon_usage/     ← 스캐너 코드(serve)        :8765
+│   └─ 서비스 isilon_usage         data-dir /var/lib/isilon_usage
+└── /opt/isilon_portal/isilon_usage/   ← 포탈 코드(portal)         :8800
+    └─ 서비스 isilon_usage_portal  data-dir /var/lib/isilon_portal
+```
+
+**설치 (두 디렉터리에 각각 패키지 배치)**
+```bash
+sudo mkdir -p /opt/isilon_edge /opt/isilon_portal
+sudo cp -r isilon_usage-*/isilon_usage /opt/isilon_edge/      # 스캐너용
+sudo cp -r isilon_usage-*/isilon_usage /opt/isilon_portal/    # 포탈용(별도 사본)
+
+# 스캐너 유닛: WorkingDirectory=/opt/isilon_edge
+sudo cp isilon_usage-*/packaging/isilon_usage.service        /etc/systemd/system/
+# 포탈 유닛: WorkingDirectory=/opt/isilon_portal, 포트 8800
+sudo cp isilon_usage-*/packaging/isilon_usage_portal.service /etc/systemd/system/
+sudo vi /etc/systemd/system/isilon_usage.service        # WorkingDirectory=/opt/isilon_edge
+sudo systemctl daemon-reload
+sudo systemctl enable --now isilon_usage isilon_usage_portal
+```
+
+**포탈만 업그레이드 (스캔 무중단)**
+```bash
+sudo cp -r isilon_usage-<새버전>/isilon_usage /opt/isilon_portal/   # 포탈 코드만 교체
+sudo systemctl restart isilon_usage_portal                          # 포탈만 재시작
+# → /opt/isilon_edge 와 isilon_usage(스캐너)는 손대지 않음 = HQ 디스크 스캔 계속 진행
+```
+
+> 참고: 같은 디렉터리를 공유해도, **실행 중 프로세스는 시작 시점의 코드를 메모리에**
+> 들고 돌기 때문에 파일을 바꿔도 그 프로세스는 영향받지 않습니다(재시작 전까지).
+> 그래도 위처럼 **코드 사본·서비스를 분리**해 두면 실수로라도 스캐너를 건드릴 일이
+> 없어 가장 안전합니다.
+
 ## 보안 (외부 노출 시 필수)
 
 `--host 0.0.0.0` 은 모든 NIC에 노출됩니다. 신뢰망(사내 LAN)이 아니면:
