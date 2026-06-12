@@ -55,11 +55,15 @@ def run_is_problem() -> None:
             "resource_bottleneck": {"level": "ok"}, "resources": []}
     assert not t.is_problem(base), "정상인데 문제로 판정"
     assert t.is_problem({**base, "verdict": {"level": "warn", "title": "x"}})
-    assert t.is_problem({**base, "resources": [{"name": "CPU", "level": "bad"}]})
+    # CPU(GIL 포화)는 정상 작업 상태 → 단독으로는 문제 아님
+    assert not t.is_problem({**base, "resources": [{"name": "CPU", "level": "bad"}]})
+    # CPU 외 자원(NAS/디스크/메모리)의 bad 는 문제
+    assert t.is_problem({**base, "resources": [{"name": "NAS(대상)", "level": "bad"}]})
     assert not t.is_problem({**base, "running": False})        # 미실행은 기록 안 함
-    # info(롱테일) 단독은 문제 아님
-    assert not t.is_problem({**base, "verdict": {"level": "info", "title": "롱테일"}})
-    print("[is_problem] OK  OK/warn/bad/info/미실행 판정")
+    # info(롱테일) + CPU bad 는 문제 아님(CPU 제외)
+    assert not t.is_problem({**base, "verdict": {"level": "info", "title": "롱테일"},
+                             "resources": [{"name": "CPU", "level": "bad"}]})
+    print("[is_problem] OK  CPU(GIL) 제외 · verdict/NAS·디스크 bad 만 문제")
 
 
 def run_history() -> None:

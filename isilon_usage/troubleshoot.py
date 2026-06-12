@@ -415,15 +415,18 @@ def _history_path(data_dir):
 
 
 def is_problem(result) -> bool:
-    """진단 결과가 '이력에 남길 문제'인지(OK 이외)."""
+    """진단 결과가 '이력에 남길 문제'인지(OK 이외).
+
+    ⚠ CPU(빨강=GIL 1코어 포화)는 이 스캐너가 **일할 때의 정상 상태**라 문제로 치지
+    않는다(그렇게 하면 정상 작동 중에도 매번 기록돼 이력이 도배된다). 판정이
+    warn/danger 이거나, **CPU 외** 자원(메모리·디스크·NAS)이 'bad' 일 때만 문제다.
+    """
     if not result or not result.get("ok") or not result.get("running"):
         return False
     if (result.get("verdict") or {}).get("level") in _PROBLEM_VERDICT:
         return True
-    if (result.get("resource_bottleneck") or {}).get("level") in _PROBLEM_RES:
-        return True
     for r in result.get("resources", []):
-        if r.get("level") in _PROBLEM_RES:
+        if r.get("name") != "CPU" and r.get("level") == "bad":
             return True
     return False
 
