@@ -103,6 +103,8 @@
     border-radius:7px; padding:8px 10px; font-size:13px; }
   .setgrid { display:grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap:12px; }
   #settingsCard label { display:flex; flex-direction:column; gap:5px; font-size:12.5px; color:var(--muted); }
+  /* 라벨 줄 수(1~2줄)가 달라도 같은 높이를 잡아 입력칸이 행끼리 줄 맞도록 함 */
+  #settingsCard .setgrid .setlbl { display:block; min-height:2.6em; line-height:1.3; }
   .setinput { background:var(--panel2); color:var(--text); border:1px solid var(--line);
     border-radius:7px; padding:8px 10px; font-size:13px; }
   #settingsCard input:disabled, #settingsCard select:disabled, #settingsCard textarea:disabled { opacity:.5; }
@@ -325,65 +327,67 @@
         설정이 잠겨 있습니다(--lock-settings). 읽기 전용입니다.
       </div>
       <div class="setgrid">
-        <label>기본 백엔드
+        <label><span class="setlbl">기본 백엔드</span>
           <select id="setBackend" class="optsel">
             <option value="native">native (빠름·저메모리)</option>
             <option value="du">du (du 프로세스 메모리 표시)</option>
           </select>
         </label>
-        <label>기본 용량 기준
+        <label><span class="setlbl">기본 용량 기준</span>
           <select id="setSize" class="optsel">
             <option value="disk">디스크 점유(du 기본)</option>
             <option value="apparent">논리 크기</option>
           </select>
         </label>
-        <label>기본 한 파일시스템(-x)
+        <label><span class="setlbl">기본 한 파일시스템(-x)</span>
           <select id="setOFS" class="optsel">
             <option value="false">사용 안 함</option>
             <option value="true">사용</option>
           </select>
         </label>
-        <label>마운트 읽기전용(ro) 확인
+        <label><span class="setlbl">마운트 읽기전용(ro) 확인</span>
           <select id="setReadonly" class="optsel">
             <option value="true">사용(시작 시 검사·표시)</option>
             <option value="false">사용 안 함</option>
           </select>
         </label>
-        <label>커밋 배치 크기
+        <label><span class="setlbl">커밋 배치 크기</span>
           <input id="setBatch" type="number" min="1" max="1000000" class="setinput" />
         </label>
-        <label>자원 샘플링 주기(초)
+        <label><span class="setlbl">자원 샘플링 주기(초)</span>
           <input id="setSample" type="number" min="0.2" max="60" step="0.1" class="setinput" />
         </label>
-        <label>상위 디렉터리 표시 개수
+        <label><span class="setlbl">상위 디렉터리 표시 개수</span>
           <input id="setTopN" type="number" min="1" max="500" class="setinput" />
         </label>
-        <label>대시보드 새로고침(ms)
+        <label><span class="setlbl">대시보드 새로고침(ms)</span>
           <input id="setRefresh" type="number" min="500" max="600000" step="100" class="setinput" />
         </label>
-        <label>동시 스캔 스레드(디렉터리 병렬, NFS 가속)
+        <label><span class="setlbl">동시 스캔 스레드(디렉터리 병렬, NFS 가속)</span>
           <input id="setWorkers" type="number" min="1" max="64" class="setinput" />
           <button type="button" id="tuneBtn" class="btn" style="margin-top:4px;">서버 사양 기반 권장 계산</button>
           <button type="button" id="benchBtn" class="btn" style="margin-top:4px;">실측 보정(시범 스캔)</button>
           <span id="tuneResult" class="sub" style="display:block; margin-top:4px;"></span>
           <span id="benchResult" class="sub" style="display:block; margin-top:4px;"></span>
         </label>
-        <label>깊이 접기 N(0=끔) — 추천: N까지만 저장·아래는 용량만 합산(합계 정확)
+        <label title="N까지만 행을 저장하고 그 아래는 용량만 합산합니다(합계는 정확). 0이면 접지 않음.">
+          <span class="setlbl">깊이 접기 N (0=끔) — N까지 저장, 아래는 용량만 합산</span>
           <input id="setFoldDepth" type="number" min="0" max="100000" class="setinput" />
         </label>
-        <label>DB 최대 GB 초과 시 자동 일시정지(0=off)
+        <label><span class="setlbl">DB 최대 GB 초과 시 자동 일시정지(0=off)</span>
           <input id="setDbMaxGb" type="number" min="0" max="1000000" class="setinput" />
         </label>
-        <label>탐색 최대 깊이(0=무제한, 빠른 컷) — 그 아래 용량은 합계에서 빠짐
+        <label title="그 깊이 아래로는 탐색하지 않습니다(빠른 컷). 그 아래 용량은 합계에서 빠집니다.">
+          <span class="setlbl">탐색 최대 깊이 (0=무제한) — 아래 용량은 합계서 제외</span>
           <input id="setMaxDepth" type="number" min="0" max="100000" class="setinput" />
         </label>
-        <label>디스크 여유 GB 미만이면 자동 일시정지(0=off)
+        <label><span class="setlbl">디스크 여유 GB 미만이면 자동 일시정지(0=off)</span>
           <input id="setMinFreeGb" type="number" min="0" max="1000000" class="setinput" />
         </label>
-        <label>하드링크 중복 제거(끄면 메모리 절약·수십억 파일 대비)
+        <label><span class="setlbl">하드링크 중복 제거(끄면 메모리 절약·수십억 파일 대비)</span>
           <select id="setHardlink" class="optsel"><option value="true">사용</option><option value="false">사용 안 함</option></select>
         </label>
-        <label>루트별 보관 스캔 수(0=무제한)
+        <label><span class="setlbl">루트별 보관 스캔 수(0=무제한)</span>
           <input id="setRetention" type="number" min="0" max="100000" class="setinput" />
         </label>
       </div>
