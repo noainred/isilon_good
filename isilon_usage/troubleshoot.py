@@ -219,11 +219,13 @@ def _build_resources(*, proc_cpu, sys_cpu, ncpu, load1, mem_percent, mem_avail,
     return res, {"level": worst, "name": worst_name, "summary": summary}
 
 
-def _verdict(w, rate_dirs, rate_files, hb_age, pending, db_bytes, disk_free):
+def _verdict(w, rate_dirs, rate_files, hb_age, pending, db_bytes, disk_free,
+             *, phase=None, agg_done=0, agg_total=0, rate_agg=0):
     """구간 분포 + 처리량 + 하트비트 + 프론티어로 병목 구간과 처방을 낸다.
 
     핵심: 파일 stat 이 돌아도(files/s>0) **디렉터리 완료가 안 되면(dirs/s≈0) 정체**다.
     대기 일감이 많은데 dirs/s≈0 이면 '정상'이 아니라 롱테일/직렬화로 판정한다.
+    집계(sizing) 단계는 탐색 워커가 없어 속도/워커가 0이므로 **집계 진행률**로 판정한다.
     """
     total = w.get("total", 0) or 1
     idle = w.get("idle", 0) + w.get("claim", 0)
@@ -232,6 +234,21 @@ def _verdict(w, rate_dirs, rate_files, hb_age, pending, db_bytes, disk_free):
     # '디렉터리 진행 정체' 임계값: 완료가 1/초 미만이고 대기가 1만 초과.
     STALL_DIRS, STALL_PENDING = 1.0, 10000
     recs = []
+
+    # 0) 집계(상향식 용량 합산) 단계 — 탐색은 끝났고 워커가 없는 게 정상.
+    if phase == "sizing":
+        pct = (agg_done / agg_total * 100) if agg_total else 0
+        agg_s = "%s/%s · %.0f/초" % (f"{agg_done:,}", f"{agg_total:,}", rate_agg or 0)
+        if hb_age > 60 and (rate_agg or 0) < 1:
+            return ("warn", "🟠 집계 단계 정체 의심 — %.0f%%" % pct,
+                    "집계 %s 에서 %d초째 진행 갱신이 없습니다. 거대 하위를 가진 한 디렉터리에서 "
+                    "오래 걸리거나 멈춘 것일 수 있습니다." % (agg_s, int(hb_age)),
+                    ["'워커별 현재 경로'(집계 중 디렉터리) 확인",
+                     "오래 지속되면 프로세스 상태 점검(strace/py-spy)"])
+        return ("ok", "🟢 집계(용량 합산) 단계 — %.0f%%" % pct,
+                "탐색 완료 후 디렉터리 용량을 상향식으로 합산 중입니다 · %s. 이 단계는 탐색 "
+                "워커가 없어 위 '속도/워커'가 0인 게 정상입니다." % agg_s,
+                ["집계는 보통 금방 끝납니다 — 끝나면 '완료'로 바뀝니다"])
 
     # 1) NAS 행(hang) — 진행 갱신이 60초+ 끊김
     if hb_age > 60 and nas > 0 and rate_dirs < 1 and rate_files < 5:
@@ -352,6 +369,13 @@ def diagnose(controller, *, sample_sec: float = 1.2) -> dict:
     discovered = r2["discovered_dirs"] or 0
     pending_est = max(0, total_known - discovered - (r2["active_workers"] or 0))
 
+    # ── 집계(sizing) 진행률: processed_dirs(집계 완료) / total_dirs ──
+    phase = r2.get("phase")
+    agg_done = r2.get("processed_dirs") or 0
+    agg_total = (r2.get("total_dirs") or 0) or discovered
+    agg_pct = (agg_done / agg_total * 100.0) if agg_total else 0.0
+    rate_agg = max(0, agg_done - (r1.get("processed_dirs") or 0)) / sample
+
     db_bytes = _size(db_path)
     wal_bytes = _size(db_path + "-wal")
     disk_free = _disk_free(os.path.dirname(db_path))
@@ -374,7 +398,8 @@ def diagnose(controller, *, sample_sec: float = 1.2) -> dict:
         disk_free=disk_free, nas_ms=nas_ms, nas_timeout=nas_timeout, iowait_pct=iowait_pct)
 
     level, title, desc, recs = _verdict(
-        workers, rate_dirs, rate_files, hb_age, pending_est, db_bytes, disk_free)
+        workers, rate_dirs, rate_files, hb_age, pending_est, db_bytes, disk_free,
+        phase=phase, agg_done=agg_done, agg_total=agg_total, rate_agg=rate_agg)
 
     # 워커별 현재 경로(병렬 표시용 JSON) 파싱
     worker_dirs = []
@@ -390,6 +415,8 @@ def diagnose(controller, *, sample_sec: float = 1.2) -> dict:
         "rate_dirs": rate_dirs, "rate_files": rate_files,
         "heartbeat_age": hb_age, "sample_sec": sample,
         "discovered": discovered, "total_known": total_known, "pending_est": pending_est,
+        "aggregating": (phase == "sizing"), "agg_done": agg_done, "agg_total": agg_total,
+        "agg_pct": agg_pct, "rate_agg": rate_agg,
         "active_workers": r2.get("active_workers") or 0, "configured_workers": r2.get("workers") or 0,
         "db_bytes": db_bytes, "wal_bytes": wal_bytes, "disk_free": disk_free,
         "current_dir": r2.get("current_dir"), "worker_dirs": worker_dirs,

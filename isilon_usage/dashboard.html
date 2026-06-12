@@ -1564,10 +1564,20 @@ function tsRender(j) {
   $("tsSegs").innerHTML = segs || '<span class="sub">워커 없음(집계 단계이거나 유휴).</span>';
   $("tsSegNote").innerHTML = '동시 워커 ' + (j.active_workers || 0) + ' / 설정 ' + (j.configured_workers || 0) + '개';
   // 처리량/진행
-  $("tsRates").innerHTML =
+  let aggHtml = "";
+  if (j.aggregating) {     // 집계(용량 합산) 단계 — 탐색 워커가 없어 속도/워커가 0인 게 정상
+    const pct = Math.round(j.agg_pct || 0);
+    aggHtml = '<div style="margin:0 0 8px; padding:8px 10px; border:1px solid var(--accent2); border-radius:6px; background:#0e1a1e;">'
+      + '<b>📦 집계(용량 합산) 단계 — ' + pct + '%</b> '
+      + '<span class="sub">' + fmtNum(j.agg_done || 0) + ' / ' + fmtNum(j.agg_total || 0) + ' 디렉터리 · ' + Math.round(j.rate_agg || 0) + '/초</span>'
+      + '<div class="bar" style="height:10px; margin-top:6px;"><span style="width:' + pct + '%"></span></div>'
+      + '<div class="sub" style="margin-top:4px;">탐색은 끝났습니다. 이 단계는 탐색 워커가 없어 아래 디렉터리/파일 속도가 0인 게 정상입니다.</div></div>';
+  }
+  $("tsRates").innerHTML = aggHtml +
     '디렉터리 <b>' + Math.round(j.rate_dirs || 0) + '</b>/초 · 파일 <b>' + Math.round(j.rate_files || 0) + '</b>/초<br>'
     + '하트비트(진행 갱신) <b>' + (j.heartbeat_age || 0).toFixed(1) + 's</b> 전<br>'
-    + '처리완료 <b>' + fmtNum(j.discovered || 0) + '</b> · 대기(추정) <b>' + fmtNum(j.pending_est || 0) + '</b>개<br>'
+    + '처리완료 <b>' + fmtNum(j.discovered || 0) + '</b> · 대기(추정) <b>' + fmtNum(j.pending_est || 0) + '</b>개'
+    + (j.aggregating ? ' · 집계 <b>' + fmtNum(j.agg_done || 0) + '</b>/' + fmtNum(j.agg_total || 0) : '') + '<br>'
     + 'DB ' + fmtBytes(j.db_bytes || 0) + ' (WAL ' + fmtBytes(j.wal_bytes || 0) + ') · 디스크 여유 ' + fmtBytes(j.disk_free || 0);
   // 워커별 현재 경로
   const wd = j.worker_dirs || [];
