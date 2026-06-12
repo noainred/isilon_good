@@ -1835,7 +1835,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 # 파일 나이/소유자/확장자별 집계 리포트
                 scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
                 if row is None or not os.path.exists(row["db_path"]):
-                    self._send_json({"ok": True, "age": [], "owners": [], "extensions": []})
+                    self._send_json({"ok": True, "age": [], "atime_age": [],
+                                     "owners": [], "extensions": []})
                     return
                 pconn = dbmod.connect(row["db_path"])
                 try:
@@ -1843,6 +1844,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     age = dbmod.get_scan_stats(pconn, rid, "age")
                     age.sort(key=lambda r: _AGE_ORDER.index(r["key"])
                              if r["key"] in _AGE_ORDER else 99)
+                    atime_age = dbmod.get_scan_stats(pconn, rid, "atime_age")
+                    atime_age.sort(key=lambda r: _AGE_ORDER.index(r["key"])
+                                   if r["key"] in _AGE_ORDER else 99)
                     owners = dbmod.get_scan_stats(pconn, rid, "owner", limit=200)
                     for o in owners:
                         o["name"] = _uid_name(o["key"])
@@ -1850,7 +1854,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     topf = dbmod.get_top_files(pconn, rid, limit=100)
                     for f in topf:
                         f["owner"] = _uid_name(f.get("uid"))
+                    try:
+                        from . import systune as sysmod
+                        atime_info = sysmod.atime_policy(row["root_path"])
+                    except Exception:   # noqa: BLE001
+                        atime_info = {"opt": "unknown", "reliable": None}
                     self._send_json({"ok": True, "scan_id": scan_id, "age": age,
+                                     "atime_age": atime_age, "atime_info": atime_info,
                                      "owners": owners, "extensions": exts,
                                      "top_files": topf})
                 finally:

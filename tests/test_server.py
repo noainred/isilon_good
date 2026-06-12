@@ -152,6 +152,9 @@ def main() -> int:
         rep = c.get(f"/api/stats?scan={s1}")
         assert rep["ok"], rep
         assert rep["age"] and sum(a["files"] for a in rep["age"]) == 4, rep["age"]
+        # 마지막 접근(atime) 나이 분포 — 파일 4개 모두 집계(같은 stat 결과라 추가 I/O 없음)
+        assert rep["atime_age"] and sum(a["files"] for a in rep["atime_age"]) == 4, rep["atime_age"]
+        assert "atime_info" in rep and "reliable" in rep["atime_info"], rep.get("atime_info")
         assert rep["owners"] and sum(o["files"] for o in rep["owners"]) == 4, rep["owners"]
         exts = {e["key"]: e["files"] for e in rep["extensions"]}
         assert exts.get(".bin", 0) >= 1, rep["extensions"]   # _make_tree 는 .bin 파일
@@ -296,6 +299,7 @@ def main() -> int:
         assert len(tf) == 4, tf
         assert all(tf[i]["bytes"] >= tf[i + 1]["bytes"] for i in range(len(tf) - 1)), tf
         assert "mtime" in tf[0] and "uid" in tf[0] and tf[0]["path"].endswith(".bin"), tf[0]
+        assert "atime" in tf[0], tf[0]   # 최대 파일에 마지막 접근시각 포함
 
         # 용량 소진 예측 — 완료 스캔 2회라 추세 계산 가능(증가 0 → 소진 없음)
         fc = c.get(f"/api/forecast?scan={r2['scan_id']}")

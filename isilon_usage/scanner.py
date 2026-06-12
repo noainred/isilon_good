@@ -146,11 +146,12 @@ class Scanner:
         self._last_wal_ckpt = 0.0
         # 집계 리포트: 파일 나이/소유자(uid)/확장자별 [bytes, files]. 메모리 누적 후 DB 저장.
         self._stat_age: dict = {}
+        self._stat_atime_age: dict = {}   # 마지막 접근(atime) 기준 나이 분포
         self._stat_uid: dict = {}
         self._stat_ext: dict = {}
         self._stats_ref = 0.0       # 나이 계산 기준 시각(스캔 시작)
         self._last_stats_write = 0.0
-        # 최대 파일 Top-N: (bytes, path, mtime, uid) 최소힙 — 가장 작은 게 루트
+        # 최대 파일 Top-N: (bytes, path, mtime, uid, atime) 최소힙 — 가장 작은 게 루트
         self._top_files: list = []
         # 재개 시간 추적: elapsed_accum=모든 세션 누적 '활성' 시간(일시정지 갭 제외),
         # _elapsed_mark=마지막으로 누적한 시각(kill -9 에도 마지막 flush 까지 보존).
@@ -441,6 +442,10 @@ class Scanner:
     def _accum_stats(self, name: str, st, eb: int, fcount: int) -> None:
         """파일 하나를 나이/소유자/확장자 집계에 더한다(_dlock 안에서 호출)."""
         self._stat_bump(self._stat_age, _age_bucket(self._stats_ref, st.st_mtime), eb, fcount)
+        # 마지막 접근(atime) 기준 나이 — stat 결과에 이미 들어있어 추가 I/O 없음.
+        # (단, noatime 마운트면 atime이 갱신되지 않아 값이 무의미할 수 있다.)
+        self._stat_bump(self._stat_atime_age,
+                        _age_bucket(self._stats_ref, st.st_atime), eb, fcount)
         self._stat_bump(self._stat_uid, str(st.st_uid), eb, fcount, cap=50000)
         ext = os.path.splitext(name)[1].lower() or "(없음)"
         if len(ext) > 24:
@@ -451,9 +456,9 @@ class Scanner:
         """최대 파일 Top-N 힙 갱신(_dlock 안에서 호출)."""
         h = self._top_files
         if len(h) < TOP_FILES_N:
-            heapq.heappush(h, (eb, path, st.st_mtime, st.st_uid))
+            heapq.heappush(h, (eb, path, st.st_mtime, st.st_uid, st.st_atime))
         elif eb > h[0][0]:
-            heapq.heapreplace(h, (eb, path, st.st_mtime, st.st_uid))
+            heapq.heapreplace(h, (eb, path, st.st_mtime, st.st_uid, st.st_atime))
 
     def _write_stats(self, conn) -> None:
         """집계를 scan_stats 에 저장(이 run 행 교체). 확장자는 상위 500개만."""
@@ -462,6 +467,8 @@ class Scanner:
         try:
             dbmod.replace_scan_stats(conn, self.run_id, "age",
                                      [(k, v[0], v[1]) for k, v in self._stat_age.items()])
+            dbmod.replace_scan_stats(conn, self.run_id, "atime_age",
+                                     [(k, v[0], v[1]) for k, v in self._stat_atime_age.items()])
             dbmod.replace_scan_stats(conn, self.run_id, "owner",
                                      [(k, v[0], v[1]) for k, v in self._stat_uid.items()])
             ext_top = sorted(self._stat_ext.items(), key=lambda kv: kv[1][0],
@@ -470,14 +477,15 @@ class Scanner:
                                      [(k, v[0], v[1]) for k, v in ext_top])
             dbmod.replace_top_files(
                 conn, self.run_id,
-                [(p, b, m, u) for (b, p, m, u) in self._top_files])
+                [(p, b, m, u, a) for (b, p, m, u, a) in self._top_files])
             conn.commit()
         except Exception:
             pass
 
     def _load_stats(self, conn) -> None:
         for kind, d in (("age", self._stat_age), ("owner", self._stat_uid),
-                        ("ext", self._stat_ext)):
+                        ("ext", self._stat_ext),
+                        ("atime_age", self._stat_atime_age)):
             try:
                 for r in dbmod.get_scan_stats(conn, self.run_id, kind):
                     d[r["key"]] = [int(r["bytes"]), int(r["files"])]
@@ -485,7 +493,8 @@ class Scanner:
                 pass
         try:   # 최대 파일 힙 복원
             self._top_files = [
-                (int(r["bytes"]), r["path"], r["mtime"], r["uid"])
+                (int(r["bytes"]), r["path"], r["mtime"], r["uid"],
+                 float(r["atime"] or 0))
                 for r in dbmod.get_top_files(conn, self.run_id)]
             heapq.heapify(self._top_files)
         except Exception:

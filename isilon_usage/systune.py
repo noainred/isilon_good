@@ -58,6 +58,53 @@ def parse_nfs_mounts():
     return out
 
 
+def parse_all_mounts():
+    """/proc/mounts 의 모든 마운트(옵션 포함). fstype 제한 없음."""
+    out = []
+    data = _read("/proc/mounts")
+    if not data:
+        return out
+    for line in data.splitlines():
+        p = line.split()
+        if len(p) < 4:
+            continue
+        dev, mnt, fstype, opts = p[0], p[1], p[2], p[3]
+        od = {}
+        for tok in opts.split(","):
+            if "=" in tok:
+                k, v = tok.split("=", 1)
+                od[k] = v
+            else:
+                od[tok] = True
+        out.append({"device": dev, "mount": mnt, "fstype": fstype, "options": od})
+    return out
+
+
+def atime_policy(path):
+    """경로가 속한 마운트의 atime(접근시각) 갱신 정책을 판정한다.
+
+    반환: {"opt", "reliable", "mount", "fstype"}
+      noatime     → atime 갱신 안 함  → reliable=False(값 무의미)
+      relatime    → mtime 이후/24h 경과 시에만 갱신 → reliable=True(거칠지만 콜드 판별 가능)
+      strictatime → 매 접근 갱신       → reliable=True
+      unknown     → /proc/mounts 에서 못 찾거나 토큰 없음 → reliable=None
+    """
+    target = _pick_target(parse_all_mounts(), path)
+    if not target:
+        return {"opt": "unknown", "reliable": None, "mount": None, "fstype": None}
+    o = target["options"]
+    if o.get("noatime"):
+        opt, reliable = "noatime", False
+    elif o.get("relatime"):
+        opt, reliable = "relatime", True
+    elif o.get("strictatime") or o.get("atime"):
+        opt, reliable = "strictatime", True
+    else:
+        opt, reliable = "unknown", None
+    return {"opt": opt, "reliable": reliable,
+            "mount": target["mount"], "fstype": target["fstype"]}
+
+
 def _pick_target(mounts, scan_root):
     if not scan_root:
         return mounts[0] if mounts else None

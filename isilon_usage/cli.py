@@ -651,7 +651,18 @@ def cmd_stats(args: argparse.Namespace) -> int:
             except Exception:  # noqa: BLE001
                 return "uid %s" % uid
 
-        _show("🕒 파일 나이(콜드 데이터)", "age", 0)
+        _show("🕒 파일 나이(수정 mtime 기준)", "age", 0)
+        _show("🧊 마지막 접근 나이(atime 기준)", "atime_age", 0)
+        try:
+            from . import systune as sysmod
+            ap = sysmod.atime_policy(row["root_path"])
+            if ap.get("reliable") is False:
+                print("    ⚠ 대상 마운트가 noatime(%s) — atime 미갱신 → 위 atime 분포는 "
+                      "신뢰 불가(mtime 참고)." % (ap.get("mount") or ""))
+            elif ap.get("opt") == "relatime":
+                print("    · 마운트 relatime — atime은 하루 단위로 거칠게 갱신(콜드 판별엔 사용 가능).")
+        except Exception:  # noqa: BLE001
+            pass
         _show("👤 소유자별 사용량 Top", "owner", 20, _owner)
         _show("🗂 확장자별 사용량 Top", "ext", 20)
 
@@ -661,8 +672,9 @@ def cmd_stats(args: argparse.Namespace) -> int:
             print("    (데이터 없음)")
         for f in tops:
             when = time.strftime("%Y-%m-%d", time.localtime(f["mtime"])) if f["mtime"] else "—"
-            print("    %12s  %s  (수정 %s, uid %s)"
-                  % (_human(f["bytes"]), f["path"], when, f["uid"]))
+            acc = time.strftime("%Y-%m-%d", time.localtime(f["atime"])) if f.get("atime") else "—"
+            print("    %12s  %s  (수정 %s, 접근 %s, uid %s)"
+                  % (_human(f["bytes"]), f["path"], when, acc, f["uid"]))
     finally:
         conn.close()
     return 0

@@ -95,10 +95,10 @@ CREATE TABLE IF NOT EXISTS resource_samples (
 
 CREATE INDEX IF NOT EXISTS idx_sample_run_ts ON resource_samples(run_id, ts);
 
--- 집계 리포트: 파일 나이(age)/소유자(owner)/확장자(ext)별 용량·개수
+-- 집계 리포트: 파일 나이(age)/소유자(owner)/확장자(ext)/접근나이(atime_age)별 용량·개수
 CREATE TABLE IF NOT EXISTS scan_stats (
     run_id  INTEGER NOT NULL,
-    kind    TEXT    NOT NULL,   -- 'age' | 'owner' | 'ext'
+    kind    TEXT    NOT NULL,   -- 'age' | 'owner' | 'ext' | 'atime_age'
     key     TEXT    NOT NULL,
     bytes   INTEGER NOT NULL DEFAULT 0,
     files   INTEGER NOT NULL DEFAULT 0,
@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS top_files (
     path    TEXT    NOT NULL,
     bytes   INTEGER NOT NULL DEFAULT 0,
     mtime   REAL,
+    atime   REAL,
     uid     INTEGER,
     PRIMARY KEY (run_id, path)
 );
@@ -161,6 +162,7 @@ def init_db(db_path: str) -> None:
         ensure_column(conn, "scan_runs", "elapsed_accum", "REAL NOT NULL DEFAULT 0")
         ensure_column(conn, "resource_samples", "scanner_cpu", "REAL NOT NULL DEFAULT 0")
         ensure_column(conn, "resource_samples", "du_cpu", "REAL NOT NULL DEFAULT 0")
+        ensure_column(conn, "top_files", "atime", "REAL")
         conn.execute(f"PRAGMA user_version={int(SCHEMA_VERSION)}")
         conn.commit()
     finally:
@@ -248,19 +250,20 @@ def get_scan_stats(conn, run_id, kind, limit: int = 0):
 
 
 def replace_top_files(conn, run_id, items) -> None:
-    """최대 파일 Top-N 행을 통째로 교체. items: [(path, bytes, mtime, uid), ...]"""
+    """최대 파일 Top-N 행을 통째로 교체. items: [(path, bytes, mtime, uid, atime), ...]"""
     conn.execute("DELETE FROM top_files WHERE run_id=?", (run_id,))
     if items:
         conn.executemany(
-            "INSERT OR REPLACE INTO top_files(run_id, path, bytes, mtime, uid) "
-            "VALUES (?,?,?,?,?)",
-            [(run_id, str(p), int(b), float(m or 0), int(u or 0))
-             for (p, b, m, u) in items])
+            "INSERT OR REPLACE INTO top_files(run_id, path, bytes, mtime, uid, atime) "
+            "VALUES (?,?,?,?,?,?)",
+            [(run_id, str(p), int(b), float(m or 0), int(u or 0), float(a or 0))
+             for (p, b, m, u, a) in items])
 
 
 def get_top_files(conn, run_id, limit: int = 0):
     """최대 파일 목록(용량 내림차순)."""
-    q = "SELECT path, bytes, mtime, uid FROM top_files WHERE run_id=? ORDER BY bytes DESC"
+    q = ("SELECT path, bytes, mtime, atime, uid FROM top_files "
+         "WHERE run_id=? ORDER BY bytes DESC")
     if limit:
         q += " LIMIT %d" % int(limit)
     return [dict(r) for r in conn.execute(q, (run_id,))]
