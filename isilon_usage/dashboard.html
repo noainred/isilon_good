@@ -852,6 +852,14 @@
     </div>
   </div>
 
+  <div id="tsIdleNotice" class="card" style="display:none; margin-top:14px; border-color:var(--warn); background:#2a2310; color:#f0d9a0;">
+    ⚠ <b>실행 중인 스캔이 없습니다.</b> 실시간 진단(판정·자원·디렉터리 읽기 속도 차트)은
+    <b>스캔이 도는 동안</b>에만 표시됩니다. 그래서 지금은 아래 <b>진단 이력(로그)</b>만 보입니다.
+    <div class="sub" style="margin-top:6px;">· 지난 <b>시간당 처리량(TB/GB·파일·디렉터리)</b> 차트는 스캔이 없어도 볼 수 있습니다 →</div>
+    <div style="margin-top:8px;"><button id="tsGoThroughput">📈 처리량 추이 보기</button>
+      <span class="sub" style="margin-left:8px;">새 스캔은 <b>Summary</b>의 '새 스캔 시작'에서.</span></div>
+  </div>
+
   <div id="tsResult" style="display:none;">
     <!-- 종합 판정 -->
     <div id="tsVerdict" class="card" style="margin-top:14px;"></div>
@@ -1517,7 +1525,13 @@ async function tsRun() {
   try {
     const j = await (await fetch("/api/troubleshoot?sample=1.0", {cache: "no-store"})).json();
     if (!j.ok) { $("tsMsg").innerHTML = '<span style="color:var(--danger)">' + (j.error || "진단 불가") + '</span>'; return; }
-    if (!j.running) { $("tsMsg").innerHTML = '<span class="sub">' + (j.msg || "실행 중인 스캔이 없습니다.") + '</span>'; $("tsResult").style.display = "none"; return; }
+    if (!j.running) {
+      $("tsMsg").innerHTML = '<span class="sub">' + (j.msg || "실행 중인 스캔이 없습니다.") + '</span>';
+      $("tsResult").style.display = "none";
+      if ($("tsIdleNotice")) $("tsIdleNotice").style.display = "block";
+      return;
+    }
+    if ($("tsIdleNotice")) $("tsIdleNotice").style.display = "none";
     $("tsMsg").textContent = ""; tsRender(j); tsPushRate(j);
     if (_tsWindowSec > 600) tsLoadServerSamples();   // 긴 구간이면 서버 24h 표본 갱신
     tsHistLoad();
@@ -1576,6 +1590,7 @@ function tsAutoToggle() {
 }
 if ($("tsRun")) $("tsRun").addEventListener("click", tsRun);
 if ($("tsAuto")) $("tsAuto").addEventListener("change", tsAutoToggle);
+if ($("tsGoThroughput")) $("tsGoThroughput").addEventListener("click", () => { if (typeof showView === "function") showView("throughput"); });
 
 // ---- 디렉터리 읽기 속도 변화 차트(시계열) ----
 let _tsRateHist = [];      // {t(epoch초), rd, rf}
