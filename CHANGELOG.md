@@ -13,6 +13,18 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.31.0] - 2026-06-12
+
+### 추가됨 (Added) — systemd 서비스 실행 지원
+- **`packaging/isilon_usage.service`** — 대시보드(`serve`)를 systemd 서비스로 돌리는
+  유닛 템플릿(부팅 자동 시작·실패 시 재시작·세션 끊겨도 유지·journald 로그).
+  `After=network-online/remote-fs`, `Restart=on-failure`, `StateDirectory`,
+  `LimitNOFILE=65536`, 기본 하드닝, **serve 가 받는 유효 옵션만** 사용.
+- **`docs/SERVICE.md`** — 설치/관리/업데이트/보안/자동스캔(run)/비-systemd(nohup) 가이드.
+- 릴리스 아카이브에 `packaging/` 포함, README 헤더에 서비스 가이드 링크.
+
+---
+
 ## [1.30.4] - 2026-06-12
 
 ### 변경됨 (Changed) — 트러블슈팅: 스캔 없을 때 '로그만 보임' 혼란 해소

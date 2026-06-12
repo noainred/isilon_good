@@ -35,7 +35,7 @@ from isilon_usage import __version__  # noqa: E402
 INCLUDE_FILES = ["README.md", "CHANGELOG.md", "LICENSE", "SECURITY.md",
                  "requirements.txt",
                  "pyproject.toml", "setup.cfg", "setup.py", "MANIFEST.in", "Dockerfile"]
-INCLUDE_DIRS = ["docs", "tools"]   # isilon_usage 패키지는 별도 처리
+INCLUDE_DIRS = ["docs", "tools", "packaging"]   # isilon_usage 패키지는 별도 처리
 
 # 과거 버전 → git 커밋(현재 버전은 작업트리에서 빌드하므로 제외)
 HISTORY = {
@@ -96,6 +96,7 @@ HISTORY = {
     "1.30.1": "3e281c2",
     "1.30.2": "986f9a3",
     "1.30.3": "f3b6ef2",
+    "1.30.4": "97b488f",
 }
 # 버전별 파이썬 호환(없으면 기본값). 1.1.1 부터 3.6 호환.
 PY_COMPAT = {"1.0.0": "Python 3.7+", "1.1.0": "Python 3.7+"}
