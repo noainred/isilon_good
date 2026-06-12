@@ -217,7 +217,7 @@ function renderPortalDash(){
   });
   $("nodeRows").innerHTML = rows.length ? rows.map((n,idx)=>{
     const st = !n.enabled ? '<span class="badge">사용 안 함</span>'
-      : (n.online ? (n.active_scans>0 ? '<span class="badge b-scan">스캔 중</span>' : '<span class="badge b-online">온라인</span>')
+      : (n.online ? (n.active_scans>0 ? '<span class="badge b-scan">🔄 스캔 중 '+n.active_scans+'</span>' : '<span class="badge b-online">온라인</span>')
                   : '<span class="badge b-offline">오프라인</span>');
     const open = `<a class="link" href="${n.url}" target="_blank" rel="noopener">열기 ↗</a>`;
     // 스토리지 어레이(아이실론/PowerStore) — storage 리스트, 없으면 isilon 단일로 폴백
@@ -265,7 +265,7 @@ async function loadNodes(){
     $("regRows").innerHTML = rows.length ? rows.map(n=>
       `<tr><td class="mono">${n.id}</td><td>${n.region||"—"}</td><td class="mono">${n.url}</td>
         <td>${nodeSummary(n)}</td><td class="sub">${ago(n.last_poll)}</td>
-        <td>${n.online?'<span class="badge b-online">온라인</span>':'<span class="badge b-offline">오프라인</span>'}</td>
+        <td>${!n.online?'<span class="badge b-offline">오프라인</span>':(n.active_scans>0?'<span class="badge b-scan">🔄 스캔 중 '+n.active_scans+'</span>':'<span class="badge b-online">온라인</span>')}</td>
         <td><button data-edit="${n.id}">수정</button> <button data-sync="${n.id}">동기화</button> <button data-del="${n.id}">삭제</button></td></tr>`
     ).join("") : '<tr><td colspan="7" class="sub">등록된 노드 없음</td></tr>';
     $("regRows").querySelectorAll("button[data-del]").forEach(b=>b.addEventListener("click",async()=>{

@@ -144,6 +144,7 @@ def save_nodes(data_dir: str, nodes: list) -> None:
 def _public_node(n: dict, cache: dict) -> dict:
     """화면용 노드(토큰 마스킹 + 실시간 캐시 상태 병합)."""
     c = cache.get(n["id"], {})
+    ov = c.get("overall") or {}
     out = dict(n)
     out["token"] = ""
     out["token_set"] = bool(n.get("token"))
@@ -151,6 +152,9 @@ def _public_node(n: dict, cache: dict) -> dict:
     out["version"] = c.get("version")
     out["hostname"] = c.get("hostname")
     out["error"] = n.get("last_error") or c.get("error") or ""
+    out["active_scans"] = int(ov.get("active_scans") or 0)   # 지금 스캔 중인 개수
+    out["scanning"] = out["active_scans"] > 0
+    out["used_bytes"] = int(ov.get("total_scanned_bytes") or 0)
     return out
 
 
