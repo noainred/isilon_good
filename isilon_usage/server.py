@@ -20,6 +20,7 @@ import json
 import os
 import socket
 import sqlite3
+import sys
 import tarfile
 import threading
 import time
@@ -842,6 +843,25 @@ class ScanController:
             return False, ("허용된 마운트 경로 밖입니다. 허용: "
                            + ", ".join(self.mount_bases))
         return True, None
+
+    def browse_allowed(self, path: str) -> bool:
+        """폴더 나열(browse)을 허용할 경로인지 검사한다.
+
+        mount_bases 가 설정돼 있으면 그 하위(또는 동일) 경로만 허용해, 허용
+        경로 밖의 디렉터리 구조가 노출되지 않게 한다. mount_bases 가 비어
+        있으면 기존 동작대로 어떤 경로든 허용한다(스캔 허용과 같은 정책).
+        """
+        if not self.mount_bases:
+            return True
+        ap = os.path.abspath(path or "/")
+        for base in self.mount_bases:
+            try:
+                b = os.path.abspath(base)
+                if os.path.commonpath([ap, b]) == b:
+                    return True
+            except ValueError:
+                continue
+        return False
 
     # ----- 실측 워커 보정(시범 탐색) -----
     def benchmark_workers(self, *, path=None, candidates=None, budget=5.0) -> dict:
@@ -1683,9 +1703,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             if path == "/api/browse":
                 qpath = qs.get("path", [""])[0]
-                if not qpath and self.controller and self.controller.mount_bases:
-                    qpath = self.controller.mount_bases[0]
-                self._send_json(browse_dir(qpath))
+                ctrl = self.controller
+                if not qpath and ctrl and ctrl.mount_bases:
+                    qpath = ctrl.mount_bases[0]
+                if ctrl and not ctrl.browse_allowed(qpath or "/"):
+                    self._send_json({"ok": False, "reason": "not_allowed",
+                                     "path": os.path.abspath(qpath or "/"),
+                                     "allowed": ctrl.mount_bases})
+                    return
+                result = browse_dir(qpath)
+                # 허용 경로 밖으로 올라가지 못하게 '위로' 대상을 현재 경로로 묶는다
+                if (ctrl and result.get("ok") and result.get("parent")
+                        and not ctrl.browse_allowed(result["parent"])):
+                    result["parent"] = result["path"]
+                self._send_json(result)
                 return
 
             if path == "/api/status":
@@ -2154,6 +2185,32 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(exc)}, status=500)
 
 
+def _warn_if_insecure(host: str, controller: "ScanController") -> None:
+    """비루프백 주소에 '무인증'으로 기동하면 stderr 로 보안 경고를 출력한다.
+
+    --host 0.0.0.0(기본)처럼 외부에 노출되는데 작업 보호 비밀번호도 없으면
+    네트워크에서 접근 가능한 누구나 스캔 시작·설정 변경을 할 수 있어 위험하다.
+    경고만 하고 기동은 막지 않는다(신뢰망 LAN 운영을 방해하지 않기 위해).
+    """
+    if host in ("127.0.0.1", "localhost", "::1", ""):
+        return
+    if (controller.settings.get("op_password") or "").strip():
+        return
+    lines = [
+        "",
+        "  ⚠  보안 경고: 비루프백 주소(%s)에 '작업 보호 비밀번호 없이' 기동합니다." % host,
+        "     네트워크에서 접근 가능한 누구나 스캔 시작·설정 변경을 할 수 있습니다.",
+        "     공개망/비신뢰망이라면 다음을 권장합니다:",
+        "       - --host 127.0.0.1 로 묶고 리버스 프록시(HTTPS/인증)나 SSH 터널 사용",
+        "       - 대시보드 '설정'에서 작업 보호 비밀번호 지정",
+        "       - 설정 편집을 막으려면 --lock-settings",
+        "       - 스캔 허용 경로를 제한하려면 --mount-base <경로>",
+        "",
+    ]
+    sys.stderr.write("\n".join(lines) + "\n")
+    sys.stderr.flush()
+
+
 def serve(data_dir: str, host: str = "0.0.0.0", port: int = 8765, *,
           initial_settings=None, enable_scan: bool = True,
           lock_settings: bool = False) -> ThreadingHTTPServer:
@@ -2173,6 +2230,7 @@ def serve(data_dir: str, host: str = "0.0.0.0", port: int = 8765, *,
                   if enable_scan else None)
     if controller is not None:
         controller.start_scheduler()   # 예약 스캔 스케줄러 시작
+        _warn_if_insecure(host, controller)
     handler = type("BoundHandler", (DashboardHandler,),
                    {"data_dir": data_dir, "controller": controller,
                     "bound_host": host, "bound_port": port})

@@ -20,7 +20,33 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from isilon_usage.server import serve  # noqa: E402
+from isilon_usage.server import serve, _warn_if_insecure  # noqa: E402
+
+
+class _StubCtrl:
+    def __init__(self, settings):
+        self.settings = settings
+
+
+def _check_insecure_warning() -> None:
+    """비루프백+무인증일 때만 stderr 경고가 나오는지 검증."""
+    import contextlib
+
+    def warn(host, settings):
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            _warn_if_insecure(host, _StubCtrl(settings))
+        return buf.getvalue()
+
+    # 0.0.0.0 + 비번 없음 → 경고
+    out = warn("0.0.0.0", {})
+    assert "보안 경고" in out and "127.0.0.1" in out, out
+    # 루프백 → 경고 없음
+    assert warn("127.0.0.1", {}) == ""
+    assert warn("localhost", {}) == ""
+    # 비번 설정됨 → 경고 없음(외부 노출이라도 인증 있음)
+    assert warn("0.0.0.0", {"op_password": "pw"}) == ""
+    print("[server] OK  비보안 기동 경고")
 
 
 def _make_tree(root: str) -> None:
@@ -71,6 +97,7 @@ def _wait_done(client, scan_id, timeout=15):
 
 
 def main() -> int:
+    _check_insecure_warning()
     tmp = tempfile.mkdtemp(prefix="isilon_srv_")
     root = os.path.join(tmp, "tree")
     _make_tree(root)
@@ -91,6 +118,13 @@ def main() -> int:
         assert c.get("/api/mounts")["ok"]
         br = c.get(f"/api/browse?path={root}")
         assert br["ok"] and any(d["name"] == "sub1" for d in br["dirs"]), br
+
+        # 탐색(browse)도 허용 마운트 경로 밖이면 거부(디렉터리 구조 노출 방지)
+        bb = c.get("/api/browse?path=/etc")
+        assert not bb["ok"] and bb["reason"] == "not_allowed", bb
+        # 마운트 루트에서 '위로'는 밖으로 못 나가게 현재 경로로 묶임
+        bm = c.get(f"/api/browse?path={tmp}")
+        assert bm["ok"] and bm["parent"] == bm["path"], bm
 
         # 경로 제한: 허용 밖 거부
         bad = c.post("/api/scan/start", {"path": "/etc"})
