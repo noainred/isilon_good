@@ -847,7 +847,7 @@
       <b>CPU·메모리·디스크·NAS</b> 중 무엇이 제약인지, <b>처리량·대기 일감</b>은 어떤지 진단합니다.</p>
     <div style="display:flex; gap:8px; align-items:center;">
       <button id="tsRun" style="border-color:var(--accent2); color:#cfe; font-weight:700; padding:8px 16px;">지금 진단</button>
-      <label><input type="checkbox" id="tsAuto" /> 자동(구간에 맞춰 갱신)</label>
+      <label title="켜두면 새로고침·탭 이동에도 계속 갱신하며 이력을 저장합니다"><input type="checkbox" id="tsAuto" /> 자동(켜두면 계속 갱신·저장)</label>
       <span id="tsMsg" class="sub"></span>
     </div>
   </div>
@@ -955,7 +955,7 @@
         <button class="tpBtn" data-bk="600">10분</button>
         <button class="tpBtn" data-bk="3600">1시간</button>
       </div>
-      <label><input type="checkbox" id="tpAuto" /> 자동(30초)</label>
+      <label title="켜두면 새로고침·탭 이동에도 30초마다 계속 갱신합니다"><input type="checkbox" id="tpAuto" /> 자동(30초, 켜두면 유지)</label>
       <button id="tpRefresh">새로고침</button>
       <span id="tpMsg" class="sub"></span>
     </div>
@@ -1567,7 +1567,9 @@ function tsRender(j) {
 }
 function tsAutoToggle() {
   if (_tsAutoTimer) { clearInterval(_tsAutoTimer); _tsAutoTimer = null; }
-  if ($("tsAuto") && $("tsAuto").checked) { _tsAutoTimer = setInterval(tsRun, _tsPollMs || 3000); tsRun(); }
+  const on = $("tsAuto") && $("tsAuto").checked;
+  try { localStorage.setItem("iu_tsAuto", on ? "1" : "0"); } catch (e) { /* 무시 */ }
+  if (on) { _tsAutoTimer = setInterval(tsRun, _tsPollMs || 3000); tsRun(); }
 }
 if ($("tsRun")) $("tsRun").addEventListener("click", tsRun);
 if ($("tsAuto")) $("tsAuto").addEventListener("change", tsAutoToggle);
@@ -1711,12 +1713,20 @@ function tpSetBucket(bk) {
 }
 function tpAutoToggle() {
   if (_tpAutoTimer) { clearInterval(_tpAutoTimer); _tpAutoTimer = null; }
-  if ($("tpAuto") && $("tpAuto").checked) { _tpAutoTimer = setInterval(tpLoad, 30000); tpLoad(); }
+  const on = $("tpAuto") && $("tpAuto").checked;
+  try { localStorage.setItem("iu_tpAuto", on ? "1" : "0"); } catch (e) { /* 무시 */ }
+  if (on) { _tpAutoTimer = setInterval(tpLoad, 30000); tpLoad(); }
 }
 document.querySelectorAll(".tpBtn").forEach(b => b.addEventListener("click", () => tpSetBucket(parseInt(b.dataset.bk))));
 if ($("tpAuto")) $("tpAuto").addEventListener("change", tpAutoToggle);
 if ($("tpRefresh")) $("tpRefresh").addEventListener("click", tpLoad);
 tpSetBucket(60);   // 기본 1분
+
+// 자동 새로고침 설정 복원 — 체크해두면 reload·탭 이동에도 계속 유지·갱신·저장한다.
+try {
+  if (localStorage.getItem("iu_tsAuto") === "1" && $("tsAuto")) { $("tsAuto").checked = true; tsAutoToggle(); }
+  if (localStorage.getItem("iu_tpAuto") === "1" && $("tpAuto")) { $("tpAuto").checked = true; tpAutoToggle(); }
+} catch (e) { /* localStorage 불가 환경 무시 */ }
 
 // ---- 튜닝 점검(OS 커널/마운트 설정) ----
 const TUNE_GLYPH = {ok: "🟢", warn: "🟠", tip: "🟡", na: "⚪"};
@@ -3032,15 +3042,8 @@ function showView(name) {
   if (name === "report") loadReport();
   if (name === "trouble") { if (typeof tsRun === "function") tsRun(); if (typeof tsHistLoad === "function") tsHistLoad(); }
   if (name === "tune") { if (typeof tuneRun === "function" && $("tuneResult") && $("tuneResult").style.display === "none") tuneRun(); }
+  // 자동(체크 시)은 뷰를 떠나도 멈추지 않고 백그라운드에서 계속 갱신·저장한다.
   if (name === "throughput") { if (typeof tpLoad === "function") tpLoad(); }
-  else if (typeof _tpAutoTimer !== "undefined" && _tpAutoTimer) {
-    clearInterval(_tpAutoTimer); _tpAutoTimer = null;
-    if ($("tpAuto")) $("tpAuto").checked = false;
-  }
-  else if (typeof _tsAutoTimer !== "undefined" && _tsAutoTimer) {
-    clearInterval(_tsAutoTimer); _tsAutoTimer = null;
-    if ($("tsAuto")) $("tsAuto").checked = false;
-  }
 }
 document.querySelectorAll(".navbtn").forEach(b => b.addEventListener("click", () => showView(b.dataset.view)));
 window.addEventListener("hashchange", () => {
