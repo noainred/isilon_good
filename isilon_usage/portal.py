@@ -400,6 +400,9 @@ class PortalController:
         wd = (self.settings.get("upgrade_watch_dir") or "").strip()
         if not wd:
             return
+        with self._lock:
+            if self._inflight:       # 동기화/복제 중이면 미룬다(중단 방지)
+                return
         found = upgrademod.find_newer_archive(wd, __version__)
         if not found:
             return

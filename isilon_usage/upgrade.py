@@ -67,28 +67,50 @@ def _accept_member(name: str) -> Optional[str]:
     return "/".join(rel)
 
 
-def read_package_members(archive_path: str) -> Dict[str, bytes]:
-    """아카이브에서 'isilon_usage/<...>' 파일을 {상대경로: bytes} 로 읽는다(안전)."""
+# 압축 해제 총량/멤버 수 상한 — 손상·거대 아카이브(zip/tar 폭탄)의 메모리 폭주 방지.
+MAX_BUNDLE_BYTES = 200 * 1024 * 1024
+MAX_MEMBERS = 20000
+
+
+def _members_from_tar(tf) -> Dict[str, bytes]:
     out: Dict[str, bytes] = {}
+    total = 0
+    for m in tf:
+        if not m.isfile():
+            continue
+        rel = _accept_member(m.name)
+        if not rel:
+            continue
+        if len(out) >= MAX_MEMBERS or total + int(m.size or 0) > MAX_BUNDLE_BYTES:
+            raise ValueError("아카이브가 너무 큼(또는 멤버 과다)")
+        f = tf.extractfile(m)
+        if f is not None:
+            data = f.read()
+            out[rel] = data
+            total += len(data)
+    return out
+
+
+def read_package_members(archive_path: str) -> Dict[str, bytes]:
+    """아카이브에서 'isilon_usage/<...>' 파일을 {상대경로: bytes} 로 읽는다(안전·상한)."""
     if archive_path.endswith(".zip"):
+        out: Dict[str, bytes] = {}
+        total = 0
         with zipfile.ZipFile(archive_path) as zf:
             for zi in zf.infolist():
                 if zi.is_dir():
                     continue
                 rel = _accept_member(zi.filename)
-                if rel:
-                    out[rel] = zf.read(zi)
-    else:
-        with tarfile.open(archive_path, "r:*") as tf:
-            for m in tf:
-                if not m.isfile():
+                if not rel:
                     continue
-                rel = _accept_member(m.name)
-                if rel:
-                    f = tf.extractfile(m)
-                    if f is not None:
-                        out[rel] = f.read()
-    return out
+                if len(out) >= MAX_MEMBERS or total + int(zi.file_size or 0) > MAX_BUNDLE_BYTES:
+                    raise ValueError("아카이브가 너무 큼(또는 멤버 과다)")
+                data = zf.read(zi)
+                out[rel] = data
+                total += len(data)
+        return out
+    with tarfile.open(archive_path, "r:*") as tf:
+        return _members_from_tar(tf)
 
 
 def members_version(members: Dict[str, bytes]) -> Optional[Tuple[int, int, int]]:
@@ -133,7 +155,7 @@ def upgrade_from_archive(archive_path: str, code_dir: str, current_version: str)
     """아카이브가 현재보다 새 버전이면 패키지를 교체한다(재시작은 호출 측에서)."""
     try:
         members = read_package_members(archive_path)
-    except (OSError, tarfile.TarError, zipfile.BadZipFile) as exc:
+    except (OSError, tarfile.TarError, zipfile.BadZipFile, ValueError) as exc:
         return {"ok": False, "reason": "아카이브 읽기 실패: %s" % exc}
     new_v = members_version(members)
     if not new_v:
@@ -154,17 +176,9 @@ def upgrade_from_bundle_bytes(data: bytes, code_dir: str, current_version: str,
     """포탈이 푸시한 agent-bundle(tar.gz bytes)을 적용한다(엣지 측)."""
     import io
     try:
-        out: Dict[str, bytes] = {}
         with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tf:
-            for m in tf:
-                if not m.isfile():
-                    continue
-                rel = _accept_member(m.name)
-                if rel:
-                    f = tf.extractfile(m)
-                    if f is not None:
-                        out[rel] = f.read()
-    except (tarfile.TarError, OSError) as exc:
+            out = _members_from_tar(tf)
+    except (tarfile.TarError, OSError, ValueError) as exc:
         return {"ok": False, "reason": "번들 읽기 실패: %s" % exc}
     new_v = members_version(out)
     if not new_v:

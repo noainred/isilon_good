@@ -740,7 +740,9 @@ class ScanController:
             try:
                 wd = (self.settings.get("upgrade_watch_dir") or "").strip()
                 secs = int(self.settings.get("upgrade_check_secs", 60) or 60)
-                if wd:
+                with self._lock:
+                    busy = bool(self._scans)   # 진행 중 스캔이 있으면 업그레이드를 미룬다
+                if wd and not busy:
                     found = upgrademod.find_newer_archive(wd, __version__)
                     if found:
                         res = upgrademod.upgrade_from_archive(found[0], code_dir, __version__)
@@ -1397,8 +1399,15 @@ class ScanController:
             return {"ok": False, "reason": "없는 scan"}
         if not os.path.exists(row["db_path"]):
             return {"ok": False, "reason": "per-run DB 가 없어 재개할 수 없습니다."}
-        self._launch(scan_id, row["db_path"], row["root_path"], row["backend"],
-                     row["size_mode"], False, resume=True)
+        if row["backend"] == "pscan":           # pscan 은 부분 재개가 없으므로 전체 재스캔
+            try:
+                os.remove(row["db_path"])       # 깨끗한 per-run DB 로 다시 기록(혼선 방지)
+            except OSError:
+                pass
+            self._launch_pscan(scan_id, row["db_path"], row["root_path"], row["size_mode"])
+        else:
+            self._launch(scan_id, row["db_path"], row["root_path"], row["backend"],
+                         row["size_mode"], False, resume=True)
         return {"ok": True, "scan_id": scan_id}
 
     # ----- 삭제 / 정리 -----
