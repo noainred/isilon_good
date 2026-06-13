@@ -119,6 +119,7 @@ def _run_server(args, *, initial_path: Optional[str]) -> int:
         "hardlink_dedup": not getattr(args, "no_hardlink_dedup", False),
         "sample_interval": args.sample_interval,
         "mount_bases": mount_bases,
+        "api_token": getattr(args, "api_token", "") or "",
     }
     if getattr(args, "reset_settings", False):
         mgrmod.init_manager(data_dir)
@@ -700,6 +701,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="웹에서 설정 편집을 막음(읽기 전용)")
     pr.add_argument("--reset-settings", action="store_true",
                     help="기존 settings.json 을 현재 CLI 옵션 값으로 덮어씀")
+    pr.add_argument("--api-token", default="",
+                    help="포탈 복제(/api/dbexport) 인증 토큰을 초기 설정으로 시드(신규 설치 시)")
     pr.add_argument("--host", default="0.0.0.0")
     pr.add_argument("--port", type=int, default=8765)
     pr.set_defaults(func=cmd_run)
@@ -726,6 +729,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="웹에서 설정 편집을 막음(읽기 전용)")
     pv.add_argument("--reset-settings", action="store_true",
                     help="기존 settings.json 을 현재 CLI 옵션 값으로 덮어씀")
+    pv.add_argument("--api-token", default="",
+                    help="포탈 복제(/api/dbexport) 인증 토큰을 초기 설정으로 시드(신규 설치 시)")
     pv.add_argument("--host", default="0.0.0.0")
     pv.add_argument("--port", type=int, default=8765)
     pv.set_defaults(func=cmd_serve)

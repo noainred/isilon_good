@@ -117,6 +117,46 @@
 <!-- 노드 설정 -->
 <div class="wrap view" id="view-nodes">
   <div class="card" style="margin-bottom:14px;">
+    <h2>🚀 원격 자동 구성 — IP만 넣으면 엣지 설치 명령 생성 + 노드 자동 등록</h2>
+    <div class="setgrid">
+      <label class="fld">원격 IP/주소<input id="pvHost" class="inp mono" placeholder="192.168.40.221" /></label>
+      <label class="fld">포트<input id="pvPort" class="inp mono" type="number" value="8765" /></label>
+      <label class="fld">API 토큰(빈칸=자동생성)<input id="pvToken" class="inp mono" placeholder="(자동 생성)" /></label>
+      <label class="fld">스캔 경로(mount-base)<input id="pvPath" class="inp mono" placeholder="/mnt/hadoop" /></label>
+      <label class="fld">노드 이름(빈칸=IP기반)<input id="pvName" class="inp mono" placeholder="(IP 기반)" /></label>
+      <label class="fld">지역(표시용)<input id="pvRegion" class="inp" placeholder="Poland" /></label>
+      <label class="fld">설치 방식<select id="pvInstall" class="inp"><option value="systemd">systemd(권장)</option><option value="nohup">nohup(간단)</option></select></label>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center;">
+      <button id="pvGenBtn" class="primary">① 설치 명령 생성 + 노드 등록</button>
+      <span class="sub" id="pvMsg"></span>
+    </div>
+    <div id="pvScriptWrap" style="display:none; margin-top:10px;">
+      <div class="sub" style="margin-bottom:4px;">아래를 <b>원격 엣지 서버에서 1회 복붙 실행</b>하세요(또는 <span class="mono">setup.sh</span> 저장 후 <span class="mono">bash setup.sh</span>). 노드·토큰은 이미 포탈에 등록됨 — 엣지가 뜨면 자동 폴링.</div>
+      <textarea id="pvScript" class="inp mono" style="width:100%; height:230px; white-space:pre;" readonly></textarea>
+      <div style="display:flex; gap:8px; margin-top:6px; align-items:center;">
+        <button id="pvCopy">📋 복사</button><span class="sub" id="pvCopyMsg"></span>
+      </div>
+    </div>
+    <details style="margin-top:12px;">
+      <summary class="sub" style="cursor:pointer;">[옵션 B] SSH로 원격 자동 설치 (IP/계정/비번) — 보안 주의</summary>
+      <div class="note" style="margin:8px 0; border-color:#5a3030; color:#f0b0b0;">
+        ⚠ 포탈이 SSH로 원격에 접속해 위 스크립트를 실행합니다. <b>비밀번호는 저장하지 않고 1회만</b> 쓰지만,
+        평문 취급·무의존 원칙(서드파티 <span class="mono">sshpass</span> 필요)상 <b>신뢰망에서만</b> 사용하고 가능하면 <b>키 인증</b>을 권장합니다.
+      </div>
+      <div class="setgrid">
+        <label class="fld">SSH 사용자<input id="pvSshUser" class="inp mono" placeholder="root" /></label>
+        <label class="fld">SSH 포트<input id="pvSshPort" class="inp mono" type="number" value="22" /></label>
+        <label class="fld">비밀번호(키 인증이면 비움)<input id="pvSshPass" class="inp mono" type="password" placeholder="(키 인증 시 비움)" /></label>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:10px; align-items:center;">
+        <button id="pvSshBtn">② SSH로 원격 자동 설치 실행</button><span class="sub" id="pvSshMsg"></span>
+      </div>
+      <pre id="pvSshOut" class="note mono" style="display:none; white-space:pre-wrap; max-height:260px; overflow:auto; margin-top:8px;"></pre>
+    </details>
+  </div>
+
+  <div class="card" style="margin-bottom:14px;">
     <h2>글로벌 노드 추가 / 수정</h2>
     <div class="setgrid">
       <label class="fld">노드 이름(고유)<input id="nId" class="inp mono" placeholder="dc-tokyo" /></label>
@@ -203,7 +243,7 @@ function freshClass(ts){ if(!ts) return ""; const s=Date.now()/1000-ts;
   return s<120?"fresh-ok":(s<900?"fresh-warn":"fresh-old"); }
 function capColor(p){ return p>=90?"#ff5c5c":(p>=75?"#f5a623":"#38d39f"); }
 function capCell(used,total){
-  if(!total) return '<span class="sub">—</span>';
+  if(!total) return '<span class="sub" title="엣지가 fs 전체 용량(statvfs)을 보고하지 않음 — 엣지 마운트/버전 확인">—</span>';
   const p=Math.min(100, used/total*100), c=capColor(p);
   return `<div class="capbar" title="사용 ${fmtBytes(used)} / 전체 ${fmtBytes(total)} (${p.toFixed(1)}%)">
       <i style="width:${p.toFixed(1)}%;background:${c}"></i><b>${p.toFixed(0)}%</b></div>
@@ -465,6 +505,41 @@ $("nodeTable").querySelectorAll("th[data-nsort]").forEach(th=>th.addEventListene
 $("nUnit").addEventListener("change", updateNUnit);
 ["nEvery","nAt","nMonth","nDay"].forEach(id=>$(id).addEventListener("input", updateNUnit));
 buildNW(); fillNSel("nMonth",12,"월"); fillNSel("nDay",31,"일"); updateNUnit();
+
+// ---- 원격 자동 구성 ----
+function pvBody(){
+  return { host:$("pvHost").value.trim(), port:Number($("pvPort").value)||8765,
+    token:$("pvToken").value.trim(), path:$("pvPath").value.trim(),
+    name:$("pvName").value.trim(), region:$("pvRegion").value.trim(),
+    install:$("pvInstall").value, hq_base:location.origin };
+}
+$("pvGenBtn").addEventListener("click", async ()=>{
+  const b=pvBody(); if(!b.host){ $("pvMsg").textContent="원격 IP/주소를 입력하세요."; return; }
+  $("pvMsg").textContent="생성 중…";
+  try{
+    const j=await (await fetch("/api/portal/provision",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)})).json();
+    if(!j.ok){ $("pvMsg").textContent="✗ "+(j.reason||"실패"); return; }
+    $("pvScript").value=j.script; $("pvScriptWrap").style.display="block";
+    $("pvMsg").textContent=`✓ 노드 '${j.node?j.node.id:""}' 등록됨 · 토큰 ${(j.token||"").slice(0,8)}… · 엣지 ${j.edge_url}`;
+    loadNodes(); loadOverview();
+  }catch(e){ $("pvMsg").textContent="✗ "+e; }
+});
+$("pvCopy").addEventListener("click", ()=>{ const t=$("pvScript"); t.select(); t.setSelectionRange(0,99999);
+  try{ document.execCommand("copy"); $("pvCopyMsg").textContent="복사됨"; }catch(e){ $("pvCopyMsg").textContent="수동 복사하세요"; }
+  setTimeout(()=>$("pvCopyMsg").textContent="",1500); });
+$("pvSshBtn").addEventListener("click", async ()=>{
+  const b=pvBody(); if(!b.host){ $("pvSshMsg").textContent="IP 먼저 입력"; return; }
+  b.ssh_user=$("pvSshUser").value.trim()||"root"; b.ssh_port=Number($("pvSshPort").value)||22; b.ssh_password=$("pvSshPass").value;
+  $("pvSshBtn").disabled=true; $("pvSshMsg").textContent="원격 설치 중… (최대 5분)";
+  try{
+    const j=await (await fetch("/api/portal/provision/ssh",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)})).json();
+    if(j.script){ $("pvScript").value=j.script; $("pvScriptWrap").style.display="block"; }
+    $("pvSshMsg").textContent = j.ok ? "✓ 원격 설치 완료" : ("✗ "+(j.reason||("returncode "+j.returncode)));
+    if(j.output){ $("pvSshOut").style.display="block"; $("pvSshOut").textContent=j.output; }
+    loadNodes(); loadOverview();
+  }catch(e){ $("pvSshMsg").textContent="✗ "+e; }
+  $("pvSshBtn").disabled=false;
+});
 
 function tickClock(){ const el=$("clock"); if(el) el.textContent=new Date().toLocaleString("ko-KR",{hour12:false}); }
 tickClock(); setInterval(tickClock,1000);

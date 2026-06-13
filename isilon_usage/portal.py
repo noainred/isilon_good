@@ -15,6 +15,8 @@ import io
 import json
 import os
 import re
+import secrets
+import shlex
 import shutil
 import tarfile
 import tempfile
@@ -180,6 +182,75 @@ def _probe_meta(url: str, token: Optional[str], timeout: float = 8.0) -> dict:
         return json.loads(f.read().decode("utf-8"))
     finally:
         tf.close()
+
+
+# ------------------------------------------------------------ 원격 자동 구성
+def agent_bundle_bytes() -> bytes:
+    """엣지에 배포할 isilon_usage 패키지(.py/.html)를 tar.gz 로 묶는다.
+
+    엣지가 HQ 포탈에서 코드를 직접 받아 설치할 수 있게 한다(폐쇄망에서도 인터넷
+    없이). 포탈이 실행 중인 바로 그 패키지를 그대로 내려준다.
+    """
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for name in sorted(os.listdir(HERE)):
+            if name.endswith(".py") or name.endswith(".html"):
+                tf.add(os.path.join(HERE, name), arcname="isilon_usage/" + name)
+    return buf.getvalue()
+
+
+def build_provision_script(*, host, port, token, path, hq_base, install="systemd",
+                           data_dir="/var/lib/isilon_usage",
+                           edge_dir="/opt/isilon_edge") -> str:
+    """엣지에서 복붙 실행할 자동 구성 스크립트(bash)를 만든다.
+
+    HQ 포탈에서 코드를 받아(agent-bundle) 배치하고, api_token·mount-base 와 함께
+    serve 를 기동한다(systemd 또는 nohup). 값은 shell 주입을 막기 위해 따옴표 처리.
+    """
+    q = shlex.quote
+    hq = (hq_base or "http://<HQ-IP>:8800").rstrip("/")
+    head = (
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "# === isilon_usage 엣지 자동 구성 (HQ 포탈 생성) ===\n"
+        "EDGE_DIR=%s\nDATA=%s\nMOUNT=%s\nPORT=%d\nTOKEN=%s\nHQ=%s\n\n"
+        'echo "[1/3] HQ 포탈에서 코드 받기 (인터넷 불필요)"\n'
+        'sudo mkdir -p "$EDGE_DIR" "$DATA"\n'
+        'curl -fsSL "$HQ/api/portal/agent-bundle" | sudo tar -xz -C "$EDGE_DIR"\n'
+        '(cd "$EDGE_DIR" && python3 -m isilon_usage --version)\n'
+    ) % (q(edge_dir), q(data_dir), q(path), int(port), q(token), q(hq))
+    if install == "nohup":
+        tail = (
+            '\necho "[2/3] nohup 으로 기동 (포트 $PORT)"\n'
+            'cd "$EDGE_DIR"\n'
+            'nohup python3 -m isilon_usage serve --data-dir "$DATA" --mount-base "$MOUNT" \\\n'
+            '    --host 0.0.0.0 --port "$PORT" --api-token "$TOKEN" \\\n'
+            '    > /var/log/isilon_usage.log 2>&1 &\n'
+            'echo "[3/3] 완료 — http://%s:%d/  (HQ 포탈이 자동 폴링)"\n'
+        ) % (host, int(port))
+    else:
+        tail = (
+            '\necho "[2/3] systemd 서비스 설치/기동 (포트 $PORT)"\n'
+            "sudo tee /etc/systemd/system/isilon_usage.service >/dev/null <<UNIT\n"
+            "[Unit]\n"
+            "Description=isilon_usage edge scanner\n"
+            "After=network-online.target\n"
+            "Wants=network-online.target\n"
+            "[Service]\n"
+            "Type=simple\n"
+            "WorkingDirectory=$EDGE_DIR\n"
+            "ExecStart=/usr/bin/python3 -m isilon_usage serve --data-dir $DATA "
+            "--mount-base $MOUNT --host 0.0.0.0 --port $PORT --api-token $TOKEN\n"
+            "Restart=on-failure\n"
+            "RestartSec=5\n"
+            "[Install]\n"
+            "WantedBy=multi-user.target\n"
+            "UNIT\n"
+            "sudo systemctl daemon-reload\n"
+            "sudo systemctl enable --now isilon_usage\n"
+            'echo "[3/3] 완료 — http://%s:%d/  ·  journalctl -u isilon_usage -f"\n'
+        ) % (host, int(port))
+    return head + tail
 
 
 # ------------------------------------------------------------------ 컨트롤러
@@ -534,6 +605,80 @@ class PortalController:
             results = []
         return {"ok": True, "results": results, "checked_at": time.time()}
 
+    # --- 원격 자동 구성 ---
+    def provision_plan(self, raw: dict) -> dict:
+        """IP/포트/경로 등으로 엣지 설치 스크립트를 생성하고 노드를 자동 등록한다(SSH 없음).
+
+        '엣지에서 복붙 실행할 스크립트'를 돌려주고 그 노드를 포탈에 등록해 둔다
+        (엣지가 뜨면 폴링으로 자동 연결). 비밀번호는 다루지 않아 안전하다.
+        """
+        host = (raw.get("host") or "").strip()
+        if not host:
+            return {"ok": False, "reason": "host(IP/주소) 필요"}
+        try:
+            port = int(raw.get("port") or 8765)
+        except (TypeError, ValueError):
+            port = 8765
+        token = (raw.get("token") or "").strip() or secrets.token_hex(16)
+        path = (raw.get("path") or "/mnt/hadoop").strip()
+        name = ((raw.get("name") or "").strip()
+                or re.sub(r"[^A-Za-z0-9_.-]+", "-", host).strip("-") or "edge")
+        region = (raw.get("region") or "").strip()
+        install = "nohup" if (raw.get("install") == "nohup") else "systemd"
+        hq_base = (raw.get("hq_base") or "").strip()
+        edge_url = "http://%s:%d" % (host, port)
+        script = build_provision_script(host=host, port=port, token=token, path=path,
+                                        hq_base=hq_base, install=install)
+        node_res = self.upsert_node({
+            "id": name, "region": region, "url": edge_url, "token": token,
+            "alias_local": path, "alias_logical": path,
+            "unit": "minute", "every": 30, "mode": "both", "enabled": True,
+        })
+        return {"ok": True, "script": script, "token": token, "edge_url": edge_url,
+                "install": install, "registered": bool(node_res.get("ok")),
+                "node": node_res.get("node")}
+
+    def provision_ssh(self, raw: dict) -> dict:
+        """[옵션] 원격에 SSH 로 접속해 구성 스크립트를 실행한다.
+
+        ssh(키 인증) 또는 sshpass(비밀번호)가 있어야 한다. 비밀번호는 보관하지 않고
+        1회성으로만 쓴다. 무의존 원칙상 기본은 'A(스크립트 생성)'이며 이건 옵션이다.
+        """
+        import subprocess
+        plan = self.provision_plan(raw)
+        if not plan.get("ok"):
+            return plan
+        host = (raw.get("host") or "").strip()
+        user = (raw.get("ssh_user") or "root").strip()
+        password = raw.get("ssh_password") or ""
+        try:
+            ssh_port = int(raw.get("ssh_port") or 22)
+        except (TypeError, ValueError):
+            ssh_port = 22
+        ssh = shutil.which("ssh")
+        if not ssh:
+            return dict(plan, ok=False,
+                        reason="ssh 바이너리가 없습니다 — 생성된 스크립트를 엣지에서 수동 실행하세요.")
+        cmd = []
+        if password:
+            sshpass = shutil.which("sshpass")
+            if not sshpass:
+                return dict(plan, ok=False,
+                            reason="비밀번호 인증엔 sshpass 가 필요합니다(미설치). 키 인증을 쓰거나 스크립트를 수동 실행하세요.")
+            cmd = [sshpass, "-p", password]
+        cmd += [ssh, "-p", str(ssh_port),
+                "-o", "StrictHostKeyChecking=accept-new",
+                "-o", "ConnectTimeout=10",
+                "%s@%s" % (user, host), "bash -s"]
+        try:
+            p = subprocess.run(cmd, input=plan["script"].encode(),
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               timeout=300)
+            out = p.stdout.decode("utf-8", "replace")[-4000:]
+            return dict(plan, ok=(p.returncode == 0), returncode=p.returncode, output=out)
+        except Exception as e:  # noqa: BLE001
+            return dict(plan, ok=False, reason="SSH 실행 실패: %s" % e)
+
     # --- 경로 비교(Cross-DC) — 복제본 DB 를 경로로 조인 ---
     @staticmethod
     def _to_local(node: dict, logical: str) -> str:
@@ -697,6 +842,16 @@ class PortalHandler(BaseHTTPRequestHandler):
             if path == "/api/portal/ping":
                 self._send_json(c.ping_nodes())
                 return
+            if path == "/api/portal/agent-bundle":
+                data = agent_bundle_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/gzip")
+                self.send_header("Content-Disposition",
+                                 'attachment; filename="isilon_usage_agent.tar.gz"')
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             if path == "/api/portal/compare":
                 qp = parse_qs(urlparse(self.path).query).get("path", [""])[0]
                 if not qp:
@@ -733,6 +888,12 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/portal/sync":
                 self._send_json(c.sync_now(body.get("id") or None))
+                return
+            if path == "/api/portal/provision":
+                self._send_json(c.provision_plan(body))
+                return
+            if path == "/api/portal/provision/ssh":
+                self._send_json(c.provision_ssh(body))
                 return
             self._send_json({"ok": False, "reason": "unknown_endpoint"}, status=404)
         except ConnectionError:

@@ -6,9 +6,11 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import sys
+import tarfile
 import tempfile
 import threading
 import time
@@ -131,6 +133,21 @@ def main() -> int:
         # 9) 삭제
         assert pc.delete_node("dc-test")["ok"]
         assert pc.overview()["totals"]["nodes_total"] == 0
+
+        # 10) 원격 자동 구성(A): 스크립트 생성 + 노드 자동 등록 + 에이전트 번들 + SSH 옵션
+        pv = pc.provision_plan({"host": "10.9.9.9", "port": 8765, "path": "/mnt/hadoop",
+                                "region": "EU", "name": "auto1", "hq_base": "http://hq:8800"})
+        assert pv["ok"] and pv["registered"] and len(pv["token"]) == 32, pv
+        assert pv["script"].startswith("#!/usr/bin/env bash") and "agent-bundle" in pv["script"], pv
+        assert any(n["id"] == "auto1" for n in pc.list_nodes()["nodes"]), "노드 자동 등록 실패"
+        names = tarfile.open(fileobj=io.BytesIO(portalmod.agent_bundle_bytes()),
+                             mode="r:gz").getnames()
+        assert "isilon_usage/portal.py" in names and "isilon_usage/__init__.py" in names, names
+        # SSH 푸시는 옵션 — ssh 없으면 스크립트를 동봉해 우아하게 실패해야 함
+        ssh = pc.provision_ssh({"host": "10.9.9.9", "ssh_user": "root",
+                                "ssh_password": "x", "name": "auto1"})
+        assert "script" in ssh and isinstance(ssh["ok"], bool), ssh
+        assert pc.delete_node("auto1")["ok"]
 
         print("[portal] OK  연결테스트·등록·폴링·복제·롤업·삭제 통과")
         print("모든 테스트 통과 ✅")
