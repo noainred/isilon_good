@@ -50,7 +50,49 @@ def _run_one(data_dir: str, root: str) -> int:
     return scan_id
 
 
+def _test_migrate_legacy_config() -> None:
+    """레거시 위치의 설정이 기본 data-dir 로 1회 이관되는지(비파괴·멱등) 검증."""
+    tmp = tempfile.mkdtemp(prefix="isilon_mig_")
+    try:
+        legacy = os.path.join(tmp, "legacy")
+        target = os.path.join(tmp, "data_isilon_usage")
+        os.makedirs(legacy, exist_ok=True)
+        with open(os.path.join(legacy, "settings.json"), "w") as fh:
+            fh.write('{"api_token": "KEEP"}')
+        with open(os.path.join(legacy, "portal_nodes.json"), "w") as fh:
+            fh.write('{"nodes": []}')
+        # 실제 /data 를 건드리지 않도록 기본/레거시 경로를 임시값으로 교체
+        old_def, old_leg = mgr.DEFAULT_DATA_DIR, mgr.LEGACY_DATA_DIRS
+        mgr.DEFAULT_DATA_DIR = target
+        mgr.LEGACY_DATA_DIRS = (legacy,)
+        try:
+            # 1) 기본이 아닌 경로는 이관하지 않는다(가드)
+            other = os.path.join(tmp, "other")
+            mgr.migrate_legacy_config(other)
+            assert not os.path.exists(os.path.join(other, "settings.json"))
+            # 2) 기본 경로면 설정을 이관한다
+            mgr.migrate_legacy_config(target)
+            assert os.path.exists(os.path.join(target, "settings.json"))
+            assert os.path.exists(os.path.join(target, "portal_nodes.json"))
+            with open(os.path.join(target, "settings.json")) as fh:
+                assert "KEEP" in fh.read()
+            # 3) 원본(레거시)은 비파괴로 남는다
+            assert os.path.exists(os.path.join(legacy, "settings.json"))
+            # 4) 이미 있으면 덮어쓰지 않는다(멱등)
+            with open(os.path.join(target, "settings.json"), "w") as fh:
+                fh.write('{"api_token": "NEW"}')
+            mgr.migrate_legacy_config(target)
+            with open(os.path.join(target, "settings.json")) as fh:
+                assert "NEW" in fh.read()
+        finally:
+            mgr.DEFAULT_DATA_DIR, mgr.LEGACY_DATA_DIRS = old_def, old_leg
+        print("[manager] migrate_legacy_config OK (이관·비파괴·멱등)")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main() -> int:
+    _test_migrate_legacy_config()
     tmp = tempfile.mkdtemp(prefix="isilon_mgr_")
     try:
         data_dir = os.path.join(tmp, "isidata")

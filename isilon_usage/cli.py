@@ -86,6 +86,7 @@ def _prepare_run(args, path: str):
     반환: (data_dir, per_run_db_path, manager_db_path, manager_scan_id)
     """
     data_dir = os.path.abspath(args.data_dir)
+    mgrmod.migrate_legacy_config(data_dir)
     mgrmod.init_manager(data_dir)
     db_path = os.path.abspath(args.db) if args.db else mgrmod.make_run_db_path(data_dir, path)
     manager_db = mgrmod.manager_db_path(data_dir)
@@ -103,6 +104,7 @@ def _run_server(args, *, initial_path: Optional[str]) -> int:
     웹페이지에서 디렉터리를 지정해 추가 스캔을 시작/중지할 수 있다.
     """
     data_dir = os.path.abspath(args.data_dir)
+    mgrmod.migrate_legacy_config(data_dir)
     mount_bases = [os.path.abspath(b) for b in (getattr(args, "mount_base", None) or [])]
 
     # CLI 플래그 → 초기 설정(settings.json 이 없을 때만 적용; 이후엔 웹 편집값 우선)
@@ -820,7 +822,7 @@ def build_parser() -> argparse.ArgumentParser:
     pst2.set_defaults(func=cmd_stats)
 
     ppo = sub.add_parser("portal", help="글로벌 통합 포탈(HQ) — 여러 DC 를 한 화면에서 조망")
-    ppo.add_argument("--data-dir", default="isilon_portal_data",
+    ppo.add_argument("--data-dir", default=DEFAULT_DATA_DIR,
                      help="portal_nodes.json + replicas/ 상위 폴더 (기본: %(default)s)")
     ppo.add_argument("--host", default="0.0.0.0")
     ppo.add_argument("--port", type=int, default=8800)

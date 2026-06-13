@@ -16,15 +16,27 @@ from typing import Dict, Optional
 import os
 import re
 import secrets
+import shutil
 import socket
+import sys
 import time
 
 from . import db as dbmod
 
 
-DEFAULT_DATA_DIR = "isilon_data"
+# 모든 영속 데이터/설정의 기본 위치 — 절대경로로 고정해 '실행 위치'나 '코드 업그레이드'
+# 와 무관하게 항상 같은 곳에 저장한다(업그레이드 시 설정 유실 방지). --data-dir 로 변경 가능.
+DEFAULT_DATA_DIR = "/data/isilon_usage"
 MANAGER_DB_NAME = "manager.db"
 SCANS_SUBDIR = "scans"
+
+# 레거시(이전 기본/예시) data-dir — 기본 위치로 설정을 1회 이관해 업그레이드 보존.
+LEGACY_DATA_DIRS = (
+    "/var/lib/isilon_usage", "/var/lib/isilon_portal",
+    "isilon_data", "isilon_portal_data",
+)
+# 이관 대상은 '설정'만(스캔/복제 DB 는 재생성 가능하므로 옮기지 않는다).
+MIGRATE_CONFIG_FILES = ("settings.json", "portal_nodes.json")
 
 
 MANAGER_SCHEMA = """
@@ -68,6 +80,37 @@ def manager_db_path(data_dir: str) -> str:
 
 def scans_dir(data_dir: str) -> str:
     return os.path.join(data_dir, SCANS_SUBDIR)
+
+
+def migrate_legacy_config(data_dir: str) -> None:
+    """업그레이드로 설정이 사라지지 않도록, 기본 data-dir 로 레거시 설정을 1회 복사한다.
+
+    - 기본(canonical) data-dir 일 때만 동작한다(사용자가 직접 지정한 경로는 건드리지 않음).
+    - 새 위치에 그 설정이 아직 없을 때만 레거시에서 복사한다(비파괴: 원본은 남긴다).
+    - 베스트에포트 — 어떤 오류도 기동을 막지 않는다.
+    """
+    try:
+        target = os.path.abspath(data_dir)
+        if target != os.path.abspath(DEFAULT_DATA_DIR):
+            return
+        os.makedirs(target, exist_ok=True)
+        for fname in MIGRATE_CONFIG_FILES:
+            dst = os.path.join(target, fname)
+            if os.path.exists(dst):
+                continue
+            for legacy in LEGACY_DATA_DIRS:
+                src_dir = os.path.abspath(legacy)
+                if src_dir == target:
+                    continue
+                src = os.path.join(src_dir, fname)
+                if os.path.exists(src):
+                    shutil.copy2(src, dst)
+                    sys.stderr.write(
+                        "[isilon_usage] 설정 이관(업그레이드 보존): %s -> %s\n" % (src, dst)
+                    )
+                    break
+    except OSError:
+        pass
 
 
 def init_manager(data_dir: str) -> str:

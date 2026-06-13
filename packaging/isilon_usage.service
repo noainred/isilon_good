@@ -28,9 +28,10 @@ Type=simple
 # (info.MD = 작업 비밀번호도 이 디렉터리에 저장된다)
 WorkingDirectory=/opt/isilon_usage
 
-# 데이터 디렉터리: systemd 가 /var/lib/isilon_usage 를 만들고 권한을 맞춘다.
-# 아래 --data-dir 값과 반드시 일치시킬 것.
-StateDirectory=isilon_usage
+# 데이터·설정 디렉터리: 기본 /data/isilon_usage (절대경로 고정 → 코드 업그레이드와
+# 무관하게 설정·DB 보존). 앱이 자동 생성한다. 전용 계정(User=)으로 돌리면 이 경로에
+# 쓰기 권한을 주거나 아래 ReadWritePaths 를 켤 것.
+# (참고) /var/lib 를 쓰려면 StateDirectory=isilon_usage 로 되돌리고 --data-dir 도 맞춘다.
 
 # 실행 명령 — serve 가 받는 유효 옵션만 사용한다.
 #  · --host 0.0.0.0  : LAN(예: 192.168.x)에서 접근. 사내 신뢰망이면 이대로.
@@ -38,7 +39,7 @@ StateDirectory=isilon_usage
 #  · --mount-base    : 웹에서 스캔 허용할 경로(여러 개면 줄을 더 추가 X — 옵션 반복).
 #  · 안전장치(min-free/db-max/fold-depth)는 대시보드 '설정'(settings.json)에서 적용.
 ExecStart=/usr/bin/python3 -m isilon_usage serve \
-    --data-dir /var/lib/isilon_usage \
+    --data-dir /data/isilon_usage \
     --mount-base /mnt/hadoop \
     --host 0.0.0.0 --port 8765 \
     --workers 8
@@ -58,7 +59,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 # 더 강하게: 아래를 켜되 NFS/데이터 쓰기가 막히면 되돌릴 것
 #ProtectSystem=full
-#ReadWritePaths=/var/lib/isilon_usage
+#ReadWritePaths=/data/isilon_usage
 
 [Install]
 WantedBy=multi-user.target

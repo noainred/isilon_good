@@ -33,12 +33,13 @@ Type=simple
 #   주의: 지정한 디렉터리가 없으면 systemd 가 status=200/CHDIR 로 기동 실패한다.
 WorkingDirectory=/opt/isilon_usage
 
-# 포탈 데이터(portal_nodes.json + replicas/) — 스캐너 data-dir 와 분리.
-StateDirectory=isilon_portal
+# 포탈 데이터·설정(portal_nodes.json + replicas/) — 스캐너와 동일한 기본 위치
+# /data/isilon_usage 에 저장(업그레이드 시 설정 보존). 앱이 자동 생성한다.
+# 파일명이 겹치지 않아 스캐너와 한 디렉터리를 공유해도 안전하다.
 
 # 포탈 실행 — 스캐너와 '다른 포트'(8800).
 ExecStart=/usr/bin/python3 -m isilon_usage portal \
-    --data-dir /var/lib/isilon_portal \
+    --data-dir /data/isilon_usage \
     --host 0.0.0.0 --port 8800
 
 Restart=on-failure

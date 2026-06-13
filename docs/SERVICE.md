@@ -39,7 +39,7 @@ sudo useradd --system --no-create-home --shell /usr/sbin/nologin isilon
 sudo cp packaging/isilon_usage.service /etc/systemd/system/isilon_usage.service
 sudo vi /etc/systemd/system/isilon_usage.service
 #  - WorkingDirectory = /opt/isilon_usage
-#  - --data-dir /var/lib/isilon_usage   (StateDirectory 와 일치)
+#  - --data-dir /data/isilon_usage      (기본값; 절대경로라 코드 업그레이드에도 설정 보존)
 #  - --mount-base /mnt/hadoop           (스캔 허용 경로)
 #  - --host / --port                    (LAN 접근이면 0.0.0.0)
 ```
@@ -103,9 +103,9 @@ HQ 서버가 **로컬 디스크 스캔(`serve`)** 과 **글로벌 집계 포탈(
 ```
 HQ 서버
 ├── /opt/isilon_edge/isilon_usage/     ← 스캐너 코드(serve)        :8765
-│   └─ 서비스 isilon_usage         data-dir /var/lib/isilon_usage
+│   └─ 서비스 isilon_usage         data-dir /data/isilon_usage
 └── /opt/isilon_portal/isilon_usage/   ← 포탈 코드(portal)         :8800
-    └─ 서비스 isilon_usage_portal  data-dir /var/lib/isilon_portal
+    └─ 서비스 isilon_usage_portal  data-dir /data/isilon_usage (스캐너와 공유 안전)
 ```
 
 **설치 (두 디렉터리에 각각 패키지 배치)**
@@ -149,7 +149,7 @@ sudo systemctl restart isilon_usage_portal                          # 포탈만 
 ```bash
 # nohup (가장 간단) — 세션 끊겨도 유지
 cd /opt/isilon_usage
-nohup python3 -m isilon_usage serve --data-dir /var/lib/isilon_usage \
+nohup python3 -m isilon_usage serve --data-dir /data/isilon_usage \
       --mount-base /mnt/hadoop --host 0.0.0.0 --port 8765 \
       > /var/log/isilon_usage.log 2>&1 &
 # 또는 tmux/screen 세션 안에서 실행

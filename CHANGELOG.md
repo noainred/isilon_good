@@ -13,6 +13,25 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.35.0] - 2026-06-13
+
+### 변경됨 (Changed) — 모든 설정·데이터를 /data/isilon_usage 에 고정(업그레이드 보존)
+
+- **기본 data-dir 를 절대경로 `/data/isilon_usage` 로 통일** — 스캐너(`serve`/`run`)와
+  포탈(`portal`) 모두 같은 기본 위치를 쓴다(이전: 상대경로 `isilon_data` /
+  `isilon_portal_data`). 코드 디렉터리(`/opt/...`)와 분리된 절대경로라 **코드를
+  업그레이드해도 설정·DB 가 사라지지 않는다.** 파일명이 겹치지 않아(스캐너
+  `settings.json`·`manager.db`·`scans/`·`metrics.db` / 포탈 `portal_nodes.json`·
+  `replicas/`) 한 디렉터리를 공유해도 안전하다. `--data-dir` 로 언제든 변경 가능.
+- **레거시 설정 자동 이관(비파괴)** — 기본 data-dir 로 처음 기동할 때, 이전 위치
+  (`/var/lib/isilon_usage`·`/var/lib/isilon_portal`·`isilon_data`·`isilon_portal_data`)의
+  `settings.json`·`portal_nodes.json` 을 새 위치로 1회 복사한다(원본은 남김). 업그레이드
+  후에도 기존 설정·노드 목록이 유지된다.
+- systemd 유닛 2개의 `--data-dir` 를 `/data/isilon_usage` 로 갱신(StateDirectory 제거,
+  앱이 디렉터리 자동 생성). 원격 자동 구성 스크립트의 기본 data-dir 도 동일하게 변경.
+
+---
+
 ## [1.34.1] - 2026-06-13
 
 ### 수정됨 (Fixed)

@@ -188,7 +188,7 @@ python3 -m isilon_usage stats --data-dir DIR --top 20  # 분석 리포트(나이
 python3 -m isilon_usage gentest /data/iutest --dirs 10 --subdirs 5 --files 10 --size 4K -y  # 테스트 트리 생성
 python3 -m isilon_usage resume <scan_id> --data-dir DIR   # 중단된 스캔 이어하기
 python3 -m isilon_usage prune --data-dir DIR --keep-per-root 5  # 오래된 스캔 정리
-python3 -m isilon_usage portal --data-dir isilon_portal_data   # 글로벌 통합 포탈(HQ)
+python3 -m isilon_usage portal   # 글로벌 통합 포탈(HQ) — 기본 data-dir /data/isilon_usage
 ```
 
 전체 서브커맨드: `run · scan · serve · status · resume · prune · tune · gentest · stats · portal · version`

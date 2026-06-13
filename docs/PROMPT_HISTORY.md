@@ -161,5 +161,9 @@
      `/opt/isilon_portal` 이 없어 chdir 실패 → 크래시-재시작 루프). **버그 수정**: 포탈
      유닛 기본 WorkingDirectory 를 스캐너와 동일한 `/opt/isilon_usage` 로 통일(간단 설치
      즉시 동작) + 분리 격리는 유닛 주석·docs/SERVICE.md 로 안내. v1.34.1.
+121. 업그레이드 시 설정 유실 방지 — **모든 config 를 /data/isilon_usage 에 저장**.
+     기본 data-dir 를 절대경로 `/data/isilon_usage` 로 통일(스캐너+포탈 공유, 파일명
+     충돌 없음) + 레거시(`/var/lib/*`·상대경로)에서 `settings.json`·`portal_nodes.json`
+     자동 이관(비파괴) + systemd 유닛/provision 기본경로 갱신. v1.35.0.
 
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

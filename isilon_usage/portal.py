@@ -29,6 +29,7 @@ from urllib.parse import urlparse, parse_qs
 
 from . import __version__
 from . import db as dbmod
+from . import manager as mgrmod
 from . import settings as setmod
 from .server import ThreadingHTTPServer  # 3.6 폴백 포함 재사용
 
@@ -200,7 +201,7 @@ def agent_bundle_bytes() -> bytes:
 
 
 def build_provision_script(*, host, port, token, path, hq_base, install="systemd",
-                           data_dir="/var/lib/isilon_usage",
+                           data_dir="/data/isilon_usage",
                            edge_dir="/opt/isilon_edge") -> str:
     """엣지에서 복붙 실행할 자동 구성 스크립트(bash)를 만든다.
 
@@ -905,6 +906,7 @@ class PortalHandler(BaseHTTPRequestHandler):
 def serve_portal(data_dir: str, host: str = "0.0.0.0", port: int = 8800):
     """글로벌 포탈 HTTP 서버를 만들어 반환한다(호출 측에서 serve_forever)."""
     data_dir = os.path.abspath(data_dir)
+    mgrmod.migrate_legacy_config(data_dir)
     os.makedirs(data_dir, exist_ok=True)
     controller = PortalController(data_dir)
     controller.start()
