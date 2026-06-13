@@ -13,6 +13,22 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.34.1] - 2026-06-13
+
+### 수정됨 (Fixed)
+
+- **포탈 systemd 유닛 기동 실패(`status=200/CHDIR`) 수정** — `isilon_usage_portal.service`
+  가 존재하지 않을 수 있는 `/opt/isilon_portal` 을 `WorkingDirectory` 기본값으로 달고
+  있어, 간단 설치(코드가 `/opt/isilon_usage` 에만 있는 경우) 사용자가 유닛을 그대로
+  `enable` 하면 systemd 가 그 디렉터리로 `chdir` 하지 못해 `EXIT_CHDIR` 로 크래시-재시작
+  루프에 빠졌다. 기본 `WorkingDirectory` 를 스캐너와 동일한 **`/opt/isilon_usage`** 로
+  통일해 간단 설치에서 바로 기동되게 했다. 업그레이드 격리(포탈만 따로 교체)가 필요하면
+  `/opt/isilon_portal` 을 만들어 패키지를 복사하고 이 값을 바꾸도록 유닛 주석과
+  `docs/SERVICE.md` 에 명시. (포탈 데이터는 여전히 `--data-dir /var/lib/isilon_portal`
+  로 분리되며, 설정·노드 목록은 그 안의 `portal_nodes.json` 에 저장된다.)
+
+---
+
 ## [1.34.0] - 2026-06-13
 
 ### 추가됨 (Added) — 포탈에서 원격 엣지 자동 구성

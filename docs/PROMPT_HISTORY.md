@@ -157,5 +157,9 @@
 119. 포탈 사용률 "—" 진단(엣지가 fs_total=0 보고; 포탈 코드는 정상·라이브 검증).
      포탈에서 **원격 IP/ID/PW 입력 → 자동 구성** 기능 → A(설치 스크립트 생성+노드
      자동 등록, 안전·무의존) 기본 + B(SSH 자동 푸시, 옵션). `--api-token` 시드 추가.
+120. 포탈 systemd 서비스가 `status=200/CHDIR` 로 기동 실패(유닛 기본 WorkingDirectory
+     `/opt/isilon_portal` 이 없어 chdir 실패 → 크래시-재시작 루프). **버그 수정**: 포탈
+     유닛 기본 WorkingDirectory 를 스캐너와 동일한 `/opt/isilon_usage` 로 통일(간단 설치
+     즉시 동작) + 분리 격리는 유닛 주석·docs/SERVICE.md 로 안내. v1.34.1.
 
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

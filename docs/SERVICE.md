@@ -119,6 +119,7 @@ sudo cp isilon_usage-*/packaging/isilon_usage.service        /etc/systemd/system
 # 포탈 유닛: WorkingDirectory=/opt/isilon_portal, 포트 8800
 sudo cp isilon_usage-*/packaging/isilon_usage_portal.service /etc/systemd/system/
 sudo vi /etc/systemd/system/isilon_usage.service        # WorkingDirectory=/opt/isilon_edge
+sudo vi /etc/systemd/system/isilon_usage_portal.service # WorkingDirectory=/opt/isilon_portal (기본 /opt/isilon_usage 에서 변경)
 sudo systemctl daemon-reload
 sudo systemctl enable --now isilon_usage isilon_usage_portal
 ```
