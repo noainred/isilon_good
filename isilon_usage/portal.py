@@ -259,6 +259,36 @@ def build_provision_script(*, host, port, token, path, hq_base, install="systemd
     return head + tail
 
 
+def build_upgrade_script(*, hq_base, edge_dir="/opt/isilon_edge",
+                         service="isilon_usage") -> str:
+    """등록된 엣지를 HQ 의 최신 코드로 올리는 bash 업그레이드 스크립트를 만든다.
+
+    HQ 포탈에서 agent-bundle(현재 실행 중 코드)을 받아 엣지 코드 디렉터리에 덮어쓰고
+    서비스를 재시작한다. 값은 shell 주입을 막기 위해 따옴표 처리한다.
+    """
+    q = shlex.quote
+    hq = (hq_base or "http://<HQ-IP>:8800").rstrip("/")
+    return (
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "# === isilon_usage 엣지 원격 업그레이드 (HQ 포탈 생성) ===\n"
+        "EDGE_DIR=%s\nHQ=%s\nSERVICE=%s\n\n"
+        'echo "[1/3] HQ 포탈에서 최신 코드 받기 (인터넷 불필요)"\n'
+        'sudo mkdir -p "$EDGE_DIR"\n'
+        'curl -fsSL "$HQ/api/portal/agent-bundle" | sudo tar -xz -C "$EDGE_DIR"\n'
+        'NEWV=$(cd "$EDGE_DIR" && python3 -m isilon_usage --version || true)\n'
+        'echo "  -> 새 코드: $NEWV"\n'
+        'echo "[2/3] 서비스 재시작"\n'
+        'if systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE}\\.service"; then\n'
+        '  sudo systemctl restart "$SERVICE"\n'
+        '  echo "  -> systemctl restart $SERVICE"\n'
+        "else\n"
+        '  echo "  (systemd 유닛 ${SERVICE} 없음 — nohup 등으로 띄웠다면 수동 재시작 필요)"\n'
+        "fi\n"
+        'echo "[3/3] 완료 — 잠시 후 포탈에서 버전 갱신이 반영됩니다"\n'
+    ) % (q(edge_dir), q(hq), q(service))
+
+
 # ------------------------------------------------------------------ 컨트롤러
 class PortalController:
     def __init__(self, data_dir: str) -> None:
@@ -689,17 +719,15 @@ class PortalController:
                 "install": install, "registered": bool(node_res.get("ok")),
                 "node": node_res.get("node")}
 
-    def provision_ssh(self, raw: dict) -> dict:
-        """[옵션] 원격에 SSH 로 접속해 구성 스크립트를 실행한다.
+    def _ssh_run(self, raw: dict, script: str) -> dict:
+        """SSH(키 인증 또는 sshpass 비밀번호)로 원격에 script 를 bash -s 로 실행한다.
 
-        ssh(키 인증) 또는 sshpass(비밀번호)가 있어야 한다. 비밀번호는 보관하지 않고
-        1회성으로만 쓴다. 무의존 원칙상 기본은 'A(스크립트 생성)'이며 이건 옵션이다.
+        비밀번호는 보관하지 않고 1회성으로만 쓴다. provision/upgrade 의 SSH 실행에 공용.
         """
         import subprocess
-        plan = self.provision_plan(raw)
-        if not plan.get("ok"):
-            return plan
         host = (raw.get("host") or "").strip()
+        if not host:
+            return {"ok": False, "reason": "host(IP/주소) 필요"}
         user = (raw.get("ssh_user") or "root").strip()
         password = raw.get("ssh_password") or ""
         try:
@@ -708,27 +736,63 @@ class PortalController:
             ssh_port = 22
         ssh = shutil.which("ssh")
         if not ssh:
-            return dict(plan, ok=False,
-                        reason="ssh 바이너리가 없습니다 — 생성된 스크립트를 엣지에서 수동 실행하세요.")
+            return {"ok": False,
+                    "reason": "ssh 바이너리가 없습니다 — 생성된 스크립트를 엣지에서 수동 실행하세요."}
         cmd = []
         if password:
             sshpass = shutil.which("sshpass")
             if not sshpass:
-                return dict(plan, ok=False,
-                            reason="비밀번호 인증엔 sshpass 가 필요합니다(미설치). 키 인증을 쓰거나 스크립트를 수동 실행하세요.")
+                return {"ok": False,
+                        "reason": "비밀번호 인증엔 sshpass 가 필요합니다(미설치). 키 인증을 쓰거나 스크립트를 수동 실행하세요."}
             cmd = [sshpass, "-p", password]
         cmd += [ssh, "-p", str(ssh_port),
                 "-o", "StrictHostKeyChecking=accept-new",
                 "-o", "ConnectTimeout=10",
                 "%s@%s" % (user, host), "bash -s"]
         try:
-            p = subprocess.run(cmd, input=plan["script"].encode(),
+            p = subprocess.run(cmd, input=script.encode(),
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               timeout=300)
+                               timeout=600)
             out = p.stdout.decode("utf-8", "replace")[-4000:]
-            return dict(plan, ok=(p.returncode == 0), returncode=p.returncode, output=out)
+            return {"ok": (p.returncode == 0), "returncode": p.returncode, "output": out}
         except Exception as e:  # noqa: BLE001
-            return dict(plan, ok=False, reason="SSH 실행 실패: %s" % e)
+            return {"ok": False, "reason": "SSH 실행 실패: %s" % e}
+
+    def provision_ssh(self, raw: dict) -> dict:
+        """[옵션] 원격에 SSH 로 접속해 구성 스크립트를 실행한다(키 또는 sshpass).
+
+        무의존 원칙상 기본은 'A(스크립트 생성)'이며 이건 옵션이다.
+        """
+        plan = self.provision_plan(raw)
+        if not plan.get("ok"):
+            return plan
+        return dict(plan, **self._ssh_run(raw, plan["script"]))
+
+    # --- 원격 버전 업그레이드 ---
+    def upgrade_plan(self, raw: dict) -> dict:
+        """등록된 엣지(또는 host)를 HQ 최신 코드로 올리는 업그레이드 스크립트를 만든다.
+
+        엣지에서 복붙 실행하면 HQ 포탈에서 최신 코드(agent-bundle)를 받아 코드 디렉터리에
+        덮어쓰고 서비스를 재시작한다. 데이터(스캔 DB·설정)는 data-dir 라 영향받지 않는다.
+        """
+        nid = str(raw.get("id") or "").strip()
+        edge_dir = (raw.get("edge_dir") or "/opt/isilon_edge").strip()
+        service = (raw.get("service") or "isilon_usage").strip()
+        hq_base = (raw.get("hq_base") or "").strip()
+        script = build_upgrade_script(hq_base=hq_base, edge_dir=edge_dir, service=service)
+        node_version = None
+        if nid:
+            with self._lock:
+                node_version = (self._cache.get(nid) or {}).get("version")
+        return {"ok": True, "script": script, "hq_version": __version__,
+                "node_version": node_version, "edge_dir": edge_dir, "service": service}
+
+    def upgrade_ssh(self, raw: dict) -> dict:
+        """[옵션] SSH 로 엣지에 접속해 업그레이드 스크립트를 실행한다."""
+        plan = self.upgrade_plan(raw)
+        if not plan.get("ok"):
+            return plan
+        return dict(plan, **self._ssh_run(raw, plan["script"]))
 
     # --- 경로 비교(Cross-DC) — 복제본 DB 를 경로로 조인 ---
     @staticmethod
@@ -965,6 +1029,12 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/portal/provision/ssh":
                 self._send_json(c.provision_ssh(body))
+                return
+            if path == "/api/portal/upgrade":
+                self._send_json(c.upgrade_plan(body))
+                return
+            if path == "/api/portal/upgrade/ssh":
+                self._send_json(c.upgrade_ssh(body))
                 return
             self._send_json({"ok": False, "reason": "unknown_endpoint"}, status=404)
         except ConnectionError:

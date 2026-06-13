@@ -177,6 +177,43 @@
   </div>
 
   <div class="card" style="margin-bottom:14px;">
+    <h2>🔄 원격 버전 업그레이드 — 엣지를 HQ 최신 코드로</h2>
+    <div class="sub" style="margin-bottom:8px;">HQ 포탈의 현재 코드로 엣지를 올립니다 — 최신 코드(agent-bundle)를 받아 코드 디렉터리에 덮어쓰고 서비스를 재시작합니다(스캔 DB·설정은 data-dir 라 보존). 노드 버전은 아래 표의 ‘버전’ 열에서 확인하세요.</div>
+    <div class="setgrid">
+      <label class="fld">대상 노드 id(표시용·선택)<input id="ugId" class="inp mono" placeholder="(노드 id)" /></label>
+      <label class="fld">엣지 코드 디렉터리<input id="ugDir" class="inp mono" value="/opt/isilon_edge" /></label>
+      <label class="fld">systemd 서비스명<input id="ugSvc" class="inp mono" value="isilon_usage" /></label>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center;">
+      <button id="ugGenBtn" class="primary">① 업그레이드 스크립트 생성</button>
+      <span class="sub" id="ugMsg"></span>
+    </div>
+    <div id="ugScriptWrap" style="display:none; margin-top:10px;">
+      <div class="sub" style="margin-bottom:4px;">아래를 <b>해당 엣지 서버에서 1회 복붙 실행</b>하세요.</div>
+      <textarea id="ugScript" class="inp mono" style="width:100%; height:180px; white-space:pre;" readonly></textarea>
+      <div style="display:flex; gap:8px; margin-top:6px; align-items:center;">
+        <button id="ugCopy">📋 복사</button><span class="sub" id="ugCopyMsg"></span>
+      </div>
+    </div>
+    <details style="margin-top:12px;">
+      <summary class="sub" style="cursor:pointer;">[옵션 B] SSH로 원격 업그레이드 실행 — 보안 주의</summary>
+      <div class="note" style="margin:8px 0; border-color:#5a3030; color:#f0b0b0;">
+        ⚠ 포탈이 SSH로 접속해 위 스크립트를 실행합니다. <b>비밀번호는 1회만</b> 쓰고 저장하지 않습니다. 신뢰망·키 인증 권장.
+      </div>
+      <div class="setgrid">
+        <label class="fld">원격 IP/주소<input id="ugHost" class="inp mono" placeholder="192.168.40.221" /></label>
+        <label class="fld">SSH 사용자<input id="ugSshUser" class="inp mono" placeholder="root" /></label>
+        <label class="fld">SSH 포트<input id="ugSshPort" class="inp mono" type="number" value="22" /></label>
+        <label class="fld">비밀번호(키 인증이면 비움)<input id="ugSshPass" class="inp mono" type="password" placeholder="(키 인증 시 비움)" /></label>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:10px; align-items:center;">
+        <button id="ugSshBtn">② SSH로 업그레이드 실행</button><span class="sub" id="ugSshMsg"></span>
+      </div>
+      <pre id="ugSshOut" class="note mono" style="display:none; white-space:pre-wrap; max-height:260px; overflow:auto; margin-top:8px;"></pre>
+    </details>
+  </div>
+
+  <div class="card" style="margin-bottom:14px;">
     <h2>글로벌 노드 추가 / 수정</h2>
     <div class="setgrid">
       <label class="fld">노드 이름(고유)<input id="nId" class="inp mono" placeholder="dc-tokyo" /></label>
@@ -266,7 +303,7 @@ function updateLoginUI(){
       btn.textContent="🔓 로그아웃 ("+(m>0?m+"분":_opLeft()+"초")+")"; }
     else btn.textContent="🔑 로그인";
   }
-  ["addBtn","testBtn","pvGenBtn","pvSshBtn","setPwBtn"].forEach(id=>{ const e=$(id); if(e) e.disabled=ro; });
+  ["addBtn","testBtn","pvGenBtn","pvSshBtn","setPwBtn","ugGenBtn","ugSshBtn"].forEach(id=>{ const e=$(id); if(e) e.disabled=ro; });
 }
 async function loadAuth(){
   try{ const j=await (await _origFetch("/api/portal/auth",{cache:"no-store"})).json();
@@ -610,6 +647,32 @@ $("pvSshBtn").addEventListener("click", async ()=>{
     loadNodes(); loadOverview();
   }catch(e){ $("pvSshMsg").textContent="✗ "+e; }
   $("pvSshBtn").disabled=false;
+});
+
+// ---- 원격 버전 업그레이드 ----
+function ugPayload(){ return {id:$("ugId").value.trim(), hq_base:location.origin, edge_dir:$("ugDir").value.trim(),
+  service:$("ugSvc").value.trim(), host:$("ugHost").value.trim(), ssh_user:$("ugSshUser").value.trim(),
+  ssh_port:$("ugSshPort").value.trim(), ssh_password:$("ugSshPass").value}; }
+$("ugGenBtn").addEventListener("click", async()=>{
+  $("ugMsg").textContent=" 생성 중…";
+  try{ const j=await (await fetch("/api/portal/upgrade",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify(ugPayload())})).json();
+    if(j.ok){ $("ugScript").value=j.script; $("ugScriptWrap").style.display="";
+      $("ugMsg").textContent=" ✓ HQ v"+(j.hq_version||"?")+(j.node_version?(" · 노드 v"+j.node_version):""); }
+    else $("ugMsg").textContent=" ✗ "+(j.reason||j.error||"실패"); }
+  catch(e){ $("ugMsg").textContent=" ✗ "+e; }
+});
+$("ugCopy").addEventListener("click", ()=>{ const t=$("ugScript"); t.select(); t.setSelectionRange(0,99999);
+  try{ document.execCommand("copy"); $("ugCopyMsg").textContent=" 복사됨"; }catch(e){} });
+$("ugSshBtn").addEventListener("click", async()=>{
+  if(!$("ugHost").value.trim()){ $("ugSshMsg").textContent=" 원격 IP 필요"; return; }
+  $("ugSshBtn").disabled=true; $("ugSshMsg").textContent=" SSH 업그레이드 중…";
+  try{ const j=await (await fetch("/api/portal/upgrade/ssh",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify(ugPayload())})).json();
+    $("ugSshMsg").textContent=j.ok?" ✓ 완료":(" ✗ "+(j.reason||("종료코드 "+j.returncode)));
+    if(j.output){ $("ugSshOut").style.display=""; $("ugSshOut").textContent=j.output; } }
+  catch(e){ $("ugSshMsg").textContent=" ✗ "+e; }
+  $("ugSshBtn").disabled=false;
 });
 
 function tickClock(){ const el=$("clock"); if(el) el.textContent=new Date().toLocaleString("ko-KR",{hour12:false}); }
