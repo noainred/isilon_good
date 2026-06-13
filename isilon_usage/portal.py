@@ -401,12 +401,48 @@ class PortalController:
         return newest
 
     # --- 글로벌 롤업 ---
+    @staticmethod
+    def _fs_capacity(roots_l):
+        """노드의 파일시스템 사용/전체 용량. 같은 FS(같은 total)는 한 번만 센다."""
+        seen = {}   # fs_total -> 최대 fs_used
+        for rt in roots_l:
+            ftot = int(rt.get("fs_total_bytes") or 0)
+            if ftot <= 0:
+                continue
+            fused = int(rt.get("fs_used_bytes") or 0)
+            if ftot not in seen or fused > seen[ftot]:
+                seen[ftot] = fused
+        ftot = sum(seen.keys())
+        fused = sum(seen.values())
+        pct = round(fused / ftot * 100, 1) if ftot else None
+        return ftot, fused, max(0, ftot - fused), pct
+
+    @staticmethod
+    def _running_scan(roots_l):
+        """진행 중(discovering/sizing) 스캔의 시작 시각·경과·단계 요약(없으면 None)."""
+        act = [rt for rt in roots_l if rt.get("status") in ("discovering", "sizing")]
+        if not act:
+            return None
+        rep = min(act, key=lambda rt: float(rt.get("started_at") or 9e18))
+        started = min((float(rt.get("started_at") or 0) for rt in act
+                       if rt.get("started_at")), default=0) or None
+        updated = max((float(rt.get("updated_at") or 0) for rt in act), default=0) or None
+        return {
+            "started_at": started, "updated_at": updated,
+            "phase": rep.get("phase"), "root_path": rep.get("root_path"),
+            "processed_dirs": int(rep.get("processed_dirs") or 0),
+            "total_dirs": int(rep.get("total_dirs") or 0),
+            "count": len(act),
+        }
+
     def overview(self) -> dict:
         with self._lock:
             cache = dict(self._cache)
             nodes_snapshot = list(self.nodes)
         regions = {}
         total_used = 0
+        total_fs_total = 0
+        total_fs_used = 0
         storages = 0
         online = 0
         active = 0
@@ -429,6 +465,9 @@ class PortalController:
             roots_l = ov.get("roots") or []
             last_scan = max([0] + [max(rt.get("finished_at") or 0, rt.get("updated_at") or 0)
                                    for rt in roots_l])     # 그 DC 가 마지막으로 스캔한 시각
+            fs_total, fs_used, fs_free, fs_pct = self._fs_capacity(roots_l)
+            total_fs_total += fs_total
+            total_fs_used += fs_used
             out_nodes.append({
                 "id": n["id"], "region": n.get("region"), "url": n["url"],
                 "enabled": n.get("enabled"), "online": is_on,
@@ -438,6 +477,9 @@ class PortalController:
                 "last_error": n.get("last_error") or c.get("error") or "",
                 "used_bytes": used, "storages": st,
                 "active_scans": int(ov.get("active_scans") or 0),
+                "fs_total_bytes": fs_total, "fs_used_bytes": fs_used,
+                "fs_free_bytes": fs_free, "fs_used_pct": fs_pct,
+                "running": self._running_scan(roots_l),
                 "roots": roots_l,
                 "isilon": c.get("isilon") or {"configured": False},
                 "storage": c.get("storage") or [],
@@ -446,11 +488,51 @@ class PortalController:
             "ok": True,
             "version": __version__,
             "totals": {"used_bytes": total_used, "storages": storages,
+                       "fs_total_bytes": total_fs_total, "fs_used_bytes": total_fs_used,
                        "nodes_online": online, "nodes_total": len(nodes_snapshot),
                        "active_scans": active},
             "regions": sorted(regions.values(), key=lambda x: -x["used_bytes"]),
             "nodes": out_nodes,
         }
+
+    # --- 노드 응답시간(핑) ---
+    def ping_nodes(self) -> dict:
+        """각 노드로 HQ→노드 왕복 응답시간(ms)을 측정한다(가벼운 meta 요청 기준).
+
+        포탈이 능동적으로 잴 수 있는 건 'HQ→각 노드' 지연이다. 엣지끼리의
+        DC↔DC 메시 핑은 엣지 협조가 필요해 지원하지 않는다(여기선 미측정).
+        여러 노드를 동시에(스레드풀) 측정해 전체 소요를 줄인다.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        with self._lock:
+            nodes_snapshot = list(self.nodes)
+
+        def _one(n):
+            entry = {"id": n["id"], "region": n.get("region"), "url": n["url"],
+                     "online": False, "latency_ms": None, "error": ""}
+            if not n.get("enabled"):
+                entry["error"] = "비활성"
+                return entry
+            t0 = time.monotonic()
+            try:
+                _probe_meta(n["url"], n.get("token"), timeout=8.0)
+                entry["online"] = True
+                entry["latency_ms"] = round((time.monotonic() - t0) * 1000, 1)
+            except urllib.error.HTTPError as e:   # 응답이 왔으니 도달은 됨
+                entry["latency_ms"] = round((time.monotonic() - t0) * 1000, 1)
+                entry["online"] = True
+                entry["error"] = "인증 실패" if e.code == 401 else ("HTTP %d" % e.code)
+            except Exception as e:  # noqa: BLE001
+                entry["error"] = str(e)
+            return entry
+
+        if nodes_snapshot:
+            with ThreadPoolExecutor(max_workers=min(16, len(nodes_snapshot))) as ex:
+                results = list(ex.map(_one, nodes_snapshot))
+        else:
+            results = []
+        return {"ok": True, "results": results, "checked_at": time.time()}
 
     # --- 경로 비교(Cross-DC) — 복제본 DB 를 경로로 조인 ---
     @staticmethod
@@ -611,6 +693,9 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/portal/overview":
                 self._send_json(c.overview())
+                return
+            if path == "/api/portal/ping":
+                self._send_json(c.ping_nodes())
                 return
             if path == "/api/portal/compare":
                 qp = parse_qs(urlparse(self.path).query).get("path", [""])[0]

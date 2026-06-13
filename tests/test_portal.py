@@ -90,6 +90,16 @@ def main() -> int:
         assert ov["totals"]["storages"] >= 1 and ov["totals"]["used_bytes"] > 0, ov["totals"]
         node = ov["nodes"][0]
         assert node["online"] and node["region"] == "아시아/서울", node
+        # 6b) 용량(fs 사용/전체) + 진행 요약 필드 노출
+        for k in ("fs_total_bytes", "fs_used_bytes", "fs_used_pct", "running"):
+            assert k in node, (k, node)
+        assert "fs_total_bytes" in ov["totals"] and ov["totals"]["fs_total_bytes"] >= 0, ov["totals"]
+
+        # 6c) 노드 응답시간(핑) — 로컬 엣지라 빠르게 응답
+        pg = pc.ping_nodes()
+        assert pg["ok"] and pg["results"], pg
+        pr = pg["results"][0]
+        assert pr["id"] == "dc-test" and pr["online"] and pr["latency_ms"] is not None, pr
 
         # 7) 복제본(완료 DB + meta.json) 존재
         rep = os.path.join(portal_data, "replicas", "dc-test")

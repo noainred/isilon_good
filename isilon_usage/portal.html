@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>글로벌 통합 포탈 (HQ)</title>
+<title>다빈치 글로벌 아이실론 관제센터</title>
 <style>
   :root { --bg:#0f141b; --panel:#19212c; --panel2:#1f2937; --line:#2b3543;
     --text:#e6edf3; --muted:#8b98a9; --accent:#4f9cff; --accent2:#38d39f;
@@ -51,11 +51,20 @@
   .regcard { cursor:pointer; border:1px solid transparent; border-radius:9px; padding:6px 8px; }
   .regcard:hover { border-color:var(--line); }
   .regcard.active { border-color:var(--accent); background:#13202e; }
+  .capbar { position:relative; height:15px; background:#0d1219; border:1px solid var(--line);
+    border-radius:8px; overflow:hidden; min-width:84px; }
+  .capbar > i { position:absolute; top:0; bottom:0; left:0; border-radius:8px 0 0 8px; transition:width .4s ease; }
+  .capbar > b { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    font-size:10.5px; font-weight:700; color:#eaf2fb; text-shadow:0 1px 2px #000a; }
+  .pill { display:inline-block; padding:1px 7px; border-radius:999px; font-size:10.5px;
+    font-weight:700; border:1px solid var(--line); white-space:nowrap; }
+  .fresh-ok { color:#52e0a0; } .fresh-warn { color:#f5c150; } .fresh-old { color:#ff8b8b; }
+  #clock { color:#9fc2e8; letter-spacing:.3px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>🌐 글로벌 통합 포탈 <span class="sub" style="font-weight:400">— 한국 HQ</span></h1>
+  <h1>🛰 다빈치 글로벌 아이실론 관제센터 <span class="sub" style="font-weight:400">— 한국 HQ</span></h1>
   <span class="sub" id="ver">—</span>
   <div class="spacer"></div>
   <nav>
@@ -63,6 +72,7 @@
     <button class="navbtn" data-view="compare">경로 비교</button>
     <button class="navbtn" data-view="nodes">노드 설정</button>
   </nav>
+  <span class="sub mono" id="clock" style="min-width:152px; text-align:right;"></span>
   <button id="refreshBtn" title="새로고침">↻</button>
 </header>
 
@@ -76,19 +86,27 @@
   </div>
 
   <div class="card" style="margin-bottom:14px;">
+    <h2>전체 스토리지 용량 (전 DC) <span class="sub" id="capLabel" style="float:right; font-weight:400;"></span></h2>
+    <div class="capbar" style="height:24px; border-radius:10px;"><i id="capFill" style="width:0"></i><b id="capPct">—</b></div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px;">
     <h2>지역별 롤업</h2>
     <div class="grid cols-4" id="regions"><div class="sub">—</div></div>
   </div>
 
   <div class="card">
-    <h2>데이터센터별 사용량 — 행 클릭=스토리지 펼침 · 지역 카드=필터 · 머리글=정렬 <span class="sub" id="updAt" style="float:right; font-weight:400;"></span></h2>
+    <h2>데이터센터별 사용량 — 행 클릭=스토리지 펼침 · 지역 카드=필터 · 머리글=정렬
+      <span style="float:right; font-weight:400;"><button id="pingBtn" style="padding:3px 9px;">📡 Ping 체크</button> <span class="sub" id="updAt"></span></span></h2>
+    <div class="sub" id="pingNote" style="margin:-4px 0 8px;"></div>
     <table id="nodeTable">
       <thead><tr>
         <th class="sortable" data-nsort="id" data-label="노드">노드</th>
         <th class="sortable" data-nsort="region" data-label="지역">지역</th>
         <th class="num sortable" data-nsort="storages" data-label="스토리지">스토리지</th>
-        <th class="num sortable" data-nsort="used_bytes" data-label="사용">사용</th>
-        <th>버전</th><th>마지막 동기화</th><th>마지막 스캔</th>
+        <th class="num sortable" data-nsort="used_bytes" data-label="조사 용량">조사 용량</th>
+        <th class="sortable" data-nsort="fs_used_pct" data-label="용량(사용률)">용량(사용률)</th>
+        <th>마지막 동기화</th><th>마지막 스캔</th>
         <th class="sortable" data-nsort="status" data-label="상태">상태</th><th></th></tr></thead>
       <tbody id="nodeRows"><tr><td colspan="9" class="sub">불러오는 중…</td></tr></tbody>
     </table>
@@ -177,17 +195,47 @@ function fmtBytes(n){ n=Number(n||0); const u=["B","KB","MB","GB","TB","PB"]; le
 function fmtNum(n){ return Number(n||0).toLocaleString(); }
 function ago(ts){ if(!ts) return "—"; const s=Math.max(0,(Date.now()/1000-ts));
   if(s<60) return Math.floor(s)+"초 전"; if(s<3600) return Math.floor(s/60)+"분 전"; return Math.floor(s/3600)+"시간 전"; }
+function fmtDur(sec){ sec=Math.max(0,Math.floor(sec||0)); const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;
+  return h?(h+"시간 "+m+"분"):(m?(m+"분 "+s+"초"):(s+"초")); }
+function fmtClock(ts){ if(!ts) return "—"; const d=new Date(ts*1000);
+  return d.toLocaleString("ko-KR",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}); }
+function freshClass(ts){ if(!ts) return ""; const s=Date.now()/1000-ts;
+  return s<120?"fresh-ok":(s<900?"fresh-warn":"fresh-old"); }
+function capColor(p){ return p>=90?"#ff5c5c":(p>=75?"#f5a623":"#38d39f"); }
+function capCell(used,total){
+  if(!total) return '<span class="sub">—</span>';
+  const p=Math.min(100, used/total*100), c=capColor(p);
+  return `<div class="capbar" title="사용 ${fmtBytes(used)} / 전체 ${fmtBytes(total)} (${p.toFixed(1)}%)">
+      <i style="width:${p.toFixed(1)}%;background:${c}"></i><b>${p.toFixed(0)}%</b></div>
+      <div class="sub mono" style="white-space:nowrap;margin-top:2px;">${fmtBytes(used)} / ${fmtBytes(total)}</div>`;
+}
 function show(v){ ["dash","compare","nodes"].forEach(n=>$("view-"+n).classList.toggle("active", n===v));
   if(v==="compare") loadCompare();
   document.querySelectorAll(".navbtn").forEach(b=>b.classList.toggle("active", b.dataset.view===v)); }
 document.querySelectorAll(".navbtn").forEach(b=>b.addEventListener("click",()=>show(b.dataset.view)));
 
 let pOverview=null, regionFilter="", nodeSort="used_bytes", nodeOrder="desc";
+let pingResults={};
 async function loadOverview(){
   try {
     const j = await (await fetch("/api/portal/overview",{cache:"no-store"})).json();
     if(!j.ok) return; pOverview=j; renderPortalDash();
   } catch(e){ /* 무시 */ }
+}
+async function loadPing(){
+  const btn=$("pingBtn"); if(btn){ btn.disabled=true; btn.textContent="📡 핑 측정 중…"; }
+  try {
+    const j = await (await fetch("/api/portal/ping",{cache:"no-store"})).json();
+    if(j.ok){
+      pingResults={}; (j.results||[]).forEach(r=>pingResults[r.id]=r);
+      const on=(j.results||[]).filter(r=>r.latency_ms!=null);
+      const avg=on.length? Math.round(on.reduce((a,r)=>a+r.latency_ms,0)/on.length):0;
+      if($("pingNote")) $("pingNote").textContent =
+        `📡 HQ→노드 왕복 응답시간 · ${on.length}/${(j.results||[]).length} 응답 · 평균 ${avg} ms · 방금 측정 (DC↔DC 메시 아님)`;
+      renderPortalDash();
+    }
+  } catch(e){ /* 무시 */ }
+  if(btn){ btn.disabled=false; btn.textContent="📡 Ping 체크"; }
 }
 function statRank(n){ return n.online ? (n.active_scans>0?2:1) : 0; }
 function scanProgress(r){   // 루트별 스캔 단계/진행률
@@ -205,6 +253,11 @@ function renderPortalDash(){
   const t=j.totals||{};
   $("kUsed").textContent=fmtBytes(t.used_bytes); $("kStorages").textContent=fmtNum(t.storages);
   $("kNodes").textContent=(t.nodes_online||0)+" / "+(t.nodes_total||0); $("kActive").textContent=fmtNum(t.active_scans);
+  // 전체 스토리지 용량 바(사용/전체 · %)
+  const ft=t.fs_total_bytes||0, fu=t.fs_used_bytes||0, fp=ft?Math.min(100,fu/ft*100):0;
+  if($("capFill")){ $("capFill").style.width=fp.toFixed(1)+"%"; $("capFill").style.background=capColor(fp); }
+  if($("capPct")) $("capPct").textContent = ft? (fp.toFixed(1)+"%") : "용량 정보 없음";
+  if($("capLabel")) $("capLabel").textContent = ft? ("사용 "+fmtBytes(fu)+" / 전체 "+fmtBytes(ft)+" · 여유 "+fmtBytes(ft-fu)) : "(엣지에서 fs 용량 미수집)";
   // 지역 카드(클릭 = 필터 토글)
   $("regions").innerHTML = (j.regions||[]).map(r=>
     `<div class="regcard${regionFilter===r.region?' active':''}" data-region="${r.region}">
@@ -245,15 +298,30 @@ function renderPortalDash(){
       a.type === "isilon" ? "🟦" : "🟧"} ${a.label||a.type} ${
       a.ok ? `<b>${a.name||"?"}</b> · ${a.version||""} · 노드 ${(a.nodes&&a.nodes.online)!=null?a.nodes.online:"?"}/${(a.nodes&&a.nodes.total)!=null?a.nodes.total:"?"} · 용량 ${(a.capacity&&a.capacity.used_pct!=null)?a.capacity.used_pct+"%":"—"} · 이벤트/알림 ${a.events_unresolved!=null?a.events_unresolved:"—"} · ${a.health==="ok"?"정상":"주의"}`
            : `연결 실패: ${a.error||""}`}</td></tr>`).join("");
-    const roots = arrRows + (n.roots||[]).map(r=>
-      `<tr class="rr-${idx}" style="display:none; background:#121a24;"><td></td>
-        <td colspan="8" class="sub mono">📁 ${r.root_path} — 사용 ${fmtBytes(r.scanned_bytes)} / fs ${fmtBytes(r.fs_used_bytes)} · ${scanProgress(r)}${r.finished_at?(" · 완료 "+ago(r.finished_at)):(r.updated_at?(" · 갱신 "+ago(r.updated_at)):"")}</td></tr>`).join("");
+    const roots = arrRows + (n.roots||[]).map(r=>{
+      const act=(r.status==="discovering"||r.status==="sizing");
+      const startTxt=(act&&r.started_at)?(" · 시작 "+fmtClock(r.started_at)+" · 진행 "+fmtDur((r.updated_at||r.started_at)-r.started_at)):"";
+      const fsTxt=r.fs_total_bytes?(" of "+fmtBytes(r.fs_total_bytes)+" ("+Math.round((r.fs_used_bytes||0)/r.fs_total_bytes*100)+"%)"):"";
+      return `<tr class="rr-${idx}" style="display:none; background:#121a24;"><td></td>
+        <td colspan="8" class="sub mono">📁 ${r.root_path} — 조사 ${fmtBytes(r.scanned_bytes)} · fs ${fmtBytes(r.fs_used_bytes)}${fsTxt} · ${scanProgress(r)}${startTxt}${r.finished_at?(" · 완료 "+ago(r.finished_at)):(r.updated_at?(" · 갱신 "+ago(r.updated_at)):"")}</td></tr>`;
+    }).join("");
+    const outdated = j.version && n.version && n.version!==j.version;
+    const verBadge = n.version
+      ? ` <span class="pill" title="${outdated?('구버전 — 포탈 v'+j.version):'버전'}" style="color:${outdated?'#f0c86a':'#9fb3c8'};border-color:${outdated?'#6a5a25':'var(--line)'}">v${n.version}${outdated?' ⬆':''}</span>`
+      : "";
+    const pr=pingResults[n.id];
+    const pingB = pr ? (pr.latency_ms!=null
+        ? ` <span class="pill" title="HQ→노드 왕복${pr.error?(' · '+pr.error):''}" style="color:${pr.latency_ms<150?'#7be0aa':(pr.latency_ms<600?'#f0c86a':'#ff9a9a')};border-color:${pr.latency_ms<150?'#2f6f50':(pr.latency_ms<600?'#6a5a25':'#7a3030')}">${pr.latency_ms} ms</span>`
+        : ` <span class="pill" title="${pr.error||'실패'}" style="color:#ff9a9a;border-color:#7a3030">✕</span>`) : "";
+    const rn=n.running;
+    const runLine = rn ? `<div class="sub" style="white-space:nowrap; margin-top:3px;">⏱ ${fmtDur((rn.updated_at||rn.started_at||0)-(rn.started_at||0))} · 시작 ${fmtClock(rn.started_at)}</div>` : "";
     return `<tr class="noderow" data-idx="${idx}" style="cursor:pointer;" title="클릭하면 스토리지/어레이 펼침">
-      <td><b>${n.id}</b>${arrBadges} <span class="sub mono">${n.hostname||""}</span></td><td>${n.region||"—"}</td>
+      <td><b>${n.id}</b>${verBadge}${arrBadges}<div class="sub mono">${n.hostname||""}</div></td><td>${n.region||"—"}</td>
       <td class="num">▸ ${fmtNum(n.storages)}</td><td class="num">${fmtBytes(n.used_bytes)}</td>
-      <td class="sub">${n.version?("v"+n.version):"—"}</td><td class="sub">${ago(n.last_poll)}</td>
+      <td>${capCell(n.fs_used_bytes,n.fs_total_bytes)}</td>
+      <td class="sub ${freshClass(n.last_poll)}">${ago(n.last_poll)}</td>
       <td class="sub">${ago(n.last_scan_at)}</td>
-      <td>${st}</td><td>${open}</td></tr>` + roots +
+      <td>${st}${pingB}${runLine}</td><td>${open}</td></tr>` + roots +
       (n.last_error ? `<tr><td colspan="9" class="sub" style="color:#ff9a9a">${n.id}: ${n.last_error}</td></tr>` : "");
   }).join("") : '<tr><td colspan="9" class="sub">표시할 노드가 없습니다.</td></tr>';
   $("nodeRows").querySelectorAll("tr.noderow").forEach(tr=>tr.addEventListener("click",e=>{
@@ -387,6 +455,7 @@ $("cmpRun").addEventListener("click", ()=>loadCompare($("cmpPath").value.trim())
 $("cmpPath").addEventListener("keydown", e=>{ if(e.key==="Enter") loadCompare($("cmpPath").value.trim()); });
 $("cmpRoot").addEventListener("click", ()=>{ const up=cmpCur.replace(/\/[^/]+$/,""); loadCompare(up||"/"); });
 $("refreshBtn").addEventListener("click", ()=>{ loadOverview(); loadNodes(); });
+$("pingBtn").addEventListener("click", loadPing);
 $("nodeTable").querySelectorAll("th[data-nsort]").forEach(th=>th.addEventListener("click",()=>{
   const c=th.dataset.nsort;
   if(nodeSort===c) nodeOrder=(nodeOrder==="desc")?"asc":"desc";
@@ -397,6 +466,8 @@ $("nUnit").addEventListener("change", updateNUnit);
 ["nEvery","nAt","nMonth","nDay"].forEach(id=>$(id).addEventListener("input", updateNUnit));
 buildNW(); fillNSel("nMonth",12,"월"); fillNSel("nDay",31,"일"); updateNUnit();
 
+function tickClock(){ const el=$("clock"); if(el) el.textContent=new Date().toLocaleString("ko-KR",{hour12:false}); }
+tickClock(); setInterval(tickClock,1000);
 loadOverview(); loadNodes();
 setInterval(()=>{ loadOverview(); loadNodes(); }, 5000);
 </script>
