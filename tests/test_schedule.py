@@ -68,6 +68,28 @@ def main() -> int:
     sc = s["schedules"][0]
     assert sc["unit"] == "minute" and sc["every"] == 45, sc
 
+    # ---- 시차 배치(stagger_schedules) ----
+    scheds = [
+        {"path": "/n1", "unit": "minute", "every": 60, "enabled": True, "last_run": 0},
+        {"path": "/n2", "unit": "minute", "every": 60, "enabled": True, "last_run": 0},
+        {"path": "/n3", "unit": "day", "every": 1, "at": "02:00", "enabled": True},
+        {"path": "/n4", "unit": "day", "every": 1, "at": "02:00", "enabled": True},
+        {"path": "/n5", "unit": "minute", "every": 60, "enabled": False, "last_run": 0},
+    ]
+    st = setmod.stagger_schedules(scheds)
+    assert scheds[0]["last_run"] == 0                       # 원본 비변형
+    lr = [s["last_run"] for s in st if s["path"] in ("/n1", "/n2")]
+    assert lr[0] != lr[1], lr                               # 간격형 위상 분산
+    ats = [s["at"] for s in st if s["path"] in ("/n3", "/n4")]
+    assert ats == ["02:00", "02:00"], ats                  # 달력형 at 은 보존(같은 날 중복실행 방지)
+    n5 = [s for s in st if s["path"] == "/n5"][0]
+    assert n5["last_run"] == 0                              # 비활성은 건드리지 않음
+    # 간격형 위상: 활성 2개의 다음 실행이 주기(60분) 안에서 분산 + 즉시 실행 안 함
+    for s in st:
+        if s["path"] in ("/n1", "/n2"):
+            assert s["last_run"] < dt.datetime.now().timestamp()   # 과거(곧 실행 대기)
+    print("[schedule] OK  stagger 시차 배치(간격형만 위상 분산, 달력형 at 보존)")
+
     print("[schedule] OK  분/시간/일/주/개월 반복주기 판정 통과")
     print("모든 테스트 통과 ✅")
     return 0

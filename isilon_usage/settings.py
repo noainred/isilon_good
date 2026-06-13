@@ -288,6 +288,32 @@ def schedule_due(sc: dict, now: float) -> bool:
     return False
 
 
+def stagger_schedules(schedules: list) -> list:
+    """활성 '간격형'(minute/hour) 예약들을 서로 다른 시각에 돌도록 위상을 분산한다.
+
+    한 서버에서 여러 NAS 를 짧은 주기로 예약 스캔할 때 동시에 시작하면 GIL/단일 DB
+    직렬화로 경합만 커진다. 그래서 같은 unit 의 간격형 예약들의 '다음 실행 시각'을
+    주기 안에서 고르게 분산한다(last_run 조정).
+
+    달력형(day/week/month)은 사용자가 지정한 시각(at)을 그대로 둔다 — at 을 임의로
+    밀면 '오늘 이미 실행한 슬롯'을 다시 깨워 같은 날 중복 실행될 수 있기 때문이다
+    (달력형끼리 겹치면 예약 화면에서 시각을 다르게 지정하면 된다).
+    원본을 변형하지 않고 보정된 새 리스트를 돌려준다(호출 측이 저장).
+    """
+    out = [dict(s) for s in (schedules or [])]
+    now = _time.time()
+    active = [s for s in out if s.get("enabled", True)]
+    for unit, mult in (("minute", 60), ("hour", 3600)):
+        grp = [s for s in active if s.get("unit") == unit]
+        n = len(grp)
+        for i, s in enumerate(grp):
+            every = max(1, int(s.get("every", 1) or 1))
+            period = every * mult
+            # 다음 실행 = now + period*(i+1)/(n+1) (즉시 실행 방지 + 균등 분산)
+            s["last_run"] = now - period + period * (i + 1) / (n + 1)
+    return out
+
+
 def load(data_dir: str) -> dict:
     """설정을 읽는다(파일이 없거나 깨졌으면 기본값)."""
     s = dict(DEFAULTS)

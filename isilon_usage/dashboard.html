@@ -243,6 +243,24 @@
     </table>
   </div>
 
+  <!-- NAS별 현황 (한 서버에서 여러 NAS 점검) -->
+  <div class="card" id="nasCard" style="margin-bottom:14px;">
+    <h2>NAS별 현황 <span class="sub" style="font-weight:normal;">— 한 서버에서 여러 NAS 점검</span></h2>
+    <div class="sub" style="margin-bottom:8px;">
+      허용 경로(mount_bases)로 등록한 NAS 와 스캔된 루트를 한눈에. 미점검 NAS 는 “지금 스캔”으로 시작.
+      <button id="staggerBtn" style="margin-left:8px; padding:2px 8px; font-size:11.5px;"
+              title="여러 NAS 예약을 서로 다른 시각에 돌도록 시차 배치(GIL 경합 완화)">예약 시차 배치</button>
+      <span id="staggerMsg" class="sub"></span>
+    </div>
+    <table>
+      <thead><tr>
+        <th>NAS (경로)</th><th class="num">디스크 사용</th><th class="num">사용%</th>
+        <th class="num">파일 수</th><th>마지막 스캔</th><th>예약</th><th>상태</th><th>작업</th>
+      </tr></thead>
+      <tbody id="nasBody"><tr><td colspan="8" style="color:var(--muted)">로딩 중…</td></tr></tbody>
+    </table>
+  </div>
+
   <!-- 새 스캔 시작 (웹에서 디렉터리 지정) -->
   <div class="card" id="startCard" style="margin-bottom:14px; display:none;">
     <h2>새 스캔 시작 — 조사할 디렉터리 지정</h2>
@@ -2628,6 +2646,8 @@ function renderOverview(j) {
       }));
   }
 
+  renderNas(roots);   // NAS별 현황 — 같은 /api/scans 데이터로 클라이언트 렌더(추가 요청 없음)
+
   // 스캔 선택기 채우기
   const sel = $("scanSelect");
   const scans = j.scans || [];
@@ -2770,6 +2790,76 @@ async function poll() {
   } finally {
     _statusInFlight = false;
   }
+}
+
+// ---- NAS별 현황 (한 서버에서 여러 NAS 점검) — /api/scans 데이터로 클라이언트 렌더 ----
+// 추가 요청 없이 개요(roots) + 허용 경로(mountBases) + 예약(schedules) 을 조인한다.
+function renderNas(roots) {
+  const byRoot = {};
+  (roots || []).forEach(r => { byRoot[r.root_path] = r; });
+  const schByPath = {};
+  (schedules || []).forEach(s => { if (s.path && !(s.path in schByPath)) schByPath[s.path] = s; });
+  const rows = [], seen = new Set();
+  const add = (path, configured) => {
+    if (!path || seen.has(path)) return;
+    seen.add(path);
+    rows.push({path, configured, r: byRoot[path], s: schByPath[path]});
+  };
+  (mountBases || []).forEach(p => add(p, true));        // 선언된 NAS(허용 경로) 먼저
+  (roots || []).forEach(r => add(r.root_path, false));  // 그 외 스캔된 루트
+  const body = $("nasBody");
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="8" style="color:var(--muted)">'
+      + '등록된 NAS(허용 경로)나 스캔된 루트가 없습니다. 설정에서 mount_bases 를 추가하세요.</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map((row, idx) => {
+    const r = row.r, s = row.s;
+    const usedPct = (r && r.fs_total_bytes > 0)
+      ? (r.fs_used_bytes / r.fs_total_bytes * 100).toFixed(1) + "%" : "—";
+    const endt = r && (r.finished_at || r.updated_at);
+    const last = endt ? new Date(endt * 1000).toLocaleString("ko-KR") : "—";
+    const sch = s
+      ? (scheduleSummary(s) + (s.enabled === false ? ' <span class="sub">(중지)</span>' : ''))
+      : '<span class="sub">없음</span>';
+    const st = r ? (statusKo[r.status] || r.status) : '<span class="sub">미점검</span>';
+    const tag = row.configured ? '★ ' : '';
+    // data-idx(정수)로 경로를 전달 — 경로에 따옴표가 있어도 잘못된 대상 스캔을 막는다
+    const act = canScan
+      ? `<button class="nasScan" data-idx="${idx}" style="padding:2px 8px; font-size:11.5px;">지금 스캔</button>`
+      : "—";
+    return `<tr>
+      <td class="path" title="${row.path}">${tag}${row.path}</td>
+      <td class="num">${r ? fmtBytes(r.fs_used_bytes) : "—"}</td>
+      <td class="num">${usedPct}</td>
+      <td class="num">${r ? fmtNum(r.total_files) : "—"}</td>
+      <td>${last}</td>
+      <td>${sch}</td>
+      <td>${st}</td>
+      <td>${act}</td>
+    </tr>`;
+  }).join("");
+  body.querySelectorAll("button.nasScan").forEach(b =>
+    b.addEventListener("click", () => startScanPath(rows[parseInt(b.dataset.idx)].path)));
+}
+
+async function startScanPath(path) {
+  if (!path) return;
+  if (!confirm(path + "\n경로를 지금 스캔할까요?")) return;
+  $("scanPath").value = path;
+  await startScan();          // 기존 스캔 시작 로직 재사용(옵션·잠금 처리 그대로)
+}
+
+async function staggerSchedules() {
+  const msg = $("staggerMsg");
+  msg.textContent = " 배치 중…";
+  try {
+    const j = await (await fetch("/api/schedules/stagger", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: "{}",
+    })).json();
+    msg.textContent = j.ok ? ` ✓ 예약 ${j.staggered || 0}개를 시차 배치함` : (" 실패: " + (j.reason || j.error || ""));
+    if (j.ok && typeof loadSettings === "function") loadSettings();
+  } catch (e) { msg.textContent = " 요청 오류: " + e; }
 }
 
 function render(d) {
@@ -3022,6 +3112,7 @@ function schedule() {
 }
 $("refreshBtn").addEventListener("click", poll);
 $("autoChk").addEventListener("change", schedule);
+$("staggerBtn").addEventListener("click", staggerSchedules);
 // 잠금 배지: 잠겨 있으면 비밀번호로 해제, 해제됨이면 다시 잠금(토큰 제거)
 $("lockPill").addEventListener("click", async () => {
   if (_opToken() && _opLeft() > 0) { opRelock(); }

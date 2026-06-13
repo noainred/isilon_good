@@ -2188,6 +2188,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(result, status=200 if result.get("ok") else 403)
                 return
 
+            if path == "/api/schedules/stagger":
+                cur = list(self.controller.settings.get("schedules", []))
+                staggered = setmod.stagger_schedules(cur)
+                res = self.controller.update_settings({"schedules": staggered})
+                if res.get("ok"):
+                    res["staggered"] = sum(1 for s in staggered if s.get("enabled", True))
+                self._send_json(res, status=200 if res.get("ok") else 403)
+                return
+
             self._send_json({"ok": False, "reason": "unknown_endpoint"}, status=404)
         except ConnectionError:
             pass  # 클라이언트가 응답 도중 연결을 끊음 — 무시
