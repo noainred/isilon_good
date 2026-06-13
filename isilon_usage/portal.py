@@ -30,6 +30,7 @@ from urllib.parse import urlparse, parse_qs
 from . import __version__
 from . import db as dbmod
 from . import manager as mgrmod
+from . import auth as authmod
 from . import settings as setmod
 from .server import ThreadingHTTPServer  # 3.6 폴백 포함 재사용
 
@@ -46,6 +47,10 @@ FAR_FUTURE = 9999999999  # since 가 미래면 meta.json 만 받아 가볍게 �
 # --------------------------------------------------------------- 노드 레지스트리
 def nodes_path(data_dir: str) -> str:
     return os.path.join(data_dir, "portal_nodes.json")
+
+
+def portal_settings_path(data_dir: str) -> str:
+    return os.path.join(data_dir, "portal_settings.json")
 
 
 def sanitize_node(raw: dict) -> Optional[dict]:
@@ -261,6 +266,8 @@ class PortalController:
         self.replicas_dir = os.path.join(self.data_dir, "replicas")
         os.makedirs(self.replicas_dir, exist_ok=True)
         self.nodes = load_nodes(self.data_dir)
+        self.settings = self._load_settings()
+        self._auth = authmod.AuthGuard(lambda: self.settings.get("op_password"))
         self._cache = {}          # id -> {online, ts, version, hostname, overall, error}
         self._inflight = set()
         self._lock = threading.RLock()
@@ -268,6 +275,49 @@ class PortalController:
         self._thread = None
         self.poll_every = POLL_EVERY
         self.tick = SCHED_TICK
+
+    # --- 인증(작업 보호: 보기는 자유, 변경은 로그인) ---
+    def _load_settings(self) -> dict:
+        try:
+            with open(portal_settings_path(self.data_dir), encoding="utf-8") as fh:
+                s = json.load(fh)
+            if isinstance(s, dict):
+                return {"op_password": str(s.get("op_password") or ""),
+                        "op_password_encrypted": bool(s.get("op_password_encrypted", False))}
+        except (OSError, ValueError):
+            pass
+        return {"op_password": "", "op_password_encrypted": False}
+
+    def _save_settings(self) -> None:
+        os.makedirs(self.data_dir, exist_ok=True)
+        path = portal_settings_path(self.data_dir)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(self.settings, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+
+    def auth_required(self) -> bool:
+        return self._auth.required()
+
+    def auth_status(self) -> dict:
+        return {"ok": True, "op_required": self._auth.required(),
+                "encrypted": bool(self.settings.get("op_password_encrypted"))}
+
+    def login(self, password: str) -> dict:
+        return self._auth.login(password)
+
+    def token_valid(self, token) -> bool:
+        return self._auth.token_valid(token)
+
+    def set_password(self, new_password: str, encrypt: bool) -> dict:
+        """비밀번호 설정/변경/해제. 호출 측(핸들러)에서 인증을 확인한다."""
+        pw = str(new_password or "")
+        enc = bool(encrypt)
+        self.settings["op_password"] = authmod.store_password(pw, encrypt=enc) if pw else ""
+        self.settings["op_password_encrypted"] = enc if pw else False
+        self._save_settings()
+        return {"ok": True, "op_required": bool(self.settings["op_password"]),
+                "encrypted": self.settings["op_password_encrypted"]}
 
     # --- 레지스트리 CRUD ---
     def _get(self, nid: str):
@@ -834,6 +884,9 @@ class PortalHandler(BaseHTTPRequestHandler):
             return
         c = self.controller
         try:
+            if path == "/api/portal/auth":
+                self._send_json(c.auth_status())
+                return
             if path == "/api/portal/nodes":
                 self._send_json(c.list_nodes())
                 return
@@ -878,6 +931,23 @@ class PortalHandler(BaseHTTPRequestHandler):
         body = self._read_json_body()
         c = self.controller
         try:
+            if path == "/api/portal/login":
+                self._send_json(c.login(body.get("password") or ""))
+                return
+            # 비밀번호 설정/변경/해제 — 이미 설정돼 있으면 로그인 필요(첫 설정은 허용)
+            if path == "/api/portal/password":
+                if c.auth_required() and not c.token_valid(self.headers.get("X-Op-Token")):
+                    self._send_json({"ok": False, "reason": "locked", "op_required": True},
+                                    status=401)
+                    return
+                self._send_json(c.set_password(body.get("password") or "",
+                                               bool(body.get("encrypt"))))
+                return
+            # 그 외 변경 작업(노드 등록·삭제·동기화·원격 구성)은 로그인 필요
+            if c.auth_required() and not c.token_valid(self.headers.get("X-Op-Token")):
+                self._send_json({"ok": False, "reason": "locked", "op_required": True,
+                                 "error": "로그인 후 작업하세요."}, status=401)
+                return
             if path == "/api/portal/nodes":
                 self._send_json(c.upsert_node(body))
                 return

@@ -73,8 +73,17 @@
     <button class="navbtn" data-view="nodes">노드 설정</button>
   </nav>
   <span class="sub mono" id="clock" style="min-width:152px; text-align:right;"></span>
+  <button id="loginBtn" title="로그인/로그아웃" style="display:none;">🔑 로그인</button>
   <button id="refreshBtn" title="새로고침">↻</button>
 </header>
+
+<div id="roBanner" class="wrap" style="display:none;">
+  <div class="card" style="border-color:#f5a623; background:#2a2410;">
+    <b>🔒 읽기 전용 모드</b> — 조회만 가능합니다. 노드 등록·원격 구성·동기화 등 변경 작업은
+    <b>로그인</b> 후 사용할 수 있습니다.
+    <button id="roLoginBtn" style="margin-left:8px;">🔑 로그인</button>
+  </div>
+</div>
 
 <!-- 글로벌 대시보드 -->
 <div class="wrap view active" id="view-dash">
@@ -116,6 +125,17 @@
 
 <!-- 노드 설정 -->
 <div class="wrap view" id="view-nodes">
+  <div class="card" style="margin-bottom:14px;">
+    <h2>🔒 접속 보안 (로그인 비밀번호)</h2>
+    <div class="sub" style="margin-bottom:8px;">비밀번호를 설정하면 접속 시 <b>읽기 전용</b>이 되고, 우상단 <b>로그인</b> 후 노드 등록·원격 구성 등 변경 작업을 할 수 있습니다. 비우고 저장하면 보호가 해제됩니다.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <input id="setPw" type="password" placeholder="새 비밀번호(변경 시에만)" style="flex:1; min-width:220px;" />
+      <label class="sub" style="display:flex; align-items:center; gap:6px;"><input id="setPwEnc" type="checkbox" /> 암호화 저장(해시)</label>
+      <button id="setPwBtn">비밀번호 저장</button>
+      <span class="sub" id="setPwMsg"></span>
+    </div>
+  </div>
+
   <div class="card" style="margin-bottom:14px;">
     <h2>🚀 원격 자동 구성 — IP만 넣으면 엣지 설치 명령 생성 + 노드 자동 등록</h2>
     <div class="setgrid">
@@ -230,6 +250,57 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
+// ---- 인증(로그인): 보기는 자유, 변경(POST)은 토큰 필요 — fetch 래퍼로 자동 처리 ----
+let _opRequired=false, _opExpiry=0, _opTimer=null;
+const _origFetch = window.fetch.bind(window);
+function _opToken(){ try{ return sessionStorage.getItem("pOpToken")||""; }catch(e){ return ""; } }
+function _opLeft(){ return Math.max(0, Math.ceil((_opExpiry-Date.now())/1000)); }
+function canMutate(){ return !_opRequired || (!!_opToken() && _opLeft()>0); }
+function updateLoginUI(){
+  const ro=_opRequired && !canMutate();
+  const b=$("roBanner"); if(b) b.style.display=ro?"":"none";
+  const btn=$("loginBtn");
+  if(btn){
+    btn.style.display=_opRequired?"":"none";
+    if(_opRequired && canMutate()){ const m=Math.floor(_opLeft()/60);
+      btn.textContent="🔓 로그아웃 ("+(m>0?m+"분":_opLeft()+"초")+")"; }
+    else btn.textContent="🔑 로그인";
+  }
+  ["addBtn","testBtn","pvGenBtn","pvSshBtn","setPwBtn"].forEach(id=>{ const e=$(id); if(e) e.disabled=ro; });
+}
+async function loadAuth(){
+  try{ const j=await (await _origFetch("/api/portal/auth",{cache:"no-store"})).json();
+    _opRequired=!!j.op_required; }catch(e){}
+  updateLoginUI();
+}
+async function doLogin(){
+  const pw=window.prompt("로그인 — 비밀번호를 입력하세요:"); if(pw==null) return false;
+  try{ const r=await _origFetch("/api/portal/login",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pw})});
+    const j=await r.json();
+    if(j.ok && j.token){ try{ sessionStorage.setItem("pOpToken",j.token); }catch(e){}
+      _opExpiry=Date.now()+(j.ttl||1800)*1000; _opRequired=true;
+      if(_opTimer) clearInterval(_opTimer);
+      _opTimer=setInterval(()=>{ if(_opLeft()<=0){ clearInterval(_opTimer); _opTimer=null;
+        try{ sessionStorage.removeItem("pOpToken"); }catch(e){} } updateLoginUI(); },1000);
+      updateLoginUI(); return true; }
+  }catch(e){}
+  window.alert("비밀번호가 올바르지 않습니다."); return false;
+}
+function doLogout(){ if(_opTimer){ clearInterval(_opTimer); _opTimer=null; } _opExpiry=0;
+  try{ sessionStorage.removeItem("pOpToken"); }catch(e){} updateLoginUI(); }
+window.fetch=async function(url,opts){
+  opts=opts||{}; const m=(opts.method||"GET").toUpperCase();
+  const u=(typeof url==="string")?url:"";
+  if(m==="POST" && u.indexOf("/api/portal/login")<0){
+    opts.headers=Object.assign({},opts.headers||{},{"X-Op-Token":_opToken()});
+    let res=await _origFetch(url,opts);
+    if(res.status===401){ _opRequired=true; updateLoginUI();
+      if(await doLogin()){ opts.headers["X-Op-Token"]=_opToken(); res=await _origFetch(url,opts); } }
+    return res;
+  }
+  return _origFetch(url,opts);
+};
 function fmtBytes(n){ n=Number(n||0); const u=["B","KB","MB","GB","TB","PB"]; let i=0;
   while(n>=1024 && i<u.length-1){ n/=1024; i++; } return (i===0? n.toFixed(0): n.toFixed(1))+" "+u[i]; }
 function fmtNum(n){ return Number(n||0).toLocaleString(); }
@@ -543,8 +614,22 @@ $("pvSshBtn").addEventListener("click", async ()=>{
 
 function tickClock(){ const el=$("clock"); if(el) el.textContent=new Date().toLocaleString("ko-KR",{hour12:false}); }
 tickClock(); setInterval(tickClock,1000);
+if($("loginBtn")) $("loginBtn").addEventListener("click", async()=>{
+  if(_opRequired && canMutate()) doLogout(); else await doLogin(); });
+if($("roLoginBtn")) $("roLoginBtn").addEventListener("click", doLogin);
+if($("setPwBtn")) $("setPwBtn").addEventListener("click", async()=>{
+  const msg=$("setPwMsg"); msg.textContent=" 저장 중…";
+  try{ const j=await (await fetch("/api/portal/password",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({password:$("setPw").value, encrypt:$("setPwEnc").checked})})).json();
+    if(j.ok){ msg.textContent=j.op_required?(" ✓ 보호 켜짐 "+(j.encrypted?"(암호화)":"(평문)")):" ✓ 보호 해제됨";
+      $("setPw").value=""; _opRequired=!!j.op_required; updateLoginUI(); }
+    else msg.textContent=" ✗ "+(j.reason||j.error||"실패"); }
+  catch(e){ msg.textContent=" ✗ "+e; }
+});
+loadAuth();
 loadOverview(); loadNodes();
-setInterval(()=>{ loadOverview(); loadNodes(); }, 5000);
+setInterval(()=>{ loadAuth(); loadOverview(); loadNodes(); }, 5000);
 </script>
 </body>
 </html>

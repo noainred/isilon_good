@@ -220,6 +220,13 @@
     <div class="sub" id="pieNote" style="margin-top:8px;"></div>
   </div>
 
+  <!-- 읽기 전용 안내(로그인 전) -->
+  <div id="roBanner" class="card" style="display:none; margin-bottom:14px; border-color:var(--warn); background:#2a2410;">
+    <b>🔒 읽기 전용 모드</b> — 지금은 조회만 가능합니다. 스캔 시작·설정 변경 등 모든 작업은
+    <b>로그인</b> 후 사용할 수 있습니다.
+    <button id="roLoginBtn" style="margin-left:8px; border-color:var(--accent2);">🔑 로그인</button>
+  </div>
+
   <!-- 스토리지 어레이 상태(아이실론 OneFS / Dell PowerStore) -->
   <div class="card" id="storageCard" style="margin-bottom:14px; display:none;">
     <h2>스토리지 어레이 상태 (Isilon / PowerStore)</h2>
@@ -423,6 +430,10 @@
           <input id="setOpPassword" type="password" class="setinput mono" style="width:100%;"
                  placeholder="(미설정)" />
         </label>
+        <label style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+          <input id="setOpEncrypt" type="checkbox" /> 비밀번호 암호화 저장(PBKDF2 해시 — 파일에 평문 미저장·복구 불가)
+        </label>
+        <div class="sub" style="margin-top:4px;">비밀번호를 설정하면 접속 시 <b>읽기 전용</b>이 되고, 우상단 <b>🔑 로그인</b> 후 모든 기능을 쓸 수 있습니다.</div>
         <div class="sub" style="margin-top:4px;">설정한 비밀번호는 실행한 디렉터리의 <span class="mono">info.MD</span>(권한 600)에 저장됩니다.</div>
       </div>
 
@@ -1053,28 +1064,40 @@ function showToast(msg, ms) {
   clearTimeout(t._tmr); t._tmr = setTimeout(() => { t.style.display = "none"; }, ms || 3000);
   return t;
 }
+// 로그인(세션 토큰 보유) 상태에서만 변경 작업 허용. 비밀번호 미설정이면 항상 허용.
+function canMutate() { return !_opRequired || (!!_opToken() && _opLeft() > 0); }
+function applyReadOnlyUI() {
+  const ro = _opRequired && !canMutate();
+  const b = $("roBanner"); if (b) b.style.display = ro ? "" : "none";
+  ["saveSettingsBtn", "staggerBtn", "schAdd"].forEach(id => {
+    const el = $(id); if (el) el.disabled = ro;
+  });
+}
 function updateLockBadge() {
   const el = $("lockPill"); if (!el) return;
-  if (!_opRequired) { el.style.display = "none"; return; }
+  if (!_opRequired) { el.style.display = "none"; applyReadOnlyUI(); return; }
   el.style.display = "";
   if (_opToken() && _opLeft() > 0) {
-    el.textContent = "🔓 자동입력 " + _opLeft() + "초";
-    el.title = "이 시간 동안 비밀번호 자동 입력(클릭 시 즉시 잠금)";
+    const left = _opLeft(), m = Math.floor(left / 60);
+    el.textContent = "🔓 로그아웃 (관리자, " + (m > 0 ? m + "분" : left + "초") + ")";
+    el.title = "관리자로 로그인됨 — 클릭하면 로그아웃";
   } else {
-    el.textContent = "🔒 잠김(작업하려면 클릭)";
-    el.title = "클릭해 비밀번호로 잠금 해제";
+    el.textContent = "🔑 로그인";
+    el.title = "로그인하면 스캔 시작·설정 등 모든 기능을 사용할 수 있습니다";
   }
+  applyReadOnlyUI();
 }
 function startOpCountdown(ttl) {
-  _opExpiry = Date.now() + (ttl || 10) * 1000;
-  showToast("🔓 비밀번호 입력됨 — <b>" + (ttl || 10) + "초</b> 동안 비밀번호 자동 입력됩니다", (ttl || 10) * 1000);
+  ttl = ttl || 1800;
+  _opExpiry = Date.now() + ttl * 1000;
+  showToast("🔓 로그인됨 — 약 <b>" + Math.round(ttl / 60) + "분</b> 후 자동 로그아웃", 3000);
   if (_opCountTimer) clearInterval(_opCountTimer);
   _opCountTimer = setInterval(() => {
     if (_opLeft() <= 0) {
       clearInterval(_opCountTimer); _opCountTimer = null;
       try { sessionStorage.removeItem("opToken"); } catch (e) {}
       updateLockBadge();
-      showToast("🔒 자동 입력 시간이 끝나 다시 잠겼습니다", 3000);
+      showToast("🔒 세션이 만료되어 다시 읽기 전용입니다 — 필요 시 다시 로그인하세요", 3000);
     } else { updateLockBadge(); }
   }, 1000);
   updateLockBadge();
@@ -1086,7 +1109,7 @@ function opRelock() {
   updateLockBadge();
 }
 async function promptUnlock() {
-  const pw = window.prompt("작업하려면 비밀번호를 입력하세요:");
+  const pw = window.prompt("로그인 — 비밀번호를 입력하세요:");
   if (pw == null) return false;
   try {
     const r = await _origFetch("/api/unlock", {method: "POST",
@@ -1224,6 +1247,7 @@ async function loadSettings() {
     $("setOpLock").checked = !!s.op_password_set;
     $("setOpPassword").value = "";
     $("setOpPassword").placeholder = s.op_password_set ? "(설정됨 — 변경 시에만 입력)" : "(미설정)";
+    if ($("setOpEncrypt")) $("setOpEncrypt").checked = !!s.op_password_encrypted;
     $("setIsilonUrl").value = s.isilon_url || "";
     $("setIsilonUser").value = s.isilon_user || "";
     $("setIsilonPass").value = "";
@@ -1889,6 +1913,7 @@ async function saveSettings() {
     api_token: $("setApiToken").value,
     op_lock: $("setOpLock").checked,
     op_password: $("setOpPassword").value,
+    op_password_encrypted: $("setOpEncrypt") ? $("setOpEncrypt").checked : false,
     isilon_url: $("setIsilonUrl").value.trim(),
     isilon_user: $("setIsilonUser").value.trim(),
     isilon_password: $("setIsilonPass").value,
@@ -2603,7 +2628,7 @@ function renderOverview(j) {
   updateLockBadge();
   mountBases = j.mount_bases || [];
   $("scanDisabledMsg").style.display = canScan ? "none" : "block";
-  $("startForm").style.display = canScan ? "block" : "none";
+  $("startForm").style.display = (canScan && canMutate()) ? "block" : "none";
   updateStartButton(runningSet.size);   // 스캔 중이면 빨간 "스캔 중…" 버튼
 
   const body = $("ovBody");
@@ -2617,10 +2642,12 @@ function renderOverview(j) {
       const el = (r.started_at && endt) ? (endt - r.started_at) : null;
       const running = runningSet.has(r.scan_id);
       let act = `<a href="#" class="goScan" data-scan="${r.scan_id}">#${r.scan_id}</a>`;
-      if (running) act += ` <button class="stopbtn" data-stop="${r.scan_id}">중지</button>`;
-      else {
-        if (r.status === "paused") act += ` <button data-resume="${r.scan_id}" style="padding:2px 8px; font-size:11.5px;">재개</button>`;
-        act += ` <button class="stopbtn" data-del="${r.scan_id}" title="삭제">✕</button>`;
+      if (canMutate()) {
+        if (running) act += ` <button class="stopbtn" data-stop="${r.scan_id}">중지</button>`;
+        else {
+          if (r.status === "paused") act += ` <button data-resume="${r.scan_id}" style="padding:2px 8px; font-size:11.5px;">재개</button>`;
+          act += ` <button class="stopbtn" data-del="${r.scan_id}" title="삭제">✕</button>`;
+        }
       }
       return `<tr>
         <td class="path" title="${r.root_path}">${r.root_path}</td>
@@ -2825,7 +2852,7 @@ function renderNas(roots) {
     const st = r ? (statusKo[r.status] || r.status) : '<span class="sub">미점검</span>';
     const tag = row.configured ? '★ ' : '';
     // data-idx(정수)로 경로를 전달 — 경로에 따옴표가 있어도 잘못된 대상 스캔을 막는다
-    const act = canScan
+    const act = (canScan && canMutate())
       ? `<button class="nasScan" data-idx="${idx}" style="padding:2px 8px; font-size:11.5px;">지금 스캔</button>`
       : "—";
     return `<tr>
@@ -3117,6 +3144,10 @@ $("staggerBtn").addEventListener("click", staggerSchedules);
 $("lockPill").addEventListener("click", async () => {
   if (_opToken() && _opLeft() > 0) { opRelock(); }
   else { await promptUnlock(); }
+  applyReadOnlyUI(); poll();
+});
+if ($("roLoginBtn")) $("roLoginBtn").addEventListener("click", async () => {
+  await promptUnlock(); applyReadOnlyUI(); poll();
 });
 // 워커별 디렉터리 표시(모두/N개) — 즉시 반영
 $("showAllWorkers").addEventListener("change", renderCurrentDir);

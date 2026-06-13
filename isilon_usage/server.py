@@ -44,12 +44,13 @@ from . import settings as setmod
 from . import isilon_api as isilonmod
 from . import powerstore_api as powerstoremod
 from . import storage_status as storagemod
+from . import auth as authmod
 from .scanner import run_scan
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DASHBOARD_HTML = os.path.join(HERE, "dashboard.html")
-OP_TOKEN_TTL = 10   # 작업 잠금 해제 토큰 유효시간(초). 입력 후 이 시간 동안만 자동 통과.
+OP_TOKEN_TTL = 1800   # 로그인 세션 유효시간(초) — 기본 30분(이후 자동 로그아웃).
 
 
 def _safe_pct(num: float, den: float) -> float:
@@ -722,7 +723,7 @@ class ScanController:
         pw = str(self.settings.get("op_password") or "")
         if not pw:
             return {"ok": True, "token": "", "op_required": False}
-        if str(password or "") != pw:
+        if not authmod.verify_password(password, pw):
             return {"ok": False, "reason": "비밀번호가 올바르지 않습니다."}
         token = uuid.uuid4().hex
         now = time.time()
@@ -811,9 +812,11 @@ class ScanController:
         merged = dict(self.settings)
         merged.update({k: v for k, v in new.items() if k in setmod.EDITABLE_KEYS})
         if op_changed is not None:        # 작업 비밀번호 설정/변경/해제
-            merged["op_password"] = op_changed
+            enc = bool(merged.get("op_password_encrypted"))
+            merged["op_password"] = authmod.store_password(op_changed, encrypt=enc)
         self.settings = setmod.save(self.data_dir, merged)
-        if op_changed:                    # 새 비밀번호를 info.MD 로 기록(권한 600)
+        # 평문 저장일 때만 복구용 info.MD 기록(암호화 시 평문을 남기지 않는다)
+        if op_changed and not bool(self.settings.get("op_password_encrypted")):
             self._write_info_md(op_changed)
         return {"ok": True, "settings": _public_settings(self.settings)}
 
