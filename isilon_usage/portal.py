@@ -31,6 +31,7 @@ from . import __version__
 from . import db as dbmod
 from . import manager as mgrmod
 from . import auth as authmod
+from . import audit as auditmod
 from . import settings as setmod
 from .server import ThreadingHTTPServer  # 3.6 폴백 포함 재사용
 
@@ -990,28 +991,45 @@ class PortalHandler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001
             self._send_json({"ok": False, "error": str(exc)}, status=500)
 
+    def _audit(self, action: str, ok: bool, detail: str = "") -> None:
+        try:
+            ip = self.client_address[0] if self.client_address else ""
+        except Exception:  # noqa: BLE001
+            ip = ""
+        auditmod.record(self.data_dir, action=action, ok=ok, ip=ip, detail=detail)
+
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         body = self._read_json_body()
         c = self.controller
         try:
             if path == "/api/portal/login":
-                self._send_json(c.login(body.get("password") or ""))
+                res = c.login(body.get("password") or "")
+                self._audit("login", res.get("ok"),
+                            "" if res.get("ok") else (res.get("reason") or ""))
+                self._send_json(res)
                 return
             # 비밀번호 설정/변경/해제 — 이미 설정돼 있으면 로그인 필요(첫 설정은 허용)
             if path == "/api/portal/password":
                 if c.auth_required() and not c.token_valid(self.headers.get("X-Op-Token")):
+                    self._audit("password", False, "locked")
                     self._send_json({"ok": False, "reason": "locked", "op_required": True},
                                     status=401)
                     return
-                self._send_json(c.set_password(body.get("password") or "",
-                                               bool(body.get("encrypt"))))
+                res = c.set_password(body.get("password") or "", bool(body.get("encrypt")))
+                self._audit("password", res.get("ok"))
+                self._send_json(res)
                 return
             # 그 외 변경 작업(노드 등록·삭제·동기화·원격 구성)은 로그인 필요
             if c.auth_required() and not c.token_valid(self.headers.get("X-Op-Token")):
+                self._audit(path, False, "locked")
                 self._send_json({"ok": False, "reason": "locked", "op_required": True,
                                  "error": "로그인 후 작업하세요."}, status=401)
                 return
+            if path == "/api/portal/audit":      # 감사 로그 조회(로그인 필요)
+                self._send_json({"ok": True, "events": auditmod.tail(self.data_dir, 300)})
+                return
+            self._audit(path, True)              # 인증 통과한 변경 작업 기록
             if path == "/api/portal/nodes":
                 self._send_json(c.upsert_node(body))
                 return

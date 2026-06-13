@@ -71,11 +71,16 @@ class AuthGuard:
     비밀번호가 비어 있으면 인증이 필요 없는(전체 공개) 상태로 본다.
     """
 
-    def __init__(self, password_getter, ttl: float = DEFAULT_TTL) -> None:
+    def __init__(self, password_getter, ttl: float = DEFAULT_TTL,
+                 max_fails: int = 5, lockout: float = 30.0) -> None:
         self._get_pw = password_getter
         self._ttl = float(ttl)
         self._tokens: dict = {}              # token -> 발급 시각
         self._lock = threading.Lock()
+        self._max_fails = int(max_fails)     # 연속 로그인 실패 허용 횟수
+        self._lockout = float(lockout)       # 초과 시 잠금 시간(초)
+        self._fails = 0
+        self._locked_until = 0.0
 
     @property
     def ttl(self) -> int:
@@ -86,15 +91,31 @@ class AuthGuard:
         return bool(str(self._get_pw() or ""))
 
     def login(self, password: str) -> dict:
-        """비밀번호를 확인하고 맞으면 세션 토큰을 발급한다."""
+        """비밀번호를 확인하고 맞으면 세션 토큰을 발급한다.
+
+        무차별 대입을 막기 위해 연속 실패가 max_fails 회를 넘으면 lockout 초간 잠근다.
+        """
         stored = str(self._get_pw() or "")
         if not stored:
             return {"ok": True, "token": "", "op_required": False}
-        if not verify_password(password, stored):
-            return {"ok": False, "reason": "비밀번호가 올바르지 않습니다."}
-        token = secrets.token_hex(16)
         now = time.time()
         with self._lock:
+            if now < self._locked_until:
+                wait = int(self._locked_until - now) + 1
+                return {"ok": False, "locked_out": True,
+                        "reason": "로그인 시도가 많아 잠시 잠겼습니다(%d초 후 재시도)" % wait}
+        if not verify_password(password, stored):
+            with self._lock:
+                self._fails += 1
+                if self._fails >= self._max_fails:
+                    self._locked_until = now + self._lockout
+                    self._fails = 0
+                    return {"ok": False, "locked_out": True,
+                            "reason": "로그인 실패가 많아 %d초간 잠급니다" % int(self._lockout)}
+            return {"ok": False, "reason": "비밀번호가 올바르지 않습니다."}
+        token = secrets.token_hex(16)
+        with self._lock:
+            self._fails = 0
             self._tokens = {t: ts for t, ts in self._tokens.items()
                             if now - ts < self._ttl}
             self._tokens[token] = now

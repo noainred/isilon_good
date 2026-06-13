@@ -134,6 +134,11 @@
       <button id="setPwBtn">비밀번호 저장</button>
       <span class="sub" id="setPwMsg"></span>
     </div>
+    <div style="margin-top:8px;">
+      <button id="pAuditBtn" style="padding:4px 10px;">🧾 감사 로그 보기</button>
+      <span class="sub" id="pAuditMsg"></span>
+      <div id="pAuditBox" style="display:none; margin-top:6px; max-height:260px; overflow:auto; border:1px solid #2a3550; border-radius:8px;"></div>
+    </div>
   </div>
 
   <div class="card" style="margin-bottom:14px;">
@@ -303,7 +308,7 @@ function updateLoginUI(){
       btn.textContent="🔓 로그아웃 ("+(m>0?m+"분":_opLeft()+"초")+")"; }
     else btn.textContent="🔑 로그인";
   }
-  ["addBtn","testBtn","pvGenBtn","pvSshBtn","setPwBtn","ugGenBtn","ugSshBtn"].forEach(id=>{ const e=$(id); if(e) e.disabled=ro; });
+  ["addBtn","testBtn","pvGenBtn","pvSshBtn","setPwBtn","ugGenBtn","ugSshBtn","pAuditBtn"].forEach(id=>{ const e=$(id); if(e) e.disabled=ro; });
 }
 async function loadAuth(){
   try{ const j=await (await _origFetch("/api/portal/auth",{cache:"no-store"})).json();
@@ -690,6 +695,19 @@ if($("setPwBtn")) $("setPwBtn").addEventListener("click", async()=>{
     else msg.textContent=" ✗ "+(j.reason||j.error||"실패"); }
   catch(e){ msg.textContent=" ✗ "+e; }
 });
+async function pLoadAudit(){
+  const esc=s=>String(s==null?"":s).replace(/[<>&"]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;"}[c]));
+  $("pAuditMsg").textContent=" 불러오는 중…";
+  try{ const j=await (await fetch("/api/portal/audit",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})).json();
+    if(!j.ok){ $("pAuditMsg").textContent=" "+(j.error||j.reason||"실패"); return; }
+    $("pAuditMsg").textContent=" 최근 "+j.events.length+"건";
+    const box=$("pAuditBox"); box.style.display="";
+    box.innerHTML='<table style="width:100%;font-size:12px;"><thead><tr><th style="text-align:left;">시각</th><th style="text-align:left;">동작</th><th>결과</th><th style="text-align:left;">출처</th><th style="text-align:left;">상세</th></tr></thead><tbody>'
+      +j.events.map(e=>`<tr><td class="mono">${new Date(e.ts*1000).toLocaleString("ko-KR")}</td><td class="mono">${esc(e.action)}</td><td style="text-align:center;">${e.ok?"✓":'<span style="color:#ff5c5c">✗</span>'}</td><td class="mono">${esc(e.ip)||"—"}</td><td class="sub">${esc(e.detail)}</td></tr>`).join("")
+      +"</tbody></table>";
+  }catch(e){ $("pAuditMsg").textContent=" 오류: "+e; }
+}
+if($("pAuditBtn")) $("pAuditBtn").addEventListener("click", pLoadAudit);
 loadAuth();
 loadOverview(); loadNodes();
 setInterval(()=>{ loadAuth(); loadOverview(); loadNodes(); }, 5000);

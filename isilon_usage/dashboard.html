@@ -433,7 +433,12 @@
         <label style="display:flex; align-items:center; gap:8px; margin-top:6px;">
           <input id="setOpEncrypt" type="checkbox" /> 비밀번호 암호화 저장(PBKDF2 해시 — 파일에 평문 미저장·복구 불가)
         </label>
-        <div class="sub" style="margin-top:4px;">비밀번호를 설정하면 접속 시 <b>읽기 전용</b>이 되고, 우상단 <b>🔑 로그인</b> 후 모든 기능을 쓸 수 있습니다.</div>
+        <div class="sub" style="margin-top:4px;">비밀번호를 설정하면 접속 시 <b>읽기 전용</b>이 되고, 우상단 <b>🔑 로그인</b> 후 모든 기능을 쓸 수 있습니다. 로그인 실패가 잦으면 잠시 잠깁니다(무차별 대입 방지).</div>
+        <div style="margin-top:8px;">
+          <button id="auditBtn" style="padding:4px 10px;">🧾 감사 로그 보기</button>
+          <span class="sub" id="auditMsg"></span>
+          <div id="auditBox" style="display:none; margin-top:6px; max-height:260px; overflow:auto; border:1px solid var(--border); border-radius:8px;"></div>
+        </div>
         <div class="sub" style="margin-top:4px;">설정한 비밀번호는 실행한 디렉터리의 <span class="mono">info.MD</span>(권한 600)에 저장됩니다.</div>
       </div>
 
@@ -1069,7 +1074,7 @@ function canMutate() { return !_opRequired || (!!_opToken() && _opLeft() > 0); }
 function applyReadOnlyUI() {
   const ro = _opRequired && !canMutate();
   const b = $("roBanner"); if (b) b.style.display = ro ? "" : "none";
-  ["saveSettingsBtn", "staggerBtn", "schAdd"].forEach(id => {
+  ["saveSettingsBtn", "staggerBtn", "schAdd", "auditBtn"].forEach(id => {
     const el = $(id); if (el) el.disabled = ro;
   });
 }
@@ -1891,6 +1896,26 @@ function tuneRender(j) {
   }).join("");
 }
 if ($("tuneRun")) $("tuneRun").addEventListener("click", tuneRun);
+
+async function loadAudit() {
+  const esc = s => String(s == null ? "" : s).replace(/[<>&"]/g,
+    c => ({"<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;"}[c]));
+  $("auditMsg").textContent = " 불러오는 중…";
+  try {
+    const r = await fetch("/api/audit", {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: "{}"});
+    const j = await r.json();
+    if (!j.ok) { $("auditMsg").textContent = " " + (j.error || j.reason || "실패"); return; }
+    $("auditMsg").textContent = " 최근 " + j.events.length + "건";
+    const box = $("auditBox"); box.style.display = "";
+    box.innerHTML = '<table style="width:100%; font-size:12px;"><thead><tr><th style="text-align:left;">시각</th>'
+      + '<th style="text-align:left;">동작</th><th>결과</th><th style="text-align:left;">출처</th><th style="text-align:left;">상세</th></tr></thead><tbody>'
+      + j.events.map(e => `<tr><td class="mono">${new Date(e.ts * 1000).toLocaleString("ko-KR")}</td>`
+        + `<td class="mono">${esc(e.action)}</td><td style="text-align:center;">${e.ok ? "✓" : '<span style="color:var(--danger)">✗</span>'}</td>`
+        + `<td class="mono">${esc(e.ip) || "—"}</td><td class="sub">${esc(e.detail)}</td></tr>`).join("")
+      + "</tbody></table>";
+  } catch (e) { $("auditMsg").textContent = " 오류: " + e; }
+}
 
 async function saveSettings() {
   const payload = {
@@ -3140,6 +3165,7 @@ function schedule() {
 $("refreshBtn").addEventListener("click", poll);
 $("autoChk").addEventListener("change", schedule);
 $("staggerBtn").addEventListener("click", staggerSchedules);
+if ($("auditBtn")) $("auditBtn").addEventListener("click", loadAudit);
 // 잠금 배지: 잠겨 있으면 비밀번호로 해제, 해제됨이면 다시 잠금(토큰 제거)
 $("lockPill").addEventListener("click", async () => {
   if (_opToken() && _opLeft() > 0) { opRelock(); }

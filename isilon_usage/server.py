@@ -24,7 +24,6 @@ import sys
 import tarfile
 import threading
 import time
-import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -45,6 +44,7 @@ from . import isilon_api as isilonmod
 from . import powerstore_api as powerstoremod
 from . import storage_status as storagemod
 from . import auth as authmod
+from . import audit as auditmod
 from .scanner import run_scan
 
 
@@ -629,8 +629,8 @@ class ScanController:
         self._rate_thread = threading.Thread(
             target=self._rate_sampler_loop, name="rate-sampler", daemon=True)
         self._rate_thread.start()
-        self._op_tokens = {}                # 작업 잠금 해제 토큰 → 발급 시각
-        self._op_lock = threading.Lock()
+        self._auth = authmod.AuthGuard(lambda: self.settings.get("op_password"),
+                                       ttl=OP_TOKEN_TTL)
         self._launch_cwd = os.getcwd()      # info.MD 를 저장할 '실행한 디렉터리'
         self._reconcile_orphans()           # 이전 프로세스가 남긴 고아 스캔 정리
 
@@ -715,37 +715,15 @@ class ScanController:
 
     # ----- 작업 보호(비밀번호) -----
     def op_required(self) -> bool:
-        """작업(POST)에 비밀번호가 필요한가(= op_password 가 설정됨)."""
-        return bool(str(self.settings.get("op_password") or ""))
+        """작업(POST)에 로그인이 필요한가(= op_password 가 설정됨)."""
+        return self._auth.required()
 
     def unlock(self, password: str) -> dict:
-        """비밀번호를 확인하고 맞으면 작업 토큰을 발급한다."""
-        pw = str(self.settings.get("op_password") or "")
-        if not pw:
-            return {"ok": True, "token": "", "op_required": False}
-        if not authmod.verify_password(password, pw):
-            return {"ok": False, "reason": "비밀번호가 올바르지 않습니다."}
-        token = uuid.uuid4().hex
-        now = time.time()
-        with self._op_lock:
-            # 만료된 토큰 정리 후 추가
-            self._op_tokens = {t: ts for t, ts in self._op_tokens.items()
-                               if now - ts < OP_TOKEN_TTL}
-            self._op_tokens[token] = now
-        return {"ok": True, "token": token, "op_required": True, "ttl": OP_TOKEN_TTL}
+        """비밀번호를 확인하고 맞으면 로그인 토큰을 발급한다(무차별 대입 시 일시 잠금)."""
+        return self._auth.login(password)
 
     def op_token_valid(self, token) -> bool:
-        token = str(token or "")
-        if not token:
-            return False
-        with self._op_lock:
-            ts = self._op_tokens.get(token)
-            if ts is None:
-                return False
-            if time.time() - ts >= OP_TOKEN_TTL:   # 입력 후 OP_TOKEN_TTL 초만 유효
-                self._op_tokens.pop(token, None)
-                return False
-            return True
+        return self._auth.token_valid(token)
 
     def _write_info_md(self, password: str) -> None:
         """설정한 비밀번호를 실행한 디렉터리의 info.MD 로 저장(권한 600)."""
@@ -2068,6 +2046,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
+    def _audit(self, action: str, ok: bool, detail: str = "") -> None:
+        try:
+            ip = self.client_address[0] if self.client_address else ""
+        except Exception:  # noqa: BLE001
+            ip = ""
+        auditmod.record(self.data_dir, action=action, ok=ok, ip=ip, detail=detail)
+
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
@@ -2081,15 +2066,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # 작업 잠금 해제: 비밀번호 → 토큰
             if path == "/api/unlock":
                 res = self.controller.unlock(body.get("password") or "")
+                self._audit("login", res.get("ok"),
+                            "" if res.get("ok") else (res.get("reason") or ""))
                 self._send_json(res, status=200 if res.get("ok") else 401)
                 return
             # 작업(POST) 보호: 비밀번호가 설정돼 있으면 유효한 토큰이 필요(보기=GET 은 자유)
             if self.controller.op_required() and not self.controller.op_token_valid(
                     self.headers.get("X-Op-Token")):
+                self._audit(path, False, "locked")
                 self._send_json({"ok": False, "reason": "locked", "op_required": True,
                                  "error": "작업하려면 비밀번호로 잠금을 해제하세요."},
                                 status=401)
                 return
+
+            if path == "/api/audit":            # 감사 로그 조회(로그인 필요)
+                self._send_json({"ok": True, "events": auditmod.tail(self.data_dir, 300)})
+                return
+            self._audit(path, True)             # 인증 통과한 변경 작업 기록
 
             if path == "/api/scan/start":
                 target = (body.get("path") or "").strip()
