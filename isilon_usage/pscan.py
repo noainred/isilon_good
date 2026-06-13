@@ -156,3 +156,62 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
         "files_per_sec": (total_files / elapsed) if elapsed > 0 else 0,
         "per_top": per_top,
     }
+
+
+def write_run_db(db_path: str, root: str, result: dict, *,
+                 size_mode: str = "disk", started: Optional[float] = None) -> int:
+    """parallel_scan 결과(루트 + 1단계 자식)를 표준 per-run DB 로 기록한다.
+
+    pscan 은 깊은 트리를 만들지 않으므로 directories 에 **루트 + 1단계 자식만** 넣는다
+    (용량 개요 + 1단계 드릴다운까지 표시, 더 깊은 드릴다운은 없음). 대시보드/매니저가
+    스레드 스캐너 결과와 동일하게 읽을 수 있다. 생성된 run_id 를 반환한다.
+    """
+    import socket
+
+    from . import __version__
+    from . import db as dbmod
+
+    root = os.path.abspath(root)
+    started = float(started or time.time())
+    now = time.time()
+    per_top = result.get("per_top", [])
+    total_bytes = int(result.get("total_bytes", 0))
+    total_files = int(result.get("total_files", 0))
+    total_dirs = int(result.get("total_dirs", 0))
+    child_bytes = sum(int(c.get("bytes", 0)) for c in per_top)
+    child_files = sum(int(c.get("files", 0)) for c in per_top)
+    root_own = max(0, total_bytes - child_bytes)
+    root_files = max(0, total_files - child_files)
+    _dcols = ("run_id,parent_id,path,name,depth,status,file_count,subdir_count,"
+              "own_bytes,total_bytes,total_files,scanned_at")
+    _ph = "?,?,?,?,?,?,?,?,?,?,?,?"
+
+    dbmod.init_db(db_path)
+    conn = dbmod.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO scan_runs (root_path,status,phase,backend,size_mode,started_at,"
+            "updated_at,finished_at,total_dirs,processed_dirs,discovered_dirs,scanned_bytes,"
+            "total_files,workers,hostname,app_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (root, "done", "done", "pscan", size_mode, started, now, now, total_dirs,
+             len(per_top), total_dirs, total_bytes, total_files,
+             int(result.get("processes", 0)), socket.gethostname(), __version__))
+        run_id = conn.execute("SELECT id FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()[0]
+        conn.execute(
+            "INSERT INTO directories (%s) VALUES (%s)" % (_dcols, _ph),
+            (run_id, None, root, os.path.basename(root.rstrip("/")) or root, 0, "done",
+             root_files, len(per_top), root_own, total_bytes, total_files, now))
+        root_id = conn.execute(
+            "SELECT id FROM directories WHERE run_id=? AND parent_id IS NULL", (run_id,)
+        ).fetchone()[0]
+        for c in per_top:
+            cp = c.get("path", "")
+            conn.execute(
+                "INSERT INTO directories (%s) VALUES (%s)" % (_dcols, _ph),
+                (run_id, root_id, cp, os.path.basename(cp.rstrip("/")) or cp, 1, "done",
+                 int(c.get("files", 0)), max(0, int(c.get("dirs", 0)) - 1),
+                 int(c.get("bytes", 0)), int(c.get("bytes", 0)), int(c.get("files", 0)), now))
+        conn.commit()
+        return run_id
+    finally:
+        conn.close()

@@ -317,6 +317,13 @@
           </select>
         </div>
         <div>
+          <div class="sub" style="margin-bottom:4px;">엔진</div>
+          <select id="optEngine" class="optsel" title="threads=상세 트리, pscan=멀티프로세스로 빠른 용량(루트+1단계)">
+            <option value="threads">threads (상세 트리)</option>
+            <option value="pscan">pscan (멀티프로세스·빠른 용량)</option>
+          </select>
+        </div>
+        <div>
           <div class="sub" style="margin-bottom:4px;">용량 기준</div>
           <select id="optSize" class="optsel">
             <option value="disk">디스크 점유(du 기본)</option>
@@ -2076,6 +2083,7 @@ async function startScan() {
         backend: $("optBackend").value,
         size_mode: $("optSize").value,
         one_file_system: $("optOFS").checked,
+        engine: $("optEngine") ? $("optEngine").value : "threads",
       }),
     });
     const j = await res.json();

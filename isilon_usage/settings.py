@@ -45,6 +45,7 @@ DEFAULTS: dict = {
     "api_token": "",                    # 글로벌 포탈 복제용 토큰(설정 시 /api/dbexport 인증 필요)
     "op_password": "",                  # 작업(버튼·설정변경) 보호 비밀번호(빈값=잠금 없음)
     "op_password_encrypted": False,     # 참이면 op_password 를 PBKDF2 해시로 저장(평문 미저장)
+    "default_engine": "threads",        # 새 스캔 기본 엔진: threads(상세) | pscan(빠른 용량)
     "isilon_url": "",                   # OneFS Platform API 주소(예: https://10.0.0.10:8080)
     "isilon_user": "",                  # PAPI 읽기 계정
     "isilon_password": "",              # PAPI 비밀번호
@@ -112,6 +113,8 @@ def sanitize(raw: dict) -> dict:
     s["api_token"] = str(s.get("api_token") or "").strip()
     s["op_password"] = str(s.get("op_password") or "")
     s["op_password_encrypted"] = bool(s.get("op_password_encrypted", False))
+    s["default_engine"] = (s.get("default_engine")
+                           if s.get("default_engine") in ("threads", "pscan") else "threads")
     s["isilon_url"] = str(s.get("isilon_url") or "").strip()
     s["isilon_user"] = str(s.get("isilon_user") or "").strip()
     s["isilon_password"] = str(s.get("isilon_password") or "")

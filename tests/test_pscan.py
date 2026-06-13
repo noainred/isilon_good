@@ -95,8 +95,40 @@ def run_bad_path() -> None:
     print("[edge] OK  없는 경로 거부 · 빈 디렉터리 처리")
 
 
+def run_write_db() -> None:
+    """parallel_scan 결과를 표준 per-run DB(루트+1단계)로 써서 되읽기 검증."""
+    from isilon_usage import db as dbmod
+    base = tempfile.mkdtemp(prefix="iu_ps_")
+    dbf = os.path.join(base, "run.db")
+    try:
+        _mk(base)
+        r = pscan.parallel_scan(base, processes=4, size_mode="apparent")
+        assert r["ok"], r
+        rid = pscan.write_run_db(dbf, base, r, size_mode="apparent")
+        assert rid >= 1
+        conn = dbmod.connect(dbf)
+        try:
+            run = conn.execute("SELECT * FROM scan_runs WHERE id=?", (rid,)).fetchone()
+            assert run["status"] == "done" and run["backend"] == "pscan"
+            assert run["scanned_bytes"] == r["total_bytes"], (run["scanned_bytes"], r["total_bytes"])
+            assert run["total_files"] == r["total_files"]
+            root = conn.execute(
+                "SELECT * FROM directories WHERE run_id=? AND parent_id IS NULL", (rid,)).fetchone()
+            assert root["depth"] == 0 and root["total_bytes"] == r["total_bytes"], dict(root)
+            kids = conn.execute(
+                "SELECT * FROM directories WHERE run_id=? AND depth=1", (rid,)).fetchall()
+            assert len(kids) == 5, len(kids)   # t0..t4 (rootfile 은 파일이라 제외)
+            assert sum(k["total_bytes"] for k in kids) + root["own_bytes"] == r["total_bytes"]
+        finally:
+            conn.close()
+        print("[write_db] OK  pscan 결과를 per-run DB(루트+1단계)로 기록·되읽기 검증")
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
 if __name__ == "__main__":
     run_correctness()
     run_node_mounts()
     run_bad_path()
+    run_write_db()
     print("모든 테스트 통과 ✅")
