@@ -446,6 +446,11 @@
           <span class="sub" id="auditMsg"></span>
           <div id="auditBox" style="display:none; margin-top:6px; max-height:260px; overflow:auto; border:1px solid var(--border); border-radius:8px;"></div>
         </div>
+        <label style="display:block; margin-top:12px;">🔁 자동 업그레이드 감시 폴더(비우면 끔)
+          <input id="setUpgradeDir" class="setinput mono" style="width:100%;"
+                 placeholder="예: /opt/isilon_releases — 이 폴더에 새 버전 isilon_usage-*.tar.gz/.zip 을 두면 자동 적용 후 재시작" />
+          <div class="sub" style="margin-top:2px;">현재 버전보다 새 압축본만 적용하고, 기존 코드는 백업합니다.</div>
+        </label>
         <div class="sub" style="margin-top:4px;">설정한 비밀번호는 실행한 디렉터리의 <span class="mono">info.MD</span>(권한 600)에 저장됩니다.</div>
       </div>
 
@@ -1260,6 +1265,7 @@ async function loadSettings() {
     $("setOpPassword").value = "";
     $("setOpPassword").placeholder = s.op_password_set ? "(설정됨 — 변경 시에만 입력)" : "(미설정)";
     if ($("setOpEncrypt")) $("setOpEncrypt").checked = !!s.op_password_encrypted;
+    if ($("setUpgradeDir")) $("setUpgradeDir").value = s.upgrade_watch_dir || "";
     $("setIsilonUrl").value = s.isilon_url || "";
     $("setIsilonUser").value = s.isilon_user || "";
     $("setIsilonPass").value = "";
@@ -1946,6 +1952,7 @@ async function saveSettings() {
     op_lock: $("setOpLock").checked,
     op_password: $("setOpPassword").value,
     op_password_encrypted: $("setOpEncrypt") ? $("setOpEncrypt").checked : false,
+    upgrade_watch_dir: $("setUpgradeDir") ? $("setUpgradeDir").value.trim() : "",
     isilon_url: $("setIsilonUrl").value.trim(),
     isilon_user: $("setIsilonUser").value.trim(),
     isilon_password: $("setIsilonPass").value,

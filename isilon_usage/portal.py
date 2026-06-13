@@ -33,6 +33,7 @@ from . import manager as mgrmod
 from . import auth as authmod
 from . import audit as auditmod
 from . import settings as setmod
+from . import upgrade as upgrademod
 from .server import ThreadingHTTPServer  # 3.6 폴백 포함 재사용
 
 
@@ -299,6 +300,7 @@ class PortalController:
         self.nodes = load_nodes(self.data_dir)
         self.settings = self._load_settings()
         self._auth = authmod.AuthGuard(lambda: self.settings.get("op_password"))
+        self._last_upgrade_check = 0.0
         self._cache = {}          # id -> {online, ts, version, hostname, overall, error}
         self._inflight = set()
         self._lock = threading.RLock()
@@ -309,15 +311,22 @@ class PortalController:
 
     # --- 인증(작업 보호: 보기는 자유, 변경은 로그인) ---
     def _load_settings(self) -> dict:
+        out = {"op_password": "", "op_password_encrypted": False,
+               "upgrade_watch_dir": "", "upgrade_check_secs": 60}
         try:
             with open(portal_settings_path(self.data_dir), encoding="utf-8") as fh:
                 s = json.load(fh)
             if isinstance(s, dict):
-                return {"op_password": str(s.get("op_password") or ""),
-                        "op_password_encrypted": bool(s.get("op_password_encrypted", False))}
+                out["op_password"] = str(s.get("op_password") or "")
+                out["op_password_encrypted"] = bool(s.get("op_password_encrypted", False))
+                out["upgrade_watch_dir"] = str(s.get("upgrade_watch_dir") or "").strip()
+                try:
+                    out["upgrade_check_secs"] = max(10, int(s.get("upgrade_check_secs", 60) or 60))
+                except (TypeError, ValueError):
+                    pass
         except (OSError, ValueError):
             pass
-        return {"op_password": "", "op_password_encrypted": False}
+        return out
 
     def _save_settings(self) -> None:
         os.makedirs(self.data_dir, exist_ok=True)
@@ -349,6 +358,62 @@ class PortalController:
         self._save_settings()
         return {"ok": True, "op_required": bool(self.settings["op_password"]),
                 "encrypted": self.settings["op_password_encrypted"]}
+
+    # --- 자동 업그레이드 ---
+    def set_upgrade_watch(self, watch_dir: str, check_secs=None) -> dict:
+        self.settings["upgrade_watch_dir"] = str(watch_dir or "").strip()
+        if check_secs is not None:
+            try:
+                self.settings["upgrade_check_secs"] = max(10, int(check_secs))
+            except (TypeError, ValueError):
+                pass
+        self._save_settings()
+        return {"ok": True, "upgrade_watch_dir": self.settings["upgrade_watch_dir"],
+                "upgrade_check_secs": self.settings["upgrade_check_secs"]}
+
+    def upgrade_config(self) -> dict:
+        return {"ok": True, "upgrade_watch_dir": self.settings.get("upgrade_watch_dir", ""),
+                "upgrade_check_secs": self.settings.get("upgrade_check_secs", 60),
+                "hq_version": __version__}
+
+    def push_upgrade_all(self) -> dict:
+        """등록된 모든 엣지에 현재(=새) 코드 번들을 푸시한다(엣지 api_token 인증)."""
+        data = agent_bundle_bytes()
+        results = []
+        for n in list(self.nodes):
+            url = n["url"].rstrip("/") + "/api/upgrade"
+            try:
+                req = urllib.request.Request(url, data=data, method="POST")
+                req.add_header("Content-Type", "application/gzip")
+                if n.get("token"):
+                    req.add_header("X-Auth-Token", n["token"])
+                resp = urllib.request.urlopen(req, timeout=120)
+                j = json.loads(resp.read().decode("utf-8"))
+                results.append({"id": n["id"], "ok": bool(j.get("ok")),
+                                "version": j.get("version"), "reason": j.get("reason")})
+            except Exception as e:  # noqa: BLE001
+                results.append({"id": n["id"], "ok": False, "reason": str(e)})
+        return {"ok": True, "hq_version": __version__, "results": results}
+
+    def _check_self_upgrade(self) -> None:
+        """감시 폴더에 새 버전이 있으면 자가 업그레이드 → 엣지 푸시 → 재시작."""
+        wd = (self.settings.get("upgrade_watch_dir") or "").strip()
+        if not wd:
+            return
+        found = upgrademod.find_newer_archive(wd, __version__)
+        if not found:
+            return
+        res = upgrademod.upgrade_from_archive(found[0], upgrademod.code_dir_of(__file__),
+                                              __version__)
+        if not res.get("ok"):
+            return
+        auditmod.record(self.data_dir, action="self_upgrade", ok=True,
+                        detail="%s -> %s" % (res.get("from"), res["version"]))
+        try:                                  # 새 코드가 디스크에 반영됨 → 엣지에도 푸시
+            self.push_upgrade_all()
+        except Exception:  # noqa: BLE001
+            pass
+        upgrademod.restart_process()          # 돌아오지 않음
 
     # --- 레지스트리 CRUD ---
     def _get(self, nid: str):
@@ -436,6 +501,10 @@ class PortalController:
         while not self._stop.is_set():
             try:
                 now = time.time()
+                secs = int(self.settings.get("upgrade_check_secs", 60) or 60)
+                if now - self._last_upgrade_check >= max(10, secs):
+                    self._last_upgrade_check = now
+                    self._check_self_upgrade()
                 for n in list(self.nodes):
                     if not n.get("enabled"):
                         continue
@@ -952,6 +1021,9 @@ class PortalHandler(BaseHTTPRequestHandler):
             if path == "/api/portal/auth":
                 self._send_json(c.auth_status())
                 return
+            if path == "/api/portal/settings":
+                self._send_json(c.upgrade_config())
+                return
             if path == "/api/portal/nodes":
                 self._send_json(c.list_nodes())
                 return
@@ -1030,6 +1102,13 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "events": auditmod.tail(self.data_dir, 300)})
                 return
             self._audit(path, True)              # 인증 통과한 변경 작업 기록
+            if path == "/api/portal/settings":
+                self._send_json(c.set_upgrade_watch(body.get("upgrade_watch_dir") or "",
+                                                    body.get("upgrade_check_secs")))
+                return
+            if path == "/api/portal/upgrade-all":
+                self._send_json(c.push_upgrade_all())
+                return
             if path == "/api/portal/nodes":
                 self._send_json(c.upsert_node(body))
                 return

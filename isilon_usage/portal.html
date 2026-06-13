@@ -142,6 +142,18 @@
   </div>
 
   <div class="card" style="margin-bottom:14px;">
+    <h2>🔁 자동 업그레이드 (감시 폴더 + 전 노드)</h2>
+    <div class="sub" style="margin-bottom:8px;">감시 폴더에 새 버전 <span class="mono">isilon_usage-*.tar.gz/.zip</span> 을 두면 포탈이 자동 적용·재시작하고, 등록된 모든 엣지에도 새 코드를 푸시합니다(엣지 <span class="mono">api_token</span> 인증). 비우면 끔.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <input id="ugWatchDir" class="inp mono" placeholder="예: /opt/isilon_releases" style="flex:1; min-width:240px;" />
+      <button id="ugWatchSave">감시 폴더 저장</button>
+      <button id="ugPushAll" class="primary">전 노드 지금 업그레이드</button>
+      <span class="sub" id="ugWatchMsg"></span>
+    </div>
+    <pre id="ugPushOut" class="note mono" style="display:none; white-space:pre-wrap; max-height:220px; overflow:auto; margin-top:8px;"></pre>
+  </div>
+
+  <div class="card" style="margin-bottom:14px;">
     <h2>🚀 원격 자동 구성 — IP만 넣으면 엣지 설치 명령 생성 + 노드 자동 등록</h2>
     <div class="setgrid">
       <label class="fld">원격 IP/주소<input id="pvHost" class="inp mono" placeholder="192.168.40.221" /></label>
@@ -308,7 +320,7 @@ function updateLoginUI(){
       btn.textContent="🔓 로그아웃 ("+(m>0?m+"분":_opLeft()+"초")+")"; }
     else btn.textContent="🔑 로그인";
   }
-  ["addBtn","testBtn","pvGenBtn","pvSshBtn","setPwBtn","ugGenBtn","ugSshBtn","pAuditBtn"].forEach(id=>{ const e=$(id); if(e) e.disabled=ro; });
+  ["addBtn","testBtn","pvGenBtn","pvSshBtn","setPwBtn","ugGenBtn","ugSshBtn","pAuditBtn","ugWatchSave","ugPushAll"].forEach(id=>{ const e=$(id); if(e) e.disabled=ro; });
 }
 async function loadAuth(){
   try{ const j=await (await _origFetch("/api/portal/auth",{cache:"no-store"})).json();
@@ -708,6 +720,32 @@ async function pLoadAudit(){
   }catch(e){ $("pAuditMsg").textContent=" 오류: "+e; }
 }
 if($("pAuditBtn")) $("pAuditBtn").addEventListener("click", pLoadAudit);
+async function pLoadUpgradeCfg(){
+  try{ const j=await (await fetch("/api/portal/settings",{cache:"no-store"})).json();
+    if(j.ok && $("ugWatchDir")) $("ugWatchDir").value=j.upgrade_watch_dir||""; }catch(e){}
+}
+if($("ugWatchSave")) $("ugWatchSave").addEventListener("click", async()=>{
+  $("ugWatchMsg").textContent=" 저장 중…";
+  try{ const j=await (await fetch("/api/portal/settings",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({upgrade_watch_dir:$("ugWatchDir").value.trim()})})).json();
+    $("ugWatchMsg").textContent=j.ok?(" ✓ 저장됨"+(j.upgrade_watch_dir?"":" (감시 끔)")):(" ✗ "+(j.reason||"실패")); }
+  catch(e){ $("ugWatchMsg").textContent=" ✗ "+e; }
+});
+if($("ugPushAll")) $("ugPushAll").addEventListener("click", async()=>{
+  if(!confirm("등록된 모든 엣지를 현재 HQ 버전으로 업그레이드할까요?")) return;
+  $("ugPushAll").disabled=true; $("ugWatchMsg").textContent=" 푸시 중…";
+  try{ const j=await (await fetch("/api/portal/upgrade-all",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:"{}"})).json();
+    if(j.ok){ const ok=j.results.filter(r=>r.ok).length;
+      $("ugWatchMsg").textContent=" ✓ HQ v"+(j.hq_version||"?")+" · "+ok+"/"+j.results.length+" 성공";
+      $("ugPushOut").style.display=""; $("ugPushOut").textContent=
+        j.results.map(r=>`${r.ok?"✓":"✗"} ${r.id} ${r.version||r.reason||""}`).join("\n"); }
+    else $("ugWatchMsg").textContent=" ✗ "+(j.reason||j.error||"실패"); }
+  catch(e){ $("ugWatchMsg").textContent=" ✗ "+e; }
+  $("ugPushAll").disabled=false;
+});
+pLoadUpgradeCfg();
 loadAuth();
 loadOverview(); loadNodes();
 setInterval(()=>{ loadAuth(); loadOverview(); loadNodes(); }, 5000);

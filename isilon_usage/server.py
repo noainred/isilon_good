@@ -45,6 +45,7 @@ from . import powerstore_api as powerstoremod
 from . import storage_status as storagemod
 from . import auth as authmod
 from . import audit as auditmod
+from . import upgrade as upgrademod
 from .scanner import run_scan
 
 
@@ -629,6 +630,9 @@ class ScanController:
         self._rate_thread = threading.Thread(
             target=self._rate_sampler_loop, name="rate-sampler", daemon=True)
         self._rate_thread.start()
+        self._upgrade_thread = threading.Thread(
+            target=self._upgrade_watch_loop, name="upgrade-watch", daemon=True)
+        self._upgrade_thread.start()
         self._auth = authmod.AuthGuard(lambda: self.settings.get("op_password"),
                                        ttl=OP_TOKEN_TTL)
         self._launch_cwd = os.getcwd()      # info.MD 를 저장할 '실행한 디렉터리'
@@ -724,6 +728,31 @@ class ScanController:
 
     def op_token_valid(self, token) -> bool:
         return self._auth.token_valid(token)
+
+    def _upgrade_watch_loop(self) -> None:
+        """감시 폴더(upgrade_watch_dir)에 새 버전 압축본이 있으면 자가 업그레이드 후 재시작.
+
+        옵트인(설정 비우면 끔). 더 새 버전만 적용하고 기존 코드는 백업한다.
+        """
+        code_dir = upgrademod.code_dir_of(__file__)
+        while not self._rate_stop.is_set():
+            secs = 60
+            try:
+                wd = (self.settings.get("upgrade_watch_dir") or "").strip()
+                secs = int(self.settings.get("upgrade_check_secs", 60) or 60)
+                if wd:
+                    found = upgrademod.find_newer_archive(wd, __version__)
+                    if found:
+                        res = upgrademod.upgrade_from_archive(found[0], code_dir, __version__)
+                        if res.get("ok"):
+                            self._log("자동 업그레이드 %s → %s (백업 %s)" % (
+                                res.get("from"), res["version"], res.get("backup")))
+                            auditmod.record(self.data_dir, action="self_upgrade", ok=True,
+                                            detail="%s -> %s" % (res.get("from"), res["version"]))
+                            upgrademod.restart_process()   # 돌아오지 않음
+            except Exception:  # noqa: BLE001
+                pass
+            self._rate_stop.wait(max(10, secs))
 
     def _write_info_md(self, password: str) -> None:
         """설정한 비밀번호를 실행한 디렉터리의 info.MD 로 저장(권한 600)."""
@@ -2132,6 +2161,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
             ip = ""
         auditmod.record(self.data_dir, action=action, ok=ok, ip=ip, detail=detail)
 
+    def _handle_upgrade_push(self) -> None:
+        """포탈이 푸시한 새 코드 번들(tar.gz)을 적용한다(api_token 인증, 적용 후 재시작)."""
+        qs = parse_qs(urlparse(self.path).query)
+        tok = (self._current_settings().get("api_token") or "").strip()
+        if not tok:
+            self._send_json({"ok": False,
+                             "reason": "원격 업그레이드는 api_token 설정이 필요합니다."}, status=403)
+            return
+        if not self._authorized(qs):
+            self._send_json({"ok": False, "reason": "unauthorized"}, status=401)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except (TypeError, ValueError):
+            length = 0
+        data = self.rfile.read(length) if length > 0 else b""
+        if not data:
+            self._send_json({"ok": False, "reason": "번들 없음"}, status=400)
+            return
+        res = upgrademod.upgrade_from_bundle_bytes(
+            data, upgrademod.code_dir_of(__file__), __version__)
+        self._audit("upgrade_push", bool(res.get("ok")),
+                    res.get("version") or res.get("reason") or "")
+        self._send_json(res, status=200 if res.get("ok") else 400)
+        if res.get("ok"):
+            def _later():
+                time.sleep(1.0)
+                upgrademod.restart_process()
+            threading.Thread(target=_later, name="upgrade-restart", daemon=True).start()
+
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
@@ -2139,6 +2198,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": False,
                              "reason": "이 서버는 웹 스캔이 비활성화되어 있습니다."},
                             status=403)
+            return
+        if path == "/api/upgrade":            # 포탈이 푸시하는 원격 업그레이드(api_token 인증)
+            self._handle_upgrade_push()
             return
         body = self._read_json_body()
         try:
