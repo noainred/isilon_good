@@ -73,6 +73,20 @@ def _age_bucket(ref: float, mtime: float) -> str:
     return "5년+"
 
 
+# 파일 크기 분포 버킷 — 작은 파일이 많으면 메타데이터 부담, 큰 파일은 정리 1순위 식별.
+SIZE_BUCKETS = [
+    (1, "0 (빈 파일)"), (1024, "1B~1KB"), (1024 ** 2, "1KB~1MB"),
+    (10 * 1024 ** 2, "1~10MB"), (100 * 1024 ** 2, "10~100MB"),
+    (1024 ** 3, "100MB~1GB"), (10 * 1024 ** 3, "1~10GB"), (None, "10GB+")]
+
+
+def _size_bucket(n: int) -> str:
+    for lim, label in SIZE_BUCKETS:
+        if lim is None or n < lim:
+            return label
+    return "10GB+"
+
+
 def _entry_bytes(stat_result, size_mode: str) -> int:
     """size_mode 에 따라 한 파일이 차지하는 바이트를 계산."""
     if size_mode == "apparent":
@@ -98,8 +112,8 @@ def _local_top(h: list, path: str, eb: int, st) -> None:
 
 
 def _local_accum(ref: float, l_age: dict, l_atime: dict, l_uid: dict, l_ext: dict,
-                 name: str, st, eb: int) -> None:
-    """한 파일을 로컬 나이/접근나이/소유자/확장자 dict 에 더한다(캡 없음 — 청크라 작음)."""
+                 l_size: dict, name: str, st, eb: int) -> None:
+    """한 파일을 로컬 나이/접근나이/소유자/확장자/크기 dict 에 더한다(캡 없음 — 청크라 작음)."""
     def bump(d, k):
         e = d.get(k)
         if e is None:
@@ -110,6 +124,7 @@ def _local_accum(ref: float, l_age: dict, l_atime: dict, l_uid: dict, l_ext: dic
     bump(l_age, _age_bucket(ref, st.st_mtime))
     bump(l_atime, _age_bucket(ref, st.st_atime))
     bump(l_uid, str(st.st_uid))
+    bump(l_size, _size_bucket(eb))     # eb=이 파일 크기(비-하드링크는 원본=counted)
     ext = os.path.splitext(name)[1].lower() or "(없음)"
     if len(ext) > 24:
         ext = ext[:24]
@@ -181,6 +196,7 @@ class Scanner:
         self._stat_atime_age: dict = {}   # 마지막 접근(atime) 기준 나이 분포
         self._stat_uid: dict = {}
         self._stat_ext: dict = {}
+        self._stat_size: dict = {}        # 파일 크기 버킷별 [bytes, files]
         self._stats_ref = 0.0       # 나이 계산 기준 시각(스캔 시작)
         self._last_stats_write = 0.0
         # 최대 파일 Top-N: (bytes, path, mtime, uid, atime) 최소힙 — 가장 작은 게 루트
@@ -483,6 +499,9 @@ class Scanner:
         if len(ext) > 24:
             ext = ext[:24]
         self._stat_bump(self._stat_ext, ext, eb, fcount)
+        # 크기 버킷: 키는 파일 '원본 크기'(하드링크 dedup 무관), bytes 는 counted.
+        self._stat_bump(self._stat_size,
+                        _size_bucket(_entry_bytes(st, self.size_mode)), eb, fcount)
 
     def _top_push(self, path: str, eb: int, st) -> None:
         """최대 파일 Top-N 힙 갱신(_dlock 안에서 호출)."""
@@ -501,7 +520,8 @@ class Scanner:
             elif it[0] > h[0][0]:
                 heapq.heapreplace(h, it)
 
-    def _accum_merge(self, l_age: dict, l_atime: dict, l_uid: dict, l_ext: dict) -> None:
+    def _accum_merge(self, l_age: dict, l_atime: dict, l_uid: dict, l_ext: dict,
+                     l_size: dict) -> None:
         """스레드 로컬 집계 dict 들을 공유 집계에 병합(_dlock 안에서 호출, 캡은 여기서 적용)."""
         for k, v in l_age.items():
             self._stat_bump(self._stat_age, k, v[0], v[1])
@@ -511,6 +531,8 @@ class Scanner:
             self._stat_bump(self._stat_uid, k, v[0], v[1], cap=50000)
         for k, v in l_ext.items():
             self._stat_bump(self._stat_ext, k, v[0], v[1])
+        for k, v in l_size.items():
+            self._stat_bump(self._stat_size, k, v[0], v[1])
 
     def _write_stats(self, conn) -> None:
         """집계를 scan_stats 에 저장(이 run 행 교체). 확장자는 상위 500개만."""
@@ -527,6 +549,8 @@ class Scanner:
                              reverse=True)[:500]
             dbmod.replace_scan_stats(conn, self.run_id, "ext",
                                      [(k, v[0], v[1]) for k, v in ext_top])
+            dbmod.replace_scan_stats(conn, self.run_id, "size",
+                                     [(k, v[0], v[1]) for k, v in self._stat_size.items()])
             dbmod.replace_top_files(
                 conn, self.run_id,
                 [(p, b, m, u, a) for (b, p, m, u, a) in self._top_files])
@@ -536,7 +560,7 @@ class Scanner:
 
     def _load_stats(self, conn) -> None:
         for kind, d in (("age", self._stat_age), ("owner", self._stat_uid),
-                        ("ext", self._stat_ext),
+                        ("ext", self._stat_ext), ("size", self._stat_size),
                         ("atime_age", self._stat_atime_age)):
             try:
                 for r in dbmod.get_scan_stats(conn, self.run_id, kind):
@@ -712,6 +736,7 @@ class Scanner:
             l_atime: dict = {}
             l_uid: dict = {}
             l_ext: dict = {}
+            l_size: dict = {}
             deferred: list = []   # nlink>1: dedup 이 공유라 락 안에서 판정
             for entry, st in zip(chunk, stats):     # 락 밖 — 파일당 작업
                 if st is None:
@@ -723,7 +748,7 @@ class Scanner:
                     continue
                 l_bytes += eb
                 _local_top(l_top, entry.path, eb, st)
-                _local_accum(ref, l_age, l_atime, l_uid, l_ext, entry.name, st, eb)
+                _local_accum(ref, l_age, l_atime, l_uid, l_ext, l_size, entry.name, st, eb)
             with self._dlock:                       # 락 안 — 짧게 병합
                 for p, name, eb, st in deferred:    # 하드링크 dedup(드묾)
                     key = (st.st_dev, st.st_ino)
@@ -737,7 +762,7 @@ class Scanner:
                         self._top_push(p, cb, st)
                     self._accum_stats(name, st, cb, 1)
                 self._top_merge(l_top)
-                self._accum_merge(l_age, l_atime, l_uid, l_ext)
+                self._accum_merge(l_age, l_atime, l_uid, l_ext, l_size)
                 own_bytes += l_bytes
                 file_count += l_files
                 self._scanned_bytes += l_bytes

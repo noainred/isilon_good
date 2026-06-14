@@ -708,6 +708,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
             pass
         _show("👤 소유자별 사용량 Top", "owner", 20, _owner)
         _show("🗂 확장자별 사용량 Top", "ext", 20)
+        _show("📏 파일 크기별 분포", "size", 20)
 
         print("\n  🐘 최대 파일 Top")
         tops = dbmod.get_top_files(conn, rid, limit=args.top)

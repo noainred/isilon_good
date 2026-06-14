@@ -2136,7 +2136,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
                 if row is None or not os.path.exists(row["db_path"]):
                     self._send_json({"ok": True, "age": [], "atime_age": [],
-                                     "owners": [], "extensions": []})
+                                     "owners": [], "extensions": [], "sizes": []})
                     return
                 pconn = dbmod.connect(row["db_path"])
                 try:
@@ -2151,6 +2151,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     for o in owners:
                         o["name"] = _uid_name(o["key"])
                     exts = dbmod.get_scan_stats(pconn, rid, "ext", limit=200)
+                    sizes = dbmod.get_scan_stats(pconn, rid, "size")
+                    _so = ["0 (빈 파일)", "1B~1KB", "1KB~1MB", "1~10MB", "10~100MB",
+                           "100MB~1GB", "1~10GB", "10GB+"]
+                    sizes.sort(key=lambda r: _so.index(r["key"]) if r["key"] in _so else 99)
                     topf = dbmod.get_top_files(pconn, rid, limit=100)
                     for f in topf:
                         f["owner"] = _uid_name(f.get("uid"))
@@ -2162,7 +2166,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._send_json({"ok": True, "scan_id": scan_id, "age": age,
                                      "atime_age": atime_age, "atime_info": atime_info,
                                      "owners": owners, "extensions": exts,
-                                     "top_files": topf})
+                                     "sizes": sizes, "top_files": topf})
                 finally:
                     pconn.close()
                 return

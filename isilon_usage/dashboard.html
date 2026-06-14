@@ -788,6 +788,11 @@
     <div class="sub" id="repAtimeNote" style="margin-bottom:8px;">마지막 <b>접근</b> 시각(atime) 기준 — 오래 접근 안 한 콜드 데이터 후보.</div>
     <div id="repAtimeAge">—</div>
   </div>
+  <div class="card" style="margin-top:14px;">
+    <h2>📏 파일 크기별 분포</h2>
+    <div class="sub" style="margin-bottom:8px;">작은 파일이 많으면 메타데이터 부담(스캔도 느려짐), 큰 파일은 정리 1순위. 버킷별 파일 수·용량.</div>
+    <div id="repSize">—</div>
+  </div>
   <div class="grid cols-2" style="gap:14px; margin-top:14px;">
     <div class="card">
       <h2>📈 용량 소진 예측</h2>
@@ -2586,6 +2591,7 @@ async function loadReport() {
     $("repOwner").innerHTML = _statBarList(j.owners,
       i => (i.name ? (i.name + ' <span class="sub">(uid ' + i.key + ')</span>') : ("uid " + i.key)), 25);
     $("repExt").innerHTML = _statBarList(j.extensions, i => i.key, 25);
+    $("repSize").innerHTML = _statBarList(j.sizes, i => i.key, 10);
     // 최대 파일 Top — 표
     const tf = j.top_files || [];
     $("repTopFiles").innerHTML = !tf.length

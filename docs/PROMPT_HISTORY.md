@@ -301,4 +301,8 @@
      전 엣지에 전파(push_upgrade_all)+재시작. 포탈 upgrade_status/check/install(propagate)/set_upgrade_net,
      API /api/portal/upgrade/*, '업그레이드' 탭 인터넷 카드(현재/최신·엣지수·로그·버튼). v1.62.0.
 
+155. 분석 리포트에 파일 크기별로도 조사. → _size_bucket(8버킷) + 집계 전 경로(scanner 로컬/공유,
+     scan_stats kind=size) + /api/stats sizes + 대시보드 📏 크기별 분포 카드 + CLI stats. 키=원본
+     크기(dedup 무관), bytes=counted. 스키마 변경 없음. v1.63.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
