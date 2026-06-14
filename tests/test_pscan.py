@@ -66,6 +66,30 @@ def run_correctness() -> None:
         shutil.rmtree(base, ignore_errors=True)
 
 
+def run_threads_per_proc() -> None:
+    """프로세스당 스레드(2단 병렬)가 켜져도 합계가 직렬과 정확히 일치해야 한다."""
+    base = tempfile.mkdtemp(prefix="iu_ps_")
+    try:
+        _mk(base)
+        rb, rf, rd = _reference(base)
+        # _scan_subtree_threaded 직접: 한 서브트리 합계가 직렬 scan_subtree 와 동일
+        sub = os.path.join(base, "t0")
+        s_serial = pscan.scan_subtree(sub, "apparent", 0, 1)
+        s_thread = pscan.scan_subtree(sub, "apparent", 0, 8)
+        assert s_serial[1:] == s_thread[1:], (s_serial, s_thread)
+        # parallel_scan: tpp 1/4/8 모두 레퍼런스와 일치(프로세스 수와 무관)
+        for p in (1, 4):
+            for tpp in (1, 4, 8):
+                r = pscan.parallel_scan(base, processes=p, size_mode="apparent",
+                                        threads_per_proc=tpp)
+                assert r["ok"] and r["threads_per_proc"] == tpp, r
+                assert (r["total_bytes"], r["total_files"], r["total_dirs"]) == (rb, rf, rd), \
+                    (p, tpp, r["total_bytes"], r["total_files"], r["total_dirs"])
+        print("[threads_per_proc] OK  2단 병렬(프로세스×스레드)도 합계 직렬과 동일")
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
 def run_node_mounts() -> None:
     # node_mounts 로 같은 base 를 가리키면(라운드로빈) 결과는 단일과 동일해야 한다.
     base = tempfile.mkdtemp(prefix="iu_ps_")
@@ -128,6 +152,7 @@ def run_write_db() -> None:
 
 if __name__ == "__main__":
     run_correctness()
+    run_threads_per_proc()
     run_node_mounts()
     run_bad_path()
     run_write_db()

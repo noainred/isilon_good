@@ -1274,6 +1274,8 @@ class ScanController:
         from . import pscan as pscanmod
         stop = threading.Event()
         procs = max(1, int(self.settings.get("scan_workers", 4) or 4))
+        # 프로세스당 stat 스레드(고지연 NAS 왕복 은닉). 기본 1=동작 변화 없음(옵트인).
+        tpp = max(1, int(self.settings.get("pscan_threads", 1) or 1))
         mdb = mgrmod.manager_db_path(self.data_dir)
 
         def worker():
@@ -1293,7 +1295,7 @@ class ScanController:
                     except Exception:  # noqa: BLE001
                         pass
 
-                res = pscanmod.parallel_scan(path, processes=procs,
+                res = pscanmod.parallel_scan(path, processes=procs, threads_per_proc=tpp,
                                              size_mode=size_mode, on_progress=_prog)
                 if not res.get("ok"):
                     raise RuntimeError(res.get("error") or "pscan 실패")
