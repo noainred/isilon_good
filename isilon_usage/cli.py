@@ -516,6 +516,43 @@ def cmd_pscan(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_autotune(args: argparse.Namespace) -> int:
+    """오토튜닝 — 실제 엔진(pscan)을 짧게 측정해 최적 프로세스×스레드를 고른다."""
+    from . import autotune as atmod
+    root = os.path.abspath(args.path)
+    print("오토튜닝 측정 — %s  (후보별 %.0f초, 읽기 전용)" % (root, args.secs))
+    print("-" * 60)
+
+    def _prog(p):
+        if p.get("phase") == "measuring":
+            sys.stdout.write("\r  [%d/%d] %s 측정 중…            "
+                             % (p["index"] + 1, p["total"], p["label"]))
+            sys.stdout.flush()
+
+    r = atmod.autotune(root, secs=args.secs, size_mode=args.size_mode,
+                       max_procs=args.procs, max_threads=args.threads, on_progress=_prog)
+    sys.stdout.write("\r" + " " * 60 + "\r")
+    if not r.get("ok"):
+        print("  실패: %s" % r.get("error"), file=sys.stderr)
+        return 2
+    print("  %-22s %14s  %8s" % ("방법", "files/s", "배속"))
+    for x in r["results"]:
+        mark = "  ◀ 최적" if x is r["best"] else ""
+        print("  %-22s %14s  %6.2f배%s"
+              % (x["label"], "{:,}".format(int(x["files_per_sec"])), x["speedup"], mark))
+    print("-" * 60)
+    b = r["best"]
+    print("실측 권장: %s  (%s files/s)"
+          % (b["label"], "{:,}".format(int(b["files_per_sec"]))))
+    print("  적용 예) python3 -m isilon_usage pscan %s -P %d -T %d"
+          % (root, b["procs"], b["threads"]))
+    print("  참고: %s" % r.get("note", ""))
+    if getattr(args, "json", False):
+        import json
+        print(json.dumps(r, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_version(args: argparse.Namespace) -> int:
     import platform
     print(f"isilon_usage {__version__}")
@@ -794,6 +831,16 @@ def build_parser() -> argparse.ArgumentParser:
                      help="프로세스 1·2·4·8 로 확장성(처리량) 비교")
     pps.add_argument("--json", action="store_true", help="결과를 JSON 으로 출력")
     pps.set_defaults(func=cmd_pscan)
+
+    aps = sub.add_parser("autotune", help="새 경로의 최적 프로세스×스레드를 실측으로 측정"
+                                          "(읽기 전용 — 본 스캔 전 자동 선택용)")
+    aps.add_argument("path", help="측정할 루트 경로")
+    aps.add_argument("--secs", type=float, default=8.0, help="후보별 측정 시간(초, 기본 8)")
+    aps.add_argument("--procs", "-P", type=int, default=8, help="시험할 최대 프로세스 수")
+    aps.add_argument("--threads", "-T", type=int, default=8, help="시험할 프로세스당 스레드 수")
+    aps.add_argument("--size-mode", choices=["disk", "apparent"], default="disk")
+    aps.add_argument("--json", action="store_true", help="결과를 JSON 으로 출력")
+    aps.set_defaults(func=cmd_autotune)
 
     pvr = sub.add_parser("version", help="버전/환경 정보 출력")
     pvr.set_defaults(func=cmd_version)

@@ -32,7 +32,7 @@ def _entry_bytes(st, size_mode: str) -> int:
 
 
 def scan_subtree(path: str, size_mode: str = "disk", per_file_work: int = 0,
-                 threads: int = 1, recursive: bool = True) -> tuple:
+                 threads: int = 1, recursive: bool = True, deadline: float = 0.0) -> tuple:
     """path 아래 전체(자기 포함)를 재귀로 훑어 (path, bytes, files, dirs, errors).
 
     프로세스 워커가 호출하는 모듈 레벨 함수(피클 가능). 스택 기반 반복(재귀 깊이 무제한).
@@ -43,11 +43,13 @@ def scan_subtree(path: str, size_mode: str = "disk", per_file_work: int = 0,
     NAS 에서 프로세스(=GIL 회피)×스레드(=지연 은닉) 2단 병렬의 핵심 레버.
     recursive=False 면 직속 파일만 센다(적응형 깊이 분할에서 '펼친 부모' 단위 — 자식
     디렉터리는 각각 별도 단위로 처리되므로 부모는 내려가지 않는다).
+    deadline>0(절대 epoch 시각)이면 그 시각에 멈춘다(오토튜닝의 시간상자 측정 — 부분
+    결과 + files_per_sec 만 쓰고 합계는 버린다).
     """
     if not recursive:
         return _scan_shallow(path, size_mode)
     if threads and threads > 1 and not per_file_work:
-        return _scan_subtree_threaded(path, size_mode, threads)
+        return _scan_subtree_threaded(path, size_mode, threads, deadline)
     total_bytes = 0
     files = 0
     dirs = 0
@@ -55,6 +57,8 @@ def scan_subtree(path: str, size_mode: str = "disk", per_file_work: int = 0,
     acc = 0
     stack = [path]
     while stack:
+        if deadline and time.time() >= deadline:   # 시간상자 만료(오토튜닝)
+            break
         d = stack.pop()
         dirs += 1
         try:                                   # 디렉터리 자기 inode 분(du 와 동일)
@@ -75,6 +79,8 @@ def scan_subtree(path: str, size_mode: str = "disk", per_file_work: int = 0,
                             if per_file_work:          # 파일당 처리 비용 모사(벤치 전용)
                                 for k in range(per_file_work):
                                     acc += k * k
+                            if deadline and (files & 8191) == 0 and time.time() >= deadline:
+                                break                  # 거대 평면 디렉터리 대비
                     except OSError:
                         errors += 1
         except OSError:
@@ -82,12 +88,14 @@ def scan_subtree(path: str, size_mode: str = "disk", per_file_work: int = 0,
     return (path, total_bytes, files, dirs, errors)
 
 
-def _scan_subtree_threaded(path: str, size_mode: str, threads: int) -> tuple:
+def _scan_subtree_threaded(path: str, size_mode: str, threads: int,
+                           deadline: float = 0.0) -> tuple:
     """scan_subtree 의 스레드판 — 디렉터리 작업큐를 T 스레드가 당겨 지연을 은닉한다.
 
     임계구역은 카운터/큐 갱신뿐(작게) — stat/scandir(I/O)는 락 밖. 결과는 직렬판과
     동일한 (path, bytes, files, dirs, errors) 튜플. 프로세스 내부에서만 도는 스레드라
     프로세스 간 공유 상태는 없다(기존 pscan 정합성 그대로).
+    deadline>0 이면 그 절대 시각에 워커가 멈춘다(오토튜닝의 시간상자 측정).
     """
     import queue
     import threading
@@ -99,6 +107,8 @@ def _scan_subtree_threaded(path: str, size_mode: str, threads: int) -> tuple:
 
     def worker():
         while True:
+            if deadline and time.time() >= deadline:   # 시간상자 만료(오토튜닝)
+                return
             try:
                 d = q.get(timeout=0.1)
             except queue.Empty:
@@ -210,7 +220,7 @@ def _split_units(child_dirs: List[str], procs: int, target_factor: int = 4) -> l
 
 def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
                   node_mounts: Optional[List[str]] = None,
-                  threads_per_proc: int = 1,
+                  threads_per_proc: int = 1, max_seconds: float = 0.0,
                   on_progress: Optional[Callable[[dict], None]] = None) -> dict:
     """root 를 1단계 자식 단위로 쪼개 processes 개 프로세스로 병렬 스캔한다.
 
@@ -223,6 +233,7 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
         return {"ok": False, "error": "디렉터리가 아니거나 접근 불가: %s" % root}
     t0 = time.time()
     tpp = max(1, int(threads_per_proc or 1))
+    deadline = (t0 + max_seconds) if max_seconds else 0.0   # 오토튜닝 시간상자(0=무제한)
 
     # 루트 직속: 파일은 코디네이터가 직접 세고, 자식 디렉터리는 작업 단위로.
     total_bytes = 0
@@ -267,7 +278,7 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
                 sp = (_remap(upath, root, node_mounts[j % len(node_mounts)])
                       if node_mounts else upath)
                 futs[ex.submit(scan_subtree, sp, size_mode, 0,
-                               tpp if rec else 1, rec)] = top
+                               tpp if rec else 1, rec, deadline)] = top
             done = 0
             for fut in as_completed(futs):
                 top = futs[fut]
