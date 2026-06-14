@@ -331,11 +331,14 @@ class PortalController:
         self._thread = None
         self.poll_every = POLL_EVERY
         self.tick = SCHED_TICK
+        self._upg_state = {"log": [], "installing": False, "available": False,
+                           "latest": None, "last_check": None}   # 인터넷 자동 업그레이드 상태
 
     # --- 인증(작업 보호: 보기는 자유, 변경은 로그인) ---
     def _load_settings(self) -> dict:
         out = {"op_password": "", "op_password_encrypted": False,
-               "upgrade_watch_dir": "", "upgrade_check_secs": 60}
+               "upgrade_watch_dir": "", "upgrade_check_secs": 60,
+               "upgrade_source": "off", "upgrade_url": "", "upgrade_auto": False}
         try:
             with open(portal_settings_path(self.data_dir), encoding="utf-8") as fh:
                 s = json.load(fh)
@@ -347,6 +350,10 @@ class PortalController:
                     out["upgrade_check_secs"] = max(10, int(s.get("upgrade_check_secs", 60) or 60))
                 except (TypeError, ValueError):
                     pass
+                _src = str(s.get("upgrade_source") or "off").strip().lower()
+                out["upgrade_source"] = _src if _src in ("off", "github") else "off"
+                out["upgrade_url"] = str(s.get("upgrade_url") or "").strip()
+                out["upgrade_auto"] = bool(s.get("upgrade_auto"))
         except (OSError, ValueError):
             pass
         return out
@@ -464,27 +471,125 @@ class PortalController:
         return {"ok": True, "hq_version": __version__, "results": results}
 
     def _check_self_upgrade(self) -> None:
-        """감시 폴더에 새 버전이 있으면 자가 업그레이드 → 엣지 푸시 → 재시작."""
-        wd = (self.settings.get("upgrade_watch_dir") or "").strip()
-        if not wd:
-            return
+        """새 버전을 자가 적용 → 엣지 푸시 → 재시작 — ① 감시 폴더 ② 인터넷(GitHub)."""
         with self._lock:
             if self._inflight:       # 동기화/복제 중이면 미룬다(중단 방지)
                 return
-        found = upgrademod.find_newer_archive(wd, __version__)
-        if not found:
-            return
-        res = upgrademod.upgrade_from_archive(found[0], upgrademod.code_dir_of(__file__),
-                                              __version__)
-        if not res.get("ok"):
-            return
+        code_dir = upgrademod.code_dir_of(__file__)
+        # ① 로컬 감시 폴더
+        wd = (self.settings.get("upgrade_watch_dir") or "").strip()
+        if wd:
+            found = upgrademod.find_newer_archive(wd, __version__)
+            if found:
+                res = upgrademod.upgrade_from_archive(found[0], code_dir, __version__)
+                if res.get("ok"):
+                    self._apply_self_upgrade(res, "감시 폴더")
+        # ② 인터넷(GitHub) 소스
+        if (self.settings.get("upgrade_source") or "off").strip() == "github":
+            info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__)
+            self._upg_set_check(info)
+            if info.get("available") and bool(self.settings.get("upgrade_auto")):
+                self._upg_log("새 버전 %s 발견 — 자동 설치" % info.get("latest"))
+                dest = os.path.join(self.data_dir, "upgrades")
+                res = upgrademod.upgrade_from_remote(
+                    self.settings.get("upgrade_url") or "", code_dir, __version__, dest)
+                if res.get("ok"):
+                    self._apply_self_upgrade(res, "인터넷")
+                else:
+                    self._upg_log("자동 설치 실패: %s" % res.get("reason"))
+
+    def _apply_self_upgrade(self, res: dict, how: str) -> None:
+        """자가 업그레이드 성공 후: 감사로그 → 엣지 전파 → 재시작(돌아오지 않음)."""
+        self._upg_log("%s 자가 업그레이드 %s → %s, 엣지 전파 후 재시작" % (
+            how, res.get("from"), res.get("version")))
         auditmod.record(self.data_dir, action="self_upgrade", ok=True,
-                        detail="%s -> %s" % (res.get("from"), res["version"]))
+                        detail="%s -> %s (%s)" % (res.get("from"), res.get("version"), how))
         try:                                  # 새 코드가 디스크에 반영됨 → 엣지에도 푸시
             self.push_upgrade_all()
         except Exception:  # noqa: BLE001
             pass
-        upgrademod.restart_process()          # 돌아오지 않음
+        upgrademod.restart_process()
+
+    # --- 인터넷 자동 업그레이드 상태/조작(엣지와 동일 + 엣지 전파) ---
+    def _upg_log(self, msg: str) -> None:
+        with self._lock:
+            self._upg_state.setdefault("log", []).append({"t": time.time(), "msg": msg})
+            self._upg_state["log"] = self._upg_state["log"][-60:]
+
+    def _upg_set_check(self, info: dict) -> None:
+        with self._lock:
+            self._upg_state.update({
+                "last_check": info.get("checked_at"), "latest": info.get("latest"),
+                "available": bool(info.get("available")), "source": info.get("source"),
+                "size_bytes": info.get("size_bytes"), "check_error": info.get("error")})
+
+    def upgrade_status(self) -> dict:
+        with self._lock:
+            st = dict(self._upg_state)
+        st["current"] = __version__
+        st["source_mode"] = self.settings.get("upgrade_source", "off")
+        st["auto"] = bool(self.settings.get("upgrade_auto"))
+        st["url"] = self.settings.get("upgrade_url") or upgrademod.DEFAULT_UPGRADE_BASE
+        st["check_secs"] = self.settings.get("upgrade_check_secs", 60)
+        st["node_count"] = len(self.nodes)
+        return {"ok": True, **st}
+
+    def upgrade_check(self) -> dict:
+        info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__)
+        self._upg_set_check(info)
+        if info.get("error"):
+            self._upg_log("확인 오류: %s" % info["error"])
+        else:
+            self._upg_log("확인 — 현재 %s · 최신 %s%s" % (
+                __version__, info.get("latest"),
+                " · 업데이트 가능" if info.get("available") else " · 최신"))
+        return {"ok": bool(info.get("ok")), **self.upgrade_status()}
+
+    def upgrade_install(self, *, propagate: bool = True) -> dict:
+        with self._lock:
+            if self._upg_state.get("installing"):
+                return {"ok": False, "error": "이미 설치 중입니다."}
+            self._upg_state["installing"] = True
+        try:
+            code_dir = upgrademod.code_dir_of(__file__)
+            dest = os.path.join(self.data_dir, "upgrades")
+            self._upg_log("수동 업그레이드 시작…")
+            res = upgrademod.upgrade_from_remote(
+                self.settings.get("upgrade_url") or "", code_dir, __version__, dest)
+        finally:
+            with self._lock:
+                self._upg_state["installing"] = False
+        if not res.get("ok"):
+            self._upg_log("설치 실패: %s" % res.get("reason"))
+            return {"ok": False, "error": res.get("reason"),
+                    "up_to_date": bool(res.get("up_to_date"))}
+        propagated = None
+        if propagate:
+            try:                              # 새 코드를 등록된 엣지에도 전파
+                propagated = self.push_upgrade_all().get("results")
+            except Exception:  # noqa: BLE001
+                pass
+        self._upg_log("설치 완료 %s → %s%s — 곧 재시작" % (
+            res.get("from"), res.get("version"), " · 엣지 전파" if propagate else ""))
+        auditmod.record(self.data_dir, action="self_upgrade_manual", ok=True,
+                        detail="-> %s" % res.get("version"))
+        threading.Thread(target=lambda: (time.sleep(1.5), upgrademod.restart_process()),
+                         daemon=True).start()
+        return {"ok": True, "version": res.get("version"), "restarting": True,
+                "propagated": propagated}
+
+    def set_upgrade_net(self, source, url, auto, check_secs=None) -> dict:
+        src = str(source or "off").strip().lower()
+        self.settings["upgrade_source"] = src if src in ("off", "github") else "off"
+        self.settings["upgrade_url"] = str(url or "").strip()
+        self.settings["upgrade_auto"] = bool(auto)
+        if check_secs is not None:
+            try:
+                self.settings["upgrade_check_secs"] = max(10, int(check_secs))
+            except (TypeError, ValueError):
+                pass
+        self._save_settings()
+        return self.upgrade_status()
 
     # --- 레지스트리 CRUD ---
     def _get(self, nid: str):
@@ -1300,6 +1405,9 @@ class PortalHandler(BaseHTTPRequestHandler):
             if path == "/api/portal/settings":
                 self._send_json(c.upgrade_config())
                 return
+            if path == "/api/portal/upgrade/status":
+                self._send_json(c.upgrade_status())
+                return
             if path == "/api/portal/ping-history":
                 qs = parse_qs(urlparse(self.path).query)
                 try:
@@ -1389,6 +1497,18 @@ class PortalHandler(BaseHTTPRequestHandler):
             if path == "/api/portal/settings":
                 self._send_json(c.set_upgrade_watch(body.get("upgrade_watch_dir") or "",
                                                     body.get("upgrade_check_secs")))
+                return
+            if path == "/api/portal/upgrade/net":     # 인터넷 자동 업그레이드 설정
+                self._send_json(c.set_upgrade_net(body.get("upgrade_source"),
+                                                  body.get("upgrade_url"),
+                                                  body.get("upgrade_auto"),
+                                                  body.get("upgrade_check_secs")))
+                return
+            if path == "/api/portal/upgrade/check":   # 지금 인터넷에서 최신 확인
+                self._send_json(c.upgrade_check())
+                return
+            if path == "/api/portal/upgrade/install":  # 지금 설치 + 엣지 전파 + 재시작
+                self._send_json(c.upgrade_install(propagate=bool(body.get("propagate", True))))
                 return
             if path == "/api/portal/upgrade-all":
                 self._send_json(c.push_upgrade_all())

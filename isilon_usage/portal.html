@@ -244,6 +244,28 @@
 
   <!-- ② 업그레이드 (원격 버전 + 자동/감시폴더/전노드) -->
   <div class="subpane" id="np-upgrade">
+  <div class="card" id="netUpgCard" style="margin-bottom:14px; border:1px solid var(--accent2);">
+    <h2>🌐 인터넷(GitHub) 자동 업그레이드 — 포탈 + 전 엣지</h2>
+    <div id="nuInfo" class="sub" style="margin-bottom:10px;">상태 불러오는 중…</div>
+    <div class="setgrid" style="margin-bottom:8px;">
+      <label class="fld">소스<select id="nuSource" class="inp">
+        <option value="off">끔(수동)</option>
+        <option value="github">GitHub(인터넷) 모니터링</option></select></label>
+      <label class="fld">versions.json URL(빈값=기본 raw GitHub)
+        <input id="nuUrl" class="inp mono" placeholder="https://raw.githubusercontent.com/.../download" /></label>
+      <label class="fld">확인 주기(초)<input id="nuSecs" class="inp" type="number" min="10" value="60" /></label>
+      <label class="fld" style="flex-direction:row; align-items:center; gap:6px;">
+        <input type="checkbox" id="nuAuto" /> 새 버전 자동 설치·재시작(+엣지 전파)</label>
+    </div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <button id="nuSaveBtn">설정 저장</button>
+      <button id="nuCheckBtn" class="primary">🔄 지금 확인</button>
+      <button id="nuInstallBtn" style="display:none; border-color:var(--warn); color:#ffd591;">⬆ 지금 업그레이드(+전 엣지)</button>
+      <span id="nuMsg" class="sub"></span>
+    </div>
+    <div id="nuLog" class="sub mono" style="display:none; max-height:160px; overflow:auto;
+      background:#0d1219; border:1px solid var(--line); border-radius:8px; padding:8px; white-space:pre-wrap; margin-top:8px;"></div>
+  </div>
   <div class="card" style="margin-bottom:14px;">
     <h2>🔄 원격 버전 업그레이드 — 엣지를 HQ 최신 코드로</h2>
     <div class="sub" style="margin-bottom:8px;">HQ 포탈의 현재 코드로 엣지를 올립니다 — 최신 코드(agent-bundle)를 받아 코드 디렉터리에 덮어쓰고 서비스를 재시작합니다(스캔 DB·설정은 data-dir 라 보존). 노드 버전은 ‘노드 관리’ 탭 표의 ‘버전’ 열에서 확인하세요.</div>
@@ -1049,7 +1071,50 @@ if($("pAuditBtn")) $("pAuditBtn").addEventListener("click", pLoadAudit);
 async function pLoadUpgradeCfg(){
   try{ const j=await (await fetch("/api/portal/settings",{cache:"no-store"})).json();
     if(j.ok && $("ugWatchDir")) $("ugWatchDir").value=j.upgrade_watch_dir||""; }catch(e){}
+  loadNetUpg();
 }
+// 인터넷(GitHub) 자동 업그레이드 — 포탈 자가 + 전 엣지 전파
+async function loadNetUpg(){
+  try{ renderNetUpg(await (await fetch("/api/portal/upgrade/status",{cache:"no-store"})).json()); }catch(e){}
+}
+function renderNetUpg(j){
+  if(!j||j.ok===false){ if($("nuInfo")) $("nuInfo").textContent="상태를 불러올 수 없습니다."; return; }
+  const a=!!j.available;
+  $("nuInfo").innerHTML=`현재 <b>v${j.current||"?"}</b> · 최신 `+(j.latest?`<b>v${j.latest}</b>`:"—")
+    +(a?' <span style="color:var(--warn);font-weight:700">⬆ 업데이트 가능</span>':(j.latest?' <span style="color:var(--ok)">✓ 최신</span>':""))
+    +(j.last_check?` · 확인 ${new Date(j.last_check*1000).toLocaleString("ko-KR")}`:" · 아직 확인 안 함")
+    +` · 엣지 ${j.node_count||0}대`
+    +(j.check_error?`<br><span style="color:var(--danger)">확인 오류: ${j.check_error}</span>`:"")
+    +`<br><span class="sub">소스: ${j.url||"—"}</span>`;
+  if(document.activeElement!==$("nuSource")) $("nuSource").value=j.source_mode||"off";
+  if(document.activeElement!==$("nuAuto")) $("nuAuto").checked=!!j.auto;
+  if(j.check_secs && document.activeElement!==$("nuSecs")) $("nuSecs").value=j.check_secs;
+  $("nuInstallBtn").style.display=a?"inline-block":"none";
+  const log=j.log||[];
+  if(log.length){ $("nuLog").style.display="block";
+    $("nuLog").textContent=log.slice().reverse().map(e=>`${new Date(e.t*1000).toLocaleTimeString("ko-KR")}  ${e.msg}`).join("\n"); }
+}
+if($("nuSaveBtn")) $("nuSaveBtn").addEventListener("click", async()=>{
+  $("nuMsg").textContent="저장 중…";
+  try{ await (await fetch("/api/portal/upgrade/net",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({upgrade_source:$("nuSource").value,upgrade_url:$("nuUrl").value.trim(),
+      upgrade_auto:$("nuAuto").checked,upgrade_check_secs:parseInt($("nuSecs").value,10)||60})})).json();
+    $("nuMsg").textContent="✓ 저장됨"; loadNetUpg(); }
+  catch(e){ $("nuMsg").textContent="✗ "+e; }
+});
+if($("nuCheckBtn")) $("nuCheckBtn").addEventListener("click", async()=>{
+  $("nuMsg").textContent="확인 중…";
+  try{ const j=await (await fetch("/api/portal/upgrade/check",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})).json();
+    renderNetUpg(j); $("nuMsg").textContent=j.available?"새 버전이 있습니다.":"최신입니다."; }
+  catch(e){ $("nuMsg").textContent="✗ "+e; }
+});
+if($("nuInstallBtn")) $("nuInstallBtn").addEventListener("click", async()=>{
+  if(!confirm("포탈을 최신 버전으로 설치하고, 등록된 모든 엣지에도 전파한 뒤 재시작할까요?")) return;
+  $("nuMsg").textContent="설치·전파 중… (잠시 후 재시작)";
+  try{ const j=await (await fetch("/api/portal/upgrade/install",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({propagate:true})})).json();
+    $("nuMsg").innerHTML=j.ok?`<span style="color:var(--ok)">✓ v${j.version} 설치 — 엣지 전파·재시작 중… 잠시 후 새로고침.</span>`:`<span style="color:var(--danger)">실패: ${j.error||""}</span>`; }
+  catch(e){ $("nuMsg").innerHTML='<span class="sub">설치 후 재시작되었습니다. 잠시 후 새로고침.</span>'; }
+});
 if($("ugWatchSave")) $("ugWatchSave").addEventListener("click", async()=>{
   $("ugWatchMsg").textContent=" 저장 중…";
   try{ const j=await (await fetch("/api/portal/settings",{method:"POST",

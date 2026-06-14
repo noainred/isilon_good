@@ -13,6 +13,25 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.62.0] - 2026-06-14
+
+### 추가됨 (Added) — 인터넷 자동 업그레이드 4단계(완성): 포탈 인터넷 소스 + 엣지 전파 + UI
+
+포탈(HQ)도 엣지처럼 인터넷(GitHub)을 모니터링해 자가 업그레이드하고, 받은 새 버전을 **등록된
+모든 엣지에 전파**한 뒤 재시작한다(기존 `push_upgrade_all` 재사용). 이로써 1~4단계 완성.
+
+- 포탈 `_check_self_upgrade` 에 인터넷 소스 추가, `_apply_self_upgrade`(자가→엣지 전파→재시작),
+  `upgrade_status/check/install(propagate)`·`set_upgrade_net`. 설치 시 push_upgrade_all 로 전 엣지 전파.
+- API: `GET /api/portal/upgrade/status`, `POST /api/portal/upgrade/check·install·net`. 설정
+  `upgrade_source/upgrade_url/upgrade_auto`(포탈 설정 파일).
+- 포탈 **「노드 설정 → 🔄 업그레이드」 탭에 🌐 인터넷 자동 업그레이드 카드** — 현재/최신 버전
+  (업데이트 가능 배지)·확인 시각·**엣지 수**·로그 + 설정(소스/자동/주기/URL) + 버튼(지금 확인 ·
+  **지금 업그레이드(+전 엣지)**).
+- HTTP 스모크·서빙 검증. **자동 업그레이드 전체 완성**: ① 원격 코어 ② 엣지 체커/API ③ 엣지 UI
+  ④ 포탈 인터넷+전파+UI.
+
+---
+
 ## [1.61.0] - 2026-06-14
 
 ### 추가됨 (Added) — 인터넷 자동 업그레이드 3단계: 엣지 대시보드 상세 UI
