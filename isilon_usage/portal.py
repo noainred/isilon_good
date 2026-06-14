@@ -521,6 +521,64 @@ class PortalController:
             self._save()
         return {"ok": True, "node": _public_node(n, self._cache)}
 
+    def import_nodes_csv(self, csv_text: str) -> dict:
+        """CSV 로 여러 노드를 한 번에 등록(import). 행별 추가/수정/오류를 집계해 반환한다.
+
+        헤더 행이 있으면(컬럼에 url+id 포함) 그 이름으로 매핑하고, 없으면
+        id,url,region,token,alias_local,alias_logical 순서로 간주한다. 한글/별칭 헤더도 허용
+        (이름→id, 주소/host→url, 지역→region, 토큰→token …). 토큰이 비면 기존 토큰을 유지한다.
+        """
+        import csv as _csv
+        import io as _io
+        if not csv_text or not csv_text.strip():
+            return {"ok": False, "reason": "CSV 내용이 비어 있습니다."}
+        alias = {
+            "id": "id", "name": "id", "node": "id", "이름": "id", "노드": "id",
+            "url": "url", "address": "url", "host": "url", "주소": "url",
+            "region": "region", "지역": "region",
+            "token": "token", "토큰": "token", "api_token": "token",
+            "alias_local": "alias_local", "local": "alias_local", "로컬": "alias_local",
+            "alias_logical": "alias_logical", "logical": "alias_logical", "논리": "alias_logical",
+            "mode": "mode",
+        }
+        try:
+            rows = [r for r in _csv.reader(_io.StringIO(csv_text))
+                    if any((c or "").strip() for c in r)]
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "reason": "CSV 파싱 오류: %s" % exc}
+        if not rows:
+            return {"ok": False, "reason": "데이터 행이 없습니다."}
+        first = [alias.get((h or "").strip().lower(), (h or "").strip().lower())
+                 for h in rows[0]]
+        has_header = "url" in first and "id" in first
+        if has_header:
+            cols, data = first, rows[1:]
+        else:
+            cols = ["id", "url", "region", "token", "alias_local", "alias_logical"]
+            data = rows
+        added = updated = 0
+        errors = []
+        for idx, row in enumerate(data):
+            line = idx + (2 if has_header else 1)
+            raw = {}
+            for j, val in enumerate(row):
+                if j < len(cols) and cols[j]:
+                    raw[cols[j]] = (val or "").strip()
+            if not raw.get("id") or not raw.get("url"):
+                errors.append({"line": line, "error": "id/url 누락"})
+                continue
+            existed = self._get(raw["id"]) is not None
+            res = self.upsert_node(raw)
+            if res.get("ok"):
+                if existed:
+                    updated += 1
+                else:
+                    added += 1
+            else:
+                errors.append({"line": line, "error": res.get("reason", "등록 실패")})
+        return {"ok": True, "added": added, "updated": updated,
+                "errors": errors, "total": len(data)}
+
     def delete_node(self, nid: str) -> dict:
         with self._lock:
             before = len(self.nodes)
@@ -1340,6 +1398,9 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/portal/nodes":
                 self._send_json(c.upsert_node(body))
+                return
+            if path == "/api/portal/nodes/import":
+                self._send_json(c.import_nodes_csv(body.get("csv") or ""))
                 return
             if path == "/api/portal/nodes/delete":
                 self._send_json(c.delete_node(str(body.get("id") or "")))

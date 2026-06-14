@@ -13,6 +13,24 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.58.0] - 2026-06-14
+
+### 추가됨 (Added) — 포탈 노드 CSV 일괄 가져오기(다수 서버 한 번에 등록)
+
+여러 엣지 서버를 하나씩 입력하지 않고 **CSV로 한 번에 등록**할 수 있다. 포탈
+**「노드 설정 → 🗂 노드 관리 → 📋 CSV로 여러 서버 가져오기」**.
+
+- **백엔드** `PortalController.import_nodes_csv` — 헤더 유연 매핑(`id`·`url` 필수,
+  region·token·alias_local·alias_logical·mode 선택, **한글/별칭 헤더**(이름·주소·지역·토큰)도
+  허용), 헤더가 없으면 `id,url,region,token,alias_local,alias_logical` 순서로 간주. 같은 id 는
+  **수정**, 토큰 빈값은 기존 유지. **행별 추가/수정/오류를 집계**해 반환. URL 스킴(http://) 자동 보정.
+  API `POST /api/portal/nodes/import {csv}`.
+- **프론트엔드** — 노드 관리 탭에 **붙여넣기 textarea + .csv 파일 업로드 + 예시 채우기** 버튼,
+  결과(추가/수정/오류 행)를 표시.
+- test_portal 단위 + HTTP 라우트 스모크로 검증. 설치 매뉴얼 7장에 연결.
+
+---
+
 ## [1.57.1] - 2026-06-14
 
 ### 변경됨 (Changed) — 설치 매뉴얼에 '포탈 중앙 설치 + 자동 배포' 추가

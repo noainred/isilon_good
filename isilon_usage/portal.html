@@ -346,6 +346,24 @@
     <div class="note" style="margin-top:12px;">연결 테스트는 <span class="mono">/api/dbexport</span>(meta.json)로 응답·토큰·요약을 확인합니다. 같은 이름으로 저장하면 수정됩니다.</div>
   </div>
 
+  <div class="card" id="csvImportCard" style="margin-bottom:14px;">
+    <h2>📋 CSV로 여러 서버 한 번에 가져오기</h2>
+    <div class="sub" style="margin-bottom:8px;">
+      여러 노드를 줄 단위로 붙여넣거나 <b>.csv 파일</b>을 선택해 한 번에 등록합니다. 첫 줄은 헤더이며
+      <b>id,url</b> 은 필수, 나머지(region·token·alias_local·alias_logical)는 선택입니다.
+      같은 id 는 <b>덮어쓰기(수정)</b>, 토큰을 비우면 기존 토큰이 유지됩니다.
+    </div>
+    <textarea id="csvText" class="inp mono" rows="6" spellcheck="false"
+      style="width:100%; resize:vertical; box-sizing:border-box;"
+      placeholder="id,url,region,token&#10;dc-seoul,http://10.1.1.5:8765,아시아/서울,TOKEN&#10;dc-tokyo,10.2.2.6:8765,아시아/도쿄,"></textarea>
+    <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; align-items:center;">
+      <input type="file" id="csvFile" accept=".csv,text/csv,text/plain" class="sub" />
+      <button id="csvImportBtn" class="primary">⬆ 가져오기</button>
+      <button id="csvSampleBtn">예시 채우기</button>
+      <span id="csvMsg" class="sub" style="margin-left:4px;"></span>
+    </div>
+  </div>
+
   <div class="card">
     <h2>등록된 글로벌 노드</h2>
     <table>
@@ -829,6 +847,41 @@ $("testBtn").addEventListener("click", async ()=>{
   $("nodeMsg").textContent="테스트 중…";
   const j = await (await fetch("/api/portal/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(nodePayload())})).json();
   $("nodeMsg").textContent = j.ok ? `✓ 연결 OK · v${j.version||"?"} · ${fmtNum(j.storages)} 스토리지 · ${fmtBytes(j.used_bytes)}` : ("✗ "+(j.reason||"실패"));
+});
+// ---- CSV 일괄 가져오기 ----
+$("csvFile").addEventListener("change", async (e)=>{
+  const f = e.target.files && e.target.files[0]; if(!f) return;
+  try { $("csvText").value = await f.text();
+        $("csvMsg").textContent = `파일 ‘${f.name}’ 불러옴 — ‘가져오기’를 누르세요.`; }
+  catch(err){ $("csvMsg").innerHTML = '<span class="err">파일 읽기 실패: '+err+'</span>'; }
+});
+$("csvSampleBtn").addEventListener("click", ()=>{
+  $("csvText").value = "id,url,region,token,alias_local,alias_logical\n"
+    + "dc-seoul,http://10.1.1.5:8765,아시아/서울,TOKEN1,/mnt/isilon/data,/data\n"
+    + "dc-tokyo,10.2.2.6:8765,아시아/도쿄,,,\n";
+  $("csvMsg").textContent = "예시를 채웠습니다. 값을 바꾼 뒤 ‘가져오기’.";
+});
+$("csvImportBtn").addEventListener("click", async ()=>{
+  const csv = $("csvText").value.trim();
+  if(!csv){ $("csvMsg").innerHTML = '<span class="err">CSV 내용을 입력하거나 파일을 선택하세요.</span>'; return; }
+  $("csvImportBtn").disabled = true; $("csvMsg").textContent = "가져오는 중…";
+  try {
+    const j = await (await fetch("/api/portal/nodes/import",{method:"POST",
+      headers:{"Content-Type":"application/json"}, body:JSON.stringify({csv})})).json();
+    if(j.ok){
+      let m = `✓ 추가 ${j.added} · 수정 ${j.updated} (총 ${j.total}행)`;
+      if(j.errors && j.errors.length){
+        m += ` · <span class="err">오류 ${j.errors.length}</span>`;
+        m += "<br><span class='sub'>오류 행: "
+           + j.errors.slice(0,10).map(e=>`${e.line}행(${e.error})`).join(", ") + "</span>";
+      }
+      $("csvMsg").innerHTML = `<span style="color:var(--ok)">${m}</span>`;
+      loadNodes(); loadOverview();
+    } else {
+      $("csvMsg").innerHTML = '<span class="err">실패: '+(j.reason||"")+'</span>';
+    }
+  } catch(err){ $("csvMsg").innerHTML = '<span class="err">요청 오류: '+err+'</span>'; }
+  $("csvImportBtn").disabled = false;
 });
 // ---- 경로 비교(Cross-DC) ----
 let cmpCur = "";

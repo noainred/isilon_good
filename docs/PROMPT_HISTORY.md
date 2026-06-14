@@ -283,4 +283,9 @@
      1회 설치→웹 설치·구성에서 엣지 자동 배포 A스크립트/B SSH→감시 폴더로 전 노드 자동 전파),
      0번 요약·GETTING_STARTED 링크. v1.57.1.
 
+151. 서버 설치할 때 다수 서버를 CSV로 import 하는 기능 추가. → 포탈 노드 CSV 일괄 등록:
+     PortalController.import_nodes_csv(헤더 유연·한글 별칭·고정순서·추가/수정/오류 집계·url 보정),
+     API /api/portal/nodes/import, 노드 관리 탭 UI(textarea+파일업로드+예시). test_portal+HTTP 스모크.
+     INSTALL 7장 연결. v1.58.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

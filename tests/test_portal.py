@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import sys
 import tarfile
 import tempfile
@@ -124,9 +125,40 @@ def _test_ping_history() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _test_csv_import() -> None:
+    """CSV 일괄 노드 등록: 추가/수정/오류 집계 + url 보정 + 헤더 유무 처리."""
+    d = tempfile.mkdtemp(prefix="portal_csv_")
+    try:
+        pc = portalmod.PortalController(d)
+        csv = ("id,url,region,token\n"
+               "seoul-01,http://10.1.1.5:8765,아시아/서울,TOK1\n"
+               "tokyo-01,10.2.2.6:8765,아시아/도쿄,\n"     # url 자동 http:// , 토큰 빈값
+               "bad-row,,지역,\n")                          # url 누락 → 오류 1건
+        r = pc.import_nodes_csv(csv)
+        assert r["ok"] and r["added"] == 2, r
+        assert len(r["errors"]) == 1 and r["errors"][0]["line"] == 4, r
+        ids = {n["id"] for n in pc.nodes}
+        assert {"seoul-01", "tokyo-01"} <= ids, ids
+        tok = next(n for n in pc.nodes if n["id"] == "tokyo-01")
+        assert tok["url"] == "http://10.2.2.6:8765", tok["url"]   # 스킴 자동 보정
+        # 재import = 수정(같은 id)
+        r2 = pc.import_nodes_csv("id,url,region\nseoul-01,http://10.1.1.9:8765,부산\n")
+        assert r2["updated"] == 1 and r2["added"] == 0, r2
+        # 한글/별칭 헤더 + 헤더 없는 고정순서
+        r3 = pc.import_nodes_csv("이름,주소,지역\nosaka,http://10.3.3.3:8765,간사이\n")
+        assert r3["added"] == 1, r3
+        r4 = pc.import_nodes_csv("nagoya,http://10.4.4.4:8765,주부\n")   # 헤더 없음
+        assert r4["added"] == 1, r4
+        assert pc.import_nodes_csv("")["ok"] is False                    # 빈 입력
+        print("[csv-import] OK  added/updated/오류 집계 · url 보정 · 한글·헤더없음 처리")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     _test_save_nodes_concurrent()
     _test_ping_history()
+    _test_csv_import()
     tmp = tempfile.mkdtemp(prefix="portal_")
     root = os.path.join(tmp, "tree")
     _make_tree(root)
