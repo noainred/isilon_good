@@ -266,4 +266,8 @@
      시작, 병렬이면 pscan·단일이면 threads), start_scan/_launch_pscan 에 procs/threads 인자, API
      /api/autotune/start·status·stop. HTTP 스모크 검증. v1.54.0.
 
+147. (오토튜닝 3단계) 대시보드 UI — 새 스캔 폼에 🔬 오토튜닝 체크박스(기본 켜짐), 첫 화면 Summary
+     에 실시간 진행 카드(단일/멀티프로세스/2단 병렬 측정 표 + 설명 + 완료 시 best→스캔 #N 자동 시작
+     안내·자동 추적), poll 에 /api/autotune/status 통합. v1.55.0. 다음 4단계 매뉴얼.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

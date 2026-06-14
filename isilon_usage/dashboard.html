@@ -348,6 +348,10 @@
         <label class="sub" style="display:flex; align-items:center; gap:6px; padding-bottom:9px;">
           <input type="checkbox" id="optOFS" /> 한 파일시스템(-x)
         </label>
+        <label class="sub" style="display:flex; align-items:center; gap:6px; padding-bottom:9px;"
+               title="단일/멀티프로세스/2단 병렬을 짧게 측정해 가장 빠른 방법을 자동으로 고른 뒤 스캔을 시작합니다(엔진·워커 자동).">
+          <input type="checkbox" id="optAutotune" checked /> 🔬 오토튜닝(최적 방법 자동)
+        </label>
         </div><!-- /scanInputs -->
         <button id="startBtn" style="border-color:var(--accent2); color:#cfe; font-weight:700; padding:9px 16px;">
           ▶ 이 디렉터리 스캔 시작
@@ -355,6 +359,18 @@
       </div>
       <div id="startMsg" class="sub" style="margin-top:10px;"></div>
     </div>
+  </div>
+
+  <!-- 오토튜닝 진행 (첫 스캔 시 최적 방법 자동 측정 → 자동 시작) -->
+  <div class="card" id="autotuneCard" style="margin-bottom:14px; display:none; border:1px solid var(--accent2);">
+    <h2 style="margin-top:0;">🔬 오토튜닝 — 이 경로에 가장 빠른 스캔 방법을 찾는 중</h2>
+    <div class="sub" style="margin-bottom:10px;">
+      같은 영역에서 <b>단일</b> · <b>멀티프로세스</b>(GIL 우회) · <b>2단 병렬</b>(프로세스×스레드,
+      NFS 왕복 지연 은닉)을 각각 짧게 시험해 <b>실측으로</b> 가장 빠른 방법을 고른 뒤, 그 설정으로
+      본 스캔을 자동 시작합니다. <b>읽기 전용 측정</b>이라 데이터에 영향이 없습니다.
+    </div>
+    <div id="autotuneSteps"></div>
+    <div id="autotuneResult" class="sub" style="margin-top:10px;"></div>
   </div>
 
   <!-- 스캔 선택 (스캔 중에는 숨김) -->
@@ -2100,35 +2116,102 @@ function updateStartButton(runningCount) {
 async function startScan() {
   const path = $("scanPath").value.trim();
   if (!path) { $("startMsg").innerHTML = '<span class="err">경로를 입력/선택하세요.</span>'; return; }
+  const useAuto = $("optAutotune") && $("optAutotune").checked;
   $("startBtn").disabled = true;
-  $("startMsg").textContent = "시작 요청 중…";
+  $("startMsg").textContent = useAuto ? "🔬 오토튜닝 측정 시작…" : "시작 요청 중…";
   try {
-    const res = await fetch("/api/scan/start", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({
-        path,
-        backend: $("optBackend").value,
-        size_mode: $("optSize").value,
-        one_file_system: $("optOFS").checked,
-        engine: $("optEngine") ? $("optEngine").value : "threads",
-      }),
-    });
-    const j = await res.json();
-    if (j.ok) {
-      const roTxt = (j.mount_readonly == null) ? ""
-        : (j.mount_readonly
-          ? ' · <span style="color:var(--ok)">🔒 읽기전용(ro)</span>'
-          : ' · <span style="color:var(--warn)">✏ 쓰기가능(rw)</span>');
-      $("startMsg").innerHTML = `<span style="color:var(--ok)">✓ 스캔 #${j.scan_id} 시작됨: ${j.root_path}</span>${roTxt}`;
-      selectedScan = j.scan_id; userPicked = true;
-      updateStartButton(1);   // 즉시 빨간 "스캔 중…"
+    if (useAuto) {
+      // 오토튜닝: 최적 방법을 측정한 뒤 그 설정으로 본 스캔을 자동 시작(서버가 처리)
+      const j = await (await fetch("/api/autotune/start", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({path, then_scan: true}),
+      })).json();
+      if (j.ok) {
+        $("startMsg").innerHTML = '<span style="color:var(--accent2)">🔬 오토튜닝 측정을 시작했습니다 — 아래 진행을 확인하세요.</span>';
+        _autotuneTracked = null;
+        await pollAutotune();
+      } else {
+        $("startMsg").innerHTML = '<span class="err">오토튜닝 시작 실패: ' + (j.error || "") + '</span>';
+      }
     } else {
-      $("startMsg").innerHTML = '<span class="err">시작 실패: ' + (j.reason || j.error || "") + '</span>';
+      const res = await fetch("/api/scan/start", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          path,
+          backend: $("optBackend").value,
+          size_mode: $("optSize").value,
+          one_file_system: $("optOFS").checked,
+          engine: $("optEngine") ? $("optEngine").value : "threads",
+        }),
+      });
+      const j = await res.json();
+      if (j.ok) {
+        const roTxt = (j.mount_readonly == null) ? ""
+          : (j.mount_readonly
+            ? ' · <span style="color:var(--ok)">🔒 읽기전용(ro)</span>'
+            : ' · <span style="color:var(--warn)">✏ 쓰기가능(rw)</span>');
+        $("startMsg").innerHTML = `<span style="color:var(--ok)">✓ 스캔 #${j.scan_id} 시작됨: ${j.root_path}</span>${roTxt}`;
+        selectedScan = j.scan_id; userPicked = true;
+        updateStartButton(1);   // 즉시 빨간 "스캔 중…"
+      } else {
+        $("startMsg").innerHTML = '<span class="err">시작 실패: ' + (j.reason || j.error || "") + '</span>';
+      }
     }
   } catch (e) {
     $("startMsg").innerHTML = '<span class="err">요청 오류: ' + e + '</span>';
   }
+  $("startBtn").disabled = false;
   await poll();   // 실행 중 목록을 즉시 반영해 버튼 상태 갱신
+}
+
+// ---- 오토튜닝: 첫 화면 실시간 진행 카드 ----
+let _autotuneTracked = null;
+async function pollAutotune() {
+  try {
+    const j = await (await fetch("/api/autotune/status", {cache: "no-store"})).json();
+    renderAutotune(j);
+  } catch (e) { /* 무시 */ }
+}
+function renderAutotune(j) {
+  const card = $("autotuneCard");
+  if (!card) return;
+  if (!j || (!j.running && !j.done)) { card.style.display = "none"; return; }
+  card.style.display = "block";
+  const best = j.best || null;
+  const rows = (j.results || []).map(x => {
+    const isBest = j.done && best && x.label === best.label;
+    return `<tr style="${isBest ? 'color:var(--ok);font-weight:700' : ''}">`
+      + `<td style="padding:2px 12px">${x.label}</td>`
+      + `<td style="padding:2px 12px;text-align:right">${fmtNum(Math.round(x.files_per_sec))} files/s</td>`
+      + `<td style="padding:2px 12px;text-align:right">${x.speedup}배</td>`
+      + `<td style="padding:2px 8px">${isBest ? '◀ 가장 빠름' : ''}</td></tr>`;
+  });
+  if (j.running && j.current && j.current.label) {
+    rows.push(`<tr><td style="padding:2px 12px">${j.current.label}</td>`
+      + `<td colspan="3" style="padding:2px 12px;color:var(--accent2)">측정 중… `
+      + `(${(j.current.index || 0) + 1}/${j.current.total || "?"})</td></tr>`);
+  }
+  $("autotuneSteps").innerHTML =
+    '<table style="border-collapse:collapse;font-size:12.5px;min-width:380px">'
+    + '<tr style="color:var(--muted)"><td style="padding:2px 12px">방법</td>'
+    + '<td style="padding:2px 12px;text-align:right">처리량</td>'
+    + '<td style="padding:2px 12px;text-align:right">배속</td><td></td></tr>'
+    + rows.join("") + '</table>';
+  const res = $("autotuneResult");
+  if (j.done && best) {
+    res.innerHTML = `✅ <b>${best.label}</b>가 가장 빠릅니다`
+      + `(${fmtNum(Math.round(best.files_per_sec))} files/s). `
+      + (j.scan_id ? `이 설정으로 <b>스캔 #${j.scan_id}</b>을 자동 시작했습니다.`
+        : '본 스캔을 시작합니다.')
+      + (j.note ? `<br><span class="sub">참고: ${j.note}</span>` : "");
+    if (j.scan_id && _autotuneTracked !== j.scan_id) {   // 시작된 스캔으로 자동 추적
+      _autotuneTracked = j.scan_id;
+      selectedScan = j.scan_id; userPicked = true;
+    }
+  } else if (j.running) {
+    res.innerHTML = '<span style="color:var(--accent2)">최적 방법을 찾는 중입니다 — '
+      + '끝나면 자동으로 스캔이 시작됩니다.</span>';
+  }
 }
 
 async function stopScan(id) {
@@ -2882,6 +2965,7 @@ async function poll() {
     const sj = await fetchJsonTimeout("/api/scans", 8000);
     if (sj.ok) renderOverview(sj);
   } catch (e) { /* 개요 일시 오류 무시 */ }
+  pollAutotune();   // 오토튜닝 진행 카드 갱신(진행 중이 아니면 카드 숨김 — 가벼움)
   // 2) 상세(/api/status) — 한 번에 하나만. 거대 DB(수십억 파일)에서 느린 요청이
   //    쌓여 브라우저 연결을 막고 개요까지 멈추는 것을 방지한다(+타임아웃).
   if (_statusInFlight) return;
