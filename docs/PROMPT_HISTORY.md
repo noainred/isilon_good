@@ -275,4 +275,8 @@
      USER_GUIDE(엔진 4.4/오토튜닝 4.5/CLI pscan·autotune/버전·스키마9)·README 갱신. 오토튜닝
      4단계 완료. v1.56.0.
 
+149. 처음 사용자용 **설치 매뉴얼** + **3페이지 솔루션 제품소개** 멋지게. → docs/INSTALL.md(환경별
+     설치·검증·systemd·보안), docs/SOLUTION_BRIEF.html(A4 3p 인쇄/PDF용, 외부 CDN 없는 단일 HTML —
+     문제/솔루션·기능6·아키텍처·도입효과). README 링크. v1.57.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
