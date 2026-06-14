@@ -405,8 +405,46 @@ class PortalController:
                 j = json.loads(resp.read().decode("utf-8"))
                 results.append({"id": n["id"], "ok": bool(j.get("ok")),
                                 "version": j.get("version"), "reason": j.get("reason")})
+            except urllib.error.HTTPError as e:  # type: ignore[attr-defined]
+                reason = ("구버전 엣지(<1.41.0): 푸시 미지원 — SSH 업그레이드로 부트스트랩 필요"
+                          if e.code == 404 else
+                          "거부됨 — 엣지에 api_token 설정 필요" if e.code == 403 else
+                          "HTTP %d" % e.code)
+                results.append({"id": n["id"], "ok": False, "reason": reason})
             except Exception as e:  # noqa: BLE001
                 results.append({"id": n["id"], "ok": False, "reason": str(e)})
+        return {"ok": True, "hq_version": __version__, "results": results}
+
+    def push_upgrade_all_ssh(self, raw: dict) -> dict:
+        """[부트스트랩] 등록된 모든 엣지에 SSH 로 접속해 업그레이드 스크립트를 실행한다.
+
+        엣지가 구버전(/api/upgrade 없음)이어도 동작한다 — 스크립트가 HQ 에서 새 코드를 받아
+        교체·재시작한다. ssh/sshpass 필요(보통 공용 계정/비번). 비번은 1회성으로만 쓴다.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+        hq_base = (raw.get("hq_base") or "").strip()
+        edge_dir = (raw.get("edge_dir") or "/opt/isilon_edge").strip()
+        service = (raw.get("service") or "isilon_usage").strip()
+        script = build_upgrade_script(hq_base=hq_base, edge_dir=edge_dir, service=service)
+        user = (raw.get("ssh_user") or "root").strip()
+        password = raw.get("ssh_password") or ""
+        port = raw.get("ssh_port") or 22
+
+        def _one(n):
+            host = urlparse(n["url"]).hostname or ""
+            if not host:
+                return {"id": n["id"], "ok": False, "reason": "host 파싱 실패"}
+            res = self._ssh_run({"host": host, "ssh_user": user,
+                                 "ssh_password": password, "ssh_port": port}, script)
+            return {"id": n["id"], "ok": bool(res.get("ok")),
+                    "reason": res.get("reason"), "returncode": res.get("returncode")}
+
+        nodes = list(self.nodes)
+        if nodes:
+            with ThreadPoolExecutor(max_workers=min(8, len(nodes))) as ex:
+                results = list(ex.map(_one, nodes))
+        else:
+            results = []
         return {"ok": True, "hq_version": __version__, "results": results}
 
     def _check_self_upgrade(self) -> None:
@@ -1128,6 +1166,9 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/portal/upgrade-all":
                 self._send_json(c.push_upgrade_all())
+                return
+            if path == "/api/portal/upgrade-all/ssh":
+                self._send_json(c.push_upgrade_all_ssh(body))
                 return
             if path == "/api/portal/nodes":
                 self._send_json(c.upsert_node(body))

@@ -151,6 +151,21 @@
       <span class="sub" id="ugWatchMsg"></span>
     </div>
     <pre id="ugPushOut" class="note mono" style="display:none; white-space:pre-wrap; max-height:220px; overflow:auto; margin-top:8px;"></pre>
+    <details style="margin-top:10px;">
+      <summary class="sub" style="cursor:pointer;">[부트스트랩] 구버전 엣지(&lt;1.41.0)를 SSH로 한 번에 — 보안 주의</summary>
+      <div class="note" style="margin:8px 0; border-color:#5a3030; color:#f0b0b0;">
+        ⚠ 위 ‘전 노드 지금 업그레이드’(푸시)는 엣지가 <b>1.41.0+</b> 일 때만 됩니다. 구버전은 포탈이 SSH로 접속해 업그레이드 스크립트를 실행합니다(엣지가 HQ에서 새 코드를 받아 교체·재시작). 비밀번호는 1회만 쓰고 저장 안 함. 신뢰망·키 인증 권장.
+      </div>
+      <div class="setgrid">
+        <label class="fld">SSH 사용자<input id="ugAllUser" class="inp mono" placeholder="root" /></label>
+        <label class="fld">SSH 포트<input id="ugAllPort" class="inp mono" type="number" value="22" /></label>
+        <label class="fld">비밀번호(키 인증이면 비움)<input id="ugAllPass" class="inp mono" type="password" placeholder="(공용 비번)" /></label>
+        <label class="fld">엣지 코드 디렉터리<input id="ugAllDir" class="inp mono" value="/opt/isilon_edge" /></label>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:10px; align-items:center;">
+        <button id="ugPushAllSsh">전 노드 SSH 업그레이드</button><span class="sub" id="ugSshAllMsg"></span>
+      </div>
+    </details>
   </div>
 
   <div class="card" style="margin-bottom:14px;">
@@ -320,7 +335,7 @@ function updateLoginUI(){
       btn.textContent="🔓 로그아웃 ("+(m>0?m+"분":_opLeft()+"초")+")"; }
     else btn.textContent="🔑 로그인";
   }
-  ["addBtn","testBtn","pvGenBtn","pvSshBtn","setPwBtn","ugGenBtn","ugSshBtn","pAuditBtn","ugWatchSave","ugPushAll"].forEach(id=>{ const e=$(id); if(e) e.disabled=ro; });
+  ["addBtn","testBtn","pvGenBtn","pvSshBtn","setPwBtn","ugGenBtn","ugSshBtn","pAuditBtn","ugWatchSave","ugPushAll","ugPushAllSsh"].forEach(id=>{ const e=$(id); if(e) e.disabled=ro; });
 }
 async function loadAuth(){
   try{ const j=await (await _origFetch("/api/portal/auth",{cache:"no-store"})).json();
@@ -750,6 +765,22 @@ if($("ugPushAll")) $("ugPushAll").addEventListener("click", async()=>{
     else $("ugWatchMsg").textContent=" ✗ "+(j.reason||j.error||"실패"); }
   catch(e){ $("ugWatchMsg").textContent=" ✗ "+e; }
   $("ugPushAll").disabled=false;
+});
+if($("ugPushAllSsh")) $("ugPushAllSsh").addEventListener("click", async()=>{
+  if(!confirm("등록된 모든 엣지에 SSH로 접속해 업그레이드를 실행할까요?(구버전 부트스트랩)")) return;
+  $("ugPushAllSsh").disabled=true; $("ugSshAllMsg").textContent=" SSH 업그레이드 중… (노드 수만큼 시간 소요)";
+  try{ const j=await (await fetch("/api/portal/upgrade-all/ssh",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({hq_base:location.origin, ssh_user:$("ugAllUser").value.trim(),
+        ssh_port:$("ugAllPort").value.trim(), ssh_password:$("ugAllPass").value,
+        edge_dir:$("ugAllDir").value.trim()})})).json();
+    if(j.ok){ const ok=j.results.filter(r=>r.ok).length;
+      $("ugSshAllMsg").textContent=" ✓ "+ok+"/"+j.results.length+" 성공";
+      $("ugPushOut").style.display=""; $("ugPushOut").textContent=
+        j.results.map(r=>`${r.ok?"✓":"✗"} ${r.id} ${r.reason||("rc="+r.returncode)||""}`).join("\n"); }
+    else $("ugSshAllMsg").textContent=" ✗ "+(j.reason||j.error||"실패"); }
+  catch(e){ $("ugSshAllMsg").textContent=" ✗ "+e; }
+  $("ugPushAllSsh").disabled=false;
 });
 pLoadUpgradeCfg();
 loadAuth();
