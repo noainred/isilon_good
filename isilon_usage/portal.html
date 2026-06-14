@@ -359,6 +359,7 @@
     <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; align-items:center;">
       <input type="file" id="csvFile" accept=".csv,text/csv,text/plain" class="sub" />
       <button id="csvImportBtn" class="primary">⬆ 가져오기</button>
+      <button id="csvSampleDownload">⬇ 샘플 CSV 받기</button>
       <button id="csvSampleBtn">예시 채우기</button>
       <span id="csvMsg" class="sub" style="margin-left:4px;"></span>
     </div>
@@ -855,11 +856,22 @@ $("csvFile").addEventListener("change", async (e)=>{
         $("csvMsg").textContent = `파일 ‘${f.name}’ 불러옴 — ‘가져오기’를 누르세요.`; }
   catch(err){ $("csvMsg").innerHTML = '<span class="err">파일 읽기 실패: '+err+'</span>'; }
 });
+const CSV_SAMPLE = "id,url,region,token,alias_local,alias_logical\n"
+  + "dc-seoul,http://10.1.1.5:8765,아시아/서울,TOKEN1,/mnt/isilon/data,/data\n"
+  + "dc-tokyo,http://10.2.2.6:8765,아시아/도쿄,TOKEN2,/mnt/isilon/data,/data\n";
 $("csvSampleBtn").addEventListener("click", ()=>{
-  $("csvText").value = "id,url,region,token,alias_local,alias_logical\n"
-    + "dc-seoul,http://10.1.1.5:8765,아시아/서울,TOKEN1,/mnt/isilon/data,/data\n"
-    + "dc-tokyo,10.2.2.6:8765,아시아/도쿄,,,\n";
+  $("csvText").value = CSV_SAMPLE;
   $("csvMsg").textContent = "예시를 채웠습니다. 값을 바꾼 뒤 ‘가져오기’.";
+});
+$("csvSampleDownload").addEventListener("click", ()=>{
+  // 엑셀에서 한글이 깨지지 않도록 UTF-8 BOM 을 앞에 붙여 다운로드
+  const blob = new Blob(["\uFEFF" + CSV_SAMPLE], {type:"text/csv;charset=utf-8"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "isilon_nodes_sample.csv";
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 0);
+  $("csvMsg").textContent = "샘플 CSV 를 내려받았습니다 — 값을 채워 다시 올리세요.";
 });
 $("csvImportBtn").addEventListener("click", async ()=>{
   const csv = $("csvText").value.trim();
