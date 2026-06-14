@@ -250,6 +250,21 @@
     </table>
   </div>
 
+  <!-- 스캔 이력 (각 회차 #1·#2…별 소요 시간·결과) -->
+  <div class="card" id="histCard" style="margin-bottom:14px;">
+    <h2>📋 스캔 이력 — 회차(#)별 소요 시간·결과</h2>
+    <div class="sub" style="margin-bottom:8px;">각 스캔 회차(#번호)가 탐색에 걸린 시간과 결과입니다.
+      같은 경로를 여러 번 스캔하면 위 표(루트별 최신)와 달리 <b>모든 회차</b>가 남습니다.
+      ‘결과 보기’를 누르면 그 회차의 집계 화면으로 이동합니다.</div>
+    <table>
+      <thead><tr>
+        <th>회차</th><th>루트</th><th>시작</th><th class="num">소요 시간</th>
+        <th class="num">조사 용량</th><th class="num">파일</th><th>상태</th><th>결과</th>
+      </tr></thead>
+      <tbody id="histBody"><tr><td colspan="8" style="color:var(--muted)">로딩 중…</td></tr></tbody>
+    </table>
+  </div>
+
   <!-- NAS별 현황 (한 서버에서 여러 NAS 점검) -->
   <div class="card" id="nasCard" style="margin-bottom:14px;">
     <h2>NAS별 현황 <span class="sub" style="font-weight:normal;">— 한 서버에서 여러 NAS 점검</span></h2>
@@ -1169,6 +1184,11 @@ function fmtBytes(n) {
   return n.toFixed(n >= 100 ? 0 : (n >= 10 ? 1 : 2)) + " " + u[i];
 }
 function fmtNum(n) { return (Number(n) || 0).toLocaleString("ko-KR"); }
+function fmtClock(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts * 1000), p = n => String(n).padStart(2, "0");
+  return `${d.getMonth() + 1}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 function fmtDur(s) {
   if (s == null) return "—";
   s = Math.floor(s);
@@ -2647,6 +2667,36 @@ function populateSchedulePaths() {
   if (cur && roots.indexOf(cur) >= 0) sel.value = cur;   // 이전 선택 유지
 }
 
+function renderHistory(scans) {
+  const body = $("histBody");
+  if (!body) return;
+  const list = (scans || []).slice();   // list_scans 는 id 내림차순(최신 먼저)
+  if (!list.length) {
+    body.innerHTML = '<tr><td colspan="8" style="color:var(--muted)">스캔 이력이 없습니다.</td></tr>';
+    return;
+  }
+  const now = Date.now() / 1000;
+  body.innerHTML = list.map(r => {
+    const running = runningSet.has(r.id);
+    const endt = running ? now : (r.finished_at || r.updated_at || now);
+    const dur = r.started_at ? Math.max(0, endt - r.started_at) : null;
+    const durTxt = dur == null ? "—"
+      : (fmtDur(dur) + (running ? " <span style='color:var(--warn)'>(진행중)</span>" : ""));
+    return `<tr>
+      <td><b>#${r.id}</b></td>
+      <td class="path" title="${r.root_path}">${r.root_path}</td>
+      <td class="sub">${fmtClock(r.started_at)}</td>
+      <td class="num">${durTxt}</td>
+      <td class="num">${fmtBytes(r.scanned_bytes)}</td>
+      <td class="num">${fmtNum(r.total_files)}</td>
+      <td>${statusKo[r.status] || r.status}</td>
+      <td><a href="#" class="goScan" data-scan="${r.id}">📊 #${r.id} 결과</a></td>
+    </tr>`;
+  }).join("");
+  body.querySelectorAll("a.goScan").forEach(a =>
+    a.addEventListener("click", (e) => { e.preventDefault(); selectScan(parseInt(a.dataset.scan)); }));
+}
+
 function renderOverview(j) {
   if (j.version) $("verPill").textContent = "v" + j.version;
   allScans = j.scans || [];
@@ -2659,6 +2709,7 @@ function renderOverview(j) {
 
   // 웹 스캔 가능 여부 / 실행 중 스캔 / 허용 경로
   runningSet = new Set(j.running || []);
+  renderHistory(allScans);   // 회차별 소요 시간·결과(runningSet 확정 후)
   // 브라우저 탭 제목에 스캔 중 표시
   document.title = (runningSet.size > 0)
     ? "● 스캔중 · Isilon 디렉터리 사용량 대시보드"
