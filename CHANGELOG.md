@@ -13,6 +13,23 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.54.0] - 2026-06-14
+
+### 추가됨 (Added) — 오토튜닝 2단계: 서버 통합(측정 → 본 스캔 자동 시작) + API
+
+1단계 측정 코어(autotune)를 엣지 서버에 통합. 측정이 끝나면 best 설정으로 본 스캔을 자동 시작한다.
+
+- `autotune_start/status/stop`(ScanController) — 백그라운드로 측정(진행 콜백으로 단계별 스냅샷)
+  → 완료 시 best 로 본 스캔 자동 시작. **best 가 병렬(P>1)이면 pscan(빠름), 단일이면 threads
+  (상세 트리)**. 측정 중지 가능(stop_event).
+- `start_scan`/`_launch_pscan` 에 processes/threads 인자 — 오토튜닝이 정한 값으로 본 스캔.
+- API: `GET /api/autotune/status`(폴링), `POST /api/autotune/start {path,secs,then_scan}`, `/stop`.
+- HTTP 스모크로 검증(측정 3후보 → best → 본 스캔 자동 시작).
+
+다음(3단계): 첫 화면 실시간 진행 카드 + 설명(신뢰). 4단계: 매뉴얼/초보자 가이드.
+
+---
+
 ## [1.53.0] - 2026-06-14
 
 ### 추가됨 (Added) — 오토튜닝 1단계: 측정 코어 + CLI (자동 최적 procs×threads)

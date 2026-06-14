@@ -262,4 +262,8 @@
      측정 후 자동시작 합의]. **1단계**: pscan 시간상자(max_seconds) + autotune 모듈(실제 엔진 후보별
      측정→최적 procs×threads) + CLI `autotune`. v1.53.0. 2~4단계(서버통합·UI·매뉴얼) 예정.
 
+146. (오토튜닝 2단계) 서버 통합 — autotune_start/status/stop(백그라운드 측정→best→본 스캔 자동
+     시작, 병렬이면 pscan·단일이면 threads), start_scan/_launch_pscan 에 procs/threads 인자, API
+     /api/autotune/start·status·stop. HTTP 스모크 검증. v1.54.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

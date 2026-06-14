@@ -623,6 +623,9 @@ class ScanController:
         self._analyze = None                # 대상 분석(깊이 구조 측정) 진행 상태
         self._analyze_lock = threading.Lock()
         self._analyze_stop = None
+        self._autotune = None               # 오토튜닝(최적 procs×threads 측정) 진행 상태
+        self._autotune_lock = threading.Lock()
+        self._autotune_stop = None
         self._ts_hist_lock = threading.Lock()  # 트러블슈팅 진단 이력 파일 보호
         self._rate_lock = threading.Lock()     # 처리량 표본 DB 보호
         self._rate_prev = None                 # (scan_id, ts, discovered, files)
@@ -952,6 +955,101 @@ class ScanController:
                 return {"ok": True, "running": False, "done": False, "results": []}
             return {"ok": True, **{k: v for k, v in self._bench.items()}}
 
+    # ----- 오토튜닝(최적 프로세스×스레드 자동 측정 → 본 스캔 자동 시작) -----
+    def autotune_start(self, *, path=None, secs=None, then_scan=True) -> dict:
+        """실제 엔진(pscan)을 짧게 측정해 최적 procs×threads 를 고르고, then_scan 이면
+        그 설정으로 본 스캔을 자동 시작한다. 진행은 autotune_status 로 폴링한다."""
+        if not path:
+            return {"ok": False, "error": "측정할 경로를 지정하세요."}
+        ok, why = self.path_allowed(path)
+        if not ok:
+            return {"ok": False, "error": why}
+        path = os.path.abspath(path)
+        try:
+            secs = float(secs) if secs else float(self.settings.get("autotune_secs", 8) or 8)
+        except (TypeError, ValueError):
+            secs = 8.0
+        secs = min(60.0, max(2.0, secs))
+        with self._autotune_lock:
+            if self._autotune and self._autotune.get("running"):
+                return {"ok": False, "error": "이미 오토튜닝이 진행 중입니다."}
+            self._autotune_stop = threading.Event()
+            self._autotune = {"running": True, "done": False, "error": None,
+                              "path": path, "results": [], "best": None,
+                              "phase": "measuring", "current": None, "scan_id": None,
+                              "then_scan": bool(then_scan), "secs": secs,
+                              "started_at": time.time()}
+        stop_event = self._autotune_stop
+        maxp = max(1, int(self.settings.get("scan_workers", 8) or 8))
+        maxt = max(1, int(self.settings.get("pscan_threads", 8) or 8))
+        if maxt < 2:
+            maxt = 8     # 측정에선 2단 병렬도 시험(설정이 1이어도)
+        size_mode = self.settings.get("default_size_mode", "disk")
+
+        def _prog(p):
+            with self._autotune_lock:
+                if self._autotune is None:
+                    return
+                self._autotune["phase"] = p.get("phase", "measuring")
+                self._autotune["results"] = p.get("results", self._autotune["results"])
+                if p.get("phase") == "measuring":
+                    self._autotune["current"] = {
+                        "procs": p.get("procs"), "threads": p.get("threads"),
+                        "label": p.get("label"), "index": p.get("index"),
+                        "total": p.get("total")}
+                if p.get("best"):
+                    self._autotune["best"] = p.get("best")
+
+        def _run():
+            scan_id = None
+            try:
+                from . import autotune as atmod
+                r = atmod.autotune(path, secs=secs, size_mode=size_mode,
+                                   max_procs=maxp, max_threads=maxt,
+                                   stop_event=stop_event, on_progress=_prog)
+            except Exception as exc:  # noqa: BLE001
+                r = {"ok": False, "error": "오토튜닝 오류: %s" % exc}
+            best = r.get("best") if r.get("ok") else None
+            if r.get("ok") and then_scan and best and not stop_event.is_set():
+                pn = int(best.get("procs", 1) or 1)
+                tn = int(best.get("threads", 1) or 1)
+                try:
+                    if pn > 1:        # 병렬이 빠름 → pscan(빠른 용량, 1단계 드릴다운)
+                        sr = self.start_scan(path, size_mode=size_mode, engine="pscan",
+                                             processes=pn, threads=tn)
+                    else:             # 단일이 빠름(빠른 저장소) → threads(상세 트리)
+                        sr = self.start_scan(path, size_mode=size_mode, engine="threads")
+                    scan_id = sr.get("scan_id")
+                except Exception:  # noqa: BLE001
+                    scan_id = None
+            with self._autotune_lock:
+                if self._autotune is not None:
+                    self._autotune["running"] = False
+                    self._autotune["done"] = True
+                    self._autotune["phase"] = "done"
+                    self._autotune["results"] = r.get("results", [])
+                    self._autotune["best"] = best
+                    self._autotune["note"] = r.get("note", "")
+                    self._autotune["scan_id"] = scan_id
+                    if not r.get("ok"):
+                        self._autotune["error"] = r.get("error")
+
+        threading.Thread(target=_run, name="autotune", daemon=True).start()
+        return {"ok": True, "started": True}
+
+    def autotune_status(self) -> dict:
+        """진행 중/완료된 오토튜닝의 현재 스냅샷(단계별 결과 + best + 시작된 스캔)."""
+        with self._autotune_lock:
+            if self._autotune is None:
+                return {"ok": True, "running": False, "done": False, "results": []}
+            return {"ok": True, **{k: v for k, v in self._autotune.items()}}
+
+    def autotune_stop(self) -> dict:
+        with self._autotune_lock:
+            if self._autotune_stop is not None:
+                self._autotune_stop.set()
+        return {"ok": True}
+
     # ----- 대상 분석(디렉터리 깊이 구조 측정) -----
     def analyze_start(self, *, path=None, max_depth=0, dir_limit=0,
                       time_budget=0.0, workers=8) -> dict:
@@ -1184,7 +1282,8 @@ class ScanController:
 
     # ----- 시작 -----
     def start_scan(self, path: str, *, backend=None, size_mode=None,
-                   one_file_system=None, engine=None) -> dict:
+                   one_file_system=None, engine=None,
+                   processes=None, threads=None) -> dict:
         path = os.path.abspath(path)
         ok, reason = self.path_allowed(path)
         if not ok:
@@ -1215,13 +1314,15 @@ class ScanController:
         self._log("scan #%d start: %s (engine=%s, backend=%s, size=%s, x=%s, ro=%s)" % (
             scan_id, path, engine, backend, size_mode, one_file_system, readonly))
         if engine == "pscan":
-            self._launch_pscan(scan_id, db_path, path, size_mode)
+            self._launch_pscan(scan_id, db_path, path, size_mode,
+                               processes=processes, threads=threads)
         else:
             self._launch(scan_id, db_path, path, backend, size_mode,
                          one_file_system, resume=False)
         return {"ok": True, "scan_id": scan_id, "db_path": db_path,
                 "root_path": path, "backend": backend, "size_mode": size_mode,
-                "engine": engine, "mount_readonly": readonly}
+                "engine": engine, "processes": processes, "threads": threads,
+                "mount_readonly": readonly}
 
     def _launch(self, scan_id, db_path, path, backend, size_mode,
                 one_file_system, *, resume: bool) -> None:
@@ -1265,17 +1366,19 @@ class ScanController:
             self._scans[scan_id] = {"stop": stop, "thread": t, "path": path}
         t.start()
 
-    def _launch_pscan(self, scan_id, db_path, path, size_mode) -> None:
+    def _launch_pscan(self, scan_id, db_path, path, size_mode,
+                      processes=None, threads=None) -> None:
         """멀티프로세스(pscan) 엔진으로 '빠른 용량' 스캔을 실행한다.
 
         GIL 우회로 스레드 대비 처리량이 크게 오른다(측정 4워커 5.48배). 깊은 트리는
         만들지 않으므로 용량 개요 + 1단계 드릴다운까지만 표시된다(중지는 즉시 반영 안 됨).
+        processes/threads 를 주면(오토튜닝 결과) 설정 대신 그 값으로 돈다.
         """
         from . import pscan as pscanmod
         stop = threading.Event()
-        procs = max(1, int(self.settings.get("scan_workers", 4) or 4))
-        # 프로세스당 stat 스레드(고지연 NAS 왕복 은닉). 기본 1=동작 변화 없음(옵트인).
-        tpp = max(1, int(self.settings.get("pscan_threads", 1) or 1))
+        procs = max(1, int(processes or self.settings.get("scan_workers", 4) or 4))
+        # 프로세스당 stat 스레드(고지연 NAS 왕복 은닉). 오토튜닝 값이 있으면 그것, 없으면 설정.
+        tpp = max(1, int(threads or self.settings.get("pscan_threads", 1) or 1))
         mdb = mgrmod.manager_db_path(self.data_dir)
 
         def worker():
@@ -1700,6 +1803,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if path == "/api/benchmark-workers/status":
                 # 진행 중/완료된 시범 탐색의 단계별 결과 스냅샷(폴링용)
                 self._send_json(self.controller.benchmark_status()
+                                if self.controller else
+                                {"ok": True, "running": False, "results": []})
+                return
+
+            if path == "/api/autotune/status":
+                # 진행 중/완료된 오토튜닝 스냅샷(첫 화면 실시간 표시용 폴링)
+                self._send_json(self.controller.autotune_status()
                                 if self.controller else
                                 {"ok": True, "running": False, "results": []})
                 return
@@ -2289,6 +2399,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             if path == "/api/gentest/stop":
                 self._send_json(self.controller.gentest_stop())
+                return
+
+            if path == "/api/autotune/start":
+                # 오토튜닝 측정 시작 → 완료 후 best 로 본 스캔 자동 시작(then_scan)
+                res = self.controller.autotune_start(
+                    path=(body.get("path") or "").strip() or None,
+                    secs=body.get("secs"),
+                    then_scan=body.get("then_scan", True),
+                )
+                self._send_json(res, status=200 if res.get("ok") else 400)
+                return
+
+            if path == "/api/autotune/stop":
+                self._send_json(self.controller.autotune_stop())
                 return
 
             if path == "/api/analyze/start":
