@@ -13,6 +13,19 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.51.0] - 2026-06-14
+
+### 변경됨 (Changed) — bench_walk `--only` 다중 선택(측정 시간 단축)
+
+`--only` 가 쉼표로 **여러 전략**을 받게 했다. 6전략 풀세트(×60초=6분) 대신 핵심 2개만
+짧게 비교할 수 있다 — 예: `--only "serial,procs8 x thr8" --secs 15` → 30초.
+
+- 실측 교훈: NAS 메타데이터 속도는 **영역·캐시상태마다 극과 극**(esko-prd serial 11,209
+  files/s 빠름 → 병렬 손해 0.25x / user·전체 cold ~1,300~1,600 느림 → 병렬 필요). 빠른
+  영역은 시간을 안 잡아먹으니 진단은 **느린 cold 영역**에서 serial vs procs×thr 만 빠르게.
+
+---
+
 ## [1.50.0] - 2026-06-14
 
 ### 변경됨 (Changed) — pscan CLI 에 `--threads`(2단 병렬) 노출

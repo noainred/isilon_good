@@ -192,7 +192,8 @@ def main():
                     help="전체 파일 수 추정치(주면 전략별 풀스캔 ETA 환산). "
                          "아이실론 FSA/쿼터나 표본으로 추정.")
     ap.add_argument("--only", default="",
-                    help="이 문자열이 든 전략만 실행(예: 'procs8 x thr8'). ETA 측정에 유용.")
+                    help="이 문자열이 든 전략만 실행. 쉼표로 여러 개 가능"
+                         "(예: 'serial,procs8 x thr8' → 2전략만 빠르게 비교).")
     ap.add_argument("--lat", type=float, default=0.0002,
                     help="합성 모드 파일당 주입 지연 초(기본 0.2ms=NFS 모사)")
     ap.add_argument("--tree", default="8,10,6,40",
@@ -209,7 +210,8 @@ def main():
         ("procs%d x thr%d" % (P, T), walk_procs, (P, T)),
     ]
     if args.only:
-        strategies = [s for s in strategies if args.only in s[0]]
+        keys = [k.strip() for k in args.only.split(",") if k.strip()]
+        strategies = [s for s in strategies if any(k in s[0] for k in keys)]
         if not strategies:
             raise SystemExit("--only '%s' 와 맞는 전략이 없음" % args.only)
 

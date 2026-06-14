@@ -248,4 +248,8 @@
      발견: pscan CLI 가 threads_per_proc 를 전달 안 해 2단 병렬을 명령줄에서 못 돌림. `--threads/-T`
      추가(v1.50.0). + 사용자 요청 "모든 답변 한글로" → CLAUDE.md 기록.
 
+142. (실측 진행) esko-prd serial 11,209 files/s(빠름)·threads 0.25x → 빠른 영역은 병렬 손해.
+     dataprep 은 디렉터리만 많고 파일 436개(부적합). 영역별 속도 극과 극 확인. "오래 걸려" →
+     bench_walk --only 다중 선택 추가(serial,procs8 x thr8 만 15초씩=30초). v1.51.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
