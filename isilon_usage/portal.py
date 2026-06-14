@@ -143,12 +143,26 @@ def load_nodes(data_dir: str) -> list:
 
 
 def save_nodes(data_dir: str, nodes: list) -> None:
+    """노드 레지스트리를 원자적으로 저장한다.
+
+    병렬 복제 스레드가 동시에 저장해도 충돌하지 않도록 스레드마다 '고유 임시파일'을 쓰고
+    (os.replace 로 원자 교체), 노드 스냅샷을 떠 직렬화 중 변경 영향을 피한다.
+    """
     os.makedirs(data_dir, exist_ok=True)
     path = nodes_path(data_dir)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump({"nodes": nodes}, fh, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    payload = json.dumps({"nodes": [dict(n) for n in nodes]},
+                         ensure_ascii=False, indent=2)
+    fd, tmp = tempfile.mkstemp(prefix=".portal_nodes-", suffix=".tmp", dir=data_dir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _public_node(n: dict, cache: dict) -> dict:
@@ -426,7 +440,8 @@ class PortalController:
         return None
 
     def _save(self) -> None:
-        save_nodes(self.data_dir, self.nodes)
+        with self._lock:        # 동시 저장 직렬화(RLock — 호출 측이 이미 잡고 있어도 안전)
+            save_nodes(self.data_dir, self.nodes)
 
     def list_nodes(self) -> dict:
         with self._lock:
@@ -555,25 +570,27 @@ class PortalController:
                         "storage": meta.get("storage") or [],
                         "error": "",
                     }
-                n["last_poll"] = time.time()
-                n["last_status"] = "online"
-                n["last_error"] = ""
+                    n["last_poll"] = time.time()
+                    n["last_status"] = "online"
+                    n["last_error"] = ""
             except Exception as e:  # noqa: BLE001
                 with self._lock:
                     c = self._cache.get(nid, {})
                     c.update({"online": False, "error": str(e)})
                     self._cache[nid] = c
-                n["last_poll"] = time.time()
-                n["last_status"] = "offline"
-                n["last_error"] = str(e)
+                    n["last_poll"] = time.time()
+                    n["last_status"] = "offline"
+                    n["last_error"] = str(e)
                 return  # 오프라인이면 복제 생략
             if do_rep and n.get("mode") in ("both", "replicate"):
                 try:
-                    newest = self._replicate(n)
-                    n["last_sync"] = max(float(n.get("last_sync", 0)), newest)
-                    self._save()
+                    newest = self._replicate(n)          # 느린 네트워크 — 락 밖에서
+                    with self._lock:
+                        n["last_sync"] = max(float(n.get("last_sync", 0)), newest)
+                        self._save()
                 except Exception as e:  # noqa: BLE001
-                    n["last_error"] = "replicate: " + str(e)
+                    with self._lock:
+                        n["last_error"] = "replicate: " + str(e)
         finally:
             with self._lock:
                 self._inflight.discard(nid)

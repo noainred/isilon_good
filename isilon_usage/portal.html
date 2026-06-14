@@ -366,7 +366,7 @@ function fmtClock(ts){ if(!ts) return "—"; const d=new Date(ts*1000);
   return d.toLocaleString("ko-KR",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}); }
 function freshClass(ts){ if(!ts) return ""; const s=Date.now()/1000-ts;
   return s<120?"fresh-ok":(s<900?"fresh-warn":"fresh-old"); }
-function capColor(p){ return p>=90?"#ff5c5c":(p>=75?"#f5a623":"#38d39f"); }
+function capColor(p){ return p>=85?"#ff5c5c":(p>=80?"#f5a623":(p>=70?"#f5d142":"#38d39f")); }  // 70노랑/80주황/85빨강
 function capCell(used,total){
   if(!total) return '<span class="sub" title="엣지가 fs 전체 용량(statvfs)을 보고하지 않음 — 엣지 마운트/버전 확인">—</span>';
   const p=Math.min(100, used/total*100), c=capColor(p);

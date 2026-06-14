@@ -50,7 +50,37 @@ def _wait_done(base, sid, timeout=15):
     raise AssertionError("스캔 미완료")
 
 
+def _test_save_nodes_concurrent() -> None:
+    """병렬 저장 레이스 회귀: 여러 스레드가 save_nodes 를 동시에 호출해도 에러/임시파일 누수 없음."""
+    import shutil
+    d = tempfile.mkdtemp(prefix="portal_race_")
+    try:
+        nodes = [{"id": "n%d" % i, "url": "http://x", "last_poll": 0} for i in range(20)]
+        errors = []
+
+        def worker():
+            for _ in range(40):
+                try:
+                    portalmod.save_nodes(d, nodes)
+                except Exception as e:  # noqa: BLE001
+                    errors.append(repr(e))
+
+        ts = [threading.Thread(target=worker) for _ in range(10)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        assert not errors, errors[:3]
+        assert not [f for f in os.listdir(d) if ".tmp" in f], "임시파일 누수"
+        data = json.load(open(os.path.join(d, "portal_nodes.json"), encoding="utf-8"))
+        assert len(data["nodes"]) == 20
+        print("[portal] save_nodes 동시성 OK (10스레드×40회, 에러/임시파일 누수 0)")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
+    _test_save_nodes_concurrent()
     tmp = tempfile.mkdtemp(prefix="portal_")
     root = os.path.join(tmp, "tree")
     _make_tree(root)
