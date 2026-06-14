@@ -469,7 +469,8 @@ def cmd_pscan(args: argparse.Namespace) -> int:
         print("  프로세스 | 소요(s) | 디렉터리/초 | 파일/초 | 1→N 속도향상")
         base = None
         for p in (1, 2, 4, 8):
-            r = psmod.parallel_scan(root, processes=p, size_mode=args.size_mode)
+            r = psmod.parallel_scan(root, processes=p, size_mode=args.size_mode,
+                                    threads_per_proc=args.threads)
             if not r.get("ok"):
                 print("  실패: %s" % r.get("error"), file=sys.stderr)
                 return 2
@@ -482,15 +483,17 @@ def cmd_pscan(args: argparse.Namespace) -> int:
         return 0
 
     print("pscan(PoC) — 멀티프로세스 병렬 스캔")
-    print("  대상: %s  ·  프로세스: %d  ·  size-mode: %s%s" % (
-        root, args.processes, args.size_mode,
+    print("  대상: %s  ·  프로세스: %d × 스레드: %d (동시 %d)  ·  size-mode: %s%s" % (
+        root, args.processes, args.threads, args.processes * args.threads,
+        args.size_mode,
         ("  ·  노드마운트 %d개" % len(node_mounts)) if node_mounts else ""))
 
     def _prog(p):
         sys.stdout.write("\r  진행: %d/%d 단위  (%.1fs)" % (p["done"], p["units"], p["elapsed"]))
         sys.stdout.flush()
     res = psmod.parallel_scan(root, processes=args.processes, size_mode=args.size_mode,
-                              node_mounts=node_mounts, on_progress=_prog)
+                              node_mounts=node_mounts, threads_per_proc=args.threads,
+                              on_progress=_prog)
     print()
     if not res.get("ok"):
         print("  실패: %s" % res.get("error"), file=sys.stderr)
@@ -781,6 +784,9 @@ def build_parser() -> argparse.ArgumentParser:
                                        "(GIL/단일 락 회피 — 프로세스 수만큼 확장)")
     pps.add_argument("path", help="스캔할 루트 경로")
     pps.add_argument("--processes", "-P", type=int, default=4, help="동시 프로세스 수")
+    pps.add_argument("--threads", "-T", type=int, default=1,
+                     help="프로세스당 스레드 수(>1=2단 병렬, 고지연 NAS 왕복 은닉). "
+                          "bench_walk 로 고른 값 사용(예: 8)")
     pps.add_argument("--size-mode", choices=["disk", "apparent"], default="disk")
     pps.add_argument("--node-mount", action="append", default=None,
                      help="멀티노드: 같은 트리의 다른 노드 마운트(여러 번 지정 → 라운드로빈 분산)")

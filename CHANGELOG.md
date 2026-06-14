@@ -13,6 +13,26 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.50.0] - 2026-06-14
+
+### 변경됨 (Changed) — pscan CLI 에 `--threads`(2단 병렬) 노출
+
+`parallel_scan()` 은 `threads_per_proc`(프로세스×스레드 2단 병렬)를 이미 지원했지만 **CLI 가
+이를 전달하지 않아**, `pscan` 명령은 프로세스×스레드1(=GIL 회피만, 왕복 지연 은닉 없음)밖에
+못 돌렸다. 즉 bench_walk 가 고른 승자(procs8×thr8)를 명령줄에서 **실제로 실행할 수 없었다**.
+
+- `pscan` 에 **`--threads/-T`**(기본 1) 추가 → `parallel_scan(threads_per_proc=...)` 로 전달.
+  실행 예: `python3 -m isilon_usage pscan /mnt/hadoop -P 8 -T 8` (동시 64 stat).
+- `--compare` 도 `--threads` 를 존중(프로세스 1·2·4·8 × 지정 스레드로 확장성 비교).
+- 헤더에 `프로세스 N × 스레드 M (동시 N*M)` 표기.
+- 정직성: 고지연 NAS 에서만 `-T>1` 이 이득(왕복 지연 은닉). 로컬 빠른 저장소는 `-T 1` 유지.
+
+### 기타
+
+- CLAUDE.md: "모든 답변은 한글로" 대화 원칙 추가(사용자 요청).
+
+---
+
 ## [1.49.0] - 2026-06-14
 
 ### 변경됨 (Changed) — bench_walk: 실 NAS 에서 '몇 분'만에 측정(시간상자·ETA)

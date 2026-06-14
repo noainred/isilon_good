@@ -243,4 +243,9 @@
      (풀스캔 ETA 환산), `--only`(단일 전략) 추가. 권장 워크플로: 대표 하위에서 `--secs 60` 로
      전략 비교 → 이긴 설정만 cold 표본에서 `--only … --secs 120 --total <FSA추정>` 로 ETA. v1.49.0.
 
+141. (실측+처방 실행) /mnt/hadoop 벤치 결과: serial 1,342 → procs8×thr8 12,318 files/s(9.18×,
+     warm). cold /mnt/hadoop/mr procs16×thr8 = 1,971 files/s(캐시 빠지니 급락). "다음에 뭐?" →
+     발견: pscan CLI 가 threads_per_proc 를 전달 안 해 2단 병렬을 명령줄에서 못 돌림. `--threads/-T`
+     추가(v1.50.0). + 사용자 요청 "모든 답변 한글로" → CLAUDE.md 기록.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
