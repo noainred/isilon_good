@@ -69,6 +69,7 @@
   <div class="spacer"></div>
   <nav>
     <button class="navbtn active" data-view="dash">글로벌 대시보드</button>
+    <button class="navbtn" data-view="netmon">네트워크 모니터링</button>
     <button class="navbtn" data-view="compare">경로 비교</button>
     <button class="navbtn" data-view="nodes">노드 설정</button>
   </nav>
@@ -120,6 +121,24 @@
       <tbody id="nodeRows"><tr><td colspan="9" class="sub">불러오는 중…</td></tr></tbody>
     </table>
     <div class="sub" id="dashNote" style="margin-top:8px;"></div>
+  </div>
+</div>
+
+<!-- 네트워크 모니터링 -->
+<div class="wrap view" id="view-netmon">
+  <div class="grid cols-4" style="margin-bottom:14px;">
+    <div class="card"><h2>🟢 UP</h2><div class="big" id="nmUp">—</div><div class="sub">도달 가능 노드</div></div>
+    <div class="card"><h2>🔴 DOWN</h2><div class="big" id="nmDown">—</div><div class="sub">무응답 노드</div></div>
+    <div class="card"><h2>평균 지연</h2><div class="big" id="nmAvg">—</div><div class="sub">HQ→노드 왕복</div></div>
+    <div class="card"><h2>측정</h2><div class="big" style="font-size:20px;">🔄 5초 자동</div><div class="sub" id="nmAt">—</div></div>
+  </div>
+  <div class="card">
+    <h2>네트워크 모니터링 — HQ→노드 핑</h2>
+    <div class="sub" style="margin-bottom:8px;">각 노드로의 왕복 지연·도달 여부를 5초마다 측정합니다. ‘추이’는 최근 측정 이력(스파크라인), ‘손실’은 이 세션 중 무응답 비율입니다.</div>
+    <table id="netmonTable">
+      <thead><tr><th>상태</th><th>노드</th><th>지역</th><th>호스트</th><th class="num">지연</th><th class="num">최소/최대</th><th class="num">손실</th><th>추이</th><th>비고</th></tr></thead>
+      <tbody id="nmBody"><tr><td colspan="9" class="sub">측정 대기…</td></tr></tbody>
+    </table>
   </div>
 </div>
 
@@ -389,10 +408,59 @@ function capCell(used,total){
       <i style="width:${p.toFixed(1)}%;background:${c}"></i><b>${p.toFixed(0)}%</b></div>
       <div class="sub mono" style="white-space:nowrap;margin-top:2px;">${fmtBytes(used)} / ${fmtBytes(total)}</div>`;
 }
-function show(v){ ["dash","compare","nodes"].forEach(n=>$("view-"+n).classList.toggle("active", n===v));
+function show(v){ ["dash","compare","nodes","netmon"].forEach(n=>$("view-"+n).classList.toggle("active", n===v));
   if(v==="compare") loadCompare();
+  if(v==="netmon") netmonStart(); else netmonStop();
   document.querySelectorAll(".navbtn").forEach(b=>b.classList.toggle("active", b.dataset.view===v)); }
 document.querySelectorAll(".navbtn").forEach(b=>b.addEventListener("click",()=>show(b.dataset.view)));
+
+// ---- 네트워크 모니터링 (HQ→노드 핑, 5초 자동) ----
+let netmonTimer=null, netmonHist={}, _nmInflight=false;
+const NETMON_KEEP=40;
+function _nmHost(u){ try{ return new URL(u).hostname; }catch(e){ return u||""; } }
+function _nmSpark(h){
+  const vals=h.map(x=>x.ms).filter(v=>v!=null);
+  if(!vals.length) return "";
+  const max=Math.max.apply(null,vals.concat([1])), w=84, hh=18, n=h.length;
+  const path=h.map((x,i)=>{ const xx=(n<=1?0:(i/(n-1))*w);
+    const yy=(x.ms!=null?(hh-x.ms/max*hh):hh); return xx.toFixed(1)+","+yy.toFixed(1); }).join(" ");
+  return '<svg width="'+w+'" height="'+hh+'" style="vertical-align:middle"><polyline points="'+path+'" fill="none" stroke="#5cc8ff" stroke-width="1.5"/></svg>';
+}
+async function loadNetmon(){
+  if(_nmInflight) return; _nmInflight=true;
+  try{
+    const j=await (await fetch("/api/portal/ping",{cache:"no-store"})).json();
+    if(j.ok){
+      (j.nodes||[]).forEach(n=>{ const h=netmonHist[n.id]||(netmonHist[n.id]=[]);
+        h.push({ms:n.latency_ms, up:n.online}); if(h.length>NETMON_KEEP) h.shift(); });
+      renderNetmon(j.nodes||[]);
+    }
+  }catch(e){}
+  finally{ _nmInflight=false; }
+}
+function renderNetmon(nodes){
+  const up=nodes.filter(n=>n.online).length, down=nodes.length-up;
+  const lats=nodes.filter(n=>n.latency_ms!=null).map(n=>n.latency_ms);
+  const avg=lats.length?Math.round(lats.reduce((a,b)=>a+b,0)/lats.length):null;
+  if($("nmUp")) $("nmUp").textContent=up;
+  if($("nmDown")) $("nmDown").textContent=down;
+  if($("nmAvg")) $("nmAvg").textContent=avg!=null?(avg+" ms"):"—";
+  if($("nmAt")) $("nmAt").textContent="최근 "+new Date().toLocaleTimeString("ko-KR");
+  const rows=nodes.slice().sort((a,b)=>(a.online-b.online)||((b.latency_ms||0)-(a.latency_ms||0)));
+  $("nmBody").innerHTML = rows.length ? rows.map(n=>{
+    const h=netmonHist[n.id]||[]; const ms=h.map(x=>x.ms).filter(v=>v!=null);
+    const mn=ms.length?Math.round(Math.min.apply(null,ms)):"—", mx=ms.length?Math.round(Math.max.apply(null,ms)):"—";
+    const loss=h.length?Math.round(h.filter(x=>!x.up).length/h.length*100):0;
+    const stat=n.online?'<span class="badge b-online">🟢 UP</span>':'<span class="badge b-offline">🔴 DOWN</span>';
+    const col=n.latency_ms==null?'#9fb3c8':(n.latency_ms<150?'#7be0aa':(n.latency_ms<600?'#f0c86a':'#ff9a9a'));
+    const lat=n.latency_ms!=null?('<b style="color:'+col+'">'+n.latency_ms+' ms</b>'):'<span class="sub">—</span>';
+    return '<tr><td>'+stat+'</td><td><b>'+n.id+'</b></td><td>'+(n.region||'—')+'</td><td class="mono sub">'+_nmHost(n.url)+'</td>'
+      +'<td class="num">'+lat+'</td><td class="num sub">'+mn+'/'+mx+'</td><td class="num sub">'+loss+'%</td>'
+      +'<td>'+_nmSpark(h)+'</td><td class="sub" style="color:#ff9a9a">'+(n.error||'')+'</td></tr>';
+  }).join("") : '<tr><td colspan="9" class="sub">등록된 노드가 없습니다.</td></tr>';
+}
+function netmonStart(){ if(netmonTimer) return; loadNetmon(); netmonTimer=setInterval(loadNetmon, 5000); }
+function netmonStop(){ if(netmonTimer){ clearInterval(netmonTimer); netmonTimer=null; } }
 
 let pOverview=null, regionFilter="", nodeSort="used_bytes", nodeOrder="desc";
 let pingResults={};
