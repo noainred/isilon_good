@@ -32,7 +32,7 @@ def _entry_bytes(st, size_mode: str) -> int:
 
 
 def scan_subtree(path: str, size_mode: str = "disk", per_file_work: int = 0,
-                 threads: int = 1) -> tuple:
+                 threads: int = 1, recursive: bool = True) -> tuple:
     """path 아래 전체(자기 포함)를 재귀로 훑어 (path, bytes, files, dirs, errors).
 
     프로세스 워커가 호출하는 모듈 레벨 함수(피클 가능). 스택 기반 반복(재귀 깊이 무제한).
@@ -41,7 +41,11 @@ def scan_subtree(path: str, size_mode: str = "disk", per_file_work: int = 0,
     threads>1 이면 이 단위를 프로세스 안에서 다시 T 스레드로 훑어 **NFS 왕복 지연을
     은닉**한다(os.stat/scandir 는 syscall 동안 GIL 을 풀어 다른 스레드가 진행). 고지연
     NAS 에서 프로세스(=GIL 회피)×스레드(=지연 은닉) 2단 병렬의 핵심 레버.
+    recursive=False 면 직속 파일만 센다(적응형 깊이 분할에서 '펼친 부모' 단위 — 자식
+    디렉터리는 각각 별도 단위로 처리되므로 부모는 내려가지 않는다).
     """
+    if not recursive:
+        return _scan_shallow(path, size_mode)
     if threads and threads > 1 and not per_file_work:
         return _scan_subtree_threaded(path, size_mode, threads)
     total_bytes = 0
@@ -147,6 +151,63 @@ def _remap(child: str, root: str, node_mount: str) -> str:
     return os.path.join(node_mount, rel) if rel != "." else node_mount
 
 
+def _scan_shallow(path: str, size_mode: str) -> tuple:
+    """path 직속 파일만 센다(자식 디렉터리로 내려가지 않음 — 적응형 분할의 '부모' 단위).
+
+    자식 디렉터리들은 각각 별도 단위로 재귀 스캔되므로, 부모는 자기 inode + 직속 파일만
+    세면 누락/중복이 없다. dirs=1(자기 자신).
+    """
+    total_bytes = files = errors = 0
+    try:
+        dst = os.stat(path, follow_symlinks=False)
+        total_bytes += _entry_bytes(dst, size_mode)
+    except OSError:
+        errors += 1
+    try:
+        with os.scandir(path) as it:
+            for e in it:
+                try:
+                    if not e.is_dir(follow_symlinks=False):
+                        st = e.stat(follow_symlinks=False)
+                        total_bytes += _entry_bytes(st, size_mode)
+                        files += 1
+                except OSError:
+                    errors += 1
+    except OSError:
+        errors += 1
+    return (path, total_bytes, files, 1, errors)
+
+
+def _split_units(child_dirs: List[str], procs: int, target_factor: int = 4) -> list:
+    """1단계 자식이 프로세스 수보다 적으면 더 깊이 펼쳐 병렬 단위를 늘린다.
+
+    반환: [(scan_path, top_label, recursive)]. 펼친 부모는 recursive=False(직속 파일만),
+    그 자식들은 recursive=True(재귀). top_label 은 원래 1단계 자식 — per_top(드릴다운)
+    집계가 바뀌지 않게 유지한다. 단위가 잘게 쪼개져 자식 적은 영역의 작업 불균형이
+    완화된다(예: 자식 16개 영역도 프로세스를 꽉 채움).
+    """
+    units = [(c, c, True) for c in child_dirs]
+    target = max(int(procs) * max(1, int(target_factor)), int(procs))
+    i = 0
+    while len(units) < target and i < len(units):
+        upath, top, rec = units[i]
+        if not rec:
+            i += 1
+            continue
+        try:
+            subs = [e.path for e in os.scandir(upath)
+                    if e.is_dir(follow_symlinks=False)]
+        except OSError:
+            subs = []
+        if not subs:                 # 더 못 펼침(파일만 있는 잎 디렉터리)
+            i += 1
+            continue
+        units[i] = (upath, top, False)                  # 부모: 직속 파일만
+        units.extend((s, top, True) for s in subs)      # 자식: 재귀(top 라벨 유지)
+        i += 1
+    return units
+
+
 def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
                   node_mounts: Optional[List[str]] = None,
                   threads_per_proc: int = 1,
@@ -192,18 +253,24 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
 
     if child_dirs:
         from concurrent.futures import ProcessPoolExecutor, as_completed
+        procs0 = max(1, min(int(processes or 1), n_units))
+        # 적응형 깊이 분할: 1단계 자식이 프로세스보다 적으면 더 깊이 펼쳐 병렬 단위를
+        # 늘린다(자식 적은 영역의 작업 불균형 완화). 펼친 부모는 직속 파일만, 자식은
+        # 재귀로 스캔 → 누락/중복 없음. per_top 은 원래 1단계 자식(top)으로 합산.
+        units = _split_units(child_dirs, procs0)
+        n_units = len(units)
         procs = max(1, min(int(processes or 1), n_units))
-        # 단위별 스캔 경로(멀티노드면 노드 마운트로 치환), 라벨은 표준 경로 유지
-        submit_paths = []
-        for i, c in enumerate(child_dirs):
-            sp = _remap(c, root, node_mounts[i % len(node_mounts)]) if node_mounts else c
-            submit_paths.append((sp, c))
+        top_acc: dict = {}
         with ProcessPoolExecutor(max_workers=procs) as ex:
-            futs = {ex.submit(scan_subtree, sp, size_mode, 0, tpp): label
-                    for sp, label in submit_paths}
+            futs = {}
+            for j, (upath, top, rec) in enumerate(units):
+                sp = (_remap(upath, root, node_mounts[j % len(node_mounts)])
+                      if node_mounts else upath)
+                futs[ex.submit(scan_subtree, sp, size_mode, 0,
+                               tpp if rec else 1, rec)] = top
             done = 0
             for fut in as_completed(futs):
-                label = futs[fut]
+                top = futs[fut]
                 try:
                     _, b, f, d, e = fut.result()
                 except Exception:           # noqa: BLE001 — 한 단위 실패가 전체를 막지 않음
@@ -213,11 +280,16 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
                 total_files += f
                 total_dirs += d
                 errors += e
-                per_top.append({"path": label, "bytes": b, "files": f, "dirs": d})
+                a = top_acc.setdefault(top, [0, 0, 0])
+                a[0] += b
+                a[1] += f
+                a[2] += d
                 done += 1
                 if on_progress:
                     on_progress({"done": done, "units": n_units,
                                  "elapsed": time.time() - t0})
+        for top, v in top_acc.items():
+            per_top.append({"path": top, "bytes": v[0], "files": v[1], "dirs": v[2]})
     else:
         procs = 1
 

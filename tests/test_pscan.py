@@ -90,6 +90,44 @@ def run_threads_per_proc() -> None:
         shutil.rmtree(base, ignore_errors=True)
 
 
+def run_adaptive_split() -> None:
+    """적응형 깊이 분할: 1단계 자식이 적어도(2개) 펼쳐 병렬화하고, 합계·per_top 정확.
+
+    user(자식 16개) 같은 영역에서 병렬 단위가 부족해 효율이 떨어지던 문제의 회귀 가드.
+    펼친 부모(shallow)가 직속 파일을 빠짐없이 세고, per_top 은 1단계 자식 기준을 유지해야.
+    """
+    base = tempfile.mkdtemp(prefix="iu_ps_")
+    try:
+        for a in range(2):                       # root 자식 2개(자식 적은 영역 모사)
+            for b in range(10):
+                for c in range(3):
+                    d = os.path.join(base, "top%d" % a, "m%d" % b, "l%d" % c)
+                    os.makedirs(d)
+                    for f in range(4):
+                        with open(os.path.join(d, "f%d" % f), "w") as fh:
+                            fh.write("z" * 80)
+            with open(os.path.join(base, "top%d" % a, "topfile"), "w") as fh:
+                fh.write("t" * 30)               # top 직속 파일(shallow 부모가 세는지)
+        rb, rf, rd = _reference(base)
+        # 펼침이 실제로 일어나는지: 자식 2개 → 단위가 그보다 많아야
+        units = pscan._split_units(
+            [os.path.join(base, "top0"), os.path.join(base, "top1")], 8)
+        assert len(units) > 2, len(units)
+        for p in (1, 4, 8):                       # 합계가 프로세스 수와 무관하게 정확
+            r = pscan.parallel_scan(base, processes=p, size_mode="apparent")
+            assert r["ok"], r
+            assert (r["total_bytes"], r["total_files"], r["total_dirs"]) == (rb, rf, rd), \
+                (p, r["total_bytes"], r["total_files"], r["total_dirs"], (rb, rf, rd))
+            # per_top 은 펼쳤어도 1단계 자식(2개) 기준 유지(드릴다운 호환)
+            assert len(r["per_top"]) == 2, [t["path"] for t in r["per_top"]]
+            assert all(os.path.basename(t["path"]).startswith("top")
+                       for t in r["per_top"]), r["per_top"]
+        print("[adaptive_split] OK  자식 2개도 펼쳐 병렬화(units=%d), 합계·per_top 정확"
+              % len(units))
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
 def run_node_mounts() -> None:
     # node_mounts 로 같은 base 를 가리키면(라운드로빈) 결과는 단일과 동일해야 한다.
     base = tempfile.mkdtemp(prefix="iu_ps_")
@@ -153,6 +191,7 @@ def run_write_db() -> None:
 if __name__ == "__main__":
     run_correctness()
     run_threads_per_proc()
+    run_adaptive_split()
     run_node_mounts()
     run_bad_path()
     run_write_db()
