@@ -626,6 +626,8 @@ class ScanController:
         self._autotune = None               # 오토튜닝(최적 procs×threads 측정) 진행 상태
         self._autotune_lock = threading.Lock()
         self._autotune_stop = None
+        self._upg_state = {"log": [], "installing": False, "available": False,
+                           "latest": None, "last_check": None}   # 인터넷 자동 업그레이드 상태
         self._ts_hist_lock = threading.Lock()  # 트러블슈팅 진단 이력 파일 보호
         self._rate_lock = threading.Lock()     # 처리량 표본 DB 보호
         self._rate_prev = None                 # (scan_id, ts, discovered, files)
@@ -733,31 +735,113 @@ class ScanController:
         return self._auth.token_valid(token)
 
     def _upgrade_watch_loop(self) -> None:
-        """감시 폴더(upgrade_watch_dir)에 새 버전 압축본이 있으면 자가 업그레이드 후 재시작.
+        """새 버전을 자동 적용한다 — ① 로컬 감시 폴더 ② 인터넷(GitHub) 소스.
 
-        옵트인(설정 비우면 끔). 더 새 버전만 적용하고 기존 코드는 백업한다.
+        옵트인(설정 비우면 끔). 더 새 버전만 적용하고 기존 코드는 백업·롤백 가능. 진행 중
+        스캔이 있으면 미룬다. 인터넷 소스는 주기적으로 확인해 상태를 기록하고(상세 표시용),
+        upgrade_auto 가 켜져 있으면 자동 설치 후 재시작한다.
         """
         code_dir = upgrademod.code_dir_of(__file__)
+        dest = os.path.join(self.data_dir, "upgrades")
         while not self._rate_stop.is_set():
             secs = 60
             try:
-                wd = (self.settings.get("upgrade_watch_dir") or "").strip()
                 secs = int(self.settings.get("upgrade_check_secs", 60) or 60)
                 with self._lock:
-                    busy = bool(self._scans)   # 진행 중 스캔이 있으면 업그레이드를 미룬다
+                    busy = bool(self._scans)   # 스캔 중이면 업그레이드 보류
+                # ① 로컬 감시 폴더
+                wd = (self.settings.get("upgrade_watch_dir") or "").strip()
                 if wd and not busy:
                     found = upgrademod.find_newer_archive(wd, __version__)
                     if found:
                         res = upgrademod.upgrade_from_archive(found[0], code_dir, __version__)
                         if res.get("ok"):
-                            self._log("자동 업그레이드 %s → %s (백업 %s)" % (
-                                res.get("from"), res["version"], res.get("backup")))
+                            self._upg_log("감시 폴더 자동 업그레이드 %s → %s" % (
+                                res.get("from"), res["version"]))
                             auditmod.record(self.data_dir, action="self_upgrade", ok=True,
                                             detail="%s -> %s" % (res.get("from"), res["version"]))
                             upgrademod.restart_process()   # 돌아오지 않음
+                # ② 인터넷(GitHub) 소스
+                if (self.settings.get("upgrade_source") or "off").strip() == "github":
+                    info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__)
+                    self._upg_set_check(info)
+                    if info.get("available") and not busy and bool(self.settings.get("upgrade_auto")):
+                        self._upg_log("새 버전 %s 발견 — 자동 설치" % info.get("latest"))
+                        res = upgrademod.upgrade_from_remote(
+                            self.settings.get("upgrade_url") or "", code_dir, __version__, dest)
+                        if res.get("ok"):
+                            self._upg_log("자동 업그레이드 %s → %s 완료, 재시작" % (
+                                res.get("from"), res["version"]))
+                            auditmod.record(self.data_dir, action="self_upgrade_net", ok=True,
+                                            detail="%s -> %s" % (res.get("from"), res["version"]))
+                            upgrademod.restart_process()
+                        else:
+                            self._upg_log("자동 설치 실패: %s" % res.get("reason"))
             except Exception:  # noqa: BLE001
                 pass
             self._rate_stop.wait(max(10, secs))
+
+    # ----- 자동 업그레이드 상태/조작(인터넷 소스, 상세 표시용) -----
+    def _upg_log(self, msg: str) -> None:
+        with self._lock:
+            self._upg_state.setdefault("log", []).append({"t": time.time(), "msg": msg})
+            self._upg_state["log"] = self._upg_state["log"][-60:]
+        self._log("[upgrade] " + msg)
+
+    def _upg_set_check(self, info: dict) -> None:
+        with self._lock:
+            self._upg_state.update({
+                "last_check": info.get("checked_at"), "latest": info.get("latest"),
+                "available": bool(info.get("available")), "source": info.get("source"),
+                "size_bytes": info.get("size_bytes"), "download_url": info.get("download_url"),
+                "check_error": info.get("error"),
+            })
+
+    def upgrade_status(self) -> dict:
+        with self._lock:
+            st = dict(self._upg_state)
+        st["current"] = __version__
+        st["source_mode"] = self.settings.get("upgrade_source", "off")
+        st["auto"] = bool(self.settings.get("upgrade_auto"))
+        st["url"] = (self.settings.get("upgrade_url") or upgrademod.DEFAULT_UPGRADE_BASE)
+        st["watch_dir"] = self.settings.get("upgrade_watch_dir", "")
+        return {"ok": True, **st}
+
+    def upgrade_check(self) -> dict:
+        info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__)
+        self._upg_set_check(info)
+        if info.get("error"):
+            self._upg_log("확인 실패: %s" % info["error"])
+        else:
+            self._upg_log("확인 — 현재 %s · 최신 %s%s" % (
+                __version__, info.get("latest"),
+                " · 업데이트 가능" if info.get("available") else " · 최신"))
+        return {"ok": bool(info.get("ok")), **self.upgrade_status()}
+
+    def upgrade_install(self) -> dict:
+        with self._lock:
+            if self._upg_state.get("installing"):
+                return {"ok": False, "error": "이미 설치 중입니다."}
+            self._upg_state["installing"] = True
+        try:
+            code_dir = upgrademod.code_dir_of(__file__)
+            dest = os.path.join(self.data_dir, "upgrades")
+            self._upg_log("수동 업그레이드 시작…")
+            res = upgrademod.upgrade_from_remote(
+                self.settings.get("upgrade_url") or "", code_dir, __version__, dest)
+        finally:
+            with self._lock:
+                self._upg_state["installing"] = False
+        if res.get("ok"):
+            self._upg_log("설치 완료 %s → %s — 곧 재시작" % (res.get("from"), res.get("version")))
+            auditmod.record(self.data_dir, action="self_upgrade_manual", ok=True,
+                            detail="-> %s" % res.get("version"))
+            threading.Thread(target=lambda: (time.sleep(1.2), upgrademod.restart_process()),
+                             daemon=True).start()
+            return {"ok": True, "version": res.get("version"), "restarting": True}
+        self._upg_log("설치 실패: %s" % res.get("reason"))
+        return {"ok": False, "error": res.get("reason"),
+                "up_to_date": bool(res.get("up_to_date"))}
 
     def _write_info_md(self, password: str) -> None:
         """설정한 비밀번호를 실행한 디렉터리의 info.MD 로 저장(권한 600)."""
@@ -1814,6 +1898,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                                 {"ok": True, "running": False, "results": []})
                 return
 
+            if path == "/api/upgrade/status":
+                # 인터넷 자동 업그레이드 상태(현재/최신 버전·확인시각·로그 — 상세 표시용)
+                self._send_json(self.controller.upgrade_status()
+                                if self.controller else {"ok": False})
+                return
+
             if path == "/api/gentest/status":
                 self._send_json(self.controller.gentest_status()
                                 if self.controller else
@@ -2413,6 +2503,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             if path == "/api/autotune/stop":
                 self._send_json(self.controller.autotune_stop())
+                return
+
+            if path == "/api/upgrade/check":     # 지금 인터넷에서 최신 버전 확인
+                self._send_json(self.controller.upgrade_check()
+                                if self.controller else {"ok": False})
+                return
+            if path == "/api/upgrade/install":   # 지금 최신 버전 다운로드·설치·재시작
+                self._send_json(self.controller.upgrade_install()
+                                if self.controller else {"ok": False})
                 return
 
             if path == "/api/analyze/start":

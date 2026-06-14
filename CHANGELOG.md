@@ -13,6 +13,26 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.60.0] - 2026-06-14
+
+### 추가됨 (Added) — 인터넷 자동 업그레이드 2단계: 엣지 체커 + 상태 + API
+
+엣지(스캐너) 서버가 인터넷(GitHub)을 모니터링해 새 버전을 받아 설치할 수 있게 했다.
+
+- **엣지 체커** — `_upgrade_watch_loop` 이 기존 감시 폴더에 더해 **인터넷 소스**(`upgrade_source=github`)를
+  주기적으로 확인한다. 새 버전이면 상태를 기록하고(상세 표시용), `upgrade_auto` 가 켜져 있으면
+  **자동 설치 후 재시작**한다(스캔 중이면 보류). 끄면 '업데이트 가능' 알림만.
+- **컨트롤러/상태** — `upgrade_status`(현재/최신·확인시각·source·로그), `upgrade_check`(지금 확인),
+  `upgrade_install`(지금 다운로드·설치·1.2초 후 재시작). 로그는 최근 60건 보관.
+- **API** — `GET /api/upgrade/status`, `POST /api/upgrade/check`, `POST /api/upgrade/install`.
+- **설정** — `upgrade_source`(off/github)·`upgrade_url`(빈값=기본 raw GitHub)·`upgrade_auto`.
+- HTTP 스모크로 검증(로컬 릴리스 서버 → 현재→최신 감지·로그).
+
+다음(3~4단계): ③ 상세 정보 UI(엣지 대시보드: 현재/최신·변경점·확인시각·진행·로그·버튼) →
+④ 포탈 자가 업그레이드 + 엣지 전파.
+
+---
+
 ## [1.59.0] - 2026-06-14
 
 ### 추가됨 (Added) — 인터넷(GitHub) 자동 업그레이드 1단계: 원격 확인·다운로드·설치 코어

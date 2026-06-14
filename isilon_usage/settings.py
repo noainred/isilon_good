@@ -47,7 +47,10 @@ DEFAULTS: dict = {
     "op_password_encrypted": False,     # 참이면 op_password 를 PBKDF2 해시로 저장(평문 미저장)
     "default_engine": "threads",        # 새 스캔 기본 엔진: threads(상세) | pscan(빠른 용량)
     "upgrade_watch_dir": "",            # 자동 업그레이드 감시 폴더(빈값=끔). 새 버전 압축본 감지
-    "upgrade_check_secs": 60,          # 감시 폴더 점검 주기(초)
+    "upgrade_check_secs": 60,          # 감시 폴더/인터넷 점검 주기(초)
+    "upgrade_source": "off",           # 인터넷 자동 업그레이드 소스: off / github(raw versions.json)
+    "upgrade_url": "",                 # versions.json base URL(빈값=기본 raw GitHub download/)
+    "upgrade_auto": False,             # 새 버전 발견 시 자동 설치(켜면 무인 설치·재시작; 끄면 알림만)
     "isilon_url": "",                   # OneFS Platform API 주소(예: https://10.0.0.10:8080)
     "isilon_user": "",                  # PAPI 읽기 계정
     "isilon_password": "",              # PAPI 비밀번호
@@ -122,6 +125,10 @@ def sanitize(raw: dict) -> dict:
         s["upgrade_check_secs"] = max(10, int(s.get("upgrade_check_secs", 60) or 60))
     except (TypeError, ValueError):
         s["upgrade_check_secs"] = 60
+    _usrc = str(s.get("upgrade_source") or "off").strip().lower()
+    s["upgrade_source"] = _usrc if _usrc in ("off", "github") else "off"
+    s["upgrade_url"] = str(s.get("upgrade_url") or "").strip()
+    s["upgrade_auto"] = bool(s.get("upgrade_auto"))
     s["isilon_url"] = str(s.get("isilon_url") or "").strip()
     s["isilon_user"] = str(s.get("isilon_user") or "").strip()
     s["isilon_password"] = str(s.get("isilon_password") or "")
