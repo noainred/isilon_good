@@ -1,6 +1,6 @@
 # Isilon 디렉터리 사용량 스캐너
 
-[사용 설명서](docs/USER_GUIDE.md) · [변경 이력](CHANGELOG.md) · [보안 가이드](SECURITY.md) · [서비스 실행(systemd)](docs/SERVICE.md) · [화면이 멈췄을 때 — 프로세스 확인/복구](docs/TROUBLESHOOTING-frozen-dashboard.md) · Python 3.6+ · [MIT License](LICENSE)
+**[🚀 처음 시작하기(초보자 가이드)](docs/GETTING_STARTED.md)** · [사용 설명서](docs/USER_GUIDE.md) · [변경 이력](CHANGELOG.md) · [보안 가이드](SECURITY.md) · [서비스 실행(systemd)](docs/SERVICE.md) · [화면이 멈췄을 때 — 프로세스 확인/복구](docs/TROUBLESHOOTING-frozen-dashboard.md) · Python 3.6+ · [MIT License](LICENSE)
 
 아이실론(Isilon)처럼 **한 디렉터리에 수천만 개의 파일**이 있는 초대용량 NAS
 에서, 트리 전체에 `du` 를 한 번에 돌리면 메모리를 너무 많이 써서 프로세스가
@@ -27,6 +27,9 @@
 - **통합·모니터링** — **글로벌 통합 포탈(HQ)**: 여러 DC를 DB 복제로 한 화면 조망 +
   Cross-DC 경로 비교 · **스토리지 어레이 상태**(Isilon/PowerStore/Unity/PowerMax/VMAX/
   XtremIO/VPLEX) · **Prometheus `/metrics`**.
+- **엔진·🔬 오토튜닝** — **2단 병렬 엔진(pscan)**: 프로세스(GIL 우회)×스레드(NFS 왕복 지연 은닉)
+  + 적응형 깊이 분할. **오토튜닝**: 새 스캔 시 단일/멀티프로세스/2단 병렬을 **실측**해 가장 빠른
+  방법으로 **자동 시작**(첫 화면 실시간 표시). 실 NAS 측정 도구 `tools/bench_walk.py`.
 - **튜닝** — 서버 사양 기반 **권장 스레드 계산** + **실측 보정(시범 스캔)**.
 - **보안·도구** — **작업 보호 비밀번호**(보기는 자유, 작업은 비밀번호), 설정 잠금,
   **테스트 데이터 생성기**.
@@ -191,8 +194,13 @@ python3 -m isilon_usage prune --data-dir DIR --keep-per-root 5  # 오래된 스�
 python3 -m isilon_usage portal   # 글로벌 통합 포탈(HQ) — 기본 data-dir /data/isilon_usage
 ```
 
-전체 서브커맨드: `run · scan · serve · status · resume · prune · tune · gentest · stats · portal · version`
+전체 서브커맨드: `run · scan · serve · status · resume · prune · tune · pscan · autotune · gentest · stats · portal · version`
 (자세한 옵션은 [USER_GUIDE](docs/USER_GUIDE.md) 6장 CLI 레퍼런스).
+
+```bash
+python3 -m isilon_usage autotune /mnt/isilon/data   # 최적 프로세스×스레드 자동 측정(읽기 전용)
+python3 -m isilon_usage pscan    /mnt/isilon/data -P 8 -T 8   # 2단 병렬 빠른 용량
+```
 
 ---
 
@@ -294,7 +302,7 @@ tools/make_release.py 결정적 릴리스 아카이브 빌드(download/)
 - per-run `scan_stats` — 파일 나이/소유자/확장자별 집계(분석 리포트)
 - per-run `top_files` — 최대 파일 Top-N
 
-> 현재 DB 스키마 버전 **8** (`PRAGMA user_version`). 구버전 DB 는 자동 마이그레이션.
+> 현재 DB 스키마 버전 **9** (`PRAGMA user_version`). 구버전 DB 는 자동 마이그레이션.
 
 ### 재시작/이어하기
 모든 진행 상태가 SQLite 에 있으므로 중간에 멈춰도 데이터가 남습니다. 같은
