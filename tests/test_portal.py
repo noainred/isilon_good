@@ -79,8 +79,54 @@ def _test_save_nodes_concurrent() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _test_ping_history() -> None:
+    """인프라 체크(서버 Ping 이력): 노드별 시계열·중앙값·다운샘플·지역정렬 회귀."""
+    import shutil
+
+    from isilon_usage import db as dbmod
+    d = tempfile.mkdtemp(prefix="portal_ping_")
+    try:
+        pc = portalmod.PortalController(d)
+        pc.nodes = [{"id": "seoul-01", "region": "OC2", "url": "http://x"},
+                    {"id": "fra-01", "region": "DMZ", "url": "http://y"}]
+        pc._init_ping_db()
+        # 빈 이력도 ok=True (아직 표본 없음)
+        empty = pc.ping_history(604800)
+        assert empty["ok"] and empty["nodes"] == [], empty
+
+        now = int(time.time())
+        rows = []
+        for i in range(600):                       # 10시간치, 1분 간격
+            ts = now - i * 60
+            rows.append((ts, "seoul-01", 12.0 + (8 if i % 50 == 0 else 0), 1))
+            rows.append((ts, "fra-01", 95.0 + (60 if i % 30 == 0 else 0), 1))
+        conn = dbmod.connect(portalmod.ping_history_path(d))
+        conn.executemany(
+            "INSERT INTO ping_samples(ts,node_id,latency_ms,up) VALUES(?,?,?,?)", rows)
+        conn.commit()
+        conn.close()
+
+        r = pc.ping_history(86400, max_points=240)
+        assert r["ok"] and r["range"] == 86400 and r["bucket"] >= 60, r
+        # 지역 오름차순 정렬(DMZ < OC2)
+        assert [n["region"] for n in r["nodes"]] == ["DMZ", "OC2"], r["nodes"]
+        for n in r["nodes"]:
+            assert n["median"] is not None and n["series"], n
+            # 다운샘플: max_points(240) 이하
+            assert len(n["series"]) <= 240, len(n["series"])
+            assert all({"t", "ms", "up"} <= set(p) for p in n["series"]), n["series"][0]
+        med = {n["id"]: n["median"] for n in r["nodes"]}
+        assert 11 <= med["seoul-01"] <= 14 and 90 <= med["fra-01"] <= 100, med
+        # 잘못된 range(0/None)는 하한 보정
+        assert pc.ping_history(0)["range"] == 86400
+        print("[portal] ping_history OK (지역정렬·중앙값·다운샘플·빈이력)")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     _test_save_nodes_concurrent()
+    _test_ping_history()
     tmp = tempfile.mkdtemp(prefix="portal_")
     root = os.path.join(tmp, "tree")
     _make_tree(root)
@@ -132,6 +178,12 @@ def main() -> int:
         assert pg["ok"] and pg["results"], pg
         pr = pg["results"][0]
         assert pr["id"] == "dc-test" and pr["online"] and pr["latency_ms"] is not None, pr
+
+        # 6d) 원격 스캔 시작(마지막 경로) — 방어 분기 + 라이브 성공
+        assert not pc.node_scan("nope")["ok"]                # 없는 노드
+        ns = pc.node_scan("dc-test")                         # 엣지에 op 비번 없음 → 시작됨
+        assert ns["ok"] and ns.get("scan_id") and ns.get("path"), ns
+        _wait_done(ebase, ns["scan_id"])                     # 재시작 스캔도 완료까지 대기
 
         # 7) 복제본(완료 DB + meta.json) 존재
         rep = os.path.join(portal_data, "replicas", "dc-test")

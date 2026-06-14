@@ -34,6 +34,9 @@
   .badge { padding:2px 9px; border-radius:999px; font-size:11.5px; font-weight:600; border:1px solid var(--line); white-space:nowrap; }
   .b-online { background:#173a2a; color:#52e0a0; } .b-offline { background:#43201f; color:#ff8b8b; }
   .b-scan { background:#16344f; color:#7cc4ff; }
+  .ssbtn { padding:1px 9px; font-size:11px; border-radius:999px; border-color:#2f6f50;
+    color:#9fe6c0; background:#12241a; vertical-align:middle; white-space:nowrap; }
+  .ssbtn:hover:not(:disabled) { border-color:var(--accent2); } .ssbtn:disabled { opacity:.6; cursor:default; }
   button { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:6px 11px; cursor:pointer; font-size:12.5px; }
   button:hover { border-color:var(--accent); } button.primary { border-color:var(--accent2); color:#cfe; font-weight:700; }
   a.link { color:#9fd0ff; text-decoration:none; } a.link:hover { text-decoration:underline; }
@@ -60,6 +63,26 @@
     font-weight:700; border:1px solid var(--line); white-space:nowrap; }
   .fresh-ok { color:#52e0a0; } .fresh-warn { color:#f5c150; } .fresh-old { color:#ff8b8b; }
   #clock { color:#9fc2e8; letter-spacing:.3px; }
+  /* 인프라 체크: 서버별 핑 이력 차트 */
+  .rbtns { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .rbtn { background:var(--panel2); color:var(--muted); border:none; border-left:1px solid var(--line);
+    border-radius:0; padding:6px 13px; font-weight:600; font-size:12.5px; }
+  .rbtn:first-child { border-left:none; } .rbtn:hover { color:var(--text); }
+  .rbtn.active { background:#16344f; color:#cfe6ff; }
+  .reglabel { font-size:12px; font-weight:700; color:#9fc2e8; letter-spacing:.4px;
+    margin:16px 0 9px; text-transform:uppercase; border-left:3px solid var(--accent); padding-left:9px; }
+  .phgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:12px; }
+  .phcard { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .phcard .phhead { display:flex; align-items:baseline; gap:8px; margin-bottom:4px; }
+  .phcard canvas { width:100%; height:120px; display:block; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; vertical-align:middle; }
+  /* 노드 설정 하위 탭 */
+  .subtabs { display:flex; gap:7px; flex-wrap:wrap; margin-bottom:16px;
+    border-bottom:1px solid var(--line); padding-bottom:12px; }
+  .stab { background:var(--panel2); color:var(--muted); border:1px solid var(--line);
+    border-radius:9px; padding:9px 16px; cursor:pointer; font-weight:650; font-size:13px; }
+  .stab:hover { color:var(--text); } .stab.active { background:#16344f; color:#cfe6ff; border-color:#2f6fb0; }
+  .subpane { display:none; } .subpane.active { display:block; }
 </style>
 </head>
 <body>
@@ -132,8 +155,33 @@
     <div class="card"><h2>평균 지연</h2><div class="big" id="nmAvg">—</div><div class="sub">HQ→노드 왕복</div></div>
     <div class="card"><h2>측정</h2><div class="big" style="font-size:20px;">🔄 5초 자동</div><div class="sub" id="nmAt">—</div></div>
   </div>
+  <!-- 인프라 체크: 서버별 핑 이력 (1년 누적) -->
+  <div class="card" style="margin-bottom:14px;">
+    <h2>🩺 인프라 체크 (서버 Ping)</h2>
+    <div class="sub" style="margin-bottom:10px;">매니저(HQ)에서 각 서버로의 TCP 연결 지연(ms)을 주기적으로 측정해 1년간 누적합니다.
+      평소(중앙값) 대비 <b style="color:var(--warn)">+20% 노랑</b>, <b style="color:var(--danger)">+50% 빨강</b>으로 표시됩니다.</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
+      <div class="rbtns" id="phRange">
+        <button class="rbtn active" data-r="86400">1일</button>
+        <button class="rbtn" data-r="604800">7일</button>
+        <button class="rbtn" data-r="2592000">30일</button>
+        <button class="rbtn" data-r="7776000">90일</button>
+        <button class="rbtn" data-r="31536000">365일</button>
+      </div>
+      <button id="phRefresh">🔄 새로고침</button>
+      <span class="sub" style="margin-left:auto;">
+        <span class="dot" style="background:#4aa3ff"></span> 정상
+        <span class="dot" style="background:var(--warn);margin-left:12px;"></span> +20% 이상
+        <span class="dot" style="background:var(--danger);margin-left:12px;"></span> +50% 이상
+        <span style="display:inline-block;width:18px;border-top:1px dashed #8aa0b8;vertical-align:middle;margin-left:12px;"></span> 중앙값
+      </span>
+    </div>
+    <div id="phGroups"><div class="sub" style="padding:14px 2px;">불러오는 중…</div></div>
+  </div>
+
+  <!-- 실시간 핑 표 -->
   <div class="card">
-    <h2>네트워크 모니터링 — HQ→노드 핑</h2>
+    <h2>실시간 핑 — HQ→노드 (5초)</h2>
     <div class="sub" style="margin-bottom:8px;">각 노드로의 왕복 지연·도달 여부를 5초마다 측정합니다. ‘추이’는 최근 측정 이력(스파크라인), ‘손실’은 이 세션 중 무응답 비율입니다.</div>
     <table id="netmonTable">
       <thead><tr><th>상태</th><th>노드</th><th>지역</th><th>호스트</th><th class="num">지연</th><th class="num">최소/최대</th><th class="num">손실</th><th>추이</th><th>비고</th></tr></thead>
@@ -144,49 +192,15 @@
 
 <!-- 노드 설정 -->
 <div class="wrap view" id="view-nodes">
-  <div class="card" style="margin-bottom:14px;">
-    <h2>🔒 접속 보안 (로그인 비밀번호)</h2>
-    <div class="sub" style="margin-bottom:8px;">비밀번호를 설정하면 접속 시 <b>읽기 전용</b>이 되고, 우상단 <b>로그인</b> 후 노드 등록·원격 구성 등 변경 작업을 할 수 있습니다. 비우고 저장하면 보호가 해제됩니다.</div>
-    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-      <input id="setPw" type="password" placeholder="새 비밀번호(변경 시에만)" style="flex:1; min-width:220px;" />
-      <label class="sub" style="display:flex; align-items:center; gap:6px;"><input id="setPwEnc" type="checkbox" /> 암호화 저장(해시)</label>
-      <button id="setPwBtn">비밀번호 저장</button>
-      <span class="sub" id="setPwMsg"></span>
-    </div>
-    <div style="margin-top:8px;">
-      <button id="pAuditBtn" style="padding:4px 10px;">🧾 감사 로그 보기</button>
-      <span class="sub" id="pAuditMsg"></span>
-      <div id="pAuditBox" style="display:none; margin-top:6px; max-height:260px; overflow:auto; border:1px solid #2a3550; border-radius:8px;"></div>
-    </div>
+  <div class="subtabs">
+    <button class="stab active" data-pane="np-install">🚀 설치 · 구성</button>
+    <button class="stab" data-pane="np-upgrade">🔄 업그레이드</button>
+    <button class="stab" data-pane="np-nodes">🗂 노드 관리</button>
+    <button class="stab" data-pane="np-security">🔒 보안 · 감사</button>
   </div>
 
-  <div class="card" style="margin-bottom:14px;">
-    <h2>🔁 자동 업그레이드 (감시 폴더 + 전 노드)</h2>
-    <div class="sub" style="margin-bottom:8px;">감시 폴더에 새 버전 <span class="mono">isilon_usage-*.tar.gz/.zip</span> 을 두면 포탈이 자동 적용·재시작하고, 등록된 모든 엣지에도 새 코드를 푸시합니다(엣지 <span class="mono">api_token</span> 인증). 비우면 끔.</div>
-    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-      <input id="ugWatchDir" class="inp mono" placeholder="예: /opt/isilon_releases" style="flex:1; min-width:240px;" />
-      <button id="ugWatchSave">감시 폴더 저장</button>
-      <button id="ugPushAll" class="primary">전 노드 지금 업그레이드</button>
-      <span class="sub" id="ugWatchMsg"></span>
-    </div>
-    <pre id="ugPushOut" class="note mono" style="display:none; white-space:pre-wrap; max-height:220px; overflow:auto; margin-top:8px;"></pre>
-    <details style="margin-top:10px;">
-      <summary class="sub" style="cursor:pointer;">[부트스트랩] 구버전 엣지(&lt;1.41.0)를 SSH로 한 번에 — 보안 주의</summary>
-      <div class="note" style="margin:8px 0; border-color:#5a3030; color:#f0b0b0;">
-        ⚠ 위 ‘전 노드 지금 업그레이드’(푸시)는 엣지가 <b>1.41.0+</b> 일 때만 됩니다. 구버전은 포탈이 SSH로 접속해 업그레이드 스크립트를 실행합니다(엣지가 HQ에서 새 코드를 받아 교체·재시작). 비밀번호는 1회만 쓰고 저장 안 함. 신뢰망·키 인증 권장.
-      </div>
-      <div class="setgrid">
-        <label class="fld">SSH 사용자<input id="ugAllUser" class="inp mono" placeholder="root" /></label>
-        <label class="fld">SSH 포트<input id="ugAllPort" class="inp mono" type="number" value="22" /></label>
-        <label class="fld">비밀번호(키 인증이면 비움)<input id="ugAllPass" class="inp mono" type="password" placeholder="(공용 비번)" /></label>
-        <label class="fld">엣지 코드 디렉터리<input id="ugAllDir" class="inp mono" value="/opt/isilon_edge" /></label>
-      </div>
-      <div style="display:flex; gap:8px; margin-top:10px; align-items:center;">
-        <button id="ugPushAllSsh">전 노드 SSH 업그레이드</button><span class="sub" id="ugSshAllMsg"></span>
-      </div>
-    </details>
-  </div>
-
+  <!-- ① 설치 · 구성 (원격 자동 구성) -->
+  <div class="subpane active" id="np-install">
   <div class="card" style="margin-bottom:14px;">
     <h2>🚀 원격 자동 구성 — IP만 넣으면 엣지 설치 명령 생성 + 노드 자동 등록</h2>
     <div class="setgrid">
@@ -226,10 +240,13 @@
       <pre id="pvSshOut" class="note mono" style="display:none; white-space:pre-wrap; max-height:260px; overflow:auto; margin-top:8px;"></pre>
     </details>
   </div>
+  </div>
 
+  <!-- ② 업그레이드 (원격 버전 + 자동/감시폴더/전노드) -->
+  <div class="subpane" id="np-upgrade">
   <div class="card" style="margin-bottom:14px;">
     <h2>🔄 원격 버전 업그레이드 — 엣지를 HQ 최신 코드로</h2>
-    <div class="sub" style="margin-bottom:8px;">HQ 포탈의 현재 코드로 엣지를 올립니다 — 최신 코드(agent-bundle)를 받아 코드 디렉터리에 덮어쓰고 서비스를 재시작합니다(스캔 DB·설정은 data-dir 라 보존). 노드 버전은 아래 표의 ‘버전’ 열에서 확인하세요.</div>
+    <div class="sub" style="margin-bottom:8px;">HQ 포탈의 현재 코드로 엣지를 올립니다 — 최신 코드(agent-bundle)를 받아 코드 디렉터리에 덮어쓰고 서비스를 재시작합니다(스캔 DB·설정은 data-dir 라 보존). 노드 버전은 ‘노드 관리’ 탭 표의 ‘버전’ 열에서 확인하세요.</div>
     <div class="setgrid">
       <label class="fld">대상 노드 id(표시용·선택)<input id="ugId" class="inp mono" placeholder="(노드 id)" /></label>
       <label class="fld">엣지 코드 디렉터리<input id="ugDir" class="inp mono" value="/opt/isilon_edge" /></label>
@@ -264,6 +281,36 @@
     </details>
   </div>
 
+  <div class="card" style="margin-bottom:14px;">
+    <h2>🔁 자동 업그레이드 (감시 폴더 + 전 노드)</h2>
+    <div class="sub" style="margin-bottom:8px;">감시 폴더에 새 버전 <span class="mono">isilon_usage-*.tar.gz/.zip</span> 을 두면 포탈이 자동 적용·재시작하고, 등록된 모든 엣지에도 새 코드를 푸시합니다(엣지 <span class="mono">api_token</span> 인증). 비우면 끔.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <input id="ugWatchDir" class="inp mono" placeholder="예: /opt/isilon_releases" style="flex:1; min-width:240px;" />
+      <button id="ugWatchSave">감시 폴더 저장</button>
+      <button id="ugPushAll" class="primary">전 노드 지금 업그레이드</button>
+      <span class="sub" id="ugWatchMsg"></span>
+    </div>
+    <pre id="ugPushOut" class="note mono" style="display:none; white-space:pre-wrap; max-height:220px; overflow:auto; margin-top:8px;"></pre>
+    <details style="margin-top:10px;">
+      <summary class="sub" style="cursor:pointer;">[부트스트랩] 구버전 엣지(&lt;1.41.0)를 SSH로 한 번에 — 보안 주의</summary>
+      <div class="note" style="margin:8px 0; border-color:#5a3030; color:#f0b0b0;">
+        ⚠ 위 ‘전 노드 지금 업그레이드’(푸시)는 엣지가 <b>1.41.0+</b> 일 때만 됩니다. 구버전은 포탈이 SSH로 접속해 업그레이드 스크립트를 실행합니다(엣지가 HQ에서 새 코드를 받아 교체·재시작). 비밀번호는 1회만 쓰고 저장 안 함. 신뢰망·키 인증 권장.
+      </div>
+      <div class="setgrid">
+        <label class="fld">SSH 사용자<input id="ugAllUser" class="inp mono" placeholder="root" /></label>
+        <label class="fld">SSH 포트<input id="ugAllPort" class="inp mono" type="number" value="22" /></label>
+        <label class="fld">비밀번호(키 인증이면 비움)<input id="ugAllPass" class="inp mono" type="password" placeholder="(공용 비번)" /></label>
+        <label class="fld">엣지 코드 디렉터리<input id="ugAllDir" class="inp mono" value="/opt/isilon_edge" /></label>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:10px; align-items:center;">
+        <button id="ugPushAllSsh">전 노드 SSH 업그레이드</button><span class="sub" id="ugSshAllMsg"></span>
+      </div>
+    </details>
+  </div>
+  </div>
+
+  <!-- ③ 노드 관리 (추가/수정 + 등록 목록) -->
+  <div class="subpane" id="np-nodes">
   <div class="card" style="margin-bottom:14px;">
     <h2>글로벌 노드 추가 / 수정</h2>
     <div class="setgrid">
@@ -306,6 +353,26 @@
       <tbody id="regRows"><tr><td colspan="7" class="sub">불러오는 중…</td></tr></tbody>
     </table>
   </div>
+  </div>
+
+  <!-- ④ 보안 · 감사 -->
+  <div class="subpane" id="np-security">
+  <div class="card" style="margin-bottom:14px;">
+    <h2>🔒 접속 보안 (로그인 비밀번호)</h2>
+    <div class="sub" style="margin-bottom:8px;">비밀번호를 설정하면 접속 시 <b>읽기 전용</b>이 되고, 우상단 <b>로그인</b> 후 노드 등록·원격 구성 등 변경 작업을 할 수 있습니다. 비우고 저장하면 보호가 해제됩니다.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <input id="setPw" type="password" placeholder="새 비밀번호(변경 시에만)" style="flex:1; min-width:220px;" />
+      <label class="sub" style="display:flex; align-items:center; gap:6px;"><input id="setPwEnc" type="checkbox" /> 암호화 저장(해시)</label>
+      <button id="setPwBtn">비밀번호 저장</button>
+      <span class="sub" id="setPwMsg"></span>
+    </div>
+    <div style="margin-top:8px;">
+      <button id="pAuditBtn" style="padding:4px 10px;">🧾 감사 로그 보기</button>
+      <span class="sub" id="pAuditMsg"></span>
+      <div id="pAuditBox" style="display:none; margin-top:6px; max-height:260px; overflow:auto; border:1px solid #2a3550; border-radius:8px;"></div>
+    </div>
+  </div>
+  </div>
 </div>
 
 <!-- 경로 비교(Cross-DC) -->
@@ -338,6 +405,7 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
+const escAttr = (s) => String(s==null?"":s).replace(/[&"<>]/g,c=>({"&":"&amp;",'"':"&quot;","<":"&lt;",">":"&gt;"}[c]));
 // ---- 인증(로그인): 보기는 자유, 변경(POST)은 토큰 필요 — fetch 래퍼로 자동 처리 ----
 let _opRequired=false, _opExpiry=0, _opTimer=null;
 const _origFetch = window.fetch.bind(window);
@@ -413,6 +481,12 @@ function show(v){ ["dash","compare","nodes","netmon"].forEach(n=>$("view-"+n).cl
   if(v==="netmon") netmonStart(); else netmonStop();
   document.querySelectorAll(".navbtn").forEach(b=>b.classList.toggle("active", b.dataset.view===v)); }
 document.querySelectorAll(".navbtn").forEach(b=>b.addEventListener("click",()=>show(b.dataset.view)));
+// 노드 설정 하위 탭(설치·구성 / 업그레이드 / 노드 관리 / 보안·감사)
+function showSub(id){
+  document.querySelectorAll("#view-nodes .subpane").forEach(p=>p.classList.toggle("active", p.id===id));
+  document.querySelectorAll("#view-nodes .stab").forEach(b=>b.classList.toggle("active", b.dataset.pane===id));
+}
+document.querySelectorAll("#view-nodes .stab").forEach(b=>b.addEventListener("click",()=>showSub(b.dataset.pane)));
 
 // ---- 네트워크 모니터링 (HQ→노드 핑, 5초 자동) ----
 let netmonTimer=null, netmonHist={}, _nmInflight=false;
@@ -431,9 +505,9 @@ async function loadNetmon(){
   try{
     const j=await (await fetch("/api/portal/ping",{cache:"no-store"})).json();
     if(j.ok){
-      (j.nodes||[]).forEach(n=>{ const h=netmonHist[n.id]||(netmonHist[n.id]=[]);
+      (j.results||[]).forEach(n=>{ const h=netmonHist[n.id]||(netmonHist[n.id]=[]);
         h.push({ms:n.latency_ms, up:n.online}); if(h.length>NETMON_KEEP) h.shift(); });
-      renderNetmon(j.nodes||[]);
+      renderNetmon(j.results||[]);
     }
   }catch(e){}
   finally{ _nmInflight=false; }
@@ -459,8 +533,89 @@ function renderNetmon(nodes){
       +'<td>'+_nmSpark(h)+'</td><td class="sub" style="color:#ff9a9a">'+(n.error||'')+'</td></tr>';
   }).join("") : '<tr><td colspan="9" class="sub">등록된 노드가 없습니다.</td></tr>';
 }
-function netmonStart(){ if(netmonTimer) return; loadNetmon(); netmonTimer=setInterval(loadNetmon, 5000); }
-function netmonStop(){ if(netmonTimer){ clearInterval(netmonTimer); netmonTimer=null; } }
+function netmonStart(){ if(netmonTimer) return; loadNetmon(); netmonTimer=setInterval(loadNetmon, 5000);
+  loadPingHistory(); if(!phTimer) phTimer=setInterval(loadPingHistory, 60000); }
+function netmonStop(){ if(netmonTimer){ clearInterval(netmonTimer); netmonTimer=null; }
+  if(phTimer){ clearInterval(phTimer); phTimer=null; } }
+
+// ---- 인프라 체크: 서버별 핑 이력(1년 누적) ----
+let phRange=86400, phTimer=null, phInflight=false, _phLast=null, _phRz=null;
+const _he=s=>String(s==null?"":s).replace(/[<>&"]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;"}[c]));
+async function loadPingHistory(){
+  if(phInflight) return; phInflight=true;
+  try{
+    const j=await (await fetch("/api/portal/ping-history?range="+phRange,{cache:"no-store"})).json();
+    if(j&&j.ok) renderPingHistory(j);
+    else if($("phGroups")) $("phGroups").innerHTML='<div class="sub" style="padding:14px 2px;">이력을 불러오지 못했습니다'+(j&&j.reason?': '+_he(j.reason):'')+'.</div>';
+  }catch(e){ if($("phGroups")) $("phGroups").innerHTML='<div class="sub" style="padding:14px 2px;">이력 요청에 실패했습니다.</div>'; }
+  finally{ phInflight=false; }
+}
+function renderPingHistory(j){
+  _phLast=j; const nodes=j.nodes||[];
+  if(!nodes.length){ $("phGroups").innerHTML='<div class="sub" style="padding:14px 2px;">아직 누적된 핑 표본이 없습니다 — 백그라운드 측정이 1분마다 쌓입니다.</div>'; return; }
+  const groups={}, order=[];
+  nodes.forEach((n,i)=>{ n._i=i; const r=n.region||'기타'; if(!groups[r]){ groups[r]=[]; order.push(r); } groups[r].push(n); });
+  let html='';
+  order.forEach(r=>{
+    html+='<div class="reglabel">'+_he(r)+' <span class="sub" style="font-weight:400">· '+groups[r].length+'대</span></div><div class="phgrid">';
+    groups[r].forEach(n=>{
+      html+='<div class="phcard"><div class="phhead"><b>'+_he(n.id)+'</b>'
+        +'<span class="sub" id="ph'+n._i+'_m"></span></div>'
+        +'<canvas id="ph'+n._i+'"></canvas>'
+        +'<div class="sub" id="ph'+n._i+'_x" style="display:flex;justify-content:space-between;margin-top:3px;"></div></div>';
+    });
+    html+='</div>';
+  });
+  $("phGroups").innerHTML=html;
+  nodes.forEach(n=>drawPhChart(n, j.range));
+}
+function _phTime(t,range){ const d=new Date(t*1000), p=x=>String(x).padStart(2,"0");
+  if(range<=86400) return p(d.getHours())+":"+p(d.getMinutes());
+  if(range<=2592000) return (d.getMonth()+1)+"/"+p(d.getDate())+" "+p(d.getHours())+"시";
+  return (d.getFullYear()%100)+"/"+p(d.getMonth()+1)+"/"+p(d.getDate()); }
+function drawPhChart(n, range){
+  const cv=$("ph"+n._i); if(!cv) return;
+  const dpr=window.devicePixelRatio||1, W=cv.clientWidth||320, H=cv.clientHeight||120;
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  const ctx=cv.getContext("2d"); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,W,H);
+  const series=(n.series||[]).filter(p=>p.ms!=null), med=n.median;
+  const padL=6, padR=8, padT=8, padB=4, plotW=W-padL-padR, plotH=H-padT-padB;
+  const msVals=series.map(p=>p.ms);
+  let ymax=Math.max.apply(null,(msVals.length?msVals:[1]).concat([med?med*1.6:1]))*1.12;
+  if(!(ymax>0)) ymax=1;
+  const now=Math.floor(Date.now()/1000), t0=now-range;
+  const xOf=t=>padL+Math.max(0,Math.min(1,(t-t0)/range))*plotW;
+  const yOf=v=>padT+(1-Math.min(v,ymax)/ymax)*plotH;
+  // 가로 보조선
+  ctx.strokeStyle="rgba(255,255,255,0.06)"; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(padL,padT+plotH*0.5); ctx.lineTo(W-padR,padT+plotH*0.5); ctx.stroke();
+  // 중앙값 점선
+  if(med!=null){ const ym=yOf(med); ctx.save(); ctx.setLineDash([4,3]); ctx.strokeStyle="#8aa0b8"; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(padL,ym); ctx.lineTo(W-padR,ym); ctx.stroke(); ctx.restore(); }
+  // 옅은 연결선
+  if(series.length>1){ ctx.strokeStyle="rgba(120,160,200,0.22)"; ctx.lineWidth=1; ctx.beginPath();
+    series.forEach((p,i)=>{ const x=xOf(p.t), y=yOf(p.ms); i?ctx.lineTo(x,y):ctx.moveTo(x,y); }); ctx.stroke(); }
+  // 점(중앙값 대비 편차 색)
+  series.forEach(p=>{ const x=xOf(p.t), y=yOf(p.ms); let c="#4aa3ff";
+    if(med){ const d=p.ms/med; if(d>=1.5) c="#ff5c5c"; else if(d>=1.2) c="#f5a623"; }
+    ctx.fillStyle=c; ctx.beginPath(); ctx.arc(x,y,2.1,0,6.2832); ctx.fill(); });
+  // y축 최대 라벨
+  ctx.fillStyle="#7c8aa0"; ctx.font="10px ui-monospace,Menlo,monospace"; ctx.textAlign="left";
+  ctx.fillText(Math.round(ymax)+"ms", padL+1, padT+8);
+  const mEl=$("ph"+n._i+"_m");
+  if(mEl) mEl.textContent=(med!=null?("중앙값 "+med+"ms"):"표본 없음")+" · "+series.length+"점";
+  const xEl=$("ph"+n._i+"_x");
+  if(xEl) xEl.innerHTML='<span>'+_phTime(t0,range)+'</span><span>'+_phTime(now,range)+'</span>';
+}
+(function _phInit(){
+  const box=$("phRange");
+  if(box) box.querySelectorAll(".rbtn").forEach(b=>b.addEventListener("click",()=>{
+    box.querySelectorAll(".rbtn").forEach(x=>x.classList.remove("active"));
+    b.classList.add("active"); phRange=parseInt(b.dataset.r,10)||86400; loadPingHistory(); }));
+  const rb=$("phRefresh"); if(rb) rb.addEventListener("click",loadPingHistory);
+  window.addEventListener("resize",()=>{ if(_phLast && $("view-netmon") && $("view-netmon").classList.contains("active")){
+    clearTimeout(_phRz); _phRz=setTimeout(()=>{ (_phLast.nodes||[]).forEach(n=>drawPhChart(n,_phLast.range)); }, 200); } });
+})();
 
 let pOverview=null, regionFilter="", nodeSort="used_bytes", nodeOrder="desc";
 let pingResults={};
@@ -535,6 +690,10 @@ function renderPortalDash(){
     const st = !n.enabled ? '<span class="badge">사용 안 함</span>'
       : (n.online ? (n.active_scans>0 ? '<span class="badge b-scan">🔄 스캔 중 '+n.active_scans+'</span>' : '<span class="badge b-online">온라인</span>')
                   : '<span class="badge b-offline">오프라인</span>');
+    // 온라인인데 스캔 안 함 + 이전 스캔 기록 있음 → '스캔 시작'(마지막 경로와 동일)
+    const canScan = n.enabled && n.online && n.active_scans===0 && !n.running && n.roots && n.roots.length;
+    const scanBtn = canScan
+      ? ` <button class="ssbtn" data-id="${escAttr(n.id)}" title="마지막 스캔과 동일한 경로로 새 스캔 시작">▶ 스캔 시작</button>` : "";
     const open = `<a class="link" href="${n.url}" target="_blank" rel="noopener">열기 ↗</a>`;
     // 스토리지 어레이(아이실론/PowerStore) — storage 리스트, 없으면 isilon 단일로 폴백
     const arrays = (n.storage && n.storage.length) ? n.storage
@@ -575,12 +734,25 @@ function renderPortalDash(){
       <td>${capCell(n.fs_used_bytes,n.fs_total_bytes)}</td>
       <td class="sub ${freshClass(n.last_poll)}">${ago(n.last_poll)}</td>
       <td class="sub">${ago(n.last_scan_at)}</td>
-      <td>${st}${pingB}${runLine}</td><td>${open}</td></tr>` + roots +
+      <td>${st}${scanBtn}${pingB}${runLine}</td><td>${open}</td></tr>` + roots +
       (n.last_error ? `<tr><td colspan="9" class="sub" style="color:#ff9a9a">${n.id}: ${n.last_error}</td></tr>` : "");
   }).join("") : '<tr><td colspan="9" class="sub">표시할 노드가 없습니다.</td></tr>';
   $("nodeRows").querySelectorAll("tr.noderow").forEach(tr=>tr.addEventListener("click",e=>{
-    if(e.target.closest("a")) return;
+    if(e.target.closest("a,button")) return;
     $("nodeRows").querySelectorAll(".rr-"+tr.dataset.idx).forEach(r=>r.style.display = r.style.display==="none"?"table-row":"none");
+  }));
+  $("nodeRows").querySelectorAll(".ssbtn").forEach(b=>b.addEventListener("click",async e=>{
+    e.stopPropagation();
+    const id=b.dataset.id; if(!id) return;
+    if(!confirm(id+" — 마지막 스캔과 동일한 경로로 새 스캔을 시작할까요?")) return;
+    b.disabled=true; b.textContent="시작 중…";
+    try{
+      const j=await (await fetch("/api/portal/node-scan",{method:"POST",
+        headers:{"Content-Type":"application/json"},body:JSON.stringify({id})})).json();
+      if(j&&j.ok){ b.textContent="✓ 시작됨"; setTimeout(loadOverview,1500); }
+      else { b.textContent="✗ 실패"; b.title=(j&&j.reason)||"실패"; b.disabled=false;
+             setTimeout(()=>{ b.textContent="▶ 스캔 시작"; }, 4000); }
+    }catch(err){ b.textContent="✗ 오류"; b.disabled=false; }
   }));
   $("nodeTable").querySelectorAll("th[data-nsort]").forEach(th=>{
     th.textContent = th.dataset.label + (th.dataset.nsort===nodeSort ? (nodeOrder==="desc"?" ▼":" ▲") : ""); });

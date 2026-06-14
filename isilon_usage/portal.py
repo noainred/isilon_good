@@ -55,6 +55,10 @@ def portal_settings_path(data_dir: str) -> str:
     return os.path.join(data_dir, "portal_settings.json")
 
 
+def ping_history_path(data_dir: str) -> str:
+    return os.path.join(data_dir, "ping_history.db")
+
+
 def sanitize_node(raw: dict) -> Optional[dict]:
     """노드 1건을 보정한다(필수: id, url). 잘못되면 None."""
     if not isinstance(raw, dict):
@@ -319,6 +323,7 @@ class PortalController:
         self.settings = self._load_settings()
         self._auth = authmod.AuthGuard(lambda: self.settings.get("op_password"))
         self._last_upgrade_check = 0.0
+        self._init_ping_db()
         self._cache = {}          # id -> {online, ts, version, hostname, overall, error}
         self._inflight = set()
         self._lock = threading.RLock()
@@ -560,6 +565,8 @@ class PortalController:
             self._thread = threading.Thread(target=self._loop, name="portal-sync",
                                             daemon=True)
             self._thread.start()
+            threading.Thread(target=self._ping_history_loop, name="portal-ping-hist",
+                             daemon=True).start()
 
     def stop(self) -> None:
         self._stop.set()
@@ -824,6 +831,148 @@ class PortalController:
         else:
             results = []
         return {"ok": True, "results": results, "checked_at": time.time()}
+
+    # --- 핑 히스토리(서버측 자동 측정 + 최대 1년 저장) ---
+    def _init_ping_db(self) -> None:
+        try:
+            conn = dbmod.connect(ping_history_path(self.data_dir))
+            try:
+                conn.execute("CREATE TABLE IF NOT EXISTS ping_samples ("
+                             "ts INTEGER NOT NULL, node_id TEXT NOT NULL, "
+                             "latency_ms REAL, up INTEGER NOT NULL DEFAULT 0)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_ping_ts ON ping_samples(ts)")
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _record_ping(self, results: list) -> None:
+        rows = [(int(time.time()), r["id"], r.get("latency_ms"), 1 if r.get("online") else 0)
+                for r in (results or []) if r.get("id")]
+        if not rows:
+            return
+        try:
+            conn = dbmod.connect(ping_history_path(self.data_dir))
+            try:
+                conn.executemany(
+                    "INSERT INTO ping_samples (ts,node_id,latency_ms,up) VALUES (?,?,?,?)", rows)
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _prune_ping_history(self) -> None:
+        try:
+            conn = dbmod.connect(ping_history_path(self.data_dir))
+            try:
+                conn.execute("DELETE FROM ping_samples WHERE ts < ?",
+                             (int(time.time()) - 366 * 86400,))
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def ping_history(self, range_sec: int, max_points: int = 240) -> dict:
+        """기간(초) 동안의 핑 이력을 '노드별' 시계열로 돌려준다(인프라 체크 스타일).
+
+        노드별: region, 평소(중앙값) median, ~max_points 로 다운샘플한 series[{t,ms,up}].
+        점 색칠(정상/+20%/+50%)은 화면에서 median 대비로 계산한다.
+        """
+        import statistics
+        range_sec = max(3600, int(range_sec or 86400))
+        max_points = max(60, min(1000, int(max_points or 240)))
+        bucket = max(60, range_sec // max_points)
+        since = int(time.time()) - range_sec
+        reg = {x["id"]: x.get("region") for x in list(self.nodes)}
+        by_node = {}
+        try:
+            conn = dbmod.connect(ping_history_path(self.data_dir))
+            try:
+                cur = conn.execute(
+                    "SELECT node_id, (ts/?)*? AS b, AVG(latency_ms), SUM(up), COUNT(*) "
+                    "FROM ping_samples WHERE ts>=? GROUP BY node_id, b ORDER BY node_id, b",
+                    (bucket, bucket, since))
+                for nid, b, avg, up, n in cur.fetchall():
+                    by_node.setdefault(nid, []).append(
+                        {"t": int(b), "ms": round(avg, 2) if avg is not None else None,
+                         "up": int(up) == int(n)})
+            finally:
+                conn.close()
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "reason": str(e), "nodes": []}
+        out = []
+        for nid, series in by_node.items():
+            vals = [p["ms"] for p in series if p["ms"] is not None]
+            med = round(statistics.median(vals), 2) if vals else None
+            out.append({"id": nid, "region": reg.get(nid) or "", "median": med,
+                        "series": series})
+        out.sort(key=lambda x: (x["region"] or "~", x["id"]))
+        return {"ok": True, "range": range_sec, "bucket": bucket, "nodes": out}
+
+    def _ping_history_loop(self) -> None:
+        last_prune = 0.0
+        while not self._stop.is_set():
+            try:
+                self._record_ping(self.ping_nodes().get("results", []))
+                now = time.time()
+                if now - last_prune > 3600:        # 1시간마다 1년치 밖 정리
+                    self._prune_ping_history()
+                    last_prune = now
+            except Exception:  # noqa: BLE001
+                pass
+            self._stop.wait(60)                    # 1분 주기(가장 가는 버킷)
+
+    # --- 원격 스캔 시작(마지막 스캔과 동일 경로) ---
+    def node_scan(self, node_id: str) -> dict:
+        """온라인·미스캔 노드를 '마지막 스캔과 동일한 경로'로 다시 스캔 시작한다.
+
+        마지막 루트는 캐시(overall.roots)에서 scan_id 가 가장 큰(=최근) 루트의 root_path.
+        엣지가 로그인 비밀번호로 보호돼 있으면(op_required) 포탈엔 그 토큰이 없어 시작할 수 없다
+        → 사유를 돌려준다(HTTP 200, ok=False). 엔진/백엔드는 엣지 기본 설정을 따른다.
+        """
+        with self._lock:
+            node = next((dict(n) for n in self.nodes if n["id"] == node_id), None)
+            cache = dict(self._cache.get(node_id, {})) if node else {}
+        if not node:
+            return {"ok": False, "reason": "노드를 찾을 수 없습니다."}
+        if not node.get("enabled", True):
+            return {"ok": False, "reason": "비활성 노드입니다."}
+        roots = (cache.get("overall") or {}).get("roots") or []
+        if not roots:
+            return {"ok": False, "reason": "이 노드에 이전 스캔 기록이 없습니다(먼저 한 번 스캔)."}
+        if any(r.get("status") in ("discovering", "sizing") for r in roots):
+            return {"ok": False, "reason": "이미 스캔이 진행 중입니다."}
+        last = max(roots, key=lambda r: int(r.get("scan_id") or 0))
+        path = (last.get("root_path") or "").strip()
+        if not path:
+            return {"ok": False, "reason": "마지막 스캔 경로를 알 수 없습니다."}
+        url = node["url"].rstrip("/") + "/api/scan/start"
+        req = urllib.request.Request(
+            url, data=json.dumps({"path": path}).encode("utf-8"), method="POST")
+        req.add_header("Content-Type", "application/json")
+        if node.get("token"):
+            req.add_header("X-Auth-Token", node["token"])
+        try:
+            resp = urllib.request.urlopen(req, timeout=30)
+            j = json.loads(resp.read().decode("utf-8"))
+            if j.get("ok"):
+                return {"ok": True, "node": node_id, "path": path,
+                        "scan_id": j.get("scan_id")}
+            return {"ok": False, "path": path,
+                    "reason": j.get("reason") or "엣지가 스캔 시작을 거부했습니다."}
+        except urllib.error.HTTPError as e:
+            reason = (
+                "엣지에 로그인 비밀번호가 설정돼 있어 포탈에서 직접 시작할 수 없습니다 — 엣지 화면에서 시작하세요."
+                if e.code == 401 else
+                "엣지가 웹 스캔을 비활성화했거나 거부했습니다." if e.code == 403 else
+                "엣지에 스캔 시작 API가 없습니다(구버전 엣지)." if e.code == 404 else
+                "HTTP %d" % e.code)
+            return {"ok": False, "reason": reason, "path": path}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "reason": str(e), "path": path}
 
     # --- 원격 자동 구성 ---
     def provision_plan(self, raw: dict) -> dict:
@@ -1093,6 +1242,14 @@ class PortalHandler(BaseHTTPRequestHandler):
             if path == "/api/portal/settings":
                 self._send_json(c.upgrade_config())
                 return
+            if path == "/api/portal/ping-history":
+                qs = parse_qs(urlparse(self.path).query)
+                try:
+                    rng = int(qs.get("range", ["86400"])[0])
+                except (TypeError, ValueError):
+                    rng = 86400
+                self._send_json(c.ping_history(rng))
+                return
             if path == "/api/portal/nodes":
                 self._send_json(c.list_nodes())
                 return
@@ -1192,6 +1349,9 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/portal/sync":
                 self._send_json(c.sync_now(body.get("id") or None))
+                return
+            if path == "/api/portal/node-scan":
+                self._send_json(c.node_scan(str(body.get("id") or "")))
                 return
             if path == "/api/portal/provision":
                 self._send_json(c.provision_plan(body))
