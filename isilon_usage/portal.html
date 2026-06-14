@@ -116,7 +116,7 @@
         <th class="num sortable" data-nsort="used_bytes" data-label="조사 용량">조사 용량</th>
         <th class="sortable" data-nsort="fs_used_pct" data-label="용량(사용률)">용량(사용률)</th>
         <th>마지막 동기화</th><th>마지막 스캔</th>
-        <th class="sortable" data-nsort="status" data-label="상태">상태</th><th></th></tr></thead>
+        <th class="sortable" data-nsort="status" data-label="상태" title="클릭: 스캔 경과시간(오래 스캔한 순)으로 정렬">상태</th><th></th></tr></thead>
       <tbody id="nodeRows"><tr><td colspan="9" class="sub">불러오는 중…</td></tr></tbody>
     </table>
     <div class="sub" id="dashNote" style="margin-top:8px;"></div>
@@ -403,6 +403,8 @@ async function loadPing(){
   if(btn){ btn.disabled=false; btn.textContent="📡 Ping 체크"; }
 }
 function statRank(n){ return n.online ? (n.active_scans>0?2:1) : 0; }
+function scanElapsed(n){ const rn=n&&n.running; if(!rn) return 0;   // 진행 중 스캔 경과(초)
+  return Math.max(0,(rn.updated_at||rn.started_at||0)-(rn.started_at||0)); }
 function scanProgress(r){   // 루트별 스캔 단계/진행률
   if(!r) return "";
   if(r.status==="done") return "✅ 완료";
@@ -436,7 +438,11 @@ function renderPortalDash(){
   if(regionFilter) rows=rows.filter(n=>(n.region||"")===regionFilter);
   rows.sort((a,b)=>{
     let va,vb;
-    if(nodeSort==="status"){ va=statRank(a); vb=statRank(b); }
+    if(nodeSort==="status"){   // 상태 정렬 = 스캔 경과시간(오래 스캔한 순) 우선, 동률이면 상태 분류
+      const ea=scanElapsed(a), eb=scanElapsed(b);
+      if(ea!==eb) return nodeOrder==="asc"?ea-eb:eb-ea;
+      va=statRank(a); vb=statRank(b);
+    }
     else { va=a[nodeSort]; vb=b[nodeSort]; }
     if(typeof va==="string"||typeof vb==="string"){ va=String(va||""); vb=String(vb||"");
       return nodeOrder==="asc"?va.localeCompare(vb):vb.localeCompare(va); }
