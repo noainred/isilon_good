@@ -436,8 +436,14 @@ class PortalController:
                 return {"id": n["id"], "ok": False, "reason": "host 파싱 실패"}
             res = self._ssh_run({"host": host, "ssh_user": user,
                                  "ssh_password": password, "ssh_port": port}, script)
+            reason = res.get("reason")
+            if not res.get("ok") and not reason:   # 실패 사유를 SSH 출력에서 뽑아 보여준다
+                tail = [ln for ln in (res.get("output") or "").splitlines() if ln.strip()]
+                reason = (tail[-1][:160] if tail
+                          else ("SSH 연결/인증 실패(rc 255)" if res.get("returncode") == 255
+                                else "실패(rc %s)" % res.get("returncode")))
             return {"id": n["id"], "ok": bool(res.get("ok")),
-                    "reason": res.get("reason"), "returncode": res.get("returncode")}
+                    "reason": reason, "returncode": res.get("returncode")}
 
         nodes = list(self.nodes)
         if nodes:
