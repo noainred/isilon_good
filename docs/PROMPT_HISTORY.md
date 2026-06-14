@@ -293,4 +293,8 @@
      upgrade.py 원격 함수(check_remote/download_archive/upgrade_from_remote, raw GitHub versions.json,
      기존 검증·백업 재사용) + 로컬 HTTP 비의존 테스트. v1.59.0. 다음 ②체커+API ③상세 UI ④엣지.
 
+    (자동 업그레이드 2·3단계) 엣지 체커+API(upgrade_source/url/auto, /api/upgrade/status·check·install,
+     상태·로그) v1.60.0 → 엣지 대시보드 '버전 기록' 탭 상세 UI(현재/최신·확인시각·소스·로그·설정·
+     지금 확인/업그레이드) v1.61.0. 다음 ④포탈 인터넷 소스+엣지 전파.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

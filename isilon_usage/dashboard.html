@@ -1078,6 +1078,27 @@
 
 <!-- 버전 기록 페이지 -->
 <div class="wrap view" id="view-history" style="display:none;">
+  <div class="card" id="upgradeCard" style="margin-bottom:14px; border:1px solid var(--accent2);">
+    <h2>⬆ 자동 업그레이드 — 인터넷(GitHub) 모니터링</h2>
+    <div id="upgInfo" class="sub" style="margin-bottom:10px;">상태 불러오는 중…</div>
+    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+      <label class="sub">소스
+        <select id="upgSource" class="optsel">
+          <option value="off">끔(수동)</option>
+          <option value="github">GitHub(인터넷) 모니터링</option>
+        </select></label>
+      <label class="sub" style="display:flex; gap:5px; align-items:center;">
+        <input type="checkbox" id="upgAuto" /> 새 버전 발견 시 자동 설치·재시작</label>
+      <label class="sub">확인 주기(초)
+        <input id="upgSecs" class="inp" type="number" min="10" value="60" style="width:84px;" /></label>
+      <button id="upgSaveBtn">설정 저장</button>
+      <button id="upgCheckBtn" class="primary">🔄 지금 확인</button>
+      <button id="upgInstallBtn" style="display:none; border-color:var(--warn); color:#ffd591;">⬆ 지금 업그레이드</button>
+      <span id="upgMsg" class="sub"></span>
+    </div>
+    <div id="upgLog" class="sub mono" style="display:none; max-height:170px; overflow:auto;
+      background:#0d1219; border:1px solid var(--line); border-radius:8px; padding:8px; white-space:pre-wrap;"></div>
+  </div>
   <div class="card">
     <h2>버전 기록 (Version History)</h2>
     <div class="sub" id="historyMeta" style="margin-bottom:10px;">—</div>
@@ -3453,7 +3474,7 @@ function showView(name) {
   });
   document.querySelectorAll(".navbtn").forEach(b => b.classList.toggle("active", b.dataset.view === name));
   try { history.replaceState(null, "", "#" + name); } catch (e) { location.hash = name; }
-  if (name === "history" && !changelogLoaded) loadChangelog();
+  if (name === "history") { if (!changelogLoaded) loadChangelog(); loadUpgrade(); }
   if (name === "report") loadReport();
   if (name === "trouble") { if (typeof tsRun === "function") tsRun(); if (typeof tsHistLoad === "function") tsHistLoad(); }
   if (name === "tune") { if (typeof tuneRun === "function" && $("tuneResult") && $("tuneResult").style.display === "none") tuneRun(); }
@@ -3465,6 +3486,68 @@ window.addEventListener("hashchange", () => {
   const v = location.hash.slice(1);
   if (VIEWS.includes(v)) showView(v);
 });
+// ---- 자동 업그레이드(인터넷 모니터링) ----
+async function loadUpgrade() {
+  try {
+    const j = await (await fetch("/api/upgrade/status", {cache: "no-store"})).json();
+    renderUpgrade(j);
+  } catch (e) { /* 무시 */ }
+}
+function renderUpgrade(j) {
+  if (!j || j.ok === false) { $("upgInfo").textContent = "상태를 불러올 수 없습니다."; return; }
+  const avail = !!j.available;
+  $("upgInfo").innerHTML = `현재 <b>v${j.current || "?"}</b> · 최신 `
+    + (j.latest ? `<b>v${j.latest}</b>` : "—")
+    + (avail ? ' <span style="color:var(--warn);font-weight:700">⬆ 업데이트 가능</span>'
+             : (j.latest ? ' <span style="color:var(--ok)">✓ 최신</span>' : ""))
+    + (j.last_check ? ` · 확인 ${new Date(j.last_check * 1000).toLocaleString("ko-KR")}`
+                    : " · 아직 확인 안 함")
+    + (j.check_error ? `<br><span class="err">확인 오류: ${j.check_error}</span>` : "")
+    + `<br><span class="sub">소스: ${j.url || "—"}</span>`;
+  if (document.activeElement !== $("upgSource")) $("upgSource").value = j.source_mode || "off";
+  if (document.activeElement !== $("upgAuto")) $("upgAuto").checked = !!j.auto;
+  $("upgInstallBtn").style.display = avail ? "inline-block" : "none";
+  const log = j.log || [];
+  if (log.length) {
+    $("upgLog").style.display = "block";
+    $("upgLog").textContent = log.slice().reverse().map(e =>
+      `${new Date(e.t * 1000).toLocaleTimeString("ko-KR")}  ${e.msg}`).join("\n");
+  }
+}
+$("upgCheckBtn").addEventListener("click", async () => {
+  $("upgMsg").textContent = "확인 중…";
+  try {
+    const j = await (await fetch("/api/upgrade/check", {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: "{}"})).json();
+    renderUpgrade(j);
+    $("upgMsg").textContent = j.available ? "새 버전이 있습니다." : "최신입니다.";
+  } catch (e) { $("upgMsg").innerHTML = '<span class="err">확인 오류: ' + e + '</span>'; }
+});
+$("upgInstallBtn").addEventListener("click", async () => {
+  if (!confirm("지금 최신 버전을 설치하고 서비스를 재시작할까요?")) return;
+  $("upgMsg").textContent = "설치 중… (잠시 후 자동 재시작)";
+  try {
+    const j = await (await fetch("/api/upgrade/install", {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: "{}"})).json();
+    $("upgMsg").innerHTML = j.ok
+      ? `<span style="color:var(--ok)">✓ v${j.version} 설치 — 재시작 중… 잠시 후 새로고침하세요.</span>`
+      : `<span class="err">실패: ${j.error || ""}</span>`;
+  } catch (e) {
+    $("upgMsg").innerHTML = '<span class="sub">설치 후 재시작되었습니다. 잠시 후 새로고침하세요.</span>';
+  }
+});
+$("upgSaveBtn").addEventListener("click", async () => {
+  const body = {settings: {upgrade_source: $("upgSource").value,
+    upgrade_auto: $("upgAuto").checked,
+    upgrade_check_secs: parseInt($("upgSecs").value, 10) || 60}};
+  try {
+    const j = await (await fetch("/api/settings", {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})).json();
+    $("upgMsg").textContent = (j.ok !== false) ? "✓ 설정 저장됨" : ("저장 실패: " + (j.error || ""));
+    loadUpgrade();
+  } catch (e) { $("upgMsg").innerHTML = '<span class="err">저장 오류: ' + e + '</span>'; }
+});
+
 async function loadChangelog() {
   changelogLoaded = true;
   try {
