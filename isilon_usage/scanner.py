@@ -84,6 +84,38 @@ def _entry_bytes(stat_result, size_mode: str) -> int:
     return int(blocks) * BLOCK_UNIT
 
 
+# --- 스레드 로컬 집계 헬퍼(직렬 구간 축소) ---
+# 파일당 파이썬 작업(나이/확장자/Top-N)을 _dlock '밖'에서 로컬에 모으고, 락 안에서는
+# 짧게 병합만 한다. 워커들이 락에 줄 서지 않고 곧바로 다음 stat 을 발사 → 고지연 NAS 에서
+# 동시 in-flight stat 이 늘어 처리량이 오른다(직렬화된 커밋/집계가 천장이던 문제 완화).
+def _local_top(h: list, path: str, eb: int, st) -> None:
+    """로컬 Top-N 후보 힙(크기 TOP_FILES_N 로 제한 → 병합 비용 작게)."""
+    item = (eb, path, st.st_mtime, st.st_uid, st.st_atime)
+    if len(h) < TOP_FILES_N:
+        heapq.heappush(h, item)
+    elif eb > h[0][0]:
+        heapq.heapreplace(h, item)
+
+
+def _local_accum(ref: float, l_age: dict, l_atime: dict, l_uid: dict, l_ext: dict,
+                 name: str, st, eb: int) -> None:
+    """한 파일을 로컬 나이/접근나이/소유자/확장자 dict 에 더한다(캡 없음 — 청크라 작음)."""
+    def bump(d, k):
+        e = d.get(k)
+        if e is None:
+            d[k] = [eb, 1]
+        else:
+            e[0] += eb
+            e[1] += 1
+    bump(l_age, _age_bucket(ref, st.st_mtime))
+    bump(l_atime, _age_bucket(ref, st.st_atime))
+    bump(l_uid, str(st.st_uid))
+    ext = os.path.splitext(name)[1].lower() or "(없음)"
+    if len(ext) > 24:
+        ext = ext[:24]
+    bump(l_ext, ext)
+
+
 class Scanner:
     def __init__(
         self,
@@ -460,6 +492,26 @@ class Scanner:
         elif eb > h[0][0]:
             heapq.heapreplace(h, (eb, path, st.st_mtime, st.st_uid, st.st_atime))
 
+    def _top_merge(self, items: list) -> None:
+        """로컬 Top-N 후보 힙을 공유 Top-N 힙에 병합(_dlock 안에서 호출)."""
+        h = self._top_files
+        for it in items:
+            if len(h) < TOP_FILES_N:
+                heapq.heappush(h, it)
+            elif it[0] > h[0][0]:
+                heapq.heapreplace(h, it)
+
+    def _accum_merge(self, l_age: dict, l_atime: dict, l_uid: dict, l_ext: dict) -> None:
+        """스레드 로컬 집계 dict 들을 공유 집계에 병합(_dlock 안에서 호출, 캡은 여기서 적용)."""
+        for k, v in l_age.items():
+            self._stat_bump(self._stat_age, k, v[0], v[1])
+        for k, v in l_atime.items():
+            self._stat_bump(self._stat_atime_age, k, v[0], v[1])
+        for k, v in l_uid.items():
+            self._stat_bump(self._stat_uid, k, v[0], v[1], cap=50000)
+        for k, v in l_ext.items():
+            self._stat_bump(self._stat_ext, k, v[0], v[1])
+
     def _write_stats(self, conn) -> None:
         """집계를 scan_stats 에 저장(이 run 행 교체). 확장자는 상위 500개만."""
         if self.run_id is None:
@@ -644,38 +696,52 @@ class Scanner:
         file_chunk: list = []
 
         def flush_files():
-            # 청크를 stat(락 밖) 한 뒤, _dlock 안에서 용량/개수/하드링크집합/진행을 갱신.
+            # 직렬 구간 축소: stat + 파일당 파이썬 집계(나이/확장자/Top-N)를 _dlock '밖'에서
+            # 스레드 로컬로 모으고, 락 안에서는 짧게 병합만 한다(하드링크 dedup 은 공유라 락 안).
             nonlocal own_bytes, file_count
             if not file_chunk:
                 return
             chunk = file_chunk[:]
             file_chunk.clear()
             stats = [self._safe_stat(e) for e in chunk]   # I/O — 락 밖
-            cb = 0
-            cf = 0
-            with self._dlock:
-                for entry, st in zip(chunk, stats):
-                    if st is None:
-                        continue
-                    cf += 1
-                    eb = _entry_bytes(st, self.size_mode)
-                    counted = True
-                    # 하드링크 중복 제거(용량 한 번만). dedup 끄면 메모리 절약(수십억 파일 대비).
-                    if self.hardlink_dedup and st.st_nlink > 1:
-                        key = (st.st_dev, st.st_ino)
-                        if key in self._seen_inodes:
-                            counted = False    # 용량은 한 번만(개수는 셈)
-                        else:
-                            self._seen_inodes.add(key)
-                    if counted:
-                        cb += eb
-                        self._top_push(entry.path, eb, st)   # 최대 파일 Top-N
-                    # 집계 리포트(나이/소유자/확장자): 개수는 모두, 용량은 dedup 반영
-                    self._accum_stats(entry.name, st, eb if counted else 0, 1)
-                own_bytes += cb
-                file_count += cf
-                self._scanned_bytes += cb
-                self._total_files += cf
+            ref = self._stats_ref
+            l_bytes = 0
+            l_files = 0
+            l_top: list = []
+            l_age: dict = {}
+            l_atime: dict = {}
+            l_uid: dict = {}
+            l_ext: dict = {}
+            deferred: list = []   # nlink>1: dedup 이 공유라 락 안에서 판정
+            for entry, st in zip(chunk, stats):     # 락 밖 — 파일당 작업
+                if st is None:
+                    continue
+                l_files += 1
+                eb = _entry_bytes(st, self.size_mode)
+                if self.hardlink_dedup and st.st_nlink > 1:
+                    deferred.append((entry.path, entry.name, eb, st))
+                    continue
+                l_bytes += eb
+                _local_top(l_top, entry.path, eb, st)
+                _local_accum(ref, l_age, l_atime, l_uid, l_ext, entry.name, st, eb)
+            with self._dlock:                       # 락 안 — 짧게 병합
+                for p, name, eb, st in deferred:    # 하드링크 dedup(드묾)
+                    key = (st.st_dev, st.st_ino)
+                    if key in self._seen_inodes:
+                        cb = 0                       # 용량은 한 번만(개수는 셈)
+                    else:
+                        self._seen_inodes.add(key)
+                        cb = eb
+                    if cb:
+                        l_bytes += cb
+                        self._top_push(p, cb, st)
+                    self._accum_stats(name, st, cb, 1)
+                self._top_merge(l_top)
+                self._accum_merge(l_age, l_atime, l_uid, l_ext)
+                own_bytes += l_bytes
+                file_count += l_files
+                self._scanned_bytes += l_bytes
+                self._total_files += l_files
                 self._flush_progress_locked(self._disc_conn,
                                             current_dir=path, current_depth=depth)
 
@@ -740,7 +806,10 @@ class Scanner:
                    WHERE id=?""",
                 (own_bytes, file_count, subdir_count, err, dir_id),
             )
-            self._disc_conn.commit()
+            # 커밋 배칭: 디렉터리마다 fsync 하던 것을 제거하고, 아래 진행 flush(최대
+            # 0.4s 스로틀)에서 한 번에 커밋한다. 같은 커넥션이라 미커밋 쓰기도 다른 워커의
+            # claim 쿼리엔 보인다(정합성 유지). 종료 시 _discover 의 마지막 커밋이 꼬리를
+            # 비우고, kill -9 면 claimed→pending 으로 되돌아 재스캔되어 안전하다.
             self._discovered += 1
             if depth > 0:
                 self._maybe_update_depth(self._disc_conn, depth)

@@ -133,6 +133,58 @@ def run_case(backend: str, workers: int = 1) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def run_hardlink_concurrency() -> None:
+    """하드링크가 여러 디렉터리에 흩어져 있어도 dedup 이 워커 수와 무관하게 정확한지.
+
+    직렬 구간 축소 리팩터(하드링크는 락 안에서 dedup)의 회귀 가드 — 워커 1 vs 8 의
+    루트 합계가 서로 같고, os.walk dedup 레퍼런스와도 같아야 한다.
+    """
+    tmp = tempfile.mkdtemp(prefix="isilon_hl_")
+    try:
+        root = os.path.join(tmp, "data")
+        src = os.path.join(root, "src")
+        os.makedirs(src, exist_ok=True)
+        originals = []
+        for i in range(5):                       # 원본 5개(각 8KB)
+            p = os.path.join(src, "orig%d.bin" % i)
+            _write(p, 8000)
+            originals.append(p)
+        linked = 0
+        for s in range(10):                      # 10개 디렉터리에 흩뿌려 하드링크
+            d = os.path.join(root, "sub%d" % s)
+            os.makedirs(d, exist_ok=True)
+            for i, op in enumerate(originals):
+                try:
+                    os.link(op, os.path.join(d, "link%d.bin" % i))
+                    linked += 1
+                except OSError:
+                    pass
+            _write(os.path.join(d, "uniq%d.bin" % s), 1000)   # 디렉터리별 고유 파일
+        if linked == 0:
+            print("[hardlink-concurrency] 건너뜀 (os.link 미지원)")
+            return
+        exp_bytes, exp_files = _expected_disk_bytes(root)
+        results = {}
+        for w in (1, 8):
+            db_path = os.path.join(tmp, "hl%d.db" % w)
+            dbmod.init_db(db_path)
+            rid = Scanner(db_path, root, backend="native", batch_size=1, workers=w).run()
+            conn = dbmod.connect(db_path)
+            try:
+                rr = conn.execute(
+                    "SELECT total_bytes, total_files FROM directories "
+                    "WHERE run_id=? AND parent_id IS NULL", (rid,)).fetchone()
+                results[w] = (rr["total_bytes"], rr["total_files"])
+            finally:
+                conn.close()
+        assert results[1] == results[8], ("워커 수에 따라 결과 다름", results)
+        assert results[8] == (exp_bytes, exp_files), (results[8], (exp_bytes, exp_files))
+        print("[hardlink-concurrency] OK  워커 1/8 동일·dedup 정확 (bytes=%d files=%d)"
+              % (exp_bytes, exp_files))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def run_permission_case() -> None:
     """접근 불가 디렉터리가 있어도 스캔이 멈추지 않고 오류로 집계되는지."""
     tmp = tempfile.mkdtemp(prefix="isilon_perm_")
@@ -233,6 +285,7 @@ def main() -> int:
     else:
         print("[du] 건너뜀 (du 명령 없음)")
     run_fold_case()
+    run_hardlink_concurrency()
     run_permission_case()
     print("모든 테스트 통과 ✅")
     return 0
