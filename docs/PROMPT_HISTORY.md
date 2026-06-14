@@ -288,4 +288,9 @@
      API /api/portal/nodes/import, 노드 관리 탭 UI(textarea+파일업로드+예시). test_portal+HTTP 스모크.
      INSTALL 7장 연결. v1.58.0.
 
+152. Csv 등록 샘플 다운로드 추가(클라이언트 Blob, UTF-8 BOM). v1.58.1.
+153. 인터넷/git 모니터링→새 버전 자동 다운로드·설치, 최대한 상세 정보, 엣지도 업그레이드. → 1단계:
+     upgrade.py 원격 함수(check_remote/download_archive/upgrade_from_remote, raw GitHub versions.json,
+     기존 검증·백업 재사용) + 로컬 HTTP 비의존 테스트. v1.59.0. 다음 ②체커+API ③상세 UI ④엣지.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

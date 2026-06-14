@@ -207,3 +207,98 @@ def restart_process() -> None:
     sys.stdout.flush()
     sys.stderr.flush()
     os.execv(sys.executable, [sys.executable, "-m", "isilon_usage"] + sys.argv[1:])
+
+
+# --- 인터넷(GitHub raw 등) 소스에서 새 버전 확인·다운로드 ---
+# api.github.com 은 막히는 환경이 많아, make_release 가 생성하는 download/versions.json 을
+# raw.githubusercontent.com 으로 받아 최신 버전을 확인한다(HTTPS·읽기 전용).
+DEFAULT_UPGRADE_BASE = ("https://raw.githubusercontent.com/noainred/isilon_good/"
+                        "claude/upbeat-bell-cXX8f/download")
+
+
+def fetch_remote_versions(base_url: str, *, timeout: float = 10.0):
+    """base_url/versions.json 을 받아 (data, error). data={latest, versions:[...]}."""
+    import json
+    import urllib.request
+    url = base_url.rstrip("/") + "/versions.json"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            raw = r.read(4 * 1024 * 1024)
+        return json.loads(raw.decode("utf-8")), None
+    except Exception as exc:  # noqa: BLE001 — 네트워크/JSON 등 어떤 실패도 '미확인'으로
+        return None, "버전 정보 조회 실패: %s" % exc
+
+
+def check_remote(base_url: str, current_version: str, *, timeout: float = 10.0) -> dict:
+    """원격 versions.json 으로 최신 버전을 확인한다(다운로드/설치는 하지 않음).
+
+    반환: {ok, available, latest, current, tar_gz, size_bytes, download_url, checked_at, source}.
+    """
+    base = (base_url or DEFAULT_UPGRADE_BASE).rstrip("/")
+    data, err = fetch_remote_versions(base, timeout=timeout)
+    cur = parse_version(current_version) or (0, 0, 0)
+    out = {"ok": err is None, "current": vstr(cur), "available": False,
+           "checked_at": time.time(), "source": base + "/versions.json"}
+    if err:
+        out["error"] = err
+        return out
+    latest = str(data.get("latest") or "")
+    lt = parse_version(latest)
+    out["latest"] = latest
+    out["available"] = bool(lt and lt > cur)
+    for v in (data.get("versions") or []):
+        if str(v.get("version")) == latest:
+            out["tar_gz"] = v.get("tar_gz")
+            out["size_bytes"] = v.get("size_bytes")
+            if v.get("tar_gz"):
+                out["download_url"] = base + "/" + v["tar_gz"]
+            break
+    return out
+
+
+def download_archive(url: str, dest_dir: str, *, timeout: float = 120.0,
+                     max_bytes: int = MAX_BUNDLE_BYTES) -> dict:
+    """원격 tar.gz/zip 을 dest_dir 에 내려받는다(파일명 검증·크기 상한).
+
+    반환 {ok, path, size} 또는 {ok:False, reason}.
+    """
+    import urllib.request
+    name = os.path.basename((url or "").split("?")[0])
+    if not _ARCHIVE_RE.search(name):
+        return {"ok": False, "reason": "허용되지 않는 아카이브 파일명: %s" % (name or "(없음)")}
+    try:
+        os.makedirs(dest_dir, exist_ok=True)
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            data = r.read(max_bytes + 1)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "reason": "다운로드 실패: %s" % exc}
+    if len(data) > max_bytes:
+        return {"ok": False, "reason": "다운로드가 너무 큼(>%d bytes)" % max_bytes}
+    dest = os.path.join(dest_dir, name)
+    with open(dest, "wb") as fh:
+        fh.write(data)
+    return {"ok": True, "path": dest, "size": len(data)}
+
+
+def upgrade_from_remote(base_url: str, code_dir: str, current_version: str,
+                        dest_dir: str, *, timeout: float = 120.0) -> dict:
+    """원격에서 최신 아카이브를 받아 설치까지 한다(재시작은 호출 측에서).
+
+    반환: check_remote 결과 + 설치 결과(installed/version/from/backup) 또는 사유.
+    """
+    info = check_remote(base_url, current_version, timeout=min(timeout, 15))
+    if not info.get("ok"):
+        return {"ok": False, "reason": info.get("error", "버전 확인 실패"), "check": info}
+    if not info.get("available"):
+        return {"ok": False, "reason": "이미 최신입니다(%s)" % info.get("latest"),
+                "check": info, "up_to_date": True}
+    if not info.get("download_url"):
+        return {"ok": False, "reason": "다운로드 URL 을 찾을 수 없음", "check": info}
+    dl = download_archive(info["download_url"], dest_dir, timeout=timeout)
+    if not dl.get("ok"):
+        return {"ok": False, "reason": dl.get("reason"), "check": info}
+    res = upgrade_from_archive(dl["path"], code_dir, current_version)
+    res["check"] = info
+    res["downloaded"] = dl.get("size")
+    return res
+

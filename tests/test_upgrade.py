@@ -89,6 +89,46 @@ def main() -> int:
         shutil.rmtree(code2, ignore_errors=True)
 
     print("[upgrade] OK  버전 비교·새 압축본 탐지·패키지 교체(백업)·번들 적용·경로탈출 차단")
+
+    # --- 인터넷(원격) 자동 업그레이드: 로컬 HTTP 서버로 versions.json+tar.gz 서빙(네트워크 비의존) ---
+    import json as _json
+    import threading as _th
+    from http.server import HTTPServer, SimpleHTTPRequestHandler
+    srv = tempfile.mkdtemp(prefix="iu_up_srv_")
+    rcode = tempfile.mkdtemp(prefix="iu_up_code_")
+    rdl = tempfile.mkdtemp(prefix="iu_up_dl_")
+    try:
+        _make_archive(os.path.join(srv, "isilon_usage-9.9.9.tar.gz"), "9.9.9")
+        with open(os.path.join(srv, "versions.json"), "w") as fh:
+            _json.dump({"latest": "9.9.9", "versions": [
+                {"version": "9.9.9", "tar_gz": "isilon_usage-9.9.9.tar.gz", "size_bytes": 100}]}, fh)
+        os.makedirs(os.path.join(rcode, "isilon_usage"))
+        with open(os.path.join(rcode, "isilon_usage", "__init__.py"), "w") as fh:
+            fh.write('__version__ = "1.0.0"\n')
+
+        class _Quiet(SimpleHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+        httpd = HTTPServer(("127.0.0.1", 0),
+                           lambda *a, **k: _Quiet(*a, directory=srv, **k))
+        _th.Thread(target=httpd.serve_forever, daemon=True).start()
+        base = "http://127.0.0.1:%d" % httpd.server_address[1]
+        info = upgrade.check_remote(base, "1.0.0", timeout=5)
+        assert info["ok"] and info["available"] and info["latest"] == "9.9.9", info
+        assert str(info.get("download_url", "")).endswith("isilon_usage-9.9.9.tar.gz"), info
+        assert not upgrade.check_remote(base, "9.9.9")["available"]    # 이미 최신이면 안 알림
+        res = upgrade.upgrade_from_remote(base, rcode, "1.0.0", rdl, timeout=10)
+        assert res["ok"] and res["version"] == "9.9.9", res
+        with open(os.path.join(rcode, "isilon_usage", "__init__.py")) as fh:
+            assert "9.9.9" in fh.read()
+        # 잘못된 파일명/다운그레이드 거부
+        assert not upgrade.download_archive(base + "/evil.sh", rdl)["ok"]
+        httpd.shutdown()
+        print("[remote-upgrade] OK  원격 확인·다운로드·설치(1.0.0→9.9.9)·최신판정·파일명검증")
+    finally:
+        for d in (srv, rcode, rdl):
+            shutil.rmtree(d, ignore_errors=True)
+
     print("모든 테스트 통과 ✅")
     return 0
 
