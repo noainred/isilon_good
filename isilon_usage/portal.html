@@ -758,10 +758,11 @@ if($("ugPushAll")) $("ugPushAll").addEventListener("click", async()=>{
   $("ugPushAll").disabled=true; $("ugWatchMsg").textContent=" 푸시 중…";
   try{ const j=await (await fetch("/api/portal/upgrade-all",{method:"POST",
       headers:{"Content-Type":"application/json"},body:"{}"})).json();
-    if(j.ok){ const ok=j.results.filter(r=>r.ok).length;
-      $("ugWatchMsg").textContent=" ✓ HQ v"+(j.hq_version||"?")+" · "+ok+"/"+j.results.length+" 성공";
+    if(j.ok){ const ok=j.results.filter(r=>r.ok).length, fail=j.results.length-ok;
+      $("ugWatchMsg").textContent=" HQ v"+(j.hq_version||"?")+" · 성공 "+ok+" · 실패 "+fail;
       $("ugPushOut").style.display=""; $("ugPushOut").textContent=
-        j.results.map(r=>`${r.ok?"✓":"✗"} ${r.id} ${r.version||r.reason||""}`).join("\n"); }
+        j.results.map(r=> r.ok ? `✓ ${r.id} — 성공 (v${r.version||"?"})`
+          : `✗ ${r.id} — 실패: ${r.reason||""}`).join("\n"); }
     else $("ugWatchMsg").textContent=" ✗ "+(j.reason||j.error||"실패"); }
   catch(e){ $("ugWatchMsg").textContent=" ✗ "+e; }
   $("ugPushAll").disabled=false;
@@ -774,10 +775,12 @@ if($("ugPushAllSsh")) $("ugPushAllSsh").addEventListener("click", async()=>{
       body:JSON.stringify({hq_base:location.origin, ssh_user:$("ugAllUser").value.trim(),
         ssh_port:$("ugAllPort").value.trim(), ssh_password:$("ugAllPass").value,
         edge_dir:$("ugAllDir").value.trim()})})).json();
-    if(j.ok){ const ok=j.results.filter(r=>r.ok).length;
-      $("ugSshAllMsg").textContent=" ✓ "+ok+"/"+j.results.length+" 성공";
+    if(j.ok){ const ok=j.results.filter(r=>r.ok).length, fail=j.results.length-ok;
+      $("ugSshAllMsg").textContent=" 성공 "+ok+" · 실패 "+fail+" (총 "+j.results.length+")";
       $("ugPushOut").style.display=""; $("ugPushOut").textContent=
-        j.results.map(r=>`${r.ok?"✓":"✗"} ${r.id} ${r.reason||("rc="+r.returncode)||""}`).join("\n"); }
+        j.results.map(r=> r.ok ? `✓ ${r.id} — 성공`
+          : `✗ ${r.id} — 실패: ${r.reason||""}`+(r.detail?("\n    "+String(r.detail).replace(/\n/g,"\n    ")):"")
+        ).join("\n"); }
     else $("ugSshAllMsg").textContent=" ✗ "+(j.reason||j.error||"실패"); }
   catch(e){ $("ugSshAllMsg").textContent=" ✗ "+e; }
   $("ugPushAllSsh").disabled=false;

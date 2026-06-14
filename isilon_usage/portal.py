@@ -289,19 +289,23 @@ def build_upgrade_script(*, hq_base, edge_dir="/opt/isilon_edge",
         "set -euo pipefail\n"
         "# === isilon_usage 엣지 원격 업그레이드 (HQ 포탈 생성) ===\n"
         "EDGE_DIR=%s\nHQ=%s\nSERVICE=%s\n\n"
-        'echo "[1/3] HQ 포탈에서 최신 코드 받기 (인터넷 불필요)"\n'
-        'sudo mkdir -p "$EDGE_DIR"\n'
-        'curl -fsSL "$HQ/api/portal/agent-bundle" | sudo tar -xz -C "$EDGE_DIR"\n'
-        'NEWV=$(cd "$EDGE_DIR" && python3 -m isilon_usage --version || true)\n'
+        "# 서비스의 실제 코드 디렉터리를 systemd 에서 자동 감지(없으면 EDGE_DIR)\n"
+        'WD=$(systemctl show -p WorkingDirectory --value "$SERVICE" 2>/dev/null || true)\n'
+        'TARGET="${WD:-$EDGE_DIR}"; [ -z "$TARGET" ] && TARGET="$EDGE_DIR"\n'
+        'OLDV=$(cd "$TARGET" 2>/dev/null && python3 -m isilon_usage --version 2>/dev/null || echo "?")\n'
+        'echo "[1/3] HQ 에서 최신 코드 받기 -> $TARGET (현재 $OLDV)"\n'
+        'sudo mkdir -p "$TARGET"\n'
+        'curl -fsSL "$HQ/api/portal/agent-bundle" | sudo tar -xz -C "$TARGET"\n'
+        'NEWV=$(cd "$TARGET" && python3 -m isilon_usage --version 2>/dev/null || echo "?")\n'
         'echo "  -> 새 코드: $NEWV"\n'
-        'echo "[2/3] 서비스 재시작"\n'
+        'echo "[2/3] 서비스 재시작: $SERVICE"\n'
         'if systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE}\\.service"; then\n'
         '  sudo systemctl restart "$SERVICE"\n'
-        '  echo "  -> systemctl restart $SERVICE"\n'
+        '  echo "  -> systemctl restart $SERVICE 완료"\n'
         "else\n"
-        '  echo "  (systemd 유닛 ${SERVICE} 없음 — nohup 등으로 띄웠다면 수동 재시작 필요)"\n'
+        '  echo "  WARN: systemd 유닛 ${SERVICE} 없음 - 코드는 $TARGET 에 갱신됨, 서비스를 수동 재시작하세요"\n'
         "fi\n"
-        'echo "[3/3] 완료 — 잠시 후 포탈에서 버전 갱신이 반영됩니다"\n'
+        'echo "[3/3] 업그레이드 $OLDV -> $NEWV (대상 $TARGET, 서비스 $SERVICE)"\n'
     ) % (q(edge_dir), q(hq), q(service))
 
 
@@ -433,17 +437,18 @@ class PortalController:
         def _one(n):
             host = urlparse(n["url"]).hostname or ""
             if not host:
-                return {"id": n["id"], "ok": False, "reason": "host 파싱 실패"}
+                return {"id": n["id"], "ok": False,
+                        "reason": "노드 URL 에서 host 를 못 읽음(노드 설정의 url 확인)"}
             res = self._ssh_run({"host": host, "ssh_user": user,
                                  "ssh_password": password, "ssh_port": port}, script)
-            reason = res.get("reason")
-            if not res.get("ok") and not reason:   # 실패 사유를 SSH 출력에서 뽑아 보여준다
-                tail = [ln for ln in (res.get("output") or "").splitlines() if ln.strip()]
-                reason = (tail[-1][:160] if tail
-                          else ("SSH 연결/인증 실패(rc 255)" if res.get("returncode") == 255
-                                else "실패(rc %s)" % res.get("returncode")))
-            return {"id": n["id"], "ok": bool(res.get("ok")),
-                    "reason": reason, "returncode": res.get("returncode")}
+            if res.get("ok"):
+                return {"id": n["id"], "ok": True}
+            rc = res.get("returncode")
+            reason = res.get("reason") or (
+                "SSH 연결/인증 실패" if rc == 255 else
+                "업그레이드 스크립트 실패" if rc is not None else "실패")
+            return {"id": n["id"], "ok": False, "reason": reason,
+                    "detail": (res.get("output") or "").strip(), "returncode": rc}
 
         nodes = list(self.nodes)
         if nodes:
