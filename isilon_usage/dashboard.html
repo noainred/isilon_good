@@ -2742,7 +2742,25 @@ function renderArrayHtml(a) {
   const label = a.label || (a.type === "powerstore" ? "Dell PowerStore" : "Isilon (OneFS)");
   if (!a.ok) return `<div style="padding:8px 0; border-bottom:1px solid #222c38;"><span class="sub">${label}</span> <span class="err">연결 실패: ${a.error || ""}</span></div>`;
   const cap = a.capacity || {}, nd = a.nodes || {};
-  const health = (a.health === "ok") ? '<span class="badge done">정상</span>' : '<span class="badge paused">주의</span>';
+  const health = a.health === "ok" ? '<span class="badge done">정상</span>'
+    : a.health === "critical" ? '<span class="badge" style="background:#5a1f1f; color:#ffb3b3;">위험</span>'
+    : '<span class="badge paused">주의</span>';
+  const _esc = s => String(s == null ? "" : s).replace(/[<>&"]/g,
+    c => ({"<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;"}[c]));
+  let alarmHtml = "";
+  if (a.alarms && a.alarms.length) {
+    const sevKo = {emergency: "긴급", critical: "심각", warning: "경고", information: "정보", info: "정보"};
+    const sevCol = {emergency: "#ff5c5c", critical: "#ff5c5c", warning: "#f5a623"};
+    const bs = a.events_by_severity || {};
+    const order = ["emergency", "critical", "warning", "information", "info"];
+    const summary = order.filter(k => bs[k]).map(k => `${sevKo[k] || k} ${bs[k]}`).join(" · ");
+    alarmHtml = `<details style="margin-top:6px;"><summary class="sub" style="cursor:pointer;">⚠ 활성 알람 ${a.alarms.length}건${summary ? " (" + summary + ")" : ""}</summary>`
+      + '<table style="width:100%; font-size:12px; margin-top:4px;"><tbody>'
+      + a.alarms.map(al => `<tr><td style="white-space:nowrap; vertical-align:top;"><b style="color:${sevCol[al.severity] || "#9bb"}">${sevKo[al.severity] || al.severity}</b></td>`
+        + `<td>${_esc(al.message)}</td>`
+        + `<td class="sub" style="white-space:nowrap; vertical-align:top;">${al.time ? new Date(al.time * 1000).toLocaleString("ko-KR") : ""}</td></tr>`).join("")
+      + "</tbody></table></details>";
+  }
   const onl = (nd.online != null) ? nd.online : "?", tot = (nd.total != null) ? nd.total : "?";
   const ev = (a.events_unresolved != null) ? a.events_unresolved : "—";
   const pct = (cap.used_pct != null) ? cap.used_pct : null;
@@ -2756,7 +2774,7 @@ function renderArrayHtml(a) {
     <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center;">
       <div><span class="sub">${label}</span> <b style="font-size:15px;">${a.name || "?"}</b> <span class="sub">${a.version || ""}</span> ${health}</div>
       <div class="sub">노드 ${onl} / ${tot}</div><div class="sub">미해결 이벤트/알림 ${ev}</div>
-    </div>${capHtml}</div>`;
+    </div>${capHtml}${alarmHtml}</div>`;
 }
 async function loadStorage() {
   try {

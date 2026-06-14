@@ -116,6 +116,25 @@ def _papi():
 
 
 def main() -> int:
+    # 0) 알람 파싱(순수 함수) — eventgroup-occurrences 요약 + health 판정
+    ev = {"total": 3, "eventgroup-occurrences": [
+        {"severity": "critical", "causes": [{"cause": "Node 3 down"}],
+         "time_noticed": 1000, "event_count": 5},
+        {"severity": "warning", "message": "Disk SMART warning", "last_event": 2000},
+        {"severity": "information", "eventgroup_id": "EG42"},
+    ]}
+    total, by_sev, alarms = isilon_api._summarize_events(ev)
+    assert total == 3 and by_sev == {"critical": 1, "warning": 1, "information": 1}, (total, by_sev)
+    assert alarms[0]["severity"] == "critical" and "Node 3 down" in alarms[0]["message"], alarms[0]
+    assert alarms[1]["severity"] == "warning" and "SMART" in alarms[1]["message"]
+    assert isilon_api._health_from(by_sev, total) == "critical"
+    assert isilon_api._health_from({"warning": 2}, 2) == "attention"
+    assert isilon_api._health_from({}, 0) == "ok"
+    assert isilon_api._health_from({}, None) == "ok"
+    t2, _, _ = isilon_api._summarize_events({"occurrences": [{"severity": "warning"}]})
+    assert t2 == 1, t2     # total 없으면 occurrences 수로 집계
+    print("[isilon] 알람 파싱/health(정상·주의·위험) 판정 OK")
+
     # 1) 미설정
     assert isilon_api.cluster_status("", "", "")["configured"] is False
 

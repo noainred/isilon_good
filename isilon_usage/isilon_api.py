@@ -25,6 +25,53 @@ def _ssl_context(verify: bool):
     return ctx
 
 
+_SEV_RANK = {"emergency": 0, "critical": 1, "warning": 2, "information": 3, "info": 3}
+
+
+def _summarize_events(ev: dict):
+    """eventgroup-occurrences 응답 → (total, by_severity, alarms[상위]) 베스트 에포트.
+
+    OneFS 버전마다 필드명이 조금씩 달라, 여러 후보를 방어적으로 읽는다.
+    """
+    occ = (ev.get("eventgroup-occurrences") or ev.get("occurrences")
+           or ev.get("entries") or [])
+    by_sev: dict = {}
+    alarms = []
+    for o in occ:
+        if not isinstance(o, dict):
+            continue
+        sev = str(o.get("severity") or "").lower() or "information"
+        by_sev[sev] = by_sev.get(sev, 0) + 1
+        msg = ""
+        causes = o.get("causes")
+        if isinstance(causes, list) and causes and isinstance(causes[0], dict):
+            msg = str(causes[0].get("cause") or "")
+        if not msg:
+            msg = str(o.get("message") or o.get("value")
+                      or ("eventgroup %s" % o.get("eventgroup_id", "")))
+        alarms.append({
+            "severity": sev,
+            "message": msg[:200],
+            "time": o.get("time_noticed") or o.get("last_event") or o.get("time"),
+            "count": o.get("event_count") or o.get("count") or 1,
+        })
+    alarms.sort(key=lambda a: (_SEV_RANK.get(a["severity"], 9), -(a["time"] or 0)))
+    total = ev.get("total")
+    if total is None:
+        total = len(occ)
+    return total, by_sev, alarms[:20]
+
+
+def _health_from(by_sev: dict, total) -> str:
+    """심각도/미해결 개수로 health 판정 — critical(심각/긴급) > attention(경고/미해결) > ok."""
+    crit = (by_sev or {}).get("emergency", 0) + (by_sev or {}).get("critical", 0)
+    if crit:
+        return "critical"
+    if (by_sev or {}).get("warning", 0) or (total not in (0, None)):
+        return "attention"
+    return "ok"
+
+
 class IsilonClient:
     """OneFS Platform API 최소 클라이언트(베이직 인증)."""
 
@@ -56,6 +103,7 @@ class IsilonClient:
             "ok": False, "type": "isilon", "label": "Isilon (OneFS)",
             "base": self.base, "name": None, "version": None,
             "capacity": {}, "nodes": {}, "events_unresolved": None,
+            "events_by_severity": {}, "alarms": [],
             "health": "unknown", "error": "",
         }
         # 1) 클러스터 설정(이름/버전) — 여기까지 되면 ok
@@ -103,15 +151,17 @@ class IsilonClient:
             out["nodes"] = {"total": int(total or 0), "online": int(online or 0)}
         except Exception:  # noqa: BLE001
             pass
-        # 4) 미해결 이벤트(건강 지표)
+        # 4) 미해결 이벤트(알람) — 개수 + 심각도별 + 상위 목록
         try:
             ev = self._get("/platform/3/event/eventgroup-occurrences"
-                           "?resolved=false&limit=1")
-            out["events_unresolved"] = ev.get("total")
+                           "?resolved=false&limit=100")
+            total, by_sev, alarms = _summarize_events(ev)
+            out["events_unresolved"] = total
+            out["events_by_severity"] = by_sev
+            out["alarms"] = alarms
         except Exception:  # noqa: BLE001
             pass
-        unresolved = out["events_unresolved"]
-        out["health"] = "ok" if (unresolved in (0, None)) else "attention"
+        out["health"] = _health_from(out["events_by_severity"], out["events_unresolved"])
         return out
 
 
