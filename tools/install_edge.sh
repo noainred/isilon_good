@@ -7,8 +7,10 @@
 #
 # 사용:  sudo bash install_edge.sh [--port 8765] [--mount-base /mnt/isilon]
 #                                  [--branch <git브랜치>] [--data-dir DIR] [--install-dir DIR]
-#                                  [--tmp-dir DIR] [--api-token TOKEN]
+#                                  [--tmp-dir DIR] [--api-token TOKEN] [--token <GitHub PAT>]
 #   --api-token : 포탈 연동/업그레이드 푸시 인증 토큰(생략하면 기존 유지·없으면 자동 생성)
+#   --token     : 비공개(private) 저장소에서 받을 때 쓰는 GitHub 액세스 토큰(PAT).
+#                 환경변수 GITHUB_TOKEN 으로도 줄 수 있다. 공개 저장소면 불필요.
 # =============================================================================
 set -euo pipefail
 
@@ -22,6 +24,8 @@ MOUNT_BASE=""                            # 스캔 허용 경로(예: /mnt/isilon
 SERVICE="isilon-edge"                    # systemd 서비스 이름
 TMP_DIR="/tmp/isilon_edge"               # 임시 작업(압축 해제·검증) 디렉터리
 API_TOKEN=""                             # 포탈 연동/업그레이드 푸시 인증 토큰(비우면 자동 생성·유지)
+GITHUB_TOKEN="${GITHUB_TOKEN:-}"         # 비공개 저장소 다운로드용 GitHub PAT(없으면 공개 raw)
+REPO="noainred/isilon_good"              # 다운로드 대상 저장소
 
 # ===== 인자로 덮어쓰기 =====
 while [ $# -gt 0 ]; do
@@ -33,12 +37,13 @@ while [ $# -gt 0 ]; do
     --install-dir) INSTALL_DIR="$2"; shift 2;;
     --tmp-dir)     TMP_DIR="$2";     shift 2;;
     --api-token)   API_TOKEN="$2";   shift 2;;
+    --token|--github-token) GITHUB_TOKEN="$2"; shift 2;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     *) echo "알 수 없는 옵션: $1 (도움말: --help)"; exit 1;;
   esac
 done
 
-BASE_URL="https://github.com/noainred/isilon_good/raw/${BRANCH}/download"
+RAW_BASE="https://github.com/${REPO}/raw/${BRANCH}"   # 공개 저장소용 raw 베이스
 
 echo "============================================================"
 echo " isilon_edge 설치/업그레이드"
@@ -46,31 +51,68 @@ echo "   설치 경로 : $INSTALL_DIR"
 echo "   데이터    : $DATA_DIR"
 echo "   다운로드  : $DL_DIR"
 echo "   브랜치    : $BRANCH   포트: $PORT"
+echo "   인증      : ${GITHUB_TOKEN:+GitHub 토큰(비공개 저장소)}${GITHUB_TOKEN:-공개 raw(무인증)}"
 echo "============================================================"
 
 # ----- 사전 점검 -----
 [ "$(id -u)" = "0" ] || { echo "✗ root 권한이 필요합니다. sudo 로 실행하세요."; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "✗ python3 가 필요합니다(3.6+)."; exit 1; }
+command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 \
+  || { echo "✗ curl 또는 wget 이 필요합니다."; exit 1; }
 
-# 다운로드 도구(curl 우선, 없으면 wget)
-if   command -v curl >/dev/null 2>&1; then GET(){ curl -fsSL -o "$1" "$2"; }
-elif command -v wget >/dev/null 2>&1; then GET(){ wget -qO "$1" "$2"; }
-else echo "✗ curl 또는 wget 이 필요합니다."; exit 1; fi
+# 다운로드 함수: FETCH <dest> <relpath>   (relpath 예: download/versions.json)
+#  - GITHUB_TOKEN 이 있으면 비공개 저장소도 받도록 GitHub API(contents, raw) + 토큰 인증.
+#  - 없으면 공개 raw URL. (curl 우선, 없으면 wget)
+FETCH() {
+  dest="$1"; rel="$2"
+  if [ -n "$GITHUB_TOKEN" ]; then
+    url="https://api.github.com/repos/${REPO}/contents/${rel}?ref=${BRANCH}"
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+           -H "Accept: application/vnd.github.raw" -o "$dest" "$url"
+    else
+      wget -q --header="Authorization: Bearer ${GITHUB_TOKEN}" \
+           --header="Accept: application/vnd.github.raw" -O "$dest" "$url"
+    fi
+  else
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsSL -o "$dest" "${RAW_BASE}/${rel}"
+    else
+      wget -qO "$dest" "${RAW_BASE}/${rel}"
+    fi
+  fi
+}
+
+# 비공개 저장소로 다운로드가 막힐 때 친절한 안내
+_hint_private() {
+  if [ -z "$GITHUB_TOKEN" ]; then
+    echo "  ↳ 이 저장소가 비공개(private)면 무인증 다운로드가 막힙니다(404/로그인 페이지)."
+    echo "    GitHub 액세스 토큰(PAT)으로 다시 실행하세요:"
+    echo "      sudo bash $0 --token <GitHub_PAT>"
+    echo "      또는  sudo GITHUB_TOKEN=<GitHub_PAT> bash $0"
+  else
+    echo "  ↳ 토큰을 줬는데도 실패 — 토큰 권한(repo read)·브랜치(${BRANCH})·api.github.com 접근을 확인하세요."
+  fi
+}
 
 # ----- 1) 최신 버전 확인 -----
 mkdir -p "$DL_DIR"
 VJSON="$DL_DIR/.isilon_versions.json"
-echo "→ 최신 버전 확인: $BASE_URL/versions.json"
-GET "$VJSON" "$BASE_URL/versions.json" || { echo "✗ 버전 정보 조회 실패(네트워크/브랜치 확인)."; exit 1; }
+echo "→ 최신 버전 확인: download/versions.json"
+if ! FETCH "$VJSON" "download/versions.json"; then
+  echo "✗ 버전 정보 조회 실패(네트워크/브랜치/권한 확인)."; _hint_private; exit 1
+fi
 VER="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['latest'])" "$VJSON" 2>/dev/null || true)"
-[ -n "$VER" ] || { echo "✗ 최신 버전을 읽지 못했습니다."; exit 1; }
+if [ -z "$VER" ]; then
+  echo "✗ 최신 버전을 읽지 못했습니다(받은 내용이 올바른 JSON 이 아님)."; _hint_private; exit 1
+fi
 echo "   최신 버전: $VER"
 
 # ----- 2) 다운로드 (/opt) -----
 TARBALL="isilon_usage-${VER}.tar.gz"
 DEST="$DL_DIR/$TARBALL"
-echo "→ 다운로드: $BASE_URL/$TARBALL"
-GET "$DEST" "$BASE_URL/$TARBALL" || { echo "✗ 다운로드 실패."; exit 1; }
+echo "→ 다운로드: download/$TARBALL"
+FETCH "$DEST" "download/$TARBALL" || { echo "✗ 다운로드 실패."; _hint_private; exit 1; }
 # 무결성 간단 확인(정상 gzip tar 인지)
 tar tzf "$DEST" >/dev/null 2>&1 || { echo "✗ 내려받은 파일이 손상되었습니다."; exit 1; }
 

@@ -328,4 +328,11 @@
      autotune 연결. **포탈 감시 폴더 '📁 찾아보기'**(GET /api/portal/browse + 모달). **install_edge.sh
      api_token 자동 생성·유지·출력**(포탈 푸시 403 해소). HTTP 스모크로 안/밖/컨펌/포탈 검증. v1.65.0.
 
+161. 1.65 업그레이드 1줄 스크립트가 동작하지 않아 [+install_edge.sh 전문] → 진단: 패키지·api_token
+     블록(set -euo pipefail)·검증 모두 정상. 원인은 **다운로드** — 이 저장소가 비공개(private)라
+     install 스크립트의 무인증 raw 다운로드가 404/로그인 HTML 을 받아 versions.json 파싱 실패.
+     수정: install_edge.sh·install_portal.sh 에 `--token <PAT>`/`GITHUB_TOKEN` 추가(있으면 GitHub
+     API contents+raw 로 인증 다운로드, 없으면 공개 raw), JSON 아니면 '비공개일 수 있음 — --token'
+     친절 안내, 배너/도움말에 인증 모드 표기. bash -n + 무토큰 raw 실동작(latest=1.65.1) 검증. v1.65.1.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
