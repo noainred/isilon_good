@@ -1,6 +1,6 @@
 # Isilon 디렉터리 사용량 스캐너
 
-**[🚀 처음 시작하기](docs/GETTING_STARTED.md)** · [📦 설치 매뉴얼](docs/INSTALL.md) · [📄 솔루션 제품소개(A4)](docs/SOLUTION_BRIEF.html) · [사용 설명서](docs/USER_GUIDE.md) · [변경 이력](CHANGELOG.md) · [보안 가이드](SECURITY.md) · [서비스 실행(systemd)](docs/SERVICE.md) · [화면이 멈췄을 때 — 프로세스 확인/복구](docs/TROUBLESHOOTING-frozen-dashboard.md) · Python 3.6+ · [MIT License](LICENSE)
+**[🚀 처음 시작하기](docs/GETTING_STARTED.md)** · [📦 설치 매뉴얼](docs/INSTALL.md) · [📄 솔루션 제품소개(A4)](docs/SOLUTION_BRIEF.html) · [📣 영업 자료](sales/) · [사용 설명서](docs/USER_GUIDE.md) · [변경 이력](CHANGELOG.md) · [보안 가이드](SECURITY.md) · [서비스 실행(systemd)](docs/SERVICE.md) · [화면이 멈췄을 때 — 프로세스 확인/복구](docs/TROUBLESHOOTING-frozen-dashboard.md) · Python 3.6+ · [MIT License](LICENSE)
 
 아이실론(Isilon)처럼 **한 디렉터리에 수천만 개의 파일**이 있는 초대용량 NAS
 에서, 트리 전체에 `du` 를 한 번에 돌리면 메모리를 너무 많이 써서 프로세스가
@@ -85,18 +85,20 @@
 
 별도 설치 없이 바로 실행할 수 있습니다(**파이썬 3.6 이상**, 표준 라이브러리만 사용).
 
-**가장 빠른 길 — 한 줄 설치(권장).** 엣지(스캐너)·포탈(HQ)을 각각 `curl … | bash` **한 줄**로
-내려받기·검증·설치·systemd 서비스(`isilon-edge`/`isilon-portal`) 등록·기동까지 끝냅니다(같은 줄을
-다시 실행하면 업그레이드). 비공개 저장소라 GitHub 토큰(PAT)이 필요하고, 엣지에
-`--hq http://<HQ>:8800` 을 붙이면 **포탈에 자동 등록(enroll)** 까지 됩니다. 명령 전체(토큰·`wget`·
-공개·`--hq`·오프라인 업그레이드)는 **[download/README.md](download/README.md)** 에 모아 두었습니다.
-
-직접 코드를 받아 실행하려면:
+**가장 빠른 길 — 사내 미러 한 줄 설치(권장).** 엣지(스캐너)·포탈(HQ)을 각각 `curl … | bash` **한 줄**로
+내려받기·검증·설치·systemd 서비스(`isilon-edge`/`isilon-portal`) 등록·기동까지 끝냅니다(같은 줄을 다시
+실행하면 업그레이드). **인터넷·토큰이 필요 없습니다**(사내 미러에서 받음). 엣지에 `--hq http://<HQ>:8800`
+을 붙이면 **포탈에 자동 등록(enroll)** 까지 됩니다.
 ```bash
-git clone <repo>
-cd isilon_good
-python3 -m isilon_usage --help
+# 엣지(스캐너) — 사내 미러에서 한 줄 설치
+curl -fsSL "http://repository.dvc.lgensol.com:8081/repository/manager-upgrade/isilon_good/raw/claude/upbeat-bell-cXX8f/tools/install_edge.sh" \
+  | sudo bash -s -- --mount-base /mnt/isilon
 ```
+> 미러 주소·브랜치는 환경에 맞게 바꾸세요. 포탈 설치·옵션·**오프라인 업그레이드** 등 전체 명령은
+> **[download/README.md](download/README.md)** 에 모아 두었습니다.
+
+미러를 쓰지 않으면 **압축 패키지 한 개**(`isilon_usage-*.tar.gz`/`.zip`)를 받아 풀어도 됩니다 — 그 한 개가
+프로그램 전체입니다. (인터넷 되는 개발 환경이면 소스 저장소에서 직접 받아도 됩니다.)
 
 > **폐쇄망 + Python 3.6(RHEL/CentOS 7 등)**: `pip install` 이 필요 없습니다. 압축본을
 > 풀어 `python3 -m isilon_usage ...` 로 바로 실행하세요. (사내 미러의 옛 setuptools로
