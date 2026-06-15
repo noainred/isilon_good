@@ -13,6 +13,17 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.64.3] - 2026-06-15
+
+### 추가됨 (Added) — 포탈(HQ) 자동 설치/업그레이드 스크립트 (tools/install_portal.sh)
+
+엣지 스크립트와 동일 구조의 **HQ 통합 포탈용**. 같은 패키지에 포탈이 포함돼 있어 서비스만
+분리한다 — `/opt/isilon_portal` 설치, `/data/isilon_portal_data` 데이터, `/tmp/isilon_portal`
+임시 staging, 포트 8800, **systemd `isilon-portal` 등록·재시작**(ExecStart=`… portal …`).
+스캔을 안 하므로 `--mount-base` 없음. 다시 실행하면 업그레이드.
+
+---
+
 ## [1.64.2] - 2026-06-15
 
 ### 변경됨 (Changed) — 엣지 설치 스크립트: 임시 작업 디렉터리(/tmp/isilon_edge) staging

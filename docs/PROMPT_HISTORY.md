@@ -316,4 +316,7 @@
 158. 임시작업 디렉터리는 /tmp/isilon_edge. → install_edge.sh 가 /tmp/isilon_edge 에 풀어 검증 후
      통과분만 /opt/isilon_edge 반영(rsync/cp), 실패 시 기존 보존. --tmp-dir 옵션. v1.64.2.
 
+159. 포탈은 미포함인가요? → 코드(패키지)엔 포탈 포함, 서비스만 엣지였음. install_portal.sh 신규
+     (HQ: /opt/isilon_portal, /data/isilon_portal_data, /tmp/isilon_portal, 8800, systemd isilon-portal). v1.64.3.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
