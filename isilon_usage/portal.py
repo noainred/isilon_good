@@ -252,6 +252,12 @@ def newest_release_archive(release_dir: str):
     return max(cands, key=_key)
 
 
+def _ver_tuple(v):
+    """'1.67.0' → (1,67,0). 못 읽으면 None(버전 비교 불가 표시)."""
+    m = re.match(r"\s*v?(\d+)\.(\d+)\.(\d+)", str(v or ""))
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
 def build_provision_script(*, host, port, token, path, hq_base, install="systemd",
                            data_dir="/data/isilon_edge_data",
                            edge_dir="/opt/isilon_edge") -> str:
@@ -580,12 +586,27 @@ class PortalController:
     def upgrade_status(self) -> dict:
         with self._lock:
             st = dict(self._upg_state)
+            nodes = list(self.nodes)
+            cache = dict(self._cache)
         st["current"] = __version__
         st["source_mode"] = self.settings.get("upgrade_source", "off")
         st["auto"] = bool(self.settings.get("upgrade_auto"))
         st["url"] = self.settings.get("upgrade_url") or upgrademod.DEFAULT_UPGRADE_BASE
         st["check_secs"] = self.settings.get("upgrade_check_secs", 60)
-        st["node_count"] = len(self.nodes)
+        st["node_count"] = len(nodes)
+        # 등록된 엣지가 HQ(현재) 버전보다 낮은지 집계 — HQ 자신만 보고 '모두 최신'이라 하던 착시 방지.
+        hq = _ver_tuple(__version__)
+        outdated, unknown = [], 0
+        for n in nodes:
+            nv = (cache.get(n["id"]) or {}).get("version")
+            tv = _ver_tuple(nv)
+            if tv is None:
+                unknown += 1
+            elif hq is not None and tv < hq:
+                outdated.append({"id": n["id"], "version": nv})
+        st["edges_outdated"] = len(outdated)
+        st["edges_outdated_list"] = outdated[:20]
+        st["edges_unknown"] = unknown
         return {"ok": True, **st}
 
     def upgrade_check(self) -> dict:

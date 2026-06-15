@@ -1200,6 +1200,12 @@ function renderNetUpg(j){
     +(a?' <span style="color:var(--warn);font-weight:700">⬆ 업데이트 가능</span>':(j.latest?' <span style="color:var(--ok)">✓ 최신</span>':""))
     +(j.last_check?` · 확인 ${new Date(j.last_check*1000).toLocaleString("ko-KR")}`:" · 아직 확인 안 함")
     +` · 엣지 ${j.node_count||0}대`
+    +(j.edges_outdated>0
+        ? ` · <span style="color:var(--warn);font-weight:700">⚠ ${j.edges_outdated}대 구버전</span>`
+          +((j.edges_outdated_list&&j.edges_outdated_list.length)
+             ? ` <span class="sub">(${j.edges_outdated_list.map(e=>`${e.id} v${e.version}`).join(", ")})</span>` : "")
+        : ((j.node_count>0&&j.edges_unknown<j.node_count) ? ` · <span style="color:var(--ok)">엣지 모두 최신</span>` : ""))
+    +((j.edges_unknown>0)?` <span class="sub">· ${j.edges_unknown}대 버전 미확인</span>`:"")
     +(j.check_error?`<br><span style="color:var(--danger)">확인 오류: ${j.check_error}</span>`:"")
     +`<br><span class="sub">소스: ${j.url||"—"}</span>`;
   if(document.activeElement!==$("nuSource")) $("nuSource").value=j.source_mode||"off";

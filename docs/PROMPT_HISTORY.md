@@ -376,4 +376,10 @@
      systemctl/journalctl/유닛파일명/서비스명만 isilon-edge·isilon-portal 로(하이픈 변형 포함).
      패키지·릴리스명·/data/isilon_usage·콘솔명령 isilon-usage 는 보존. 잔재 0 검증, 13테스트·ruff 통과. v1.67.1.
 
+168. 1대가 업그레이드 안 됐는데 포탈은 '모두 업그레이드됨'이라 나옴 버그 수정 [+스샷: 노드 .20
+     v1.67.0⬆, 패널 '✓최신·엣지2대'] → upgrade_status 가 HQ 자신만 보고 노드 버전 뒤처짐을 안 봐서
+     생긴 착시. 등록 노드 캐시버전 vs HQ(현재) 비교해 edges_outdated/_list/edges_unknown 반환,
+     패널에 '⚠ N대 구버전 (id vX)'·'엣지 모두 최신' 표시. _ver_tuple 신설. 회귀+HTTP 스모크. v1.67.2.
+     (실제 .20이 안 오른 건 별개 — 그 엣지에서 설치/업그레이드 한 줄 재실행 필요.)
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

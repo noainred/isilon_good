@@ -290,7 +290,17 @@ def main() -> int:
         assert ri["ok"] and ri["release_available"] and ri["release_file"] == "isilon_usage-1.10.0.tar.gz", ri
         assert pc.upgrade_config().get("release_dir") == reld
 
-        print("[portal] OK  연결테스트·등록·폴링·복제·롤업·삭제·enroll·release 통과")
+        # 13) 업그레이드 상태: 노드 버전이 HQ보다 낮으면 '구버전'으로 집계('모두 최신' 착시 방지)
+        assert pc.upsert_node({"id": "old-node", "url": "http://10.9.9.1:8765", "token": "x"})["ok"]
+        with pc._lock:
+            pc._cache["old-node"] = {"version": "1.0.0"}
+        us = pc.upgrade_status()
+        assert us["ok"] and us.get("edges_outdated", 0) >= 1, us
+        assert any(e["id"] == "old-node" and e["version"] == "1.0.0"
+                   for e in us.get("edges_outdated_list", [])), us
+        assert pc.delete_node("old-node")["ok"]
+
+        print("[portal] OK  연결테스트·등록·폴링·복제·롤업·삭제·enroll·release·구버전집계 통과")
         print("모든 테스트 통과 ✅")
         return 0
     finally:
