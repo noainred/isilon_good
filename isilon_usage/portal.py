@@ -542,33 +542,60 @@ class PortalController:
             results = []
         return {"ok": True, "hq_version": __version__, "results": results}
 
-    def _check_self_upgrade(self) -> None:
-        """새 버전을 자가 적용 → 엣지 푸시 → 재시작 — ① 감시 폴더 ② 인터넷(GitHub)."""
+    def _try_begin_install(self) -> bool:
+        """설치를 시작할 수 있으면(다른 설치가 진행 중이 아니면) installing 을 잡고 True.
+
+        자동(감시폴더/인터넷)과 수동 '지금 업그레이드'가 **동시에 엣지에 푸시·재시작하는
+        중복 실행**을 막는 단일 뮤텍스(원자적 test-and-set). 못 잡으면 False(이미 설치 중)."""
         with self._lock:
-            if self._inflight:       # 동기화/복제 중이면 미룬다(중단 방지)
+            if self._upg_state.get("installing"):
+                return False
+            self._upg_state.update(installing=True, install_started=time.time(),
+                                   install_done=False, install_error=None)
+            return True
+
+    def _check_self_upgrade(self) -> None:
+        """새 버전을 자가 적용 → 엣지 푸시 → 재시작 — ① 감시 폴더 ② 인터넷(GitHub).
+
+        이미 설치 중(installing)이거나 동기화 중(_inflight)이면 건너뛴다(수동 '지금 업그레이드'
+        와의 중복 실행 방지).
+        """
+        with self._lock:
+            if self._inflight or self._upg_state.get("installing"):
                 return
         code_dir = upgrademod.code_dir_of(__file__)
         # ① 로컬 감시 폴더
         wd = (self.settings.get("upgrade_watch_dir") or "").strip()
         if wd:
             found = upgrademod.find_newer_archive(wd, __version__)
-            if found:
-                res = upgrademod.upgrade_from_archive(found[0], code_dir, __version__)
-                if res.get("ok"):
-                    self._apply_self_upgrade(res, "감시 폴더")
+            if found and self._try_begin_install():
+                try:
+                    res = upgrademod.upgrade_from_archive(found[0], code_dir, __version__)
+                    if res.get("ok"):
+                        self._apply_self_upgrade(res, "감시 폴더")   # 재시작(돌아오지 않음)
+                        return
+                    self._upg_log("감시 폴더 업그레이드 실패: %s" % res.get("reason"))
+                finally:
+                    with self._lock:
+                        self._upg_state["installing"] = False
         # ② 인터넷(GitHub) 소스
         if (self.settings.get("upgrade_source") or "off").strip() == "github":
             info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__)
             self._upg_set_check(info)
-            if info.get("available") and bool(self.settings.get("upgrade_auto")):
+            if (info.get("available") and bool(self.settings.get("upgrade_auto"))
+                    and self._try_begin_install()):
                 self._upg_log("새 버전 %s 발견 — 자동 설치" % info.get("latest"))
                 dest = os.path.join(self.data_dir, "upgrades")
-                res = upgrademod.upgrade_from_remote(
-                    self.settings.get("upgrade_url") or "", code_dir, __version__, dest)
-                if res.get("ok"):
-                    self._apply_self_upgrade(res, "인터넷")
-                else:
+                try:
+                    res = upgrademod.upgrade_from_remote(
+                        self.settings.get("upgrade_url") or "", code_dir, __version__, dest)
+                    if res.get("ok"):
+                        self._apply_self_upgrade(res, "인터넷")   # 재시작
+                        return
                     self._upg_log("자동 설치 실패: %s" % res.get("reason"))
+                finally:
+                    with self._lock:
+                        self._upg_state["installing"] = False
 
     def _apply_self_upgrade(self, res: dict, how: str) -> None:
         """자가 업그레이드 성공 후: 감사로그 → 엣지 전파 → 재시작(돌아오지 않음)."""
@@ -635,12 +662,10 @@ class PortalController:
     def upgrade_install(self, *, propagate: bool = True) -> dict:
         """[비동기] 최신 코드 적용 → 엣지 전파 → 재시작. 즉시 반환하고 백그라운드로 진행하며,
         진행 단계를 _upg_log 에 남긴다(업그레이드 모달이 /upgrade/status 를 폴링해 라이브 표시)."""
+        if not self._try_begin_install():
+            return {"ok": False, "error": "이미 설치 중입니다.", **self.upgrade_status()}
         with self._lock:
-            if self._upg_state.get("installing"):
-                return {"ok": False, "error": "이미 설치 중입니다.", **self.upgrade_status()}
-            self._upg_state.update(installing=True, install_started=time.time(),
-                                   install_done=False, install_error=None,
-                                   target=self._upg_state.get("latest"))
+            self._upg_state["target"] = self._upg_state.get("latest")
         threading.Thread(target=self._do_upgrade_install, args=(bool(propagate),),
                          daemon=True).start()
         return {"ok": True, "started": True, **self.upgrade_status()}
@@ -670,11 +695,12 @@ class PortalController:
                             detail="-> %s" % res.get("version"))
             self._upg_log("④ 곧 포탈을 재시작합니다 (약 1.5초) — 새 버전 v%s 로 돌아옵니다"
                           % res.get("version"))
-            with self._lock:
-                self._upg_state.update(installing=False, install_done=True,
-                                       target=res.get("version"))
+            with self._lock:        # 재시작 직전까지 installing 유지(1.5초 틈새 중복 설치 차단)
+                self._upg_state.update(install_done=True, target=res.get("version"))
             time.sleep(1.5)
             upgrademod.restart_process()
+            with self._lock:        # 재시작이 실패해 돌아온 경우에만 잠금 해제
+                self._upg_state["installing"] = False
         except Exception as e:  # noqa: BLE001
             self._upg_log("✗ 설치 중 오류: %s" % e)
             with self._lock:

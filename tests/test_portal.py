@@ -300,6 +300,15 @@ def main() -> int:
                    for e in us.get("edges_outdated_list", [])), us
         assert pc.delete_node("old-node")["ok"]
 
+        # 14) 업그레이드 동시 실행 방지(뮤텍스) — 자동/수동 중복 푸시 차단
+        assert pc._try_begin_install() is True
+        assert pc._try_begin_install() is False         # 이미 installing → 거부
+        with pc._lock:
+            pc._upg_state["installing"] = False
+        assert pc._try_begin_install() is True           # 풀리면 다시 가능
+        with pc._lock:
+            pc._upg_state["installing"] = False
+
         print("[portal] OK  연결테스트·등록·폴링·복제·롤업·삭제·enroll·release·구버전집계 통과")
         print("모든 테스트 통과 ✅")
         return 0

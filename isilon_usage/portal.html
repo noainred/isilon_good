@@ -1276,7 +1276,8 @@ async function runUpgradeModal(){
   let target=null, sawRestart=false; const t0=Date.now();
   try{
     const j=await (await fetch("/api/portal/upgrade/install",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({propagate:true})})).json();
-    if(j&&j.ok===false){ $("upgModalStat").innerHTML=`<span style="color:var(--danger)">시작 실패: ${j.error||""}</span>`; return; }
+    if(j&&j.ok===false && !/이미 설치/.test(j.error||"")){ $("upgModalStat").innerHTML=`<span style="color:var(--danger)">시작 실패: ${j.error||""}</span>`; return; }
+    // '이미 설치 중'이면 진행 중인 설치를 그대로 폴링해 보여준다(중복 시작 안 함)
     target=(j&&(j.target||j.latest))||null;
   }catch(e){ /* 시작 응답이 끊겨도 폴링이 이어서 보여줌 */ }
   if(_upgTimer) clearTimeout(_upgTimer);
