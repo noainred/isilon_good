@@ -25,7 +25,7 @@ DEFAULTS: dict = {
     "mount_bases": [],                  # 웹에서 스캔 허용할 경로 목록(빈 목록=전체 허용)
     "top_n": 20,                        # 상위 디렉터리 표시 개수
     "refresh_ms": 1500,                 # 대시보드 자동 새로고침 주기(ms)
-    "scan_workers": 8,                  # 동시 스캔 스레드 수(디렉터리 단위 병렬, NFS 가속, 더 올릴수록 빠름)
+    "scan_workers": 4,                  # 동시 스캔 스레드 수(디렉터리 단위 병렬, NFS 가속, 더 올릴수록 빠름)
     "scan_max_depth": 0,                # 탐색 최대 깊이(0=무제한, 빠른 컷). 깊은 용량은 합계에서 빠짐
     "fold_depth": 0,                    # 깊이 접기(0=off): N까지만 행 저장, 그 아래는 용량만 N에 합산(합계 정확)
     "db_max_gb": 0,                     # per-run DB(.db+-wal)가 이 GB 초과하면 자동 일시정지(0=off)
@@ -100,7 +100,7 @@ def sanitize(raw: dict) -> dict:
     s["sample_interval"] = _float(s["sample_interval"], 0.2, 60.0, 2.0)
     s["top_n"] = _int(s["top_n"], 1, 500, 20)
     s["refresh_ms"] = _int(s["refresh_ms"], 500, 600_000, 1500)
-    s["scan_workers"] = _int(s["scan_workers"], 1, 64, 8)
+    s["scan_workers"] = _int(s["scan_workers"], 1, 64, 4)
     s["scan_max_depth"] = _int(s.get("scan_max_depth"), 0, 100000, 0)
     s["fold_depth"] = _int(s.get("fold_depth"), 0, 100000, 0)
     s["db_max_gb"] = _int(s.get("db_max_gb"), 0, 1000000, 0)

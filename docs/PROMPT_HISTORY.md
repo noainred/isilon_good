@@ -535,4 +535,8 @@
      자동 탐색(재시작 누락 방지) ② tar 덮어쓰기 경로(SSH·프로비저닝·릴리스 풀)에 __pycache__ 정리 추가
      (stale 바이트코드 차단). test_portal 스크립트 검증. v1.72.1.
 
+193. (스크린샷 '동시 스캔 스레드' 4) 이걸 기본값으로 → scan_workers 기본 8→4(settings DEFAULTS +
+     sanitize _int 폴백), CLI --workers 기본도 serve/scan/analyze 모두 8→4(웹 UI 기본은 serve 의 pv
+     --workers 가 116줄에서 scan_workers 로 들어감). v1.72.2.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

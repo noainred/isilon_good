@@ -48,7 +48,7 @@ def _add_scan_opts(p: argparse.ArgumentParser) -> None:
                    help="다른 파일시스템으로 넘어가지 않음(du -x 와 동일)")
     p.add_argument("--batch-size", type=int, default=500,
                    help="DB 커밋 배치 크기 (기본: %(default)s)")
-    p.add_argument("--workers", type=int, default=8,
+    p.add_argument("--workers", type=int, default=4,
                    help="동시 스캔 스레드 수(디렉터리 병렬, NFS 가속, 기본: %(default)s)")
     p.add_argument("--max-depth", type=int, default=0,
                    help="탐색 최대 깊이(0=무제한, 빠른 컷). 그 아래 용량은 합계에서 빠짐")
@@ -765,7 +765,7 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("--size-mode", choices=["disk", "apparent"], default="disk")
     pv.add_argument("--one-file-system", "-x", action="store_true")
     pv.add_argument("--batch-size", type=int, default=500)
-    pv.add_argument("--workers", type=int, default=8,
+    pv.add_argument("--workers", type=int, default=4,
                     help="동시 스캔 스레드 수(디렉터리 병렬, 웹 스캔 기본값, NFS 가속)")
     pv.add_argument("--sample-interval", type=float, default=2.0)
     pv.add_argument("--lock-settings", action="store_true",
@@ -807,7 +807,7 @@ def build_parser() -> argparse.ArgumentParser:
                      help="디렉터리 이만큼 방문하면 중단(0=무제한)")
     pan.add_argument("--timeout", type=float, default=0.0,
                      help="이 초만큼 지나면 중단(0=무제한). 빠른 추정에 유용")
-    pan.add_argument("--workers", type=int, default=8, help="동시 디렉터리 워커 수")
+    pan.add_argument("--workers", type=int, default=4, help="동시 디렉터리 워커 수")
     pan.add_argument("--json", action="store_true", help="결과를 JSON 으로 출력")
     pan.set_defaults(func=cmd_analyze)
 
