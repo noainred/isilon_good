@@ -8,8 +8,9 @@
 #
 # 사용:  sudo bash install_portal.sh [--port 8800] [--branch <git브랜치>]
 #                                    [--data-dir DIR] [--install-dir DIR] [--tmp-dir DIR]
-#                                    [--token <GitHub PAT>]
-#   --token : 비공개(private) 저장소 다운로드용 GitHub 토큰(PAT). 환경변수 GITHUB_TOKEN 가능.
+#                                    [--base-url <미러베이스>]
+#   기본 다운로드 소스는 사내(폐쇄망) 미러다. 다른 미러면 --base-url 로 베이스를 준다. 예:
+#     http://repository.dvc.lgensol.com:8081/repository/manager-upgrade/isilon_good/raw/<branch>
 # =============================================================================
 set -euo pipefail
 
@@ -21,8 +22,10 @@ DL_DIR="/opt"                              # 다운로드(압축본) 저장 경�
 TMP_DIR="/tmp/isilon_portal"               # 임시 작업(압축 해제·검증) 디렉터리
 PORT="8800"                                # 포탈 포트
 SERVICE="isilon-portal"                    # systemd 서비스 이름
-GITHUB_TOKEN="${GITHUB_TOKEN:-}"           # 비공개 저장소 다운로드용 GitHub PAT(없으면 공개 raw)
-REPO="noainred/isilon_good"                # 다운로드 대상 저장소
+GITHUB_TOKEN="${GITHUB_TOKEN:-}"           # (선택) GitHub 비공개 저장소 토큰 — 미러를 쓰면 불필요
+REPO="noainred/isilon_good"                # 저장소 이름(미러 경로/토큰 모드에 사용)
+MIRROR_ROOT="http://repository.dvc.lgensol.com:8081/repository/manager-upgrade/isilon_good/raw"  # 폐쇄망 미러 루트
+BASE_URL=""                                # 다운로드 베이스 직접 지정(비우면 미러: MIRROR_ROOT/BRANCH)
 
 # ===== 인자로 덮어쓰기 =====
 while [ $# -gt 0 ]; do
@@ -33,20 +36,20 @@ while [ $# -gt 0 ]; do
     --install-dir) INSTALL_DIR="$2"; shift 2;;
     --tmp-dir)     TMP_DIR="$2";     shift 2;;
     --token|--github-token) GITHUB_TOKEN="$2"; shift 2;;
+    --base-url|--mirror) BASE_URL="$2"; shift 2;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     *) echo "알 수 없는 옵션: $1 (도움말: --help)"; exit 1;;
   esac
 done
 
-RAW_BASE="https://github.com/${REPO}/raw/${BRANCH}"   # 공개 저장소용 raw 베이스
+RAW_BASE="${BASE_URL:-$MIRROR_ROOT/$BRANCH}"   # 다운로드 베이스(기본=폐쇄망 미러)
 
 echo "============================================================"
 echo " isilon_portal(HQ) 설치/업그레이드"
 echo "   설치 경로 : $INSTALL_DIR"
 echo "   데이터    : $DATA_DIR"
-echo "   다운로드  : $DL_DIR   임시: $TMP_DIR"
-echo "   브랜치    : $BRANCH   포트: $PORT"
-echo "   인증      : ${GITHUB_TOKEN:+GitHub 토큰(비공개 저장소)}${GITHUB_TOKEN:-공개 raw(무인증)}"
+echo "   소스      : $RAW_BASE"
+echo "   브랜치    : $BRANCH   포트: $PORT   임시: $TMP_DIR"
 echo "============================================================"
 
 # ----- 사전 점검 -----
@@ -55,31 +58,33 @@ command -v python3 >/dev/null 2>&1 || { echo "✗ python3 가 필요합니다(3.
 command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 \
   || { echo "✗ curl 또는 wget 이 필요합니다."; exit 1; }
 
-# 다운로드 함수: FETCH <dest> <relpath>  (GITHUB_TOKEN 있으면 비공개 저장소도 API 로 인증 다운로드)
+# 다운로드 함수: FETCH <dest> <relpath>
+#  - 베이스가 github.com 이고 GITHUB_TOKEN 이 있으면 GitHub API(비공개)로 인증 다운로드.
+#  - 그 외(폐쇄망 미러/공개 raw)는 단순 다운로드(인증 불필요). curl 우선, 없으면 wget.
 FETCH() {
   dest="$1"; rel="$2"
-  if [ -n "$GITHUB_TOKEN" ]; then
-    url="https://api.github.com/repos/${REPO}/contents/${rel}?ref=${BRANCH}"
-    if command -v curl >/dev/null 2>&1; then
-      curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-           -H "Accept: application/vnd.github.raw" -o "$dest" "$url"
-    else
-      wget -q --header="Authorization: Bearer ${GITHUB_TOKEN}" \
-           --header="Accept: application/vnd.github.raw" -O "$dest" "$url"
-    fi
-  else
-    if command -v curl >/dev/null 2>&1; then curl -fsSL -o "$dest" "${RAW_BASE}/${rel}"
-    else wget -qO "$dest" "${RAW_BASE}/${rel}"; fi
-  fi
+  case "$RAW_BASE" in
+    *github.com*)
+      if [ -n "$GITHUB_TOKEN" ]; then
+        url="https://api.github.com/repos/${REPO}/contents/${rel}?ref=${BRANCH}"
+        if command -v curl >/dev/null 2>&1; then
+          curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+               -H "Accept: application/vnd.github.raw" -o "$dest" "$url"
+        else
+          wget -q --header="Authorization: Bearer ${GITHUB_TOKEN}" \
+               --header="Accept: application/vnd.github.raw" -O "$dest" "$url"
+        fi
+        return
+      fi
+      ;;
+  esac
+  if command -v curl >/dev/null 2>&1; then curl -fsSL -o "$dest" "${RAW_BASE}/${rel}"
+  else wget -qO "$dest" "${RAW_BASE}/${rel}"; fi
 }
 _hint_private() {
-  if [ -z "$GITHUB_TOKEN" ]; then
-    echo "  ↳ 이 저장소가 비공개(private)면 무인증 다운로드가 막힙니다(404/로그인 페이지)."
-    echo "    GitHub 액세스 토큰(PAT)으로 다시 실행: sudo bash $0 --token <GitHub_PAT>"
-    echo "    또는  sudo GITHUB_TOKEN=<GitHub_PAT> bash $0"
-  else
-    echo "  ↳ 토큰을 줬는데도 실패 — 토큰 권한(repo read)·브랜치(${BRANCH})·api.github.com 접근을 확인하세요."
-  fi
+  echo "  ↳ 소스 접근을 확인하세요: $RAW_BASE"
+  echo "    - 폐쇄망 미러면 주소/포트/방화벽과 versions.json 존재 여부를 확인."
+  echo "    - 다른 미러로 받으려면: sudo bash $0 --base-url <미러베이스URL>"
 }
 
 # ----- 1) 최신 버전 확인 -----
