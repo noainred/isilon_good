@@ -236,12 +236,12 @@ def newest_release_archive(release_dir: str):
     if not d or not os.path.isdir(d):
         return None
     cands = [os.path.join(d, n) for n in os.listdir(d)
-             if n.startswith("isilon_usage-") and n.endswith(".tar.gz")]
+             if n.startswith("isilon_usage-") and (n.endswith(".tar.gz") or n.endswith(".tgz"))]
     if not cands:
         return None
 
     def _key(p):
-        m = re.search(r"isilon_usage-(\d+)\.(\d+)\.(\d+)\.tar\.gz$", os.path.basename(p))
+        m = re.search(r"isilon_usage-(\d+)\.(\d+)\.(\d+)\.(?:tar\.gz|tgz)$", os.path.basename(p))
         ver = tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
         try:
             mt = os.path.getmtime(p)
@@ -476,12 +476,46 @@ class PortalController:
         return dict({"ok": True}, **self.release_info())
 
     def release_info(self) -> dict:
-        """현재 release_dir 와 거기서 엣지에 내려줄 최신 패키지 정보를 반환."""
+        """현재 release_dir 와 거기서 엣지에 내려줄 최신 패키지 정보(+진단)를 반환.
+
+        '없음'으로 보일 때 원인을 바로 알 수 있도록, 포탈이 **실제로 읽는** 폴더 경로·존재 여부·
+        그 폴더에서 보이는 isilon_usage-* 파일 목록·이 포탈의 호스트명·사유를 함께 돌려준다
+        (파일을 다른 호스트/다른 경로에 두었거나 권한 문제인 경우를 바로 드러낸다).
+        """
+        import socket
         rel = (self.settings.get("release_dir") or "/opt/isilon_release")
+        host = socket.gethostname()
+        exists = os.path.isdir(rel)
+        seen, n_all = [], 0
+        if exists:
+            try:
+                names = os.listdir(rel)
+                n_all = len(names)
+                seen = sorted(n for n in names if n.startswith("isilon_usage-") and (
+                    n.endswith(".tar.gz") or n.endswith(".tgz") or n.endswith(".zip")))
+            except OSError:
+                exists = False
         arc = newest_release_archive(rel)
-        return {"release_dir": rel,
+        ver = ""
+        if arc:
+            m = re.search(r"isilon_usage-(\d+\.\d+\.\d+)", os.path.basename(arc))
+            ver = m.group(1) if m else ""
+        reason = ""
+        if not arc:
+            if not exists:
+                reason = ("폴더가 없습니다: %s — 파일을 '이 포탈 서버(%s)'의 이 경로에 두세요."
+                          % (rel, host))
+            elif seen and not any(n.endswith((".tar.gz", ".tgz")) for n in seen):
+                reason = ("tar.gz/tgz 가 없습니다(zip 은 엣지 풀로 못 풉니다). 보이는 파일: %s"
+                          % ", ".join(seen))
+            else:
+                reason = ("isilon_usage-*.tar.gz 가 안 보입니다(폴더 파일 %d개). 파일을 '이 포탈 "
+                          "서버(%s)'의 %s 에 두었는지 확인하세요." % (n_all, host, rel))
+        return {"release_dir": rel, "release_dir_exists": exists, "release_host": host,
+                "release_seen": seen[:30], "release_count": n_all,
                 "release_file": os.path.basename(arc) if arc else "",
-                "release_available": bool(arc)}
+                "release_version": ver, "release_available": bool(arc),
+                "release_reason": reason}
 
     # --- 자동 업그레이드 ---
     def set_upgrade_watch(self, watch_dir: str, check_secs=None) -> dict:

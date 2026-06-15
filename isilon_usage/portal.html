@@ -345,9 +345,11 @@
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
       <input id="relDir" class="inp mono" placeholder="/opt/isilon_release" style="flex:1; min-width:240px;" />
       <button id="relSave">릴리스 폴더 저장</button>
+      <button id="relCheck">🔄 지금 확인</button>
       <span class="sub" id="relMsg"></span>
     </div>
     <div class="sub" style="margin-top:8px;">현재 내려줄 패키지: <span class="mono" id="relFile">—</span></div>
+    <div class="sub" style="margin-top:4px;" id="relSeen"></div>
     <div class="sub" style="margin-top:10px;">엣지 콘솔에서 1줄(업그레이드) — 클릭하면 복사:</div>
     <pre id="relCmd" class="note mono" style="white-space:pre-wrap; word-break:break-all; margin-top:4px; cursor:pointer;" title="클릭하면 복사">—</pre>
   </div>
@@ -1352,7 +1354,16 @@ async function loadRelease(){
   try{ const j=await (await fetch("/api/portal/release/info",{cache:"no-store"})).json();
     if(!j.ok) return;
     if($("relDir")) $("relDir").value=j.release_dir||"";
-    if($("relFile")) $("relFile").textContent=j.release_available?j.release_file:"(없음 — 폴더에 isilon_usage-*.tar.gz 를 두세요)";
+    if($("relFile")) $("relFile").innerHTML = j.release_available
+      ? `${(""+(j.release_file||"")).replace(/</g,"&lt;")} <span style="color:var(--ok)">(v${j.release_version||"?"})</span>`
+      : `<span style="color:var(--warn)">(없음)</span> <span class="sub">${(""+(j.release_reason||"폴더에 isilon_usage-*.tar.gz 를 두세요")).replace(/</g,"&lt;")}</span>`;
+    if($("relSeen")){
+      const host=j.release_host?` · 포탈 서버 <b>${(""+j.release_host).replace(/</g,"&lt;")}</b>`:"";
+      const seen=(j.release_seen||[]);
+      $("relSeen").innerHTML = seen.length
+        ? `이 폴더에서 보이는 패키지: <span class="mono">${seen.join(", ").replace(/</g,"&lt;")}</span>${host}`
+        : `이 폴더에서 isilon_usage-* 패키지가 안 보입니다${host}. (파일을 <b>이 포탈 서버</b>의 위 경로에 두었는지 확인)`;
+    }
     if($("relCmd")) $("relCmd").textContent=
       `curl -fsSL "${location.origin}/api/portal/release" | sudo tar -xz -C /opt/isilon_edge --strip-components=1 && (cd /opt/isilon_edge && python3 -m isilon_usage --version) && sudo systemctl restart isilon-edge`;
   }catch(e){}
@@ -1368,6 +1379,9 @@ if($("relSave")) $("relSave").addEventListener("click", async()=>{
 if($("relCmd")) $("relCmd").addEventListener("click",()=>{
   if(navigator.clipboard) navigator.clipboard.writeText($("relCmd").textContent);
   if($("relMsg")) $("relMsg").textContent=" (명령 복사됨)"; });
+if($("relCheck")) $("relCheck").addEventListener("click",()=>{
+  if($("relMsg")) $("relMsg").textContent=" 확인 중…"; loadRelease();
+  setTimeout(()=>{ if($("relMsg")&&$("relMsg").textContent===" 확인 중…") $("relMsg").textContent=""; }, 800); });
 loadRelease();
 // ── 서버 디렉터리 브라우저(감시 폴더 선택) — HQ 로컬 경로를 클릭으로 탐색 ──
 let _fbCur="/";

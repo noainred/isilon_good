@@ -297,6 +297,28 @@ def main() -> int:
         assert ri["ok"] and ri["release_available"] and ri["release_file"] == "isilon_usage-1.10.0.tar.gz", ri
         assert pc.upgrade_config().get("release_dir") == reld
 
+        # 12-b) 사용자 보고 시나리오: 1.69.4 vs 1.70.1 → 반드시 '최신(1.70.1)' 선택(구버전 금지).
+        #       구버전 mtime 을 더 최신으로 만들어도 '버전'이 이겨야 한다.
+        reld2 = os.path.join(tmp, "rel2"); os.makedirs(reld2, exist_ok=True)
+        for fn in ("isilon_usage-1.69.4.tar.gz", "isilon_usage-1.70.1.tar.gz"):
+            with open(os.path.join(reld2, fn), "wb") as fh:
+                fh.write(b"x")
+        os.utime(os.path.join(reld2, "isilon_usage-1.69.4.tar.gz"), None)   # 구버전을 최신 mtime 으로
+        info2 = pc.set_release_dir(reld2)
+        assert info2["release_available"] and info2["release_file"] == "isilon_usage-1.70.1.tar.gz", info2
+        assert info2["release_version"] == "1.70.1", info2
+        assert "isilon_usage-1.70.1.tar.gz" in info2["release_seen"] and info2.get("release_host"), info2
+
+        # 12-c) 진단: 빈 폴더·없는 폴더는 '왜 없는지' 사유를 노출(호스트/경로 착오를 바로 알게)
+        de = pc.set_release_dir(os.path.join(tmp, "empty_rel"))
+        os.makedirs(os.path.join(tmp, "empty_rel"), exist_ok=True)
+        de = pc.release_info()
+        assert not de["release_available"] and de["release_reason"], de
+        dn = pc.set_release_dir(os.path.join(tmp, "no_such_dir"))
+        assert (not dn["release_available"] and not dn["release_dir_exists"]
+                and "폴더가 없습니다" in dn["release_reason"]), dn
+        pc.set_release_dir(reld)   # 원복
+
         # 13) 업그레이드 상태: 노드 버전이 HQ보다 낮으면 '구버전'으로 집계('모두 최신' 착시 방지)
         assert pc.upsert_node({"id": "old-node", "url": "http://10.9.9.1:8765", "token": "x"})["ok"]
         with pc._lock:
