@@ -529,11 +529,12 @@ def diff_scans(data_dir: str, base_id: int, target_id: int, *,
         depth_b = depth_a
         rows = conn.execute(
             f"""
-            SELECT path, SUM(ab) AS ab, SUM(bb) AS bb FROM (
-                SELECT path, total_bytes AS ab, 0 AS bb
+            SELECT path, SUM(ab) AS ab, SUM(bb) AS bb,
+                         SUM(af) AS af, SUM(bf) AS bf FROM (
+                SELECT path, total_bytes AS ab, 0 AS bb, total_files AS af, 0 AS bf
                   FROM a.directories WHERE run_id=? {depth_a}
                 UNION ALL
-                SELECT path, 0 AS ab, total_bytes AS bb
+                SELECT path, 0 AS ab, total_bytes AS bb, 0 AS af, total_files AS bf
                   FROM b.directories WHERE run_id=? {depth_b}
             ) GROUP BY path
             ORDER BY ABS(SUM(bb)-SUM(ab)) DESC LIMIT ?
@@ -542,9 +543,12 @@ def diff_scans(data_dir: str, base_id: int, target_id: int, *,
         ).fetchall()
         result = [{"path": r["path"], "base_bytes": int(r["ab"]),
                    "target_bytes": int(r["bb"]),
-                   "delta": int(r["bb"]) - int(r["ab"])} for r in rows]
+                   "delta": int(r["bb"]) - int(r["ab"]),
+                   "base_files": int(r["af"]), "target_files": int(r["bf"]),
+                   "files_delta": int(r["bf"]) - int(r["af"])} for r in rows]
         return {
             "ok": True,
+            "root_path": target["root_path"],
             "base": {"scan_id": base_id, "scanned_bytes": base["scanned_bytes"],
                      "started_at": base["started_at"]},
             "target": {"scan_id": target_id, "scanned_bytes": target["scanned_bytes"],
@@ -2306,6 +2310,48 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     return
                 self._send_json(diff_scans(self.data_dir, base, target,
                                            max_depth=self._query_int(qs, "max_depth")))
+                return
+
+            if path == "/api/folder-history":
+                # 특정 폴더의 크기·파일수가 완료 스캔들에서 어떻게 변해왔는지(이력)
+                root = (qs.get("root", [""])[0] or "").strip()
+                dpath = (qs.get("path", [""])[0] or "").strip()
+                if not root or not dpath:
+                    self._send_json({"ok": False, "reason": "root/path 필요"}, status=400)
+                    return
+                limit = max(2, min(self._query_int(qs, "limit") or 30, 100))
+                scans = mconn.execute(
+                    "SELECT id, db_path, started_at FROM scans "
+                    "WHERE root_path=? AND status='done' ORDER BY id DESC LIMIT ?",
+                    (root, limit)).fetchall()
+                points = []
+                for s in scans:
+                    dbp = s["db_path"]
+                    if not dbp or not os.path.exists(dbp):
+                        continue
+                    try:
+                        c = dbmod.connect(dbp)
+                        try:
+                            r = c.execute(
+                                "SELECT total_bytes, total_files FROM directories "
+                                "WHERE run_id=(SELECT MAX(id) FROM scan_runs) AND path=?",
+                                (dpath,)).fetchone()
+                        finally:
+                            c.close()
+                    except Exception:  # noqa: BLE001
+                        r = None
+                    if r is not None:
+                        points.append({
+                            "scan_id": int(s["id"]), "started_at": s["started_at"],
+                            "total_bytes": int(r["total_bytes"]),
+                            "total_files": int(r["total_files"])})
+                points.reverse()  # 오래된→최신 순으로
+                for i, p in enumerate(points):
+                    prev = points[i - 1] if i else None
+                    p["bytes_delta"] = (p["total_bytes"] - prev["total_bytes"]) if prev else 0
+                    p["files_delta"] = (p["total_files"] - prev["total_files"]) if prev else 0
+                self._send_json({"ok": True, "root": root, "path": dpath,
+                                 "found": len(points), "points": points})
                 return
 
             if path == "/api/export":

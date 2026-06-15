@@ -725,15 +725,23 @@
       <div class="sub" id="trendNote" style="margin-top:6px;">같은 루트의 과거 스캔별 조사 용량</div>
     </div>
     <div class="card">
-      <h2>스캔 비교 (diff)</h2>
+      <h2>스캔 비교 — 변경 많은 폴더 Top 10</h2>
       <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
         <span class="sub">기준</span><select id="diffBase" class="optsel"></select>
         <span class="sub">→ 대상</span><select id="diffTarget" class="optsel"></select>
         <button id="diffRun">비교</button>
       </div>
       <div class="sub" id="diffSummary"></div>
-      <table><thead><tr><th>디렉터리</th><th class="num">변화량</th></tr></thead>
-        <tbody id="diffBody"><tr><td colspan="2" class="sub">같은 루트의 두 스캔을 골라 비교하세요.</td></tr></tbody></table>
+      <table><thead><tr><th>디렉터리</th><th class="num">크기 변화</th><th class="num">파일수 변화</th></tr></thead>
+        <tbody id="diffBody"><tr><td colspan="3" class="sub">같은 루트의 두 스캔을 골라 비교하세요. 행을 클릭하면 그 폴더의 변화 이력을 봅니다.</td></tr></tbody></table>
+      <div style="margin-top:10px; border-top:1px solid var(--line); padding-top:8px;">
+        <div class="sub" style="margin-bottom:6px;">📂 특정 폴더 변화 이력 — 경로를 입력(또는 위 표의 행 클릭)하면 스캔별 <b>크기·파일수</b> 변화를 보여줍니다.</div>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+          <input id="fhPath" class="mono" style="flex:1; min-width:240px; background:#0d1219; color:#cfe3ff; border:1px solid var(--line); border-radius:7px; padding:6px 9px;" placeholder="예: /mnt/isilon/ifs/project" />
+          <button id="fhRun">이력 보기</button>
+        </div>
+        <div id="fhOut" class="sub">—</div>
+      </div>
     </div>
   </div>
 
@@ -2736,7 +2744,9 @@ async function loadReport() {
       } else {
         const row = (r, col) => '<div style="display:flex; justify-content:space-between; gap:8px; margin:3px 0; font-size:0.92em;">'
           + '<span class="mono" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + r.path + '">' + r.path + '</span>'
-          + '<b style="color:' + col + '; white-space:nowrap;">' + (r.delta >= 0 ? "+" : "−") + fmtBytes(Math.abs(r.delta)) + '</b></div>';
+          + '<b style="color:' + col + '; white-space:nowrap;">' + (r.delta >= 0 ? "+" : "−") + fmtBytes(Math.abs(r.delta))
+          + ((r.files_delta !== undefined && r.files_delta !== 0) ? ' <span class="sub">(' + (r.files_delta > 0 ? "+" : "−") + fmtNum(Math.abs(r.files_delta)) + '개)</span>' : '')
+          + '</b></div>';
         let html = '<div class="sub" style="margin-bottom:4px;">전체 변화: <b>'
           + (gw.total_delta >= 0 ? "+" : "−") + fmtBytes(Math.abs(gw.total_delta)) + '</b></div>';
         html += (gw.growers || []).slice(0, 8).map(r => row(r, "var(--warn)")).join("");
@@ -2751,7 +2761,9 @@ async function loadReport() {
   } catch (e) { /* 무시 */ }
 }
 
+let diffRoot = "";          // 폴더 변화 이력 조회에 쓰는 현재 비교 루트
 function populateDiff(rootPath) {
+  diffRoot = rootPath || "";
   const opts = allScans.filter(s => s.root_path === rootPath)
     .map(s => `<option value="${s.id}">#${s.id} · ${s.started_at ? new Date(s.started_at*1000).toLocaleString("ko-KR") : ""}</option>`).join("");
   $("diffBase").innerHTML = opts; $("diffTarget").innerHTML = opts;
@@ -2765,14 +2777,49 @@ async function runDiff() {
   try {
     const j = await (await fetch(`/api/diff?base=${base}&target=${target}`, {cache:"no-store"})).json();
     if (!j.ok) { $("diffSummary").innerHTML = '<span class="err">' + (j.reason||"") + '</span>'; return; }
+    if (j.root_path) diffRoot = j.root_path;
     const sign = j.total_delta >= 0 ? "+" : "−";
-    $("diffSummary").innerHTML = `전체 변화: <b>${sign}${fmtBytes(Math.abs(j.total_delta))}</b>`;
-    $("diffBody").innerHTML = (j.rows||[]).filter(r=>r.delta!==0).slice(0,30).map(r => {
-      const up = r.delta >= 0;
-      return `<tr><td class="mono" title="${r.path}" style="max-width:360px; overflow:hidden; text-overflow:ellipsis;">${r.path}</td>
-        <td class="num" style="color:${up?'#ff8b8b':'#65e0b4'}">${up?'+':'−'}${fmtBytes(Math.abs(r.delta))}</td></tr>`;
-    }).join("") || '<tr><td colspan="2" class="sub">변화 없음</td></tr>';
+    $("diffSummary").innerHTML = `전체 변화: <b>${sign}${fmtBytes(Math.abs(j.total_delta))}</b> `
+      + `<span class="sub">· 변경 많은 폴더 Top 10 (크기 변화 기준)</span>`;
+    $("diffBody").innerHTML = (j.rows||[]).filter(r=>r.delta!==0 || r.files_delta!==0).slice(0,10).map(r => {
+      const up = r.delta >= 0, fd = r.files_delta || 0, fu = fd >= 0;
+      return `<tr class="fhrow" data-fhpath="${encodeURIComponent(r.path)}" style="cursor:pointer">
+        <td class="mono" title="${r.path}" style="max-width:300px; overflow:hidden; text-overflow:ellipsis;">${r.path}</td>
+        <td class="num" style="color:${up?'#ff8b8b':'#65e0b4'}">${up?'+':'−'}${fmtBytes(Math.abs(r.delta))}</td>
+        <td class="num" style="color:${fd===0?'var(--muted)':(fu?'#ff8b8b':'#65e0b4')}">${fd===0?'0':(fu?'+':'−')+fmtNum(Math.abs(fd))}</td></tr>`;
+    }).join("") || '<tr><td colspan="3" class="sub">변화 없음</td></tr>';
+    $("diffBody").querySelectorAll("tr.fhrow").forEach(tr =>
+      tr.addEventListener("click", () => {
+        const p = decodeURIComponent(tr.dataset.fhpath);
+        $("fhPath").value = p; loadFolderHistory(p);
+      }));
   } catch (e) { $("diffSummary").innerHTML = '<span class="err">'+e+'</span>'; }
+}
+
+// 특정 폴더의 스캔별 크기·파일수 변화 이력(클릭한 행 또는 입력 경로)
+async function loadFolderHistory(p) {
+  const path = (p || $("fhPath").value || "").trim();
+  if (!path) return;
+  if (!diffRoot) { $("fhOut").innerHTML = '<span class="err">먼저 같은 루트의 두 스캔을 비교해 루트를 정하세요.</span>'; return; }
+  $("fhOut").textContent = "이력 불러오는 중…";
+  try {
+    const j = await (await fetch(`/api/folder-history?root=${encodeURIComponent(diffRoot)}&path=${encodeURIComponent(path)}`, {cache:"no-store"})).json();
+    if (!j.ok) { $("fhOut").innerHTML = '<span class="err">'+(j.reason||"")+'</span>'; return; }
+    if (!j.points || !j.points.length) { $("fhOut").innerHTML = '<span class="sub">이 경로를 가진 완료 스캔이 없습니다(경로가 정확한지 확인하세요).</span>'; return; }
+    const rows = j.points.map(pt => {
+      const bd = pt.bytes_delta||0, fd = pt.files_delta||0;
+      const bcol = bd>0?'#ff8b8b':(bd<0?'#65e0b4':'var(--muted)');
+      const fcol = fd>0?'#ff8b8b':(fd<0?'#65e0b4':'var(--muted)');
+      const when = pt.started_at ? new Date(pt.started_at*1000).toLocaleString("ko-KR") : "";
+      return `<tr><td>#${pt.scan_id}</td><td class="sub">${when}</td>
+        <td class="num">${fmtBytes(pt.total_bytes)}</td>
+        <td class="num" style="color:${bcol}">${bd===0?'—':(bd>0?'+':'−')+fmtBytes(Math.abs(bd))}</td>
+        <td class="num">${fmtNum(pt.total_files)}</td>
+        <td class="num" style="color:${fcol}">${fd===0?'—':(fd>0?'+':'−')+fmtNum(Math.abs(fd))}</td></tr>`;
+    }).join("");
+    $("fhOut").innerHTML = `<div class="mono sub" style="margin-bottom:4px; word-break:break-all;">${path}</div>`
+      + `<table><thead><tr><th>스캔</th><th>일시</th><th class="num">크기</th><th class="num">Δ크기</th><th class="num">파일수</th><th class="num">Δ파일수</th></tr></thead><tbody>${rows}</tbody></table>`;
+  } catch (e) { $("fhOut").innerHTML = '<span class="err">'+e+'</span>'; }
 }
 
 // ---- 오류 디렉터리 ----
@@ -3525,6 +3572,8 @@ $("treeRoot").addEventListener("click", () => { treeStack = []; loadTree(null, [
 $("treeSearch").addEventListener("keydown", (e) => { if (e.key === "Enter") treeSearch($("treeSearch").value.trim()); });
 // 스캔 비교
 $("diffRun").addEventListener("click", runDiff);
+$("fhRun").addEventListener("click", () => loadFolderHistory());
+$("fhPath").addEventListener("keydown", (e) => { if (e.key === "Enter") loadFolderHistory(); });
 // 스토리지 어레이 추가
 $("arrAdd").addEventListener("click", () => {
   const url = $("arrUrl").value.trim();

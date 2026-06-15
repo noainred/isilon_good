@@ -299,6 +299,21 @@ def main() -> int:
         _wait_done(c, r2["scan_id"])
         df = c.get(f"/api/diff?base={s1}&target={r2['scan_id']}")
         assert df["ok"] and df["total_delta"] == 0, df
+        # diff 행에 크기 변화 + 파일수 변화 + 루트경로 포함(변경 많은 폴더 Top 비교)
+        assert df.get("root_path") == root and df["rows"], df
+        assert all({"delta", "files_delta", "base_files", "target_files"} <= set(r) for r in df["rows"]), df["rows"][:1]
+        # 특정 폴더 변화 이력: 루트 경로의 스캔별 크기·파일수(같은 트리라 변화 0)
+        fh = c.get(f"/api/folder-history?root={root}&path={root}")
+        assert fh["ok"] and fh["found"] >= 2 and len(fh["points"]) >= 2, fh
+        assert fh["points"][-1]["total_files"] == 4, fh["points"][-1]
+        assert all("bytes_delta" in p and "files_delta" in p for p in fh["points"]), fh
+        assert fh["points"][-1]["bytes_delta"] == 0 and fh["points"][-1]["files_delta"] == 0, fh["points"][-1]
+        # root/path 누락 → 400
+        miss = c.get("/api/folder-history?root=&path=")
+        assert not miss["ok"], miss
+        # 존재하지 않는 폴더 경로 → 빈 이력(에러 아님)
+        none_fh = c.get(f"/api/folder-history?root={root}&path={root}/__no_such__")
+        assert none_fh["ok"] and none_fh["found"] == 0, none_fh
 
         # 최대 파일 Top — /api/stats 에 포함(파일 4개 전부, 크기 내림차순)
         tf = c.get(f"/api/stats?scan={r2['scan_id']}")["top_files"]

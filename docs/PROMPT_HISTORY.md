@@ -481,4 +481,12 @@
      연락처·가격은 자리표시자/“별도 문의”). 정직성 감사(PoC 표기·레드플래그 스캔) 통과. README 에
      '영업 자료' 링크 추가.
 
+184. 특정 폴더의 크기·파일 개수가 스캔 결과에 따라 어떻게 변경됐는지 + 어느 폴더가 가장 변경 많은지
+     변경 많은 폴더 Top 10 비교 기능 추가 → diff_scans 에 파일 수 델타(base_files/target_files/
+     files_delta)와 root_path 추가, 신규 GET /api/folder-history?root=&path=(완료 스캔별 total_bytes/
+     total_files + 직전 대비 bytes_delta/files_delta 시계열, 최근 N개). 대시보드 '스캔 비교'를
+     '변경 많은 폴더 Top 10'(크기·파일수 열, 행 클릭→폴더 이력)으로 강화, growers 에 파일 수 증감 표기.
+     test_server 회귀(diff 파일수/root + folder-history 정상/누락/빈경로) + 변경량 HTTP 스모크
+     (파일 +2 → files_delta=2, 크기 +8192 disk블록) 확인. ruff·전체테스트·JS 통과. v1.70.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
