@@ -616,37 +616,129 @@ function _phTime(t,range){ const d=new Date(t*1000), p=x=>String(x).padStart(2,"
   return (d.getFullYear()%100)+"/"+p(d.getMonth()+1)+"/"+p(d.getDate()); }
 function drawPhChart(n, range){
   const cv=$("ph"+n._i); if(!cv) return;
+  const now=Math.floor(Date.now()/1000);
+  _drawSpark(cv, n.series, n.median, now-range, range);
+  cv._node=n; cv._range=range;
+  if(!cv._phBound){ cv._phBound=1; _bindPhCanvas(cv); }
+  const mEl=$("ph"+n._i+"_m");
+  if(mEl) mEl.textContent=(n.median!=null?("중앙값 "+n.median+"ms"):"표본 없음")+" · "+(n.series||[]).length+"점 · 더블클릭=확대";
+  const xEl=$("ph"+n._i+"_x");
+  if(xEl) xEl.innerHTML='<span>'+_phTime(now-range,range)+'</span><span>'+_phTime(now,range)+'</span>';
+}
+// 공통 스파크라인 렌더(작은 카드/큰 모달 공용) — t0~t0+range 윈도우, 점 좌표를 cv._pts 에 저장
+function _drawSpark(cv, series, med, t0, range){
   const dpr=window.devicePixelRatio||1, W=cv.clientWidth||320, H=cv.clientHeight||120;
   cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
   const ctx=cv.getContext("2d"); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,W,H);
-  const series=(n.series||[]).filter(p=>p.ms!=null), med=n.median;
+  series=(series||[]).filter(p=>p.ms!=null);
   const padL=6, padR=8, padT=8, padB=4, plotW=W-padL-padR, plotH=H-padT-padB;
-  const msVals=series.map(p=>p.ms);
+  const vis=series.filter(p=>p.t>=t0-1 && p.t<=t0+range+1);   // 윈도우 안 점만(패닝 대응)
+  const msVals=vis.map(p=>p.ms);
   let ymax=Math.max.apply(null,(msVals.length?msVals:[1]).concat([med?med*1.6:1]))*1.12;
   if(!(ymax>0)) ymax=1;
-  const now=Math.floor(Date.now()/1000), t0=now-range;
   const xOf=t=>padL+Math.max(0,Math.min(1,(t-t0)/range))*plotW;
   const yOf=v=>padT+(1-Math.min(v,ymax)/ymax)*plotH;
-  // 가로 보조선
   ctx.strokeStyle="rgba(255,255,255,0.06)"; ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(padL,padT+plotH*0.5); ctx.lineTo(W-padR,padT+plotH*0.5); ctx.stroke();
-  // 중앙값 점선
   if(med!=null){ const ym=yOf(med); ctx.save(); ctx.setLineDash([4,3]); ctx.strokeStyle="#8aa0b8"; ctx.lineWidth=1;
     ctx.beginPath(); ctx.moveTo(padL,ym); ctx.lineTo(W-padR,ym); ctx.stroke(); ctx.restore(); }
-  // 옅은 연결선
-  if(series.length>1){ ctx.strokeStyle="rgba(120,160,200,0.22)"; ctx.lineWidth=1; ctx.beginPath();
-    series.forEach((p,i)=>{ const x=xOf(p.t), y=yOf(p.ms); i?ctx.lineTo(x,y):ctx.moveTo(x,y); }); ctx.stroke(); }
-  // 점(중앙값 대비 편차 색)
-  series.forEach(p=>{ const x=xOf(p.t), y=yOf(p.ms); let c="#4aa3ff";
+  if(vis.length>1){ ctx.strokeStyle="rgba(120,160,200,0.22)"; ctx.lineWidth=1; ctx.beginPath();
+    vis.forEach((p,i)=>{ const x=xOf(p.t), y=yOf(p.ms); i?ctx.lineTo(x,y):ctx.moveTo(x,y); }); ctx.stroke(); }
+  const rad=(H>200?3.2:2.2);
+  vis.forEach(p=>{ const x=xOf(p.t), y=yOf(p.ms); let c="#4aa3ff";
     if(med){ const d=p.ms/med; if(d>=1.5) c="#ff5c5c"; else if(d>=1.2) c="#f5a623"; }
-    ctx.fillStyle=c; ctx.beginPath(); ctx.arc(x,y,2.1,0,6.2832); ctx.fill(); });
-  // y축 최대 라벨
+    ctx.fillStyle=c; ctx.beginPath(); ctx.arc(x,y,rad,0,6.2832); ctx.fill(); });
   ctx.fillStyle="#7c8aa0"; ctx.font="10px ui-monospace,Menlo,monospace"; ctx.textAlign="left";
   ctx.fillText(Math.round(ymax)+"ms", padL+1, padT+8);
-  const mEl=$("ph"+n._i+"_m");
-  if(mEl) mEl.textContent=(med!=null?("중앙값 "+med+"ms"):"표본 없음")+" · "+series.length+"점";
-  const xEl=$("ph"+n._i+"_x");
-  if(xEl) xEl.innerHTML='<span>'+_phTime(t0,range)+'</span><span>'+_phTime(now,range)+'</span>';
+  cv._pts=vis.map(p=>({x:xOf(p.t), y:yOf(p.ms), t:p.t, ms:p.ms}));
+}
+// ---- 핑 차트 인터랙션: 마우스오버 툴팁 · 더블클릭 확대 · 드래그 시점이동 · 휠 줌 ----
+function _nearestPt(pts, mx, my){
+  let best=null, bd=20*20;
+  (pts||[]).forEach(p=>{ const dx=p.x-mx, dy=p.y-my, d=dx*dx+dy*dy; if(d<bd){ bd=d; best=p; } });
+  return best;
+}
+function _phTipEl(){
+  let t=$("phTip");
+  if(!t){ t=document.createElement("div"); t.id="phTip"; document.body.appendChild(t);
+    t.style.cssText="position:fixed;z-index:9999;background:#0d1622;border:1px solid var(--line);"
+      +"border-radius:6px;padding:4px 9px;font-size:12px;color:var(--text);pointer-events:none;"
+      +"white-space:nowrap;box-shadow:0 6px 18px #000b;display:none;"; }
+  return t;
+}
+function _showPhTip(cx, cy, pt){
+  const t=_phTipEl(), d=new Date(pt.t*1000), p=x=>String(x).padStart(2,"0");
+  const ts=(d.getMonth()+1)+"/"+p(d.getDate())+" "+p(d.getHours())+":"+p(d.getMinutes())+":"+p(d.getSeconds());
+  t.innerHTML='<b>'+Math.round(pt.ms)+' ms</b> · '+ts;
+  t.style.display="block"; t.style.left=(cx+13)+"px"; t.style.top=(cy+13)+"px";
+}
+function _hidePhTip(){ const t=$("phTip"); if(t) t.style.display="none"; }
+function _bindPhCanvas(cv){
+  cv.style.cursor="crosshair";
+  cv.addEventListener("mousemove", e=>{
+    const r=cv.getBoundingClientRect(), pt=_nearestPt(cv._pts, e.clientX-r.left, e.clientY-r.top);
+    if(pt) _showPhTip(e.clientX, e.clientY, pt); else _hidePhTip();
+  });
+  cv.addEventListener("mouseleave", _hidePhTip);
+  cv.addEventListener("dblclick", ()=>{ if(cv._node) openPhModal(cv._node); });
+}
+let _phMV=null;   // 모달 뷰 상태 {series, med, id, t0, range}
+function openPhModal(node){
+  let m=$("phModal");
+  if(!m){
+    m=document.createElement("div"); m.id="phModal"; document.body.appendChild(m);
+    m.style.cssText="position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.72);display:none;align-items:center;justify-content:center;";
+    m.innerHTML='<div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;width:92vw;max-width:1150px;">'
+      +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">'
+      +'<b id="phmTitle" style="font-size:15px;"></b><span class="sub" id="phmInfo"></span><div style="flex:1"></div>'
+      +'<span class="sub">드래그=시점 이동 · 휠=확대/축소 · 더블클릭=리셋</span>'
+      +'<button id="phmClose">✕ 닫기</button></div>'
+      +'<canvas id="phmCanvas" style="width:100%;height:400px;display:block;cursor:grab;"></canvas>'
+      +'<div class="sub" id="phmX" style="display:flex;justify-content:space-between;margin-top:5px;"></div></div>';
+    $("phmClose").addEventListener("click", _closePhModal);
+    m.addEventListener("click", e=>{ if(e.target===m) _closePhModal(); });
+    document.addEventListener("keydown", e=>{ if(e.key==="Escape" && m.style.display==="flex") _closePhModal(); });
+    _bindPhModalCanvas();
+  }
+  m.style.display="flex";
+  $("phmTitle").textContent=node.id;
+  $("phmInfo").textContent="불러오는 중…";
+  // 1년치를 받아 그 노드만 큰 차트로(드래그로 과거까지 탐색)
+  fetch("/api/portal/ping-history?range=31536000",{cache:"no-store"}).then(r=>r.json()).then(j=>{
+    const nn=((j&&j.nodes)||[]).find(x=>x.id===node.id) || node;
+    const series=(nn.series||[]).filter(p=>p.ms!=null).slice().sort((a,b)=>a.t-b.t);
+    _phMV={ series, med:nn.median, id:node.id };
+    if(series.length){ const span=Math.max(3600, series[series.length-1].t-series[0].t);
+      _phMV.range=span; _phMV.t0=series[0].t; }
+    else { _phMV.range=86400; _phMV.t0=Math.floor(Date.now()/1000)-86400; }
+    drawPhModal();
+  }).catch(()=>{ const inf=$("phmInfo"); if(inf) inf.textContent="불러오기 실패"; });
+}
+function _closePhModal(){ const m=$("phModal"); if(m) m.style.display="none"; _hidePhTip(); }
+function drawPhModal(){
+  const cv=$("phmCanvas"), v=_phMV; if(!cv||!v) return;
+  _drawSpark(cv, v.series, v.med, v.t0, v.range);
+  const inf=$("phmInfo"); if(inf) inf.textContent=(v.med!=null?("중앙값 "+v.med+"ms · "):"")+v.series.length+"점";
+  const xe=$("phmX"); if(xe) xe.innerHTML='<span>'+_phTime(v.t0,v.range)+'</span><span>'+_phTime(v.t0+v.range,v.range)+'</span>';
+}
+function _bindPhModalCanvas(){
+  const cv=$("phmCanvas"); let drag=null;
+  cv.addEventListener("mousedown", e=>{ if(!_phMV) return; drag={x:e.clientX, t0:_phMV.t0}; cv.style.cursor="grabbing"; e.preventDefault(); });
+  window.addEventListener("mousemove", e=>{
+    const m=$("phModal"); if(!m || m.style.display!=="flex" || !_phMV) return;
+    if(drag){ const r=cv.getBoundingClientRect(); const frac=(e.clientX-drag.x)/(r.width||1);
+      _phMV.t0=drag.t0 - frac*_phMV.range; drawPhModal(); _hidePhTip(); return; }
+    const r=cv.getBoundingClientRect(), mx=e.clientX-r.left, my=e.clientY-r.top;
+    if(mx>=0&&my>=0&&mx<=r.width&&my<=r.height){ const pt=_nearestPt(cv._pts, mx, my); if(pt) _showPhTip(e.clientX,e.clientY,pt); else _hidePhTip(); }
+    else _hidePhTip();
+  });
+  window.addEventListener("mouseup", ()=>{ if(drag){ drag=null; cv.style.cursor="grab"; } });
+  cv.addEventListener("dblclick", ()=>{ const v=_phMV; if(v&&v.series.length){ v.t0=v.series[0].t; v.range=Math.max(3600, v.series[v.series.length-1].t-v.series[0].t); drawPhModal(); } });
+  cv.addEventListener("wheel", e=>{ if(!_phMV) return; e.preventDefault();
+    const r=cv.getBoundingClientRect(), frac=(e.clientX-r.left)/(r.width||1);
+    const center=_phMV.t0+frac*_phMV.range, f=(e.deltaY<0?0.8:1.25);
+    _phMV.range=Math.max(600, Math.min(31536000, _phMV.range*f)); _phMV.t0=center-frac*_phMV.range; drawPhModal();
+  }, {passive:false});
 }
 (function _phInit(){
   const box=$("phRange");
