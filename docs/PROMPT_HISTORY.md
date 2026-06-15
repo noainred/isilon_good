@@ -524,4 +524,9 @@
      실제 버전' 표시·경고. push_upgrade_all=agent_bundle(포탈 디스크 코드) 푸시임을 명확화. 회귀 테스트.
      v1.71.3. (근본원인은 사용자 측 파일 내용/엣지 import 측정 필요 — 추측 금지, 사실만.)
 
+191. 엣지 업그레이드 시 스캔이 돌고 있으면 업그레이드 후 자동 재개 → 재시작 직전 running_ids 를
+     data-dir 마커(resume_after_upgrade.json)에 기록, 시작 때 _reconcile_orphans(paused) 직후
+     _resume_after_upgrade 가 resume_scan 호출(1회성·빈상태 미기록). 4개 업그레이드 재시작 경로(감시·
+     인터넷·수동·포탈 푸시)를 _restart_for_upgrade 로 교체. test_server 글루 테스트. v1.72.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

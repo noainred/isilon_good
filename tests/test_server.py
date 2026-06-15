@@ -96,8 +96,42 @@ def _wait_done(client, scan_id, timeout=15):
     raise AssertionError("스캔이 시간 내에 끝나지 않음")
 
 
+def _check_resume_after_upgrade() -> None:
+    """업그레이드 재시작 ↔ 진행 중 스캔 자동 재개: 마커 기록/판독/재개·1회성 글루 검증."""
+    import shutil
+
+    from isilon_usage.server import ScanController
+    d = tempfile.mkdtemp(prefix="isilon_resume_")
+    try:
+        c = ScanController(os.path.join(d, "data"))
+        marker = os.path.join(c.data_dir, c._RESUME_MARK)
+        # 돌던 스캔이 있으면 그 id 를 마커에 기록한다.
+        c.running_ids = lambda: [5, 7]                                   # type: ignore[assignment]
+        c._mark_running_scans_for_resume()
+        with open(marker, encoding="utf-8") as fh:
+            assert json.load(fh)["scan_ids"] == [5, 7]
+        # 시작 시 자동 재개 → resume_scan 호출 + 마커 삭제(1회성).
+        resumed = []
+        c.resume_scan = lambda sid: (resumed.append(sid) or {"ok": True})  # type: ignore[assignment]
+        c._resume_after_upgrade()
+        assert resumed == [5, 7], resumed
+        assert not os.path.exists(marker)               # 다음 재시작에서 반복 재개 안 함
+        c._resume_after_upgrade()                        # 마커 없으면 아무 일도 없음
+        assert resumed == [5, 7], resumed
+        # 돌던 스캔이 없으면 마커를 만들지 않고, 남아있던 마커도 지운다.
+        with open(marker, "w") as fh:
+            fh.write("{}")
+        c.running_ids = lambda: []                                       # type: ignore[assignment]
+        c._mark_running_scans_for_resume()
+        assert not os.path.exists(marker)
+        print("[resume-after-upgrade] OK  돌던 스캔 표시→재시작 후 자동 재개·1회성·빈상태 처리")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     _check_insecure_warning()
+    _check_resume_after_upgrade()
     tmp = tempfile.mkdtemp(prefix="isilon_srv_")
     root = os.path.join(tmp, "tree")
     _make_tree(root)

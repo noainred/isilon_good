@@ -668,6 +668,7 @@ class ScanController:
                                        ttl=OP_TOKEN_TTL)
         self._launch_cwd = os.getcwd()      # info.MD 를 저장할 '실행한 디렉터리'
         self._reconcile_orphans()           # 이전 프로세스가 남긴 고아 스캔 정리
+        self._resume_after_upgrade()        # 업그레이드 재시작 직전 돌던 스캔을 자동 재개
 
     def storage_status(self, force: bool = False) -> list:
         """설정된 스토리지 어레이(아이실론/PowerStore) 상태 목록을 캐시(60초)와 함께 반환."""
@@ -735,6 +736,65 @@ class ScanController:
         finally:
             mconn.close()
 
+    # ----- 업그레이드 재시작 ↔ 진행 중 스캔 자동 재개 -----
+    _RESUME_MARK = "resume_after_upgrade.json"
+
+    def _mark_running_scans_for_resume(self) -> None:
+        """업그레이드로 재시작하기 직전, 지금 돌고 있는 스캔 id 를 마커 파일(data-dir)에 적어둔다.
+
+        새 프로세스가 시작할 때 이 마커를 읽어 자동 재개한다. 돌던 스캔이 없으면 남은 마커를 지운다.
+        (data-dir 은 코드 교체와 무관하게 보존되므로 업그레이드 후에도 마커가 살아남는다.)
+        """
+        ids = self.running_ids()
+        path = os.path.join(self.data_dir, self._RESUME_MARK)
+        if not ids:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            return
+        try:
+            os.makedirs(self.data_dir, exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({"scan_ids": ids, "ts": time.time()}, fh)
+            os.replace(tmp, path)
+            self._log("[upgrade] 재시작 후 자동 재개할 스캔 표시: %s" % ids)
+        except OSError:
+            pass
+
+    def _restart_for_upgrade(self) -> None:
+        """진행 중 스캔을 자동 재개 대상으로 표시한 뒤 프로세스를 재시작한다(돌아오지 않음)."""
+        try:
+            self._mark_running_scans_for_resume()
+        except Exception:   # noqa: BLE001 — 표시 실패해도 업그레이드 재시작은 그대로 진행
+            pass
+        upgrademod.restart_process()
+
+    def _resume_after_upgrade(self) -> None:
+        """업그레이드 재시작 직전에 표시해 둔 스캔을 자동 재개한다(시작 시 1회). 마커는 즉시 삭제.
+
+        _reconcile_orphans() 가 먼저 그 스캔을 'paused' 로 정리한 뒤 호출되므로, 여기서 곧바로
+        이어서 재개한다. 마커는 비업그레이드(일반) 재시작에서는 쓰이지 않으므로 자동 재개되지 않는다.
+        """
+        path = os.path.join(self.data_dir, self._RESUME_MARK)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return
+        try:
+            os.remove(path)     # 한 번만 — 다음(비업그레이드) 재시작에서 반복 재개 방지
+        except OSError:
+            pass
+        for sid in (data.get("scan_ids") or []):
+            try:
+                res = self.resume_scan(int(sid))
+                self._log("[upgrade] 업그레이드 후 자동 재개 scan #%s: %s"
+                          % (sid, "재개" if res.get("ok") else res.get("reason")))
+            except Exception as exc:   # noqa: BLE001
+                self._log("[upgrade] 자동 재개 실패 scan #%s: %s" % (sid, exc))
+
     # 설정에서 파생되는 값들(편집되면 즉시 반영)
     @property
     def mount_bases(self):
@@ -786,7 +846,7 @@ class ScanController:
                                 res.get("from"), res["version"]))
                             auditmod.record(self.data_dir, action="self_upgrade", ok=True,
                                             detail="%s -> %s" % (res.get("from"), res["version"]))
-                            upgrademod.restart_process()   # 돌아오지 않음
+                            self._restart_for_upgrade()   # 돌던 스캔 표시 후 재시작(돌아오지 않음)
                 # ② 인터넷(GitHub) 소스
                 if (self.settings.get("upgrade_source") or "off").strip() == "github":
                     info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__,
@@ -802,7 +862,7 @@ class ScanController:
                                 res.get("from"), res["version"]))
                             auditmod.record(self.data_dir, action="self_upgrade_net", ok=True,
                                             detail="%s -> %s" % (res.get("from"), res["version"]))
-                            upgrademod.restart_process()
+                            self._restart_for_upgrade()
                         else:
                             self._upg_log("자동 설치 실패: %s" % res.get("reason"))
             except Exception:  # noqa: BLE001
@@ -868,7 +928,7 @@ class ScanController:
             self._upg_log("설치 완료 %s → %s — 곧 재시작" % (res.get("from"), res.get("version")))
             auditmod.record(self.data_dir, action="self_upgrade_manual", ok=True,
                             detail="-> %s" % res.get("version"))
-            threading.Thread(target=lambda: (time.sleep(1.2), upgrademod.restart_process()),
+            threading.Thread(target=lambda: (time.sleep(1.2), self._restart_for_upgrade()),
                              daemon=True).start()
             return {"ok": True, "version": res.get("version"), "restarting": True}
         self._upg_log("설치 실패: %s" % res.get("reason"))
@@ -2537,7 +2597,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if res.get("ok"):
             def _later():
                 time.sleep(1.0)
-                upgrademod.restart_process()
+                self.controller._restart_for_upgrade()
             threading.Thread(target=_later, name="upgrade-restart", daemon=True).start()
 
     def do_POST(self) -> None:  # noqa: N802
