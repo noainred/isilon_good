@@ -171,12 +171,34 @@ def _public_settings(s: dict) -> dict:
     return out
 
 
+def _idle_resources() -> dict:
+    """스캔이 없을 때(유휴) 대시보드에 보여줄 라이브 시스템 자원(메모리·CPU·디스크)."""
+    out: dict = {}
+    try:
+        samp = monmod.collect(os.getpid(), None).as_dict()
+        out["resources"] = {"latest": samp, "series": [samp], "peak_scanner_rss": 0,
+                            "peak_du_rss": 0, "peak_mem_percent": samp.get("mem_percent", 0)}
+        ft = fu = ff = 0
+        try:
+            v = os.statvfs("/")
+            ft = v.f_blocks * v.f_frsize
+            ff = v.f_bavail * v.f_frsize
+            fu = ft - (v.f_bfree * v.f_frsize)
+        except OSError:
+            pass
+        out["idle_fs"] = {"fs_total_bytes": ft, "fs_used_bytes": fu, "fs_free_bytes": ff}
+    except Exception:  # noqa: BLE001 — 자원 수집 실패가 상태 응답을 막지 않음
+        pass
+    return out
+
+
 def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 20) -> dict:
     """대시보드가 한 번의 폴링으로 쓸 수 있는 통합 상태 객체를 만든다."""
     if run_id is None:
         run_id = dbmod.latest_run_id(conn)
     if run_id is None:
-        return {"ok": False, "reason": "no_runs", "have_psutil": monmod.have_psutil()}
+        return dict({"ok": False, "reason": "no_runs",
+                     "have_psutil": monmod.have_psutil()}, **_idle_resources())
 
     run = dbmod.get_run(conn, run_id)
     if run is None:
@@ -2074,8 +2096,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if path == "/api/status":
                 scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
                 if row is None:
-                    self._send_json({"ok": False, "reason": "no_runs",
-                                     "have_psutil": monmod.have_psutil()})
+                    self._send_json(dict({"ok": False, "reason": "no_runs",
+                                          "have_psutil": monmod.have_psutil()},
+                                         **_idle_resources()))
                     return
                 scan_meta = dict(row)
                 db_path = scan_meta["db_path"]

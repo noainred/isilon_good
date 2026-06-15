@@ -434,4 +434,9 @@
      ResourceMonitor 부착, 끝에 write_run_db(run_id=) 로 갱신. write_run_db run_id 갱신 모드 추가.
      회귀+HTTP 스모크(pscan 후 mem/scanner_rss/peak 표시) 검증. v1.69.4.
 
+177. (갓 설치한 엣지, 스캔 0) cpu·메모리 등 정보가 안 나와 → 자원 패널이 run 에 묶여 스캔 없으면 빈칸.
+     /api/status 의 두 no_runs 경로(build_status + 핸들러)에 _idle_resources()(라이브 mem/cpu/load/swap +
+     statvfs(/) )를 실어, 대시보드 no_runs 분기에서 시스템 패널 렌더(측정 프로세스는 스캔 시만). JS 문법·
+     test_server·HTTP 스모크(스캔 없이 mem 16.8GB·fs 270GB) 검증. v1.69.5.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

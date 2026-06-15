@@ -3070,6 +3070,22 @@ async function poll() {
           ? "아직 시작된 스캔이 없습니다. `python -m isilon_usage run <경로>` 로 시작하세요."
           : (data.reason === "initializing" ? "스캔 초기화 중… (per-run DB 생성 대기)"
              : ("상태 없음: " + (data.reason || data.error || "")));
+        // 스캔이 없어도 시스템 자원(메모리·CPU·디스크)은 라이브로 표시(측정 프로세스는 스캔 시).
+        const _IL = (data.resources && data.resources.latest) || null;
+        if (_IL) {
+          const _mp = _IL.mem_percent || 0;
+          $("memPct").textContent = _mp.toFixed(1) + "%";
+          $("memDetail").textContent = fmtBytes(_IL.mem_used) + " / " + fmtBytes(_IL.mem_total);
+          const _mb = $("memBar"); if (_mb) _mb.style.width = Math.min(100, _mp) + "%";
+          $("swapUsed").textContent = fmtBytes(_IL.swap_used);
+          $("cpuPct").textContent = (_IL.cpu_percent || 0).toFixed(0) + "%";
+          $("load1").textContent = (_IL.load1 || 0).toFixed(2);
+        }
+        if (data.idle_fs) {
+          $("fsTotal").textContent = fmtBytes(data.idle_fs.fs_total_bytes);
+          $("fsUsed").textContent = fmtBytes(data.idle_fs.fs_used_bytes);
+          $("fsFree").textContent = fmtBytes(data.idle_fs.fs_free_bytes);
+        }
         _hbRunning = false; tickHeartbeat();   // 진행 중 아님 → 하트비트 비활성
       } else {
         render(data);
