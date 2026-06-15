@@ -1304,8 +1304,10 @@ class PortalController:
     def provision_plan(self, raw: dict) -> dict:
         """IP/포트/경로 등으로 엣지 설치 스크립트를 생성하고 노드를 자동 등록한다(SSH 없음).
 
-        '엣지에서 복붙 실행할 스크립트'를 돌려주고 그 노드를 포탈에 등록해 둔다
-        (엣지가 뜨면 폴링으로 자동 연결). 비밀번호는 다루지 않아 안전하다.
+        같은 노드(같은 이름 id, 또는 같은 url=같은 서버)가 이미 있으면 overwrite(기본 True)일 때
+        **전체 덮어쓰기**한다(같은 서버가 다른 이름으로 있던 중복 항목도 제거). API 토큰을 비우면
+        — 기존 노드가 있으면 그 토큰을 **재사용**(엣지 페어링 유지), 없으면 새로 생성한다.
+        overwrite=False 인데 이미 있으면 등록하지 않고 사유를 돌려준다.
         """
         host = (raw.get("host") or "").strip()
         if not host:
@@ -1314,7 +1316,6 @@ class PortalController:
             port = int(raw.get("port") or 8765)
         except (TypeError, ValueError):
             port = 8765
-        token = (raw.get("token") or "").strip() or secrets.token_hex(16)
         path = (raw.get("path") or "/mnt/hadoop").strip()
         name = ((raw.get("name") or "").strip()
                 or re.sub(r"[^A-Za-z0-9_.-]+", "-", host).strip("-") or "edge")
@@ -1322,8 +1323,31 @@ class PortalController:
         install = "nohup" if (raw.get("install") == "nohup") else "systemd"
         hq_base = (raw.get("hq_base") or "").strip()
         edge_url = "http://%s:%d" % (host, port)
+        overwrite = raw.get("overwrite", True)
+        if isinstance(overwrite, str):
+            overwrite = overwrite.strip().lower() not in ("0", "false", "no", "off", "")
+        # 기존 노드: 같은 이름(id) 또는 같은 url(같은 서버)
+        with self._lock:
+            found = next((n for n in self.nodes
+                          if n["id"] == name or (n.get("url") or "").rstrip("/") == edge_url), None)
+            existing = dict(found) if found else None
+        if existing and not overwrite:
+            return {"ok": False,
+                    "reason": "이미 등록된 노드입니다('%s'). '기존 노드 덮어쓰기'를 켜세요." % existing["id"]}
+        # 토큰: 입력값 우선 → 비면 기존 토큰 재사용(페어링 유지) → 그것도 없으면 새로 생성
+        token = (raw.get("token") or "").strip()
+        token_reused = False
+        if not token:
+            if existing and existing.get("token"):
+                token, token_reused = existing["token"], True
+            else:
+                token = secrets.token_hex(16)
         script = build_provision_script(host=host, port=port, token=token, path=path,
                                         hq_base=hq_base, install=install)
+        replaced_prev = None
+        if existing and existing["id"] != name:   # 같은 서버가 다른 이름으로 있었으면 옛 항목 제거
+            replaced_prev = existing["id"]
+            self.delete_node(existing["id"])
         node_res = self.upsert_node({
             "id": name, "region": region, "url": edge_url, "token": token,
             "alias_local": path, "alias_logical": path,
@@ -1331,7 +1355,8 @@ class PortalController:
         })
         return {"ok": True, "script": script, "token": token, "edge_url": edge_url,
                 "install": install, "registered": bool(node_res.get("ok")),
-                "node": node_res.get("node")}
+                "overwritten": bool(existing), "replaced_prev": replaced_prev,
+                "token_reused": token_reused, "node": node_res.get("node")}
 
     def _ssh_run(self, raw: dict, script: str) -> dict:
         """SSH(키 인증 또는 sshpass 비밀번호)로 원격에 script 를 bash -s 로 실행한다.

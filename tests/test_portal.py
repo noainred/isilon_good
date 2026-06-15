@@ -309,6 +309,22 @@ def main() -> int:
         with pc._lock:
             pc._upg_state["installing"] = False
 
+        # 15) provision 덮어쓰기: 재등록 시 기존 노드 전체 갱신 + 빈 토큰이면 기존 토큰 재사용
+        p1 = pc.provision_plan({"host": "10.5.5.5", "port": 8765, "name": "ov1", "region": "A"})
+        assert p1["ok"] and not p1["overwritten"], p1
+        tok1 = p1["token"]
+        p2 = pc.provision_plan({"host": "10.5.5.5", "port": 8765, "name": "ov1", "region": "B"})
+        assert p2["ok"] and p2["overwritten"] and p2["token_reused"] and p2["token"] == tok1, p2
+        assert any(n["id"] == "ov1" and n["region"] == "B" for n in pc.list_nodes()["nodes"]), "덮어쓰기 안 됨"
+        # 같은 서버(url)를 다른 이름으로 → 옛 항목 대체(중복 제거)
+        p3 = pc.provision_plan({"host": "10.5.5.5", "port": 8765, "name": "ov1-new"})
+        assert p3["ok"] and p3["replaced_prev"] == "ov1", p3
+        assert not any(n["id"] == "ov1" for n in pc.list_nodes()["nodes"]), "옛 이름 항목이 남음"
+        # overwrite=False 면 거부
+        p4 = pc.provision_plan({"host": "10.5.5.5", "port": 8765, "name": "ov1-new", "overwrite": False})
+        assert not p4["ok"], p4
+        assert pc.delete_node("ov1-new")["ok"]
+
         print("[portal] OK  연결테스트·등록·폴링·복제·롤업·삭제·enroll·release·구버전집계 통과")
         print("모든 테스트 통과 ✅")
         return 0

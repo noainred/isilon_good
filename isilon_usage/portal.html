@@ -213,6 +213,7 @@
       <label class="fld">설치 방식<select id="pvInstall" class="inp"><option value="systemd">systemd(권장)</option><option value="nohup">nohup(간단)</option></select></label>
     </div>
     <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center;">
+      <label class="sub" style="display:flex; align-items:center; gap:6px;" title="같은 이름 또는 같은 서버(IP:포트)가 이미 등록돼 있으면 전체 갱신합니다"><input id="pvOverwrite" type="checkbox" checked /> 기존 노드 덮어쓰기</label>
       <button id="pvGenBtn" class="primary">① 설치 명령 생성 + 노드 등록</button>
       <span class="sub" id="pvMsg"></span>
     </div>
@@ -1116,7 +1117,8 @@ function pvBody(){
   return { host:$("pvHost").value.trim(), port:Number($("pvPort").value)||8765,
     token:$("pvToken").value.trim(), path:$("pvPath").value.trim(),
     name:$("pvName").value.trim(), region:$("pvRegion").value.trim(),
-    install:$("pvInstall").value, hq_base:location.origin };
+    install:$("pvInstall").value, hq_base:location.origin,
+    overwrite: $("pvOverwrite") ? $("pvOverwrite").checked : true };
 }
 $("pvGenBtn").addEventListener("click", async ()=>{
   const b=pvBody(); if(!b.host){ $("pvMsg").textContent="원격 IP/주소를 입력하세요."; return; }
@@ -1125,7 +1127,9 @@ $("pvGenBtn").addEventListener("click", async ()=>{
     const j=await (await fetch("/api/portal/provision",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)})).json();
     if(!j.ok){ $("pvMsg").textContent="✗ "+(j.reason||"실패"); return; }
     $("pvScript").value=j.script; $("pvScriptWrap").style.display="block";
-    $("pvMsg").textContent=`✓ 노드 '${j.node?j.node.id:""}' 등록됨 · 토큰 ${(j.token||"").slice(0,8)}… · 엣지 ${j.edge_url}`;
+    const ov=j.overwritten?(j.replaced_prev?`덮어씀(옛 '${j.replaced_prev}' 대체)`:"덮어씀"):"신규 등록";
+    const tk=j.token_reused?"기존 토큰 유지":`새 토큰 ${(j.token||"").slice(0,8)}…(스크립트로 엣지에 적용)`;
+    $("pvMsg").textContent=`✓ 노드 '${j.node?j.node.id:""}' ${ov} · ${tk} · 엣지 ${j.edge_url}`;
     loadNodes(); loadOverview();
   }catch(e){ $("pvMsg").textContent="✗ "+e; }
 });
