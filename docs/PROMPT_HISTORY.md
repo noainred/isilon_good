@@ -513,4 +513,8 @@
      경로·존재여부·폴더에서 보이는 패키지 목록·고른 버전·사유 추가, 포탈 UI 표시 + ‘🔄 지금 확인’ 버튼.
      newest_release_archive .tgz 인식. test_portal 회귀(1.69.4 vs 1.70.1·빈/없는 폴더 사유). v1.71.1.
 
+189. (포탈 머신 직접 확인) /api/portal/release/info → release_available:true, release_file
+     isilon_usage-1.70.1.tar.gz 로 백엔드는 정상. ‘없음’은 UI stale(로드/저장 때만 갱신). showSub 가
+     ‘🔄 업그레이드’ 탭 열 때 loadRelease()/loadNetUpg() 자동 호출하도록 하여 라이브 갱신. v1.71.2.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

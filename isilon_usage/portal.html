@@ -576,6 +576,8 @@ document.querySelectorAll(".navbtn").forEach(b=>b.addEventListener("click",()=>s
 function showSub(id){
   document.querySelectorAll("#view-nodes .subpane").forEach(p=>p.classList.toggle("active", p.id===id));
   document.querySelectorAll("#view-nodes .stab").forEach(b=>b.classList.toggle("active", b.dataset.pane===id));
+  // 업그레이드 탭을 열 때마다 릴리스 폴더/인터넷 업그레이드 상태를 라이브로 새로고침(stale 표시 방지).
+  if(id==="np-upgrade"){ try{ loadRelease(); loadNetUpg(); }catch(e){} }
 }
 document.querySelectorAll("#view-nodes .stab").forEach(b=>b.addEventListener("click",()=>showSub(b.dataset.pane)));
 
