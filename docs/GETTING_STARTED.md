@@ -48,6 +48,11 @@ python3 -m isilon_usage run /tmp/demo --mount-base /tmp --port 8765
 
 ## 2. 실제 NAS 조사하기 (권장 흐름)
 
+> **운영 설치는 한 줄이 가장 쉽습니다.** 엣지(스캐너)를 `curl … | bash` 한 줄로 설치·systemd
+> 서비스(`isilon-edge`) 등록까지 끝낼 수 있습니다(비공개 저장소라 GitHub 토큰 필요; `--hq` 로
+> 포탈 자동 등록). 명령은 **[download/README.md](../download/README.md)**. 아래는 코드를 직접
+> 받아 띄우는 방식입니다.
+
 ### 2-1. NAS를 이 서버에 마운트
 
 ```bash

@@ -11,6 +11,14 @@
 
 ## 0. 5분 안에 끝내기 (요약)
 
+**가장 빠른 길 — 한 줄 설치(권장).** 엣지(스캐너)를 `curl … | bash` **한 줄**로:
+최신본 내려받기 → 검증 → `/opt/isilon_edge` 설치 → systemd 서비스(`isilon-edge`) 등록·기동까지
+끝냅니다(같은 줄을 다시 실행하면 업그레이드). 비공개 저장소라 **GitHub 토큰(PAT)** 이 필요하고,
+`--hq http://<HQ>:8800` 을 붙이면 **포탈에 자동 등록(enroll)** 까지 됩니다. 토큰·`wget`·공개·`--hq`·
+**포탈 한 줄**·**오프라인 업그레이드** 등 정확한 명령은 한곳에 모아 두었습니다 →
+**[download/README.md](../download/README.md)**.
+
+직접 코드를 받아 실행해도 됩니다:
 ```bash
 cd /opt
 git clone https://github.com/noainred/isilon_good.git
@@ -142,7 +150,9 @@ python3 -m isilon_usage serve \
 포탈을 한 번만 설치**하고, 포탈 웹에서 각 엣지(스캐너) 서버를 **자동으로 배포**하면 됩니다.
 
 ### 7-1. 포탈(HQ) 설치·실행
-스캐너와 **같은 코드**입니다(따로 받을 것 없음). HQ 서버에서:
+스캐너와 **같은 코드**입니다(따로 받을 것 없음). 가장 쉬운 건 **한 줄 설치**(install_portal.sh →
+`/opt/isilon_portal` · 데이터 `/data/isilon_portal_data` · 서비스 `isilon-portal` · 포트 8800,
+명령은 [download/README.md](../download/README.md)). 직접 띄우려면 HQ 서버에서:
 ```bash
 python3 -m isilon_usage portal --data-dir /var/lib/isilon_portal --port 8800
 # 브라우저: http://<HQ주소>:8800/
@@ -155,6 +165,10 @@ python3 -m isilon_usage portal --data-dir /var/lib/isilon_portal --port 8800
   복붙 실행**. 스캐너를 설치·기동하고 **포탈에 자동 등록**까지 됩니다(아무 의존성도 필요 없음).
 - **B) SSH 자동 푸시 (옵션)** — 포탈이 SSH로 접속해 설치·구성을 **대신 실행**합니다
   (신뢰망·키 인증 권장). 여러 대를 한 번에 올릴 때 편리합니다.
+- **C) 엣지에서 한 줄 자기등록 (`--hq`)** — 엣지 서버에서 설치 한 줄에 `--hq http://<HQ>:8800`
+  을 붙이면, 설치 직후 엣지가 자기 주소·`api_token` 을 포탈에 보내 **스스로 등록**됩니다(포탈에
+  로그인 비밀번호가 있으면 '보안·감사' 탭의 enroll 토큰을 `--enroll` 로 함께). 명령은
+  [download/README.md](../download/README.md).
 - **여러 대를 CSV로 한 번에 등록** — 포탈 **「노드 설정 → 🗂 노드 관리 → 📋 CSV로 여러 서버
   가져오기」** 에 `id,url,region,token,…` 형식 CSV 를 붙여넣거나 `.csv` 파일을 올리면 **한 번에
   등록**됩니다(첫 줄 헤더, `id`·`url` 필수, 같은 id 는 수정, 토큰 빈값은 기존 유지). 등록 후 위

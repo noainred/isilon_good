@@ -85,6 +85,13 @@
 
 별도 설치 없이 바로 실행할 수 있습니다(**파이썬 3.6 이상**, 표준 라이브러리만 사용).
 
+**가장 빠른 길 — 한 줄 설치(권장).** 엣지(스캐너)·포탈(HQ)을 각각 `curl … | bash` **한 줄**로
+내려받기·검증·설치·systemd 서비스(`isilon-edge`/`isilon-portal`) 등록·기동까지 끝냅니다(같은 줄을
+다시 실행하면 업그레이드). 비공개 저장소라 GitHub 토큰(PAT)이 필요하고, 엣지에
+`--hq http://<HQ>:8800` 을 붙이면 **포탈에 자동 등록(enroll)** 까지 됩니다. 명령 전체(토큰·`wget`·
+공개·`--hq`·오프라인 업그레이드)는 **[download/README.md](download/README.md)** 에 모아 두었습니다.
+
+직접 코드를 받아 실행하려면:
 ```bash
 git clone <repo>
 cd isilon_good

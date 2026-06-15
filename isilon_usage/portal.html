@@ -434,8 +434,10 @@
       <input id="setPw" type="password" placeholder="새 비밀번호(변경 시에만)" style="flex:1; min-width:220px;" />
       <label class="sub" style="display:flex; align-items:center; gap:6px;"><input id="setPwEnc" type="checkbox" /> 암호화 저장(해시)</label>
       <button id="setPwBtn">비밀번호 저장</button>
+      <button id="setPwClearBtn" title="설정된 비밀번호를 지워 보호를 끕니다(로그인 필요)">🔓 비밀번호 해제</button>
       <span class="sub" id="setPwMsg"></span>
     </div>
+    <div class="sub" style="margin-top:6px;">비밀번호를 잊었다면: 포탈 서버의 데이터 폴더 <span class="mono">portal_settings.json</span> 에서 <span class="mono">"op_password"</span> 를 <span class="mono">""</span> 로 바꾸고 포탈을 재시작하세요.</div>
     <div style="margin-top:8px;">
       <button id="pAuditBtn" style="padding:4px 10px;">🧾 감사 로그 보기</button>
       <span class="sub" id="pAuditMsg"></span>
@@ -501,7 +503,7 @@ function updateLoginUI(){
       btn.textContent="🔓 로그아웃 ("+(m>0?m+"분":_opLeft()+"초")+")"; }
     else btn.textContent="🔑 로그인";
   }
-  ["addBtn","testBtn","pvGenBtn","pvSshBtn","setPwBtn","ugGenBtn","ugSshBtn","pAuditBtn","ugWatchSave","ugPushAll","ugPushAllSsh"].forEach(id=>{ const e=$(id); if(e) e.disabled=ro; });
+  ["addBtn","testBtn","pvGenBtn","pvSshBtn","setPwBtn","setPwClearBtn","ugGenBtn","ugSshBtn","pAuditBtn","ugWatchSave","ugPushAll","ugPushAllSsh"].forEach(id=>{ const e=$(id); if(e) e.disabled=ro; });
 }
 async function loadAuth(){
   try{ const j=await (await _origFetch("/api/portal/auth",{cache:"no-store"})).json();
@@ -1182,6 +1184,17 @@ if($("setPwBtn")) $("setPwBtn").addEventListener("click", async()=>{
       body:JSON.stringify({password:$("setPw").value, encrypt:$("setPwEnc").checked})})).json();
     if(j.ok){ msg.textContent=j.op_required?(" ✓ 보호 켜짐 "+(j.encrypted?"(암호화)":"(평문)")):" ✓ 보호 해제됨";
       $("setPw").value=""; _opRequired=!!j.op_required; updateLoginUI(); }
+    else msg.textContent=" ✗ "+(j.reason||j.error||"실패"); }
+  catch(e){ msg.textContent=" ✗ "+e; }
+});
+if($("setPwClearBtn")) $("setPwClearBtn").addEventListener("click", async()=>{
+  if(!confirm("로그인 비밀번호를 해제할까요?\n이후에는 로그인 없이 노드 등록·업그레이드 등 변경 작업이 가능해집니다.")) return;
+  const msg=$("setPwMsg"); msg.textContent=" 해제 중…";
+  try{ const j=await (await fetch("/api/portal/password",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({password:"", encrypt:false})})).json();
+    if(j.ok){ msg.textContent=" ✓ 보호 해제됨"; $("setPw").value=""; _opRequired=!!j.op_required; updateLoginUI(); }
+    else if(j.reason==="locked"||j.op_required) msg.textContent=" ✗ 먼저 우상단에서 로그인하세요(현재 비밀번호 필요)";
     else msg.textContent=" ✗ "+(j.reason||j.error||"실패"); }
   catch(e){ msg.textContent=" ✗ "+e; }
 });
