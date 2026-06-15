@@ -343,6 +343,21 @@
     <div class="sub" style="margin-top:10px;">엣지 콘솔에서 1줄(업그레이드) — 클릭하면 복사:</div>
     <pre id="relCmd" class="note mono" style="white-space:pre-wrap; word-break:break-all; margin-top:4px; cursor:pointer;" title="클릭하면 복사">—</pre>
   </div>
+
+  <!-- 업그레이드 진행 모달(단계별 라이브 로그) -->
+  <div id="upgModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.62); z-index:2000; align-items:center; justify-content:center;">
+    <div style="background:#141a2b; border:1px solid #2a3550; border-radius:12px; width:min(760px,94vw); max-height:88vh; display:flex; flex-direction:column; box-shadow:0 14px 44px rgba(0,0,0,.55);">
+      <div style="padding:13px 18px; border-bottom:1px solid #2a3550; display:flex; align-items:center; gap:10px;">
+        <span style="font-size:18px;">⬆️</span><b style="font-size:15px;">업그레이드 진행</b>
+        <span id="upgModalStat" class="sub" style="margin-left:auto;"></span>
+      </div>
+      <pre id="upgModalLog" class="mono" style="margin:0; padding:14px 18px; overflow:auto; flex:1; min-height:240px; white-space:pre-wrap; word-break:break-all; font-size:12.5px; line-height:1.75;"></pre>
+      <div style="padding:10px 18px; border-top:1px solid #2a3550; display:flex; align-items:center; gap:10px;">
+        <span class="sub">닫아도 업그레이드는 백그라운드로 계속됩니다.</span>
+        <button id="upgModalClose" style="margin-left:auto;">닫기</button>
+      </div>
+    </div>
+  </div>
   </div>
 
   <!-- ③ 노드 관리 (추가/수정 + 등록 목록) -->
@@ -1230,13 +1245,58 @@ if($("nuCheckBtn")) $("nuCheckBtn").addEventListener("click", async()=>{
     renderNetUpg(j); $("nuMsg").textContent=j.available?"새 버전이 있습니다.":"최신입니다."; }
   catch(e){ $("nuMsg").textContent="✗ "+e; }
 });
-if($("nuInstallBtn")) $("nuInstallBtn").addEventListener("click", async()=>{
-  if(!confirm("포탈을 최신 버전으로 설치하고, 등록된 모든 엣지에도 전파한 뒤 재시작할까요?")) return;
-  $("nuMsg").textContent="설치·전파 중… (잠시 후 재시작)";
-  try{ const j=await (await fetch("/api/portal/upgrade/install",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({propagate:true})})).json();
-    $("nuMsg").innerHTML=j.ok?`<span style="color:var(--ok)">✓ v${j.version} 설치 — 엣지 전파·재시작 중… 잠시 후 새로고침.</span>`:`<span style="color:var(--danger)">실패: ${j.error||""}</span>`; }
-  catch(e){ $("nuMsg").innerHTML='<span class="sub">설치 후 재시작되었습니다. 잠시 후 새로고침.</span>'; }
+function _upgLine(e){
+  const t=new Date(e.t*1000).toLocaleTimeString("ko-KR");
+  let cls="";
+  if(/✓|성공|완료|돌아옵|복귀/.test(e.msg)) cls="color:var(--ok)";
+  else if(/✗|실패|오류|거부/.test(e.msg)) cls="color:var(--danger)";
+  else if(/내려받|교체|전파|재시작|시작|①|②|③|④/.test(e.msg)) cls="color:var(--warn)";
+  return `<div style="${cls}"><span class="sub">${t}</span>  ${(e.msg||"").replace(/</g,"&lt;")}</div>`;
+}
+let _upgTimer=null;
+function closeUpgModal(){ if(_upgTimer){clearTimeout(_upgTimer);_upgTimer=null;} const m=$("upgModal"); if(m) m.style.display="none"; }
+async function runUpgradeModal(){
+  const m=$("upgModal"); if(!m) return;
+  m.style.display="flex";
+  $("upgModalLog").innerHTML='<div class="sub">시작하는 중…</div>';
+  $("upgModalStat").innerHTML='<span style="color:var(--warn)">⏳ 시작</span>';
+  let target=null, sawRestart=false; const t0=Date.now();
+  try{
+    const j=await (await fetch("/api/portal/upgrade/install",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({propagate:true})})).json();
+    if(j&&j.ok===false){ $("upgModalStat").innerHTML=`<span style="color:var(--danger)">시작 실패: ${j.error||""}</span>`; return; }
+    target=(j&&(j.target||j.latest))||null;
+  }catch(e){ /* 시작 응답이 끊겨도 폴링이 이어서 보여줌 */ }
+  if(_upgTimer) clearTimeout(_upgTimer);
+  const poll=async()=>{
+    let j=null, err=false;
+    try{ j=await (await fetch("/api/portal/upgrade/status",{cache:"no-store"})).json(); }catch(e){ err=true; }
+    if(err){
+      sawRestart=true;
+      $("upgModalStat").innerHTML='<span style="color:var(--warn)">🔄 포탈 재시작 중… (잠시만요)</span>';
+    } else {
+      target=target||j.latest;
+      const lines=j.log||[];
+      if(lines.length){ $("upgModalLog").innerHTML=lines.map(_upgLine).join(""); const b=$("upgModalLog"); b.scrollTop=b.scrollHeight; }
+      if(j.install_error){ $("upgModalStat").innerHTML='<span style="color:var(--danger)">✗ 실패 — 아래 로그 확인</span>'; return; }
+      if((target && j.current===target && (sawRestart||j.install_done)) || (sawRestart && !j.installing && (!j.log||!j.log.length))){
+        $("upgModalStat").innerHTML=`<span style="color:var(--ok)">✅ 완료 — v${j.current}</span>`;
+        $("upgModalLog").innerHTML+=`<div style="color:var(--ok)">✅ 새 버전 v${j.current} 로 복귀 — 업그레이드 완료</div>`;
+        const b=$("upgModalLog"); b.scrollTop=b.scrollHeight;
+        loadNetUpg(); try{ loadOverview(); loadNodes(); }catch(_){}
+        return;
+      }
+      $("upgModalStat").innerHTML=j.installing?'<span style="color:var(--warn)">⏳ 진행 중…</span>':(sawRestart?'<span style="color:var(--warn)">🔄 복귀 대기…</span>':'<span style="color:var(--warn)">⏳ 진행 중…</span>');
+    }
+    if(Date.now()-t0<90000){ _upgTimer=setTimeout(poll,700); }
+    else { $("upgModalStat").innerHTML+=' <span class="sub">— 오래 걸립니다. ‘노드 관리’에서 확인하세요.</span>'; }
+  };
+  poll();
+}
+if($("nuInstallBtn")) $("nuInstallBtn").addEventListener("click", ()=>{
+  if(!confirm("포탈을 최신 버전으로 설치하고, 등록된 모든 엣지에도 전파한 뒤 재시작할까요?\n(진행 상황은 팝업으로 단계별 표시됩니다)")) return;
+  runUpgradeModal();
 });
+if($("upgModalClose")) $("upgModalClose").addEventListener("click", closeUpgModal);
 if($("ugWatchSave")) $("ugWatchSave").addEventListener("click", async()=>{
   $("ugWatchMsg").textContent=" 저장 중…";
   try{ const j=await (await fetch("/api/portal/settings",{method:"POST",

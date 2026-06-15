@@ -467,10 +467,15 @@ class PortalController:
                      "hq_version": __version__}, **self.release_info())
 
     def push_upgrade_all(self) -> dict:
-        """등록된 모든 엣지에 현재(=새) 코드 번들을 푸시한다(엣지 api_token 인증)."""
+        """등록된 모든 엣지에 현재(=새) 코드 번들을 푸시한다(엣지 api_token 인증).
+
+        진행 상황을 _upg_log 에 엣지별로 남겨, 업그레이드 모달이 라이브로 보여줄 수 있게 한다.
+        """
         data = agent_bundle_bytes()
         results = []
-        for n in list(self.nodes):
+        nodes = list(self.nodes)
+        self._upg_log("③ 엣지 전파 시작 — %d대 (각 엣지가 새 코드 받아 재시작)" % len(nodes))
+        for n in nodes:
             url = n["url"].rstrip("/") + "/api/upgrade"
             try:
                 req = urllib.request.Request(url, data=data, method="POST")
@@ -489,6 +494,13 @@ class PortalController:
                 results.append({"id": n["id"], "ok": False, "reason": reason})
             except Exception as e:  # noqa: BLE001
                 results.append({"id": n["id"], "ok": False, "reason": str(e)})
+            r = results[-1]
+            if r.get("ok"):
+                self._upg_log("   • %s → ✓ v%s" % (n["id"], r.get("version") or "?"))
+            else:
+                self._upg_log("   • %s → ✗ %s" % (n["id"], r.get("reason") or "실패"))
+        okn = sum(1 for r in results if r.get("ok"))
+        self._upg_log("③ 엣지 전파 완료 — 성공 %d/%d" % (okn, len(nodes)))
         return {"ok": True, "hq_version": __version__, "results": results}
 
     def push_upgrade_all_ssh(self, raw: dict) -> dict:
@@ -621,37 +633,53 @@ class PortalController:
         return {"ok": bool(info.get("ok")), **self.upgrade_status()}
 
     def upgrade_install(self, *, propagate: bool = True) -> dict:
+        """[비동기] 최신 코드 적용 → 엣지 전파 → 재시작. 즉시 반환하고 백그라운드로 진행하며,
+        진행 단계를 _upg_log 에 남긴다(업그레이드 모달이 /upgrade/status 를 폴링해 라이브 표시)."""
         with self._lock:
             if self._upg_state.get("installing"):
-                return {"ok": False, "error": "이미 설치 중입니다."}
-            self._upg_state["installing"] = True
+                return {"ok": False, "error": "이미 설치 중입니다.", **self.upgrade_status()}
+            self._upg_state.update(installing=True, install_started=time.time(),
+                                   install_done=False, install_error=None,
+                                   target=self._upg_state.get("latest"))
+        threading.Thread(target=self._do_upgrade_install, args=(bool(propagate),),
+                         daemon=True).start()
+        return {"ok": True, "started": True, **self.upgrade_status()}
+
+    def _do_upgrade_install(self, propagate: bool) -> None:
+        """업그레이드 백그라운드 작업: 내려받기 → HQ 적용 → 엣지 전파 → 재시작(돌아오지 않음)."""
         try:
             code_dir = upgrademod.code_dir_of(__file__)
             dest = os.path.join(self.data_dir, "upgrades")
-            self._upg_log("수동 업그레이드 시작…")
+            src = self.settings.get("upgrade_url") or upgrademod.DEFAULT_UPGRADE_BASE
+            self._upg_log("① 최신 코드 내려받는 중… (%s)" % src)
             res = upgrademod.upgrade_from_remote(
                 self.settings.get("upgrade_url") or "", code_dir, __version__, dest)
-        finally:
+            if not res.get("ok"):
+                self._upg_log("✗ 설치 실패: %s" % res.get("reason"))
+                with self._lock:
+                    self._upg_state.update(installing=False, install_done=True,
+                                           install_error=res.get("reason"))
+                return
+            self._upg_log("② HQ 코드 교체 완료: v%s → v%s" % (res.get("from"), res.get("version")))
+            if propagate:
+                try:                          # 새 코드를 등록된 엣지에도 전파(엣지별 로그)
+                    self.push_upgrade_all()
+                except Exception as e:  # noqa: BLE001
+                    self._upg_log("③ 엣지 전파 중 오류: %s" % e)
+            auditmod.record(self.data_dir, action="self_upgrade_manual", ok=True,
+                            detail="-> %s" % res.get("version"))
+            self._upg_log("④ 곧 포탈을 재시작합니다 (약 1.5초) — 새 버전 v%s 로 돌아옵니다"
+                          % res.get("version"))
             with self._lock:
-                self._upg_state["installing"] = False
-        if not res.get("ok"):
-            self._upg_log("설치 실패: %s" % res.get("reason"))
-            return {"ok": False, "error": res.get("reason"),
-                    "up_to_date": bool(res.get("up_to_date"))}
-        propagated = None
-        if propagate:
-            try:                              # 새 코드를 등록된 엣지에도 전파
-                propagated = self.push_upgrade_all().get("results")
-            except Exception:  # noqa: BLE001
-                pass
-        self._upg_log("설치 완료 %s → %s%s — 곧 재시작" % (
-            res.get("from"), res.get("version"), " · 엣지 전파" if propagate else ""))
-        auditmod.record(self.data_dir, action="self_upgrade_manual", ok=True,
-                        detail="-> %s" % res.get("version"))
-        threading.Thread(target=lambda: (time.sleep(1.5), upgrademod.restart_process()),
-                         daemon=True).start()
-        return {"ok": True, "version": res.get("version"), "restarting": True,
-                "propagated": propagated}
+                self._upg_state.update(installing=False, install_done=True,
+                                       target=res.get("version"))
+            time.sleep(1.5)
+            upgrademod.restart_process()
+        except Exception as e:  # noqa: BLE001
+            self._upg_log("✗ 설치 중 오류: %s" % e)
+            with self._lock:
+                self._upg_state.update(installing=False, install_done=True,
+                                       install_error=str(e))
 
     def set_upgrade_net(self, source, url, auto, check_secs=None) -> dict:
         src = str(source or "off").strip().lower()
