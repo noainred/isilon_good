@@ -224,11 +224,10 @@
         <button id="pvCopy">📋 복사</button><span class="sub" id="pvCopyMsg"></span>
       </div>
     </div>
-    <details style="margin-top:12px;">
-      <summary class="sub" style="cursor:pointer;">[옵션 B] SSH로 원격 자동 설치 (IP/계정/비번) — 보안 주의</summary>
-      <div class="note" style="margin:8px 0; border-color:#5a3030; color:#f0b0b0;">
-        ⚠ 포탈이 SSH로 원격에 접속해 위 스크립트를 실행합니다. <b>비밀번호는 저장하지 않고 1회만</b> 쓰지만,
-        평문 취급·무의존 원칙(서드파티 <span class="mono">sshpass</span> 필요)상 <b>신뢰망에서만</b> 사용하고 가능하면 <b>키 인증</b>을 권장합니다.
+    <div style="margin-top:14px; border-top:1px solid #2a3550; padding-top:12px;">
+      <div class="sub" style="margin-bottom:6px;"><b>② SSH로 원격 자동 설치 + 등록</b> — 위 <b>IP</b>에 SSH로 접속해 엣지를 <b>설치·기동·포탈 등록까지 한 번에</b>. (계정/비번만 더 입력하면 끝)</div>
+      <div class="note" style="margin:6px 0; border-color:#5a3030; color:#f0b0b0;">
+        ⚠ 포탈이 SSH로 접속해 실행합니다. <b>비밀번호는 저장하지 않고 1회만</b> 씁니다(포탈 호스트에 <span class="mono">sshpass</span> 필요, 비번 인증 시). 신뢰망·키 인증 권장.
       </div>
       <div class="setgrid">
         <label class="fld">SSH 사용자<input id="pvSshUser" class="inp mono" placeholder="root" /></label>
@@ -236,10 +235,10 @@
         <label class="fld">비밀번호(키 인증이면 비움)<input id="pvSshPass" class="inp mono" type="password" placeholder="(키 인증 시 비움)" /></label>
       </div>
       <div style="display:flex; gap:8px; margin-top:10px; align-items:center;">
-        <button id="pvSshBtn">② SSH로 원격 자동 설치 실행</button><span class="sub" id="pvSshMsg"></span>
+        <button id="pvSshBtn" class="primary">② SSH로 자동 설치 + 등록</button><span class="sub" id="pvSshMsg"></span>
       </div>
       <pre id="pvSshOut" class="note mono" style="display:none; white-space:pre-wrap; max-height:260px; overflow:auto; margin-top:8px;"></pre>
-    </details>
+    </div>
   </div>
   </div>
 

@@ -439,4 +439,9 @@
      statvfs(/) )를 실어, 대시보드 no_runs 분기에서 시스템 패널 렌더(측정 프로세스는 스캔 시만). JS 문법·
      test_server·HTTP 스모크(스캔 없이 mem 16.8GB·fs 270GB) 검증. v1.69.5.
 
+178. 포탈에서 IP+계정만 입력하면 엣지에 자동 설치+포탈 등록하는 기능 만들어줘 → 이미 provision_ssh
+     (옵션 B)로 있었으나 접힌 details 안이라 안 보였음. '원격 자동 구성' 본문으로 끌어올려 '② SSH로
+     자동 설치 + 등록' primary 버튼 노출(IP+SSH 사용자/포트/비번 → SSH 접속해 설치·기동·토큰맞춤·등록).
+     _ssh_run 은 accept-new/ConnectTimeout/sshpass 로 견고. UI 노출만 개선. v1.69.6.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
