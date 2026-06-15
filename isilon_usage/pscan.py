@@ -319,12 +319,17 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
 
 
 def write_run_db(db_path: str, root: str, result: dict, *,
-                 size_mode: str = "disk", started: Optional[float] = None) -> int:
+                 size_mode: str = "disk", started: Optional[float] = None,
+                 run_id: Optional[int] = None) -> int:
     """parallel_scan 결과(루트 + 1단계 자식)를 표준 per-run DB 로 기록한다.
 
     pscan 은 깊은 트리를 만들지 않으므로 directories 에 **루트 + 1단계 자식만** 넣는다
     (용량 개요 + 1단계 드릴다운까지 표시, 더 깊은 드릴다운은 없음). 대시보드/매니저가
-    스레드 스캐너 결과와 동일하게 읽을 수 있다. 생성된 run_id 를 반환한다.
+    스레드 스캐너 결과와 동일하게 읽을 수 있다. 생성된(또는 갱신된) run_id 를 반환한다.
+
+    run_id 가 주어지면 그 run(미리 'sizing' 으로 만들어 둔 행)을 'done' 으로 **갱신**한다 —
+    _launch_pscan 이 스캔 시작 시 run 을 만들고 ResourceMonitor 를 붙여, 스캔 중에도 자원
+    패널/진행이 보이게 하기 위함이다(같은 run 에 자원 샘플이 쌓이므로 끝나도 유지).
     """
     import socket
 
@@ -349,14 +354,24 @@ def write_run_db(db_path: str, root: str, result: dict, *,
     dbmod.init_db(db_path)
     conn = dbmod.connect(db_path)
     try:
-        conn.execute(
-            "INSERT INTO scan_runs (root_path,status,phase,backend,size_mode,started_at,"
-            "updated_at,finished_at,total_dirs,processed_dirs,discovered_dirs,scanned_bytes,"
-            "total_files,workers,hostname,app_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (root, "done", "done", "pscan", size_mode, started, now, now, total_dirs,
-             len(per_top), total_dirs, total_bytes, total_files,
-             int(result.get("processes", 0)), socket.gethostname(), __version__))
-        run_id = conn.execute("SELECT id FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()[0]
+        if run_id is None:
+            conn.execute(
+                "INSERT INTO scan_runs (root_path,status,phase,backend,size_mode,started_at,"
+                "updated_at,finished_at,total_dirs,processed_dirs,discovered_dirs,scanned_bytes,"
+                "total_files,workers,hostname,app_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (root, "done", "done", "pscan", size_mode, started, now, now, total_dirs,
+                 len(per_top), total_dirs, total_bytes, total_files,
+                 int(result.get("processes", 0)), socket.gethostname(), __version__))
+            run_id = conn.execute("SELECT id FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()[0]
+        else:                       # 미리 만든 run(sizing) 을 갱신
+            conn.execute(
+                "UPDATE scan_runs SET status='done',phase='done',backend='pscan',size_mode=?,"
+                "updated_at=?,finished_at=?,total_dirs=?,processed_dirs=?,discovered_dirs=?,"
+                "scanned_bytes=?,total_files=?,workers=?,hostname=?,app_version=? WHERE id=?",
+                (size_mode, now, now, total_dirs, len(per_top), total_dirs, total_bytes,
+                 total_files, int(result.get("processes", 0)), socket.gethostname(),
+                 __version__, run_id))
+            conn.execute("DELETE FROM directories WHERE run_id=?", (run_id,))
         conn.execute(
             "INSERT INTO directories (%s) VALUES (%s)" % (_dcols, _ph),
             (run_id, None, root, os.path.basename(root.rstrip("/")) or root, 0, "done",

@@ -13,6 +13,21 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.69.4] - 2026-06-15
+
+### 수정됨 (Fixed) — pscan 스캔 중 자원 패널(메모리·CPU·디스크·프로세스 RSS)이 안 뜨던 문제
+
+대시보드 자원 패널은 **per-run DB의 run + `resource_samples`** 를 읽는데, pscan 은 per-run DB의
+run 을 **스캔이 끝난 뒤에** 만들어서(끝까지 `/api/status` 가 `no_runs`) — 스캔 내내 메모리·CPU·
+디스크·프로세스 정보가 **빈칸**이었다(특히 autotune 이 pscan(다중 프로세스)을 고른 경우). 이제
+`_launch_pscan` 이 **시작 시 run 을 `sizing` 으로 만들고 `ResourceMonitor` 를 붙여**, 스캔 중에도
+자원 패널이 채워진다. 끝나면 `write_run_db(run_id=…)` 가 그 run 을 갱신(중복 run·고아 샘플 없음).
+
+- `pscan.write_run_db` 에 `run_id`(갱신 모드) 추가, `_launch_pscan` 이 run 선생성 + 모니터 +
+  종료 시 모니터 정지. 회귀 테스트(run_id 갱신) + HTTP 스모크(pscan 후 자원 표시) 검증.
+
+---
+
 ## [1.69.3] - 2026-06-15
 
 ### 변경됨 (Changed) — 설치 스크립트 기본 다운로드 소스를 사내(폐쇄망) 미러로

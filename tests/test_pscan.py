@@ -183,7 +183,26 @@ def run_write_db() -> None:
             assert sum(k["total_bytes"] for k in kids) + root["own_bytes"] == r["total_bytes"]
         finally:
             conn.close()
-        print("[write_db] OK  pscan 결과를 per-run DB(루트+1단계)로 기록·되읽기 검증")
+        # run_id 갱신 모드: 미리 만든 run(sizing)을 갱신 — 중복 run 없이 같은 id 반환(자원 패널용)
+        dbf2 = os.path.join(base, "run2.db")
+        dbmod.init_db(dbf2)
+        c2 = dbmod.connect(dbf2)
+        c2.execute("INSERT INTO scan_runs (root_path,status,phase,backend,size_mode,"
+                   "started_at,updated_at,scanner_pid,hostname,app_version) "
+                   "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                   (base, "sizing", "sizing", "pscan", "apparent", 0.0, 0.0, 1, "h", "v"))
+        pre = c2.execute("SELECT id FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()[0]
+        c2.commit(); c2.close()
+        got = pscan.write_run_db(dbf2, base, r, size_mode="apparent", run_id=pre)
+        assert got == pre, (got, pre)
+        c2 = dbmod.connect(dbf2)
+        try:
+            nruns = c2.execute("SELECT COUNT(*) AS n FROM scan_runs").fetchone()["n"]
+            st = c2.execute("SELECT status FROM scan_runs WHERE id=?", (pre,)).fetchone()["status"]
+            assert nruns == 1 and st == "done", (nruns, st)
+        finally:
+            c2.close()
+        print("[write_db] OK  pscan 결과를 per-run DB(루트+1단계)로 기록·되읽기 + run_id 갱신 검증")
     finally:
         shutil.rmtree(base, ignore_errors=True)
 

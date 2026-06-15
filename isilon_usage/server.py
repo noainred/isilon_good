@@ -1490,10 +1490,29 @@ class ScanController:
 
         def worker():
             started = time.time()
+            mon_stop = None
             try:
                 mc = dbmod.connect(mdb)
                 mgrmod.update_scan(mc, scan_id, status="sizing", phase="sizing")
                 mc.commit(); mc.close()
+                # per-run DB 에 run 을 미리 만들고(sizing) 자원 모니터를 붙인다 →
+                # pscan 중에도 /api/status 가 run 을 찾아 자원 패널·진행이 보인다(끝나면 갱신).
+                import socket as _sock
+                dbmod.init_db(db_path)
+                pc0 = dbmod.connect(db_path)
+                pc0.execute(
+                    "INSERT INTO scan_runs (root_path,status,phase,backend,size_mode,"
+                    "started_at,updated_at,scanner_pid,hostname,app_version) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (os.path.abspath(path), "sizing", "sizing", "pscan", size_mode,
+                     started, started, os.getpid(), _sock.gethostname(), __version__))
+                run_id = pc0.execute(
+                    "SELECT id FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()[0]
+                pc0.commit(); pc0.close()
+                mon_stop = threading.Event()
+                monmod.ResourceMonitor(db_path, run_id, os.getpid(),
+                                       interval=self.sample_interval,
+                                       stop_event=mon_stop).start()
 
                 def _prog(p):
                     try:
@@ -1509,7 +1528,8 @@ class ScanController:
                                              size_mode=size_mode, on_progress=_prog)
                 if not res.get("ok"):
                     raise RuntimeError(res.get("error") or "pscan 실패")
-                pscanmod.write_run_db(db_path, path, res, size_mode=size_mode, started=started)
+                pscanmod.write_run_db(db_path, path, res, size_mode=size_mode,
+                                      started=started, run_id=run_id)
                 fs_total = fs_used = fs_free = 0
                 try:
                     v = os.statvfs(path)
@@ -1540,6 +1560,8 @@ class ScanController:
                 except Exception:  # noqa: BLE001
                     pass
             finally:
+                if mon_stop:
+                    mon_stop.set()
                 with self._lock:
                     self._scans.pop(scan_id, None)
                 self._on_scan_finished(scan_id)

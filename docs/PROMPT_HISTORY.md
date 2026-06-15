@@ -428,4 +428,10 @@
      API 경로(폴백), 배너 '소스' 표시, 실패 안내 미러 기준. bash -n + URL 구성 검증. v1.69.3.
      (구버전 깔린 원인=setup.sh가 가리킨 HQ 포탈이 1.36.0; 포탈을 미러로 올린 뒤 setup.sh 재생성.)
 
+176. 서버 메모리·측정 프로세스 CPU·디스크 정보가 안 나와(재설치 후) → 진단: 자원 패널은 per-run DB의
+     run+resource_samples 를 읽는데, pscan 은 run 을 끝에 만들어서(스캔 중 /api/status=no_runs) 자원이
+     빈칸. autotune 이 pscan 고르면 발생. 수정: _launch_pscan 이 시작 시 run(sizing) 선생성 +
+     ResourceMonitor 부착, 끝에 write_run_db(run_id=) 로 갱신. write_run_db run_id 갱신 모드 추가.
+     회귀+HTTP 스모크(pscan 후 mem/scanner_rss/peak 표시) 검증. v1.69.4.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
