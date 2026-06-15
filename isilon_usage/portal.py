@@ -631,6 +631,7 @@ class PortalController:
         st["source_mode"] = self.settings.get("upgrade_source", "off")
         st["auto"] = bool(self.settings.get("upgrade_auto"))
         st["url"] = self.settings.get("upgrade_url") or upgrademod.DEFAULT_UPGRADE_BASE
+        st["url_custom"] = self.settings.get("upgrade_url") or ""
         st["check_secs"] = self.settings.get("upgrade_check_secs", 60)
         st["node_count"] = len(nodes)
         # 등록된 엣지가 HQ(현재) 버전보다 낮은지 집계 — HQ 자신만 보고 '모두 최신'이라 하던 착시 방지.

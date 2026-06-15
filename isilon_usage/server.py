@@ -804,6 +804,7 @@ class ScanController:
         st["source_mode"] = self.settings.get("upgrade_source", "off")
         st["auto"] = bool(self.settings.get("upgrade_auto"))
         st["url"] = (self.settings.get("upgrade_url") or upgrademod.DEFAULT_UPGRADE_BASE)
+        st["url_custom"] = self.settings.get("upgrade_url") or ""
         st["watch_dir"] = self.settings.get("upgrade_watch_dir", "")
         return {"ok": True, **st}
 

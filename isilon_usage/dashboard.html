@@ -1094,6 +1094,8 @@
           <option value="off">끔(수동)</option>
           <option value="github">GitHub(인터넷) 모니터링</option>
         </select></label>
+      <label class="sub" style="flex:1 1 260px; min-width:220px;">소스 주소(빈값=기본 GitHub)
+        <input id="upgUrl" class="inp mono" placeholder="https://raw.githubusercontent.com/.../download" style="width:100%;" /></label>
       <label class="sub" style="display:flex; gap:5px; align-items:center;">
         <input type="checkbox" id="upgAuto" /> 새 버전 발견 시 자동 설치·재시작</label>
       <label class="sub">확인 주기(초)
@@ -3555,6 +3557,7 @@ function renderUpgrade(j) {
     + (j.check_error ? `<br><span class="err">확인 오류: ${j.check_error}</span>` : "")
     + `<br><span class="sub">소스: ${j.url || "—"}</span>`;
   if (document.activeElement !== $("upgSource")) $("upgSource").value = j.source_mode || "off";
+  if ($("upgUrl") && document.activeElement !== $("upgUrl")) $("upgUrl").value = j.url_custom || "";
   if (document.activeElement !== $("upgAuto")) $("upgAuto").checked = !!j.auto;
   $("upgInstallBtn").style.display = avail ? "inline-block" : "none";
   const log = j.log || [];
@@ -3588,6 +3591,7 @@ $("upgInstallBtn").addEventListener("click", async () => {
 });
 $("upgSaveBtn").addEventListener("click", async () => {
   const body = {settings: {upgrade_source: $("upgSource").value,
+    upgrade_url: $("upgUrl") ? $("upgUrl").value.trim() : "",
     upgrade_auto: $("upgAuto").checked,
     upgrade_check_secs: parseInt($("upgSecs").value, 10) || 60}};
   try {

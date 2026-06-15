@@ -1241,6 +1241,7 @@ function renderNetUpg(j){
     +(j.check_error?`<br><span style="color:var(--danger)">확인 오류: ${j.check_error}</span>`:"")
     +`<br><span class="sub">소스: ${j.url||"—"}</span>`;
   if(document.activeElement!==$("nuSource")) $("nuSource").value=j.source_mode||"off";
+  if($("nuUrl") && document.activeElement!==$("nuUrl")) $("nuUrl").value=j.url_custom||"";
   if(document.activeElement!==$("nuAuto")) $("nuAuto").checked=!!j.auto;
   if(j.check_secs && document.activeElement!==$("nuSecs")) $("nuSecs").value=j.check_secs;
   $("nuInstallBtn").style.display=a?"inline-block":"none";
