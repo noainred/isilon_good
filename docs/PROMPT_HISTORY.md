@@ -319,4 +319,13 @@
 159. 포탈은 미포함인가요? → 코드(패키지)엔 포탈 포함, 서비스만 엣지였음. install_portal.sh 신규
      (HQ: /opt/isilon_portal, /data/isilon_portal_data, /tmp/isilon_portal, 8800, systemd isilon-portal). v1.64.3.
 
+160. not allow 확인해줘 [+이미지: `/mnt/isilon/ifs` 탐색이 not_allowed] / `/mnt/isilon` 이 기본값이어도
+     사용자가 다른 경로를 입력하게 하되, 지정 경로 밖을 고르면 "지정한 경로를 벗어났습니다" 문구 띄우고
+     진행 컨펌 받기 / 포탈 감시 폴더에서 서버 경로를 브라우징해 디렉터리 선택 / (점·"살아잇어?") →
+     진단: browse_allowed 는 깨끗한 base 면 하위 경로 통과(정상)지만 base 에 공백/구버전이면 막힘.
+     **지정 경로를 하드 차단→소프트 컨펌으로 전환**: 밖이면 outside_base 신호→대시보드 컨펌→confirm
+     플래그로 진행(예약은 컨펌 없이, 비-디렉터리는 하드 거부). scan_path_check 신설, browse/scan_start/
+     autotune 연결. **포탈 감시 폴더 '📁 찾아보기'**(GET /api/portal/browse + 모달). **install_edge.sh
+     api_token 자동 생성·유지·출력**(포탈 푸시 403 해소). HTTP 스모크로 안/밖/컨펌/포탈 검증. v1.65.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

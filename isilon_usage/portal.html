@@ -308,6 +308,7 @@
     <div class="sub" style="margin-bottom:8px;">감시 폴더에 새 버전 <span class="mono">isilon_usage-*.tar.gz/.zip</span> 을 두면 포탈이 자동 적용·재시작하고, 등록된 모든 엣지에도 새 코드를 푸시합니다(엣지 <span class="mono">api_token</span> 인증). 비우면 끔.</div>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
       <input id="ugWatchDir" class="inp mono" placeholder="예: /opt/isilon_releases" style="flex:1; min-width:240px;" />
+      <button id="ugWatchBrowse" type="button">📁 찾아보기</button>
       <button id="ugWatchSave">감시 폴더 저장</button>
       <button id="ugPushAll" class="primary">전 노드 지금 업그레이드</button>
       <span class="sub" id="ugWatchMsg"></span>
@@ -1215,6 +1216,59 @@ if($("ugWatchSave")) $("ugWatchSave").addEventListener("click", async()=>{
     $("ugWatchMsg").textContent=j.ok?(" ✓ 저장됨"+(j.upgrade_watch_dir?"":" (감시 끔)")):(" ✗ "+(j.reason||"실패")); }
   catch(e){ $("ugWatchMsg").textContent=" ✗ "+e; }
 });
+// ── 서버 디렉터리 브라우저(감시 폴더 선택) — HQ 로컬 경로를 클릭으로 탐색 ──
+let _fbCur="/";
+function fbOpen(){
+  let m=$("fbModal");
+  if(!m){
+    m=document.createElement("div"); m.id="fbModal"; document.body.appendChild(m);
+    m.style.cssText="position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.72);display:none;align-items:center;justify-content:center;";
+    m.innerHTML='<div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;width:92vw;max-width:760px;">'
+      +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">'
+      +'<b style="font-size:15px;">📁 서버 디렉터리 선택 (HQ 로컬)</b><div style="flex:1"></div>'
+      +'<button id="fbClose">✕ 닫기</button></div>'
+      +'<div style="display:flex;gap:6px;margin-bottom:8px;">'
+      +'<button id="fbUp">⬆ 위로</button>'
+      +'<input id="fbPath" class="inp mono" style="flex:1;" placeholder="/opt" />'
+      +'<button id="fbGo">탐색</button></div>'
+      +'<div id="fbList" style="max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:4px;"></div>'
+      +'<div class="sub" id="fbErr" style="color:#ff8a8a;margin-top:6px;"></div>'
+      +'<div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+      +'<span class="sub">이 폴더를 감시 폴더로:</span>'
+      +'<b id="fbCurLbl" class="mono" style="flex:1;min-width:160px;word-break:break-all;"></b>'
+      +'<button id="fbPick" class="primary">이 디렉터리 선택</button></div></div>';
+    $("fbClose").addEventListener("click", fbClose);
+    m.addEventListener("click", e=>{ if(e.target===m) fbClose(); });
+    document.addEventListener("keydown", e=>{ if(e.key==="Escape" && m.style.display==="flex") fbClose(); });
+    $("fbUp").addEventListener("click", ()=>fbBrowse($("fbUp").dataset.parent||"/"));
+    $("fbGo").addEventListener("click", ()=>fbBrowse($("fbPath").value.trim()||"/"));
+    $("fbPath").addEventListener("keydown", e=>{ if(e.key==="Enter") fbBrowse($("fbPath").value.trim()||"/"); });
+    $("fbPick").addEventListener("click", ()=>{ $("ugWatchDir").value=_fbCur; fbClose();
+      $("ugWatchMsg").textContent=" (선택됨 — '감시 폴더 저장'을 누르세요)"; });
+  }
+  m.style.display="flex";
+  fbBrowse($("ugWatchDir").value.trim()||"/");
+}
+function fbClose(){ const m=$("fbModal"); if(m) m.style.display="none"; }
+async function fbBrowse(p){
+  const errEl=$("fbErr"); if(errEl) errEl.textContent="";
+  try{
+    const j=await (await fetch("/api/portal/browse?path="+encodeURIComponent(p||"/"),{cache:"no-store"})).json();
+    if(!j.ok){ if(errEl) errEl.textContent="탐색 실패: "+(j.reason||j.error||""); return; }
+    _fbCur=j.path; $("fbPath").value=j.path; $("fbCurLbl").textContent=j.path;
+    $("fbUp").dataset.parent=j.parent||"/";
+    const list=$("fbList");
+    const items=(j.dirs||[]).map(d=>`<div class="fbitem" data-go="${encodeURIComponent(d.path)}" style="padding:7px 9px;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;"><span>📁 ${esc(d.name)}</span><span class="sub">열기 ▶</span></div>`);
+    list.innerHTML=items.length?items.join(""):'<span class="sub" style="padding:8px;display:block;">하위 디렉터리가 없습니다.</span>';
+    list.querySelectorAll(".fbitem").forEach(el=>{
+      el.addEventListener("click", ()=>fbBrowse(decodeURIComponent(el.dataset.go)));
+      el.addEventListener("mouseenter", ()=>{ el.style.background="var(--panel2)"; });
+      el.addEventListener("mouseleave", ()=>{ el.style.background=""; });
+    });
+    if(j.error && errEl) errEl.textContent="일부 접근 불가: "+j.error;
+  }catch(e){ if(errEl) errEl.textContent="오류: "+e; }
+}
+if($("ugWatchBrowse")) $("ugWatchBrowse").addEventListener("click", fbOpen);
 if($("ugPushAll")) $("ugPushAll").addEventListener("click", async()=>{
   if(!confirm("등록된 모든 엣지를 현재 HQ 버전으로 업그레이드할까요?")) return;
   $("ugPushAll").disabled=true; $("ugWatchMsg").textContent=" 푸시 중…";

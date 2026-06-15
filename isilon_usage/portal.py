@@ -34,7 +34,7 @@ from . import auth as authmod
 from . import audit as auditmod
 from . import settings as setmod
 from . import upgrade as upgrademod
-from .server import ThreadingHTTPServer  # 3.6 폴백 포함 재사용
+from .server import ThreadingHTTPServer, browse_dir  # 3.6 폴백 포함 재사용
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -1415,6 +1415,11 @@ class PortalHandler(BaseHTTPRequestHandler):
                 except (TypeError, ValueError):
                     rng = 86400
                 self._send_json(c.ping_history(rng))
+                return
+            if path == "/api/portal/browse":
+                # HQ(포탈) 서버의 로컬 디렉터리 탐색 — 감시 폴더 등 경로 선택용.
+                qp = parse_qs(urlparse(self.path).query).get("path", [""])[0]
+                self._send_json(browse_dir(qp or "/"))
                 return
             if path == "/api/portal/nodes":
                 self._send_json(c.list_nodes())

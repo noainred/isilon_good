@@ -7,6 +7,8 @@
 #
 # 사용:  sudo bash install_edge.sh [--port 8765] [--mount-base /mnt/isilon]
 #                                  [--branch <git브랜치>] [--data-dir DIR] [--install-dir DIR]
+#                                  [--tmp-dir DIR] [--api-token TOKEN]
+#   --api-token : 포탈 연동/업그레이드 푸시 인증 토큰(생략하면 기존 유지·없으면 자동 생성)
 # =============================================================================
 set -euo pipefail
 
@@ -19,6 +21,7 @@ PORT="8765"                              # 대시보드 포트
 MOUNT_BASE=""                            # 스캔 허용 경로(예: /mnt/isilon). 비우면 전체 허용
 SERVICE="isilon-edge"                    # systemd 서비스 이름
 TMP_DIR="/tmp/isilon_edge"               # 임시 작업(압축 해제·검증) 디렉터리
+API_TOKEN=""                             # 포탈 연동/업그레이드 푸시 인증 토큰(비우면 자동 생성·유지)
 
 # ===== 인자로 덮어쓰기 =====
 while [ $# -gt 0 ]; do
@@ -29,6 +32,7 @@ while [ $# -gt 0 ]; do
     --data-dir)    DATA_DIR="$2";    shift 2;;
     --install-dir) INSTALL_DIR="$2"; shift 2;;
     --tmp-dir)     TMP_DIR="$2";     shift 2;;
+    --api-token)   API_TOKEN="$2";   shift 2;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     *) echo "알 수 없는 옵션: $1 (도움말: --help)"; exit 1;;
   esac
@@ -90,6 +94,32 @@ fi
 rm -rf "$TMP_DIR"
 cd "$INSTALL_DIR"
 
+# ----- 4.5) api_token 보장(포탈 연동·'전 노드 업그레이드' 푸시 인증) -----
+#   포탈에서 엣지로 업그레이드를 푸시하려면 엣지에 api_token 이 있어야 한다(없으면 403).
+#   --api-token 으로 주면 그 값을, 없으면 기존 값을 유지, 그것도 없으면 새로 생성한다.
+SETTINGS="$DATA_DIR/settings.json"
+TOKEN="$(API_TOKEN="$API_TOKEN" SETTINGS="$SETTINGS" python3 - <<'PY'
+import json, os, secrets
+sp = os.environ["SETTINGS"]
+want = (os.environ.get("API_TOKEN") or "").strip()
+try:
+    with open(sp, encoding="utf-8") as fh:
+        s = json.load(fh)
+    if not isinstance(s, dict):
+        s = {}
+except Exception:
+    s = {}
+tok = want or str(s.get("api_token") or "").strip() or secrets.token_hex(16)
+s["api_token"] = tok
+tmp = sp + ".tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(s, fh, ensure_ascii=False, indent=2)
+os.replace(tmp, sp)
+print(tok)
+PY
+)"
+[ -n "$TOKEN" ] && echo "→ api_token 설정 완료: $SETTINGS"
+
 # ----- 5) systemd 서비스 등록 -----
 UNIT="/etc/systemd/system/${SERVICE}.service"
 MB_ARG=""; [ -n "$MOUNT_BASE" ] && MB_ARG="--mount-base $MOUNT_BASE"
@@ -124,6 +154,11 @@ echo "✅ 완료 — isilon_edge $VER 설치·서비스 등록·재시작"
 echo "   접속 : http://<서버주소>:$PORT/"
 echo "   로그 : journalctl -u $SERVICE -f"
 echo "   상태 : systemctl status $SERVICE"
+if [ -n "$TOKEN" ]; then
+  echo "   API 토큰 : $TOKEN"
+  echo "      ↳ 포탈 '노드 설정'에서 이 엣지를 등록할 때 위 토큰을 입력하면"
+  echo "        포탈의 '전 노드 지금 업그레이드'(푸시)가 동작합니다."
+fi
 if [ -z "$MOUNT_BASE" ]; then
   echo "   ⚠ 보안: 지금은 스캔 허용 경로가 전체입니다."
   echo "      예) sudo bash $0 --mount-base /mnt/isilon  (로 다시 실행)"

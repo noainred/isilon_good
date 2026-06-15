@@ -119,16 +119,19 @@ def main() -> int:
         br = c.get(f"/api/browse?path={root}")
         assert br["ok"] and any(d["name"] == "sub1" for d in br["dirs"]), br
 
-        # 탐색(browse)도 허용 마운트 경로 밖이면 거부(디렉터리 구조 노출 방지)
+        # 탐색(browse)도 지정 경로 밖이면 '소프트 컨펌' 신호(outside_base)를 준다
         bb = c.get("/api/browse?path=/etc")
-        assert not bb["ok"] and bb["reason"] == "not_allowed", bb
-        # 마운트 루트에서 '위로'는 밖으로 못 나가게 현재 경로로 묶임
+        assert not bb["ok"] and bb["reason"] == "outside_base", bb
+        # 컨펌(confirm=1)하면 지정 경로 밖도 탐색 허용
+        bc = c.get("/api/browse?path=/etc&confirm=1")
+        assert bc["ok"] and bc.get("path") == "/etc", bc
+        # 마운트 루트에서 '위로'는 (컨펌 전) 밖으로 못 나가게 현재 경로로 묶임
         bm = c.get(f"/api/browse?path={tmp}")
         assert bm["ok"] and bm["parent"] == bm["path"], bm
 
-        # 경로 제한: 허용 밖 거부
+        # 경로 제한: 지정 경로 밖은 컨펌 없으면 outside_base 로 보류
         bad = c.post("/api/scan/start", {"path": "/etc"})
-        assert not bad["ok"], bad
+        assert not bad["ok"] and bad.get("reason") == "outside_base", bad
 
         # 스캔 1 시작 → 완료
         r1 = c.post("/api/scan/start", {"path": root})

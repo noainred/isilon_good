@@ -2085,12 +2085,29 @@ async function loadMounts() {
 }
 
 // ---- 폴더 탐색 ----
-async function doBrowse(path) {
+// 지정 경로(mount_bases) 밖을 한 번 컨펌하면, 이후 탐색은 계속 허용(매번 묻지 않음).
+let _browseOutsideOK = false;
+async function doBrowse(path, _confirmed) {
   $("browseErr").textContent = "";
+  const useConfirm = _confirmed || _browseOutsideOK;
   try {
-    const url = "/api/browse" + (path ? ("?path=" + encodeURIComponent(path)) : "");
+    const p = new URLSearchParams();
+    if (path) p.set("path", path);
+    if (useConfirm) p.set("confirm", "1");
+    const url = "/api/browse" + (p.toString() ? ("?" + p.toString()) : "");
     const j = await (await fetch(url, {cache:"no-store"})).json();
-    if (!j.ok) { $("browseErr").textContent = "탐색 실패: " + (j.reason || j.error || ""); return; }
+    if (!j.ok) {
+      if (j.reason === "outside_base") {
+        const base = (j.allowed || []).join(", ") || "지정 경로";
+        if (confirm("지정한 경로(" + base + ")를 벗어났습니다.\n이 경로로 계속 탐색할까요?")) {
+          _browseOutsideOK = true;          // 이후엔 자유 탐색
+          return doBrowse(path, true);
+        }
+        $("browseErr").textContent = "지정 경로 밖이라 탐색을 취소했습니다.";
+        return;
+      }
+      $("browseErr").textContent = "탐색 실패: " + (j.reason || j.error || ""); return;
+    }
     $("browsePath").value = j.path;
     $("browseUp").dataset.parent = j.parent || "/";
     const list = $("browseList");
@@ -2141,6 +2158,30 @@ function updateStartButton(runningCount) {
   if (tdr) tdr.style.display = scanning ? "none" : "grid";
 }
 
+// 서버가 'outside_base'(지정 경로 밖)를 주면 컨펌을 받는다. 진행이면 true.
+function confirmOutside(j) {
+  const base = (j.allowed || []).join(", ") || "지정 경로";
+  return confirm("지정한 경로(" + base + ")를 벗어났습니다.\n이 경로로 진행할까요?");
+}
+async function reqAutotune(path, confirmOut) {
+  return (await fetch("/api/autotune/start", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({path, then_scan: true, confirm_outside: confirmOut}),
+  })).json();
+}
+async function reqScanStart(path, confirmOut) {
+  return (await fetch("/api/scan/start", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      path,
+      backend: $("optBackend").value,
+      size_mode: $("optSize").value,
+      one_file_system: $("optOFS").checked,
+      engine: $("optEngine") ? $("optEngine").value : "threads",
+      confirm_outside: confirmOut,
+    }),
+  })).json();
+}
 async function startScan() {
   const path = $("scanPath").value.trim();
   if (!path) { $("startMsg").innerHTML = '<span class="err">경로를 입력/선택하세요.</span>'; return; }
@@ -2150,29 +2191,30 @@ async function startScan() {
   try {
     if (useAuto) {
       // 오토튜닝: 최적 방법을 측정한 뒤 그 설정으로 본 스캔을 자동 시작(서버가 처리)
-      const j = await (await fetch("/api/autotune/start", {
-        method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({path, then_scan: true}),
-      })).json();
+      let j = await reqAutotune(path, false);
+      if (!j.ok && j.reason === "outside_base") {
+        if (!confirmOutside(j)) {
+          $("startMsg").textContent = "취소됨 — 지정 경로 밖.";
+          $("startBtn").disabled = false; return;
+        }
+        j = await reqAutotune(path, true);
+      }
       if (j.ok) {
         $("startMsg").innerHTML = '<span style="color:var(--accent2)">🔬 오토튜닝 측정을 시작했습니다 — 아래 진행을 확인하세요.</span>';
         _autotuneTracked = null;
         await pollAutotune();
       } else {
-        $("startMsg").innerHTML = '<span class="err">오토튜닝 시작 실패: ' + (j.error || "") + '</span>';
+        $("startMsg").innerHTML = '<span class="err">오토튜닝 시작 실패: ' + (j.error || j.reason || "") + '</span>';
       }
     } else {
-      const res = await fetch("/api/scan/start", {
-        method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({
-          path,
-          backend: $("optBackend").value,
-          size_mode: $("optSize").value,
-          one_file_system: $("optOFS").checked,
-          engine: $("optEngine") ? $("optEngine").value : "threads",
-        }),
-      });
-      const j = await res.json();
+      let j = await reqScanStart(path, false);
+      if (!j.ok && j.reason === "outside_base") {
+        if (!confirmOutside(j)) {
+          $("startMsg").textContent = "취소됨 — 지정 경로 밖.";
+          $("startBtn").disabled = false; return;
+        }
+        j = await reqScanStart(path, true);
+      }
       if (j.ok) {
         const roTxt = (j.mount_readonly == null) ? ""
           : (j.mount_readonly

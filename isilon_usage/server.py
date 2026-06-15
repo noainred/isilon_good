@@ -962,6 +962,24 @@ class ScanController:
                 continue
         return False
 
+    def scan_path_check(self, path: str, confirm_outside: bool = False):
+        """스캔/측정 대상 경로를 검사한다.
+
+        - 디렉터리가 아니거나 접근 불가 → 하드 거부(되돌릴 수 없음).
+        - mount_bases(지정 경로)가 설정돼 있고 그 '밖'이며 confirm_outside 가
+          아니면 → reason="outside_base"(사용자 컨펌으로 진행 가능한 '소프트' 신호).
+          지정 경로는 기본값/가드일 뿐, 사용자가 컨펌하면 다른 경로도 허용한다.
+        반환: (ok, err_dict_or_None). err_dict 는 그대로 응답으로 보낼 수 있다.
+        """
+        ap = os.path.abspath(path)
+        if not os.path.isdir(ap):
+            return False, {"ok": False,
+                           "reason": "디렉터리가 아니거나 접근할 수 없습니다."}
+        if self.mount_bases and not self.browse_allowed(ap) and not confirm_outside:
+            return False, {"ok": False, "reason": "outside_base",
+                           "path": ap, "allowed": self.mount_bases}
+        return True, None
+
     # ----- 실측 워커 보정(시범 탐색) -----
     def benchmark_workers(self, *, path=None, candidates=None, budget=5.0) -> dict:
         """대상 경로에서 후보 스레드 수로 짧게 시범 탐색해 처리량을 비교한다."""
@@ -1040,14 +1058,18 @@ class ScanController:
             return {"ok": True, **{k: v for k, v in self._bench.items()}}
 
     # ----- 오토튜닝(최적 프로세스×스레드 자동 측정 → 본 스캔 자동 시작) -----
-    def autotune_start(self, *, path=None, secs=None, then_scan=True) -> dict:
+    def autotune_start(self, *, path=None, secs=None, then_scan=True,
+                       confirm_outside=False) -> dict:
         """실제 엔진(pscan)을 짧게 측정해 최적 procs×threads 를 고르고, then_scan 이면
         그 설정으로 본 스캔을 자동 시작한다. 진행은 autotune_status 로 폴링한다."""
         if not path:
             return {"ok": False, "error": "측정할 경로를 지정하세요."}
-        ok, why = self.path_allowed(path)
+        ok, err = self.scan_path_check(path, confirm_outside)
         if not ok:
-            return {"ok": False, "error": why}
+            # 지정 경로 밖이면 컨펌 신호(outside_base)를 그대로 전달해 클라가 묻게 한다.
+            if err.get("reason") == "outside_base":
+                return err
+            return {"ok": False, "error": err.get("reason")}
         path = os.path.abspath(path)
         try:
             secs = float(secs) if secs else float(self.settings.get("autotune_secs", 8) or 8)
@@ -1367,11 +1389,11 @@ class ScanController:
     # ----- 시작 -----
     def start_scan(self, path: str, *, backend=None, size_mode=None,
                    one_file_system=None, engine=None,
-                   processes=None, threads=None) -> dict:
+                   processes=None, threads=None, confirm_outside=False) -> dict:
         path = os.path.abspath(path)
-        ok, reason = self.path_allowed(path)
+        ok, err = self.scan_path_check(path, confirm_outside)
         if not ok:
-            return {"ok": False, "reason": reason}
+            return err
         # 지정하지 않은 옵션은 설정의 기본값을 사용
         if backend is None:
             backend = self.settings.get("default_backend", "native")
@@ -1656,12 +1678,14 @@ class ScanController:
             path = sc["path"]
             if path in running_paths:
                 continue
-            ok, _ = self.path_allowed(path)
+            # 예약은 관리자가 미리 지정한 경로라 '지정 경로 밖'이어도 컨펌 없이 진행
+            ok, _ = self.scan_path_check(path, confirm_outside=True)
             if not ok:
                 continue
             res = self.start_scan(path, backend=sc.get("backend"),
                                   size_mode=sc.get("size_mode"),
-                                  one_file_system=sc.get("one_file_system"))
+                                  one_file_system=sc.get("one_file_system"),
+                                  confirm_outside=True)
             if res.get("ok"):
                 sc["last_run"] = now
                 changed = True
@@ -2003,17 +2027,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             if path == "/api/browse":
                 qpath = qs.get("path", [""])[0]
+                confirm = qs.get("confirm", ["0"])[0] in ("1", "true", "yes", "on")
                 ctrl = self.controller
                 if not qpath and ctrl and ctrl.mount_bases:
                     qpath = ctrl.mount_bases[0]
-                if ctrl and not ctrl.browse_allowed(qpath or "/"):
-                    self._send_json({"ok": False, "reason": "not_allowed",
+                # 지정 경로(mount_bases) 밖이면 하드 차단 대신 '컨펌 가능' 신호를 준다.
+                # 사용자가 컨펌하면 클라이언트가 confirm=1 로 다시 호출 → 자유 탐색 허용.
+                if (ctrl and ctrl.mount_bases and not confirm
+                        and not ctrl.browse_allowed(qpath or "/")):
+                    self._send_json({"ok": False, "reason": "outside_base",
                                      "path": os.path.abspath(qpath or "/"),
                                      "allowed": ctrl.mount_bases})
                     return
                 result = browse_dir(qpath)
-                # 허용 경로 밖으로 올라가지 못하게 '위로' 대상을 현재 경로로 묶는다
-                if (ctrl and result.get("ok") and result.get("parent")
+                # 컨펌 전에는 지정 경로 밖으로 '위로' 올라가지 못하게 묶는다(컨펌하면 자유).
+                if (ctrl and ctrl.mount_bases and not confirm and result.get("ok")
+                        and result.get("parent")
                         and not ctrl.browse_allowed(result["parent"])):
                     result["parent"] = result["path"]
                 self._send_json(result)
@@ -2453,6 +2482,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     size_mode=body.get("size_mode"),
                     one_file_system=None if ofs is None else bool(ofs),
                     engine=body.get("engine"),
+                    confirm_outside=bool(body.get("confirm_outside")),
                 )
                 self._send_json(result, status=200 if result.get("ok") else 400)
                 return
@@ -2501,6 +2531,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     path=(body.get("path") or "").strip() or None,
                     secs=body.get("secs"),
                     then_scan=body.get("then_scan", True),
+                    confirm_outside=bool(body.get("confirm_outside")),
                 )
                 self._send_json(res, status=200 if res.get("ok") else 400)
                 return
