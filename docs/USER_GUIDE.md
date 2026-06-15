@@ -61,24 +61,25 @@
 - **리눅스** (자원 수집에 `/proc` 사용)
 - 조사할 NAS 가 이 서버에 **마운트**되어 있고 읽기 권한이 있을 것
 
-### 2.2 코드 받기 — 사내 미러 한 줄 설치(권장) 또는 오프라인 패키지
-폐쇄망에서는 **사내 미러에서 한 줄**로 받아 설치·기동까지 끝내는 것이 가장 쉽습니다(인터넷·토큰 불필요).
+### 2.2 코드 받기 — GitHub 에서 클론
 ```bash
-# 엣지(스캐너): 한 줄 설치 + systemd(isilon-edge) 등록·기동 (같은 줄 재실행 = 업그레이드)
-curl -fsSL "http://repository.dvc.lgensol.com:8081/repository/manager-upgrade/isilon_good/raw/claude/upbeat-bell-cXX8f/tools/install_edge.sh" \
-  | sudo bash -s -- --mount-base /mnt/isilon
+cd /opt
+git clone https://github.com/noainred/isilon_good.git
+cd isilon_good
+# 현재 개발 브랜치를 사용(기본 브랜치이므로 자동 체크아웃되지만 명시해도 됨)
+git checkout claude/upbeat-bell-cXX8f
 ```
-> 미러 주소·브랜치는 환경에 맞게 바꾸세요. 포탈 자동 등록은 `--hq http://<HQ-IP>:8800` 을 덧붙입니다.
-> 포탈(HQ) 설치·옵션·오프라인 업그레이드 등 전체 명령은 **[download/README.md](../download/README.md)**.
 
-미러를 쓰지 않으면 **압축 패키지 한 개**(`isilon_usage-*.tar.gz`/`.zip`)를 받아 풀어도 됩니다 — 그 한 개가 프로그램 전체입니다.
+폐쇄망이라 git 이 안 되면, 인터넷 되는 PC 에서 받아 압축해 옮깁니다.
 ```bash
-tar xzf isilon_usage-*.tar.gz       # 풀면 isilon_usage/ 가 들어 있음(별도 설치 불필요)
-python3 -m isilon_usage --version
+# 외부 PC
+git clone https://github.com/noainred/isilon_good.git
+cd isilon_good && git checkout claude/upbeat-bell-cXX8f
+tar czf isilon_usage.tgz isilon_usage tools tests docs README.md CHANGELOG.md requirements.txt
+# 대상 서버로 scp 후
+tar xzf isilon_usage.tgz
 ```
 핵심은 **`isilon_usage/` 폴더 하나**입니다(그 안에 전부 들어 있음).
-
-> (선택) 인터넷이 되는 개발 환경이라면 소스 저장소에서 직접 받아도 됩니다(`git clone … && git checkout claude/upbeat-bell-cXX8f`).
 
 ### 2.3 (선택) psutil 설치
 없어도 동작합니다. 설치하면 메모리/CPU 지표가 더 정확합니다.

@@ -11,15 +11,11 @@
 
 ## 0. 5분 안에 끝내기 (요약)
 
-**가장 빠른 길 — 사내 미러 한 줄 설치(권장).** 엣지(스캐너)를 `curl … | bash` **한 줄**로:
+**가장 빠른 길 — 한 줄 설치(권장).** 엣지(스캐너)를 `curl … | bash` **한 줄**로:
 최신본 내려받기 → 검증 → `/opt/isilon_edge` 설치 → systemd 서비스(`isilon-edge`) 등록·기동까지
-끝냅니다(같은 줄을 다시 실행하면 업그레이드). **사내 미러에서 받으므로 인터넷·토큰이 필요 없습니다.**
-`--hq http://<HQ>:8800` 을 붙이면 **포탈에 자동 등록(enroll)** 까지 됩니다.
-```bash
-curl -fsSL "http://repository.dvc.lgensol.com:8081/repository/manager-upgrade/isilon_good/raw/claude/upbeat-bell-cXX8f/tools/install_edge.sh" \
-  | sudo bash -s -- --mount-base /mnt/isilon
-```
-포탈 한 줄·옵션·**오프라인 업그레이드** 등 정확한 명령은 한곳에 모아 두었습니다 →
+끝냅니다(같은 줄을 다시 실행하면 업그레이드). 비공개 저장소라 **GitHub 토큰(PAT)** 이 필요하고,
+`--hq http://<HQ>:8800` 을 붙이면 **포탈에 자동 등록(enroll)** 까지 됩니다. 토큰·`wget`·공개·`--hq`·
+**포탈 한 줄**·**오프라인 업그레이드** 등 정확한 명령은 한곳에 모아 두었습니다 →
 **[download/README.md](../download/README.md)**.
 
 직접 코드를 받아 실행해도 됩니다:
@@ -54,36 +50,33 @@ python3 -m isilon_usage serve --data-dir /var/lib/isilon_usage \
 
 ---
 
-## 2. 설치 방법 A — 사내 미러 한 줄 설치 (권장, 폐쇄망 OK)
-
-사내 미러에서 스크립트를 받아 설치·기동까지 한 줄로 끝냅니다(인터넷·토큰 불필요).
-```bash
-# 엣지(스캐너)
-curl -fsSL "http://repository.dvc.lgensol.com:8081/repository/manager-upgrade/isilon_good/raw/claude/upbeat-bell-cXX8f/tools/install_edge.sh" \
-  | sudo bash -s -- --mount-base /mnt/isilon
-# 포탈(HQ)
-curl -fsSL "http://repository.dvc.lgensol.com:8081/repository/manager-upgrade/isilon_good/raw/claude/upbeat-bell-cXX8f/tools/install_portal.sh" \
-  | sudo bash -s -- --port 8800
-```
-미러 주소·브랜치는 환경에 맞게 바꾸세요. 핵심은 **`isilon_usage/` 폴더 하나**에 모든 코드가 들어 있다는 점입니다.
-
-> (선택, 인터넷 되는 환경) `git clone https://github.com/noainred/isilon_good.git` 로 직접 받아 `python3 -m isilon_usage --version` 으로 확인해도 됩니다.
-
----
-
-## 3. 설치 방법 B — 오프라인 패키지 (미러도 못 쓸 때)
-
-**압축 패키지 한 개**(`isilon_usage-*.tar.gz` 또는 `.zip`)를 받아 풀면 그 자체가 프로그램 전체입니다.
-사내 미러의 `download/` 폴더나 인터넷 되는 PC에서 받아 scp/USB로 옮기세요.
+## 2. 설치 방법 A — 인터넷이 되는 서버 (git clone)
 
 ```bash
-# (대상 폐쇄망 서버) — 옮긴 압축본을 풀고 바로 실행
-tar xzf isilon_usage-*.tar.gz
+cd /opt
+git clone https://github.com/noainred/isilon_good.git
+cd isilon_good
 python3 -m isilon_usage --version
 ```
 
-> 인터넷 PC에서 직접 묶으려면: `git clone …` 후
-> `tar czf isilon_usage.tgz isilon_usage tools tests docs README.md CHANGELOG.md requirements.txt`.
+끝입니다. 핵심은 **`isilon_usage/` 폴더 하나**에 모든 코드가 들어 있다는 점입니다.
+
+---
+
+## 3. 설치 방법 B — 폐쇄망 서버 (인터넷 불가)
+
+인터넷이 되는 PC에서 받아 압축해 대상 서버로 옮깁니다.
+
+```bash
+# (인터넷 PC)
+git clone https://github.com/noainred/isilon_good.git
+cd isilon_good
+tar czf isilon_usage.tgz isilon_usage tools tests docs README.md CHANGELOG.md requirements.txt
+
+# (대상 폐쇄망 서버) — scp/USB 등으로 옮긴 뒤
+tar xzf isilon_usage.tgz
+python3 -m isilon_usage --version
+```
 
 > `pip install` 이 **필요 없습니다.** 사내 미러의 옛 setuptools로 굳이 설치하려면
 > `pip install --no-build-isolation .` 을 쓰세요.

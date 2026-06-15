@@ -489,4 +489,10 @@
      test_server 회귀(diff 파일수/root + folder-history 정상/누락/빈경로) + 변경량 HTTP 스모크
      (파일 +2 → files_delta=2, 크기 +8192 disk블록) 확인. ruff·전체테스트·JS 통과. v1.70.0.
 
+185. 소스를 github 링크로 원복하고 문서 업데이트 → 182에서 설치/업데이트 안내를 사내 미러 1순위로
+     바꿨던 것을 사용자 지시로 **다시 GitHub 링크 기준으로 원복**(README·GETTING_STARTED·INSTALL
+     방법 A=git clone/B=폐쇄망 git·USER_GUIDE 2.2·download/README 비공개 토큰 1순위). CHANGELOG
+     1.70.0 문서 항목도 GitHub 기준으로 정정. 설치 스크립트(MIRROR_ROOT 기본)는 그대로 두되
+     `--base-url` 로 미러 지정 가능(문서·스크립트 둘 다 GitHub/미러 선택 가능 상태 유지).
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
