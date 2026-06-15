@@ -354,4 +354,11 @@
      (tools/install_portal.sh 토큰 인증 다운로드 → sudo bash -s -- --port 8800; /opt/isilon_portal,
      /data/isilon_portal_data, isilon-portal). 경로 raw 200·bash -n 검증. 문서 변경.
 
+165. (엣지 한 줄 실행 시) 포탈에 자동 등록하게 해줘 → **엣지 자기등록(enroll)** 구현. 포탈
+     POST /api/portal/enroll(인증 게이트 앞; 공유 enroll_token 으로 인증, 미설정+무비번이면 LAN
+     개방, 비번 있는데 토큰 없으면 401). 엣지가 자기 url+실제 api_token 을 보내 폴링 401 예방.
+     install_edge.sh --hq/--region/--node-id/--enroll/--advertise-host(설치 후 POST, 실패해도 설치
+     정상). 포탈 '보안·감사' 탭에 enroll token UI. 회귀테스트+HTTP 스모크. download/README 한 줄에
+     --hq 반영. v1.66.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

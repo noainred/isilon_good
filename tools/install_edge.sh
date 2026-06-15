@@ -11,6 +11,9 @@
 #   --api-token : 포탈 연동/업그레이드 푸시 인증 토큰(생략하면 기존 유지·없으면 자동 생성)
 #   --token     : 비공개(private) 저장소에서 받을 때 쓰는 GitHub 액세스 토큰(PAT).
 #                 환경변수 GITHUB_TOKEN 으로도 줄 수 있다. 공개 저장소면 불필요.
+#   --hq URL    : HQ 포탈 주소(예: http://10.0.0.5:8800). 주면 설치 후 이 엣지를
+#                 포탈에 자동 등록(enroll)한다. --region/--node-id/--enroll/--advertise-host 동반 가능.
+#   --enroll T  : 포탈에 로그인 비밀번호가 걸려 있으면 필요한 enroll 공유 토큰.
 # =============================================================================
 set -euo pipefail
 
@@ -26,6 +29,11 @@ TMP_DIR="/tmp/isilon_edge"               # 임시 작업(압축 해제·검증) 
 API_TOKEN=""                             # 포탈 연동/업그레이드 푸시 인증 토큰(비우면 자동 생성·유지)
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"         # 비공개 저장소 다운로드용 GitHub PAT(없으면 공개 raw)
 REPO="noainred/isilon_good"              # 다운로드 대상 저장소
+HQ=""                                    # 포탈(HQ) URL — 주면 설치 후 포탈에 자기등록(enroll)
+REGION=""                                # 노드 지역 라벨(표시용)
+NODE_ID=""                               # 노드 id(비우면 hostname)
+ENROLL_TOKEN=""                          # 포탈 enroll 공유 토큰(포탈에 로그인 비번이 걸린 경우 필요)
+ADVERTISE_HOST=""                        # 포탈이 이 엣지를 찾아올 IP/호스트(비우면 자동 감지)
 
 # ===== 인자로 덮어쓰기 =====
 while [ $# -gt 0 ]; do
@@ -38,6 +46,11 @@ while [ $# -gt 0 ]; do
     --tmp-dir)     TMP_DIR="$2";     shift 2;;
     --api-token)   API_TOKEN="$2";   shift 2;;
     --token|--github-token) GITHUB_TOKEN="$2"; shift 2;;
+    --hq|--portal) HQ="$2";          shift 2;;
+    --region)      REGION="$2";      shift 2;;
+    --node-id|--name) NODE_ID="$2";  shift 2;;
+    --enroll|--enroll-token) ENROLL_TOKEN="$2"; shift 2;;
+    --advertise-host) ADVERTISE_HOST="$2"; shift 2;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     *) echo "알 수 없는 옵션: $1 (도움말: --help)"; exit 1;;
   esac
@@ -52,6 +65,7 @@ echo "   데이터    : $DATA_DIR"
 echo "   다운로드  : $DL_DIR"
 echo "   브랜치    : $BRANCH   포트: $PORT"
 echo "   인증      : ${GITHUB_TOKEN:+GitHub 토큰(비공개 저장소)}${GITHUB_TOKEN:-공개 raw(무인증)}"
+[ -n "$HQ" ] && echo "   포탈(HQ)  : $HQ   (설치 후 자기등록)"
 echo "============================================================"
 
 # ----- 사전 점검 -----
@@ -191,6 +205,39 @@ systemctl restart "$SERVICE"
 sleep 1
 systemctl --no-pager -l status "$SERVICE" 2>/dev/null | head -6 || true
 
+# ----- 7) 포탈(HQ) 자기등록(enroll) — --hq 가 주어진 경우 -----
+if [ -n "$HQ" ]; then
+  HQ="${HQ%/}"
+  ADV="$ADVERTISE_HOST"
+  [ -z "$ADV" ] && ADV="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  [ -z "$ADV" ] && ADV="$(hostname 2>/dev/null)"
+  NID="$NODE_ID"; [ -z "$NID" ] && NID="$(hostname 2>/dev/null)"
+  NODE_URL="http://$ADV:$PORT"
+  echo "→ 포탈 자기등록: $HQ  (이 엣지 $NODE_URL, id=$NID)"
+  # JSON 은 python3 로 안전하게 직렬화(셸 주입 방지)
+  BODY="$(NID="$NID" NODE_URL="$NODE_URL" TOK="$TOKEN" REGION="$REGION" ENROLL_TOKEN="$ENROLL_TOKEN" MB="$MOUNT_BASE" python3 - <<'PY'
+import json, os
+print(json.dumps({
+    "id": os.environ["NID"], "url": os.environ["NODE_URL"],
+    "token": os.environ.get("TOK", ""), "region": os.environ.get("REGION", ""),
+    "enroll_token": os.environ.get("ENROLL_TOKEN", ""), "path": os.environ.get("MB", ""),
+}))
+PY
+)"
+  if command -v curl >/dev/null 2>&1; then
+    RESP="$(curl -fsS -X POST -H 'Content-Type: application/json' -d "$BODY" "$HQ/api/portal/enroll" 2>&1)" && OK=1 || OK=0
+  else
+    RESP="$(wget -qO- --header='Content-Type: application/json' --post-data="$BODY" "$HQ/api/portal/enroll" 2>&1)" && OK=1 || OK=0
+  fi
+  if [ "$OK" = "1" ]; then
+    echo "   ✓ 포탈 등록됨: $RESP"
+  else
+    echo "   ⚠ 포탈 등록 실패(엣지 설치 자체는 정상). 포탈 주소/네트워크/enroll_token 확인:"
+    echo "     $RESP"
+    echo "     수동 등록: 포탈 '노드 설정'에서 url=$NODE_URL, API 토큰=$TOKEN"
+  fi
+fi
+
 echo
 echo "✅ 완료 — isilon_edge $VER 설치·서비스 등록·재시작"
 echo "   접속 : http://<서버주소>:$PORT/"
@@ -198,8 +245,12 @@ echo "   로그 : journalctl -u $SERVICE -f"
 echo "   상태 : systemctl status $SERVICE"
 if [ -n "$TOKEN" ]; then
   echo "   API 토큰 : $TOKEN"
-  echo "      ↳ 포탈 '노드 설정'에서 이 엣지를 등록할 때 위 토큰을 입력하면"
-  echo "        포탈의 '전 노드 지금 업그레이드'(푸시)가 동작합니다."
+  if [ -n "$HQ" ]; then
+    echo "      ↳ 위 토큰으로 포탈에 자기등록했습니다(폴링이 바로 인증됨)."
+  else
+    echo "      ↳ 포탈에 자동 등록하려면 다시 실행에 --hq http://<HQ-IP>:8800 을 추가하세요."
+    echo "        (수동이라면 포탈 '노드 설정'에서 위 토큰을 입력)"
+  fi
 fi
 if [ -z "$MOUNT_BASE" ]; then
   echo "   ⚠ 보안: 지금은 스캔 허용 경로가 전체입니다."

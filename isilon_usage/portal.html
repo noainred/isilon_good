@@ -414,6 +414,15 @@
       <div id="pAuditBox" style="display:none; margin-top:6px; max-height:260px; overflow:auto; border:1px solid #2a3550; border-radius:8px;"></div>
     </div>
   </div>
+  <div class="card" style="margin-bottom:14px;">
+    <h2>🔑 엣지 자기등록 토큰 (enroll token)</h2>
+    <div class="sub" style="margin-bottom:8px;">엣지 설치 시 <span class="mono">--hq http://&lt;이포탈&gt;:8800</span> 을 주면 엣지가 스스로 등록됩니다. 포탈에 <b>로그인 비밀번호가 설정된 경우</b>엔 엣지가 이 공유 토큰을 함께 보내야 등록됩니다(엣지 쪽 <span class="mono">--enroll &lt;토큰&gt;</span>). 비밀번호가 없으면(신뢰망) 토큰 없이도 등록됩니다. 비우고 저장하면 토큰 검사를 끕니다.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <input id="setEnroll" class="inp mono" placeholder="enroll 공유 토큰" style="flex:1; min-width:240px;" />
+      <button id="setEnrollBtn">저장</button>
+      <span class="sub" id="setEnrollMsg"></span>
+    </div>
+  </div>
   </div>
 </div>
 
@@ -1163,7 +1172,8 @@ async function pLoadAudit(){
 if($("pAuditBtn")) $("pAuditBtn").addEventListener("click", pLoadAudit);
 async function pLoadUpgradeCfg(){
   try{ const j=await (await fetch("/api/portal/settings",{cache:"no-store"})).json();
-    if(j.ok && $("ugWatchDir")) $("ugWatchDir").value=j.upgrade_watch_dir||""; }catch(e){}
+    if(j.ok && $("ugWatchDir")) $("ugWatchDir").value=j.upgrade_watch_dir||"";
+    if(j.ok && $("setEnroll")) $("setEnroll").placeholder=j.enroll_token_set?"설정됨 — 바꾸려면 새 토큰 입력(비우고 저장=해제)":"enroll 공유 토큰"; }catch(e){}
   loadNetUpg();
 }
 // 인터넷(GitHub) 자동 업그레이드 — 포탈 자가 + 전 엣지 전파
@@ -1215,6 +1225,15 @@ if($("ugWatchSave")) $("ugWatchSave").addEventListener("click", async()=>{
       body:JSON.stringify({upgrade_watch_dir:$("ugWatchDir").value.trim()})})).json();
     $("ugWatchMsg").textContent=j.ok?(" ✓ 저장됨"+(j.upgrade_watch_dir?"":" (감시 끔)")):(" ✗ "+(j.reason||"실패")); }
   catch(e){ $("ugWatchMsg").textContent=" ✗ "+e; }
+});
+if($("setEnrollBtn")) $("setEnrollBtn").addEventListener("click", async()=>{
+  $("setEnrollMsg").textContent=" 저장 중…";
+  try{ const j=await (await fetch("/api/portal/settings",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({enroll_token:$("setEnroll").value.trim()})})).json();
+    $("setEnrollMsg").textContent=j.ok?(j.enroll_token_set?" ✓ 저장됨":" ✓ 해제됨(토큰 검사 끔)"):(" ✗ "+(j.reason||"실패"));
+    if(j.ok){ $("setEnroll").value=""; if($("setEnroll")) $("setEnroll").placeholder=j.enroll_token_set?"설정됨 — 바꾸려면 새 토큰 입력(비우고 저장=해제)":"enroll 공유 토큰"; } }
+  catch(e){ $("setEnrollMsg").textContent=" ✗ "+e; }
 });
 // ── 서버 디렉터리 브라우저(감시 폴더 선택) — HQ 로컬 경로를 클릭으로 탐색 ──
 let _fbCur="/";

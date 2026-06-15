@@ -13,6 +13,30 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.66.0] - 2026-06-15
+
+### 추가됨 (Added) — 엣지 자기등록(enroll): 설치 한 줄로 포탈에 자동 등록
+
+엣지에서 설치 한 줄에 **`--hq http://<HQ-IP>:8800`** 을 주면, 설치·기동 직후 엣지가
+포탈에 **스스로 등록**한다(포탈에서 IP 입력하는 방향의 반대). 엣지가 자기 URL과 **실제
+api_token** 을 함께 보내므로 포탈 폴링이 곧바로 인증된다 — 토큰을 따로 맞출 필요가 없어
+**401 Unauthorized 도 원천 예방**된다.
+
+- 포탈 `POST /api/portal/enroll`(인증 게이트 앞 — 엣지는 포탈 로그인 토큰이 없으므로):
+  `{id,url,token,region,path,enroll_token}` 를 받아 노드를 upsert.
+- **인증**: 포탈에 `enroll_token`(공유 가입 비밀)이 설정돼 있으면 일치해야 한다
+  (`secrets.compare_digest`). 미설정이면 — 포탈에 로그인 비밀번호가 걸려 있을 때는 거부
+  (무인증 자기등록 금지), 비밀번호도 없으면 LAN 신뢰로 허용. 인증 실패는 HTTP 401.
+- 포탈 '보안·감사' 탭에 **enroll token 설정 UI** 추가(`/api/portal/settings` 로 저장,
+  값은 노출하지 않고 설정 여부만 표시).
+- `install_edge.sh`: `--hq`·`--region`·`--node-id`·`--enroll`·`--advertise-host` 옵션 추가.
+  등록 URL 은 `http://<자동감지 IP 또는 --advertise-host>:<port>`. 등록 실패해도 설치 자체는
+  정상 진행하고 수동 등록 안내를 출력한다. JSON 은 python3 로 안전 직렬화.
+
+회귀 테스트(enroll 개방 허용 / enroll_token 불일치 401 / 일치 허용) 추가. HTTP 스모크 검증.
+
+---
+
 ## [1.65.2] - 2026-06-15
 
 ### 변경됨 (Changed) — 엣지 설치 규칙을 install_edge.sh 로 통일(서비스 `isilon-edge`, `/opt/isilon_edge`)

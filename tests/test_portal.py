@@ -266,7 +266,19 @@ def main() -> int:
         assert "script" in ssh and isinstance(ssh["ok"], bool), ssh
         assert pc.delete_node("auto1")["ok"]
 
-        print("[portal] OK  연결테스트·등록·폴링·복제·롤업·삭제 통과")
+        # 11) 엣지 자기등록(enroll): 비번 없으면 LAN 개방 허용, enroll_token 설정 시 일치 필요
+        en = pc.enroll_node({"url": ebase, "token": "tok", "region": "KR", "id": "self1"})
+        assert en["ok"] and en.get("enrolled") == "self1", en
+        assert any(n["id"] == "self1" for n in pc.list_nodes()["nodes"]), "자기등록 실패"
+        pc.set_enroll_token("S3CRET")
+        bad = pc.enroll_node({"url": ebase, "token": "tok", "id": "self2"})
+        assert not bad["ok"] and bad.get("_status") == 401, bad
+        assert pc.enroll_node({"url": ebase, "token": "tok", "id": "self2",
+                               "enroll_token": "S3CRET"})["ok"]
+        pc.set_enroll_token("")
+        assert pc.delete_node("self1")["ok"] and pc.delete_node("self2")["ok"]
+
+        print("[portal] OK  연결테스트·등록·폴링·복제·롤업·삭제·enroll 통과")
         print("모든 테스트 통과 ✅")
         return 0
     finally:

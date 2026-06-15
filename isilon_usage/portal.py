@@ -339,7 +339,8 @@ class PortalController:
     def _load_settings(self) -> dict:
         out = {"op_password": "", "op_password_encrypted": False,
                "upgrade_watch_dir": "", "upgrade_check_secs": 60,
-               "upgrade_source": "off", "upgrade_url": "", "upgrade_auto": False}
+               "upgrade_source": "off", "upgrade_url": "", "upgrade_auto": False,
+               "enroll_token": ""}
         try:
             with open(portal_settings_path(self.data_dir), encoding="utf-8") as fh:
                 s = json.load(fh)
@@ -355,6 +356,7 @@ class PortalController:
                 out["upgrade_source"] = _src if _src in ("off", "github") else "off"
                 out["upgrade_url"] = str(s.get("upgrade_url") or "").strip()
                 out["upgrade_auto"] = bool(s.get("upgrade_auto"))
+                out["enroll_token"] = str(s.get("enroll_token") or "").strip()
         except (OSError, ValueError):
             pass
         return out
@@ -390,6 +392,12 @@ class PortalController:
         return {"ok": True, "op_required": bool(self.settings["op_password"]),
                 "encrypted": self.settings["op_password_encrypted"]}
 
+    def set_enroll_token(self, token: str) -> dict:
+        """엣지 자기등록(enroll) 공유 토큰을 설정/해제. 호출 측에서 인증을 확인한다."""
+        self.settings["enroll_token"] = str(token or "").strip()
+        self._save_settings()
+        return {"ok": True, "enroll_token_set": bool(self.settings["enroll_token"])}
+
     # --- 자동 업그레이드 ---
     def set_upgrade_watch(self, watch_dir: str, check_secs=None) -> dict:
         self.settings["upgrade_watch_dir"] = str(watch_dir or "").strip()
@@ -405,6 +413,7 @@ class PortalController:
     def upgrade_config(self) -> dict:
         return {"ok": True, "upgrade_watch_dir": self.settings.get("upgrade_watch_dir", ""),
                 "upgrade_check_secs": self.settings.get("upgrade_check_secs", 60),
+                "enroll_token_set": bool(self.settings.get("enroll_token")),
                 "hq_version": __version__}
 
     def push_upgrade_all(self) -> dict:
@@ -626,6 +635,40 @@ class PortalController:
                 self.nodes.append(n)
             self._save()
         return {"ok": True, "node": _public_node(n, self._cache)}
+
+    def enroll_node(self, raw: dict) -> dict:
+        """엣지가 스스로 포탈에 등록한다(자기 enroll). 공유 enroll_token 으로 인증.
+
+        포탈에 enroll_token 이 설정돼 있으면 그 값이 일치해야 한다(여러 엣지가 공유하는
+        가입 비밀). 미설정이면 포탈에 로그인 비밀번호가 걸려 있을 때는 거부(무인증 자기
+        등록 금지), 비밀번호도 없으면 LAN 신뢰로 허용한다. 엣지가 보낸 api_token 을 그대로
+        저장하므로 포탈 폴링이 곧바로 인증된다(토큰 불일치 401 예방). 인증 실패는 _status
+        로 핸들러가 HTTP 401 을 내도록 표시한다.
+        """
+        want = str(self.settings.get("enroll_token") or "").strip()
+        given = str(raw.get("enroll_token") or "").strip()
+        if want:
+            if not secrets.compare_digest(given, want):
+                return {"ok": False, "reason": "enroll_token 불일치", "_status": 401}
+        elif self._auth.required():
+            return {"ok": False, "_status": 401,
+                    "reason": "포탈에 enroll_token 을 설정하거나 로그인 비밀번호를 해제하세요."}
+        url = (raw.get("url") or "").strip()
+        if not url:
+            return {"ok": False, "reason": "url 필요"}
+        nid = ((raw.get("id") or "").strip()
+               or re.sub(r"[^A-Za-z0-9_.-]+", "-", urlparse(url).hostname or url).strip("-")
+               or "edge")
+        path = (raw.get("path") or "").strip()
+        res = self.upsert_node({
+            "id": nid, "region": (raw.get("region") or "").strip(),
+            "url": url, "token": (raw.get("token") or "").strip(),
+            "alias_local": path, "alias_logical": path,
+            "unit": "minute", "every": 30, "mode": "both", "enabled": True,
+        })
+        if res.get("ok"):
+            res["enrolled"] = nid
+        return res
 
     def import_nodes_csv(self, csv_text: str) -> dict:
         """CSV 로 여러 노드를 한 번에 등록(import). 행별 추가/수정/오류를 집계해 반환한다.
@@ -1490,6 +1533,15 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self._audit("password", res.get("ok"))
                 self._send_json(res)
                 return
+            # 엣지 자기등록(enroll) — op 로그인 토큰이 아니라 공유 enroll_token 으로 인증하므로
+            # 일반 인증 게이트 '앞'에 둔다(엣지는 포탈 로그인 토큰을 갖지 않는다).
+            if path == "/api/portal/enroll":
+                res = c.enroll_node(body)
+                st = res.pop("_status", None) or (200 if res.get("ok") else 400)
+                self._audit("enroll", res.get("ok"),
+                            "" if res.get("ok") else (res.get("reason") or ""))
+                self._send_json(res, status=st)
+                return
             # 그 외 변경 작업(노드 등록·삭제·동기화·원격 구성)은 로그인 필요
             if c.auth_required() and not c.token_valid(self.headers.get("X-Op-Token")):
                 self._audit(path, False, "locked")
@@ -1501,8 +1553,11 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return
             self._audit(path, True)              # 인증 통과한 변경 작업 기록
             if path == "/api/portal/settings":
-                self._send_json(c.set_upgrade_watch(body.get("upgrade_watch_dir") or "",
-                                                    body.get("upgrade_check_secs")))
+                res = c.set_upgrade_watch(body.get("upgrade_watch_dir") or "",
+                                          body.get("upgrade_check_secs"))
+                if "enroll_token" in body:
+                    res.update(c.set_enroll_token(body.get("enroll_token") or ""))
+                self._send_json(res)
                 return
             if path == "/api/portal/upgrade/net":     # 인터넷 자동 업그레이드 설정
                 self._send_json(c.set_upgrade_net(body.get("upgrade_source"),
