@@ -26,7 +26,7 @@ Type=simple
 
 # 압축본을 푼 위치 = 'isilon_usage/' 패키지가 바로 아래 있는 디렉터리.
 # (info.MD = 작업 비밀번호도 이 디렉터리에 저장된다)
-WorkingDirectory=/opt/isilon_usage
+WorkingDirectory=/opt/isilon_edge
 
 # 데이터·설정 디렉터리: 기본 /data/isilon_usage (절대경로 고정 → 코드 업그레이드와
 # 무관하게 설정·DB 보존). 앱이 자동 생성한다. 전용 계정(User=)으로 돌리면 이 경로에

@@ -335,4 +335,13 @@
      API contents+raw 로 인증 다운로드, 없으면 공개 raw), JSON 아니면 '비공개일 수 있음 — --token'
      친절 안내, 배너/도움말에 인증 모드 표기. bash -n + 무토큰 raw 실동작(latest=1.65.1) 검증. v1.65.1.
 
+162. 노드추가 자동화 하면 안돼? + 포탈 노드 401 Unauthorized·오프라인 [+스샷 2장] → 진단: 401 =
+     토큰 불일치(엣지에 설정된 api_token ≠ 포탈이 보낸 토큰; server.py 검증). 원인: 포탈
+     '자동 구성'이 새 토큰 생성·등록했지만 엣지는 이전 설치의 다른 토큰으로 동작. 즉시 해결은
+     토큰 일치(엣지 재설정 또는 포탈 노드 토큰을 엣지 값으로). 자동화는 옵션 B(SSH 원격 자동
+     설치)가 이미 함. **합의로 엣지 규칙을 isilon-edge 로 통일**: 포탈 생성 스크립트
+     (provision/upgrade)·packaging 유닛·docs 의 서비스명 isilon_usage→isilon-edge,
+     data /data/isilon_usage→/data/isilon_edge_data. 이어서 "/opt/isilon_usage→/opt/isilon_edge
+     모두 변경"(운영 파일 일괄 치환; 과거 기록은 보존). 회귀 테스트 추가. v1.65.2.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

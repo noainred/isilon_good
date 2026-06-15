@@ -13,10 +13,10 @@
 폐쇄망이면 압축본을 풀어 **패키지 디렉터리만** 고정 위치에 둡니다.
 
 ```bash
-sudo mkdir -p /opt/isilon_usage
+sudo mkdir -p /opt/isilon_edge
 unzip isilon_usage-latest.zip                      # isilon_usage-<버전>/ 생성
-sudo cp -r isilon_usage-*/isilon_usage /opt/isilon_usage/
-# 결과: /opt/isilon_usage/isilon_usage/  (패키지)  → python3 -m isilon_usage 가능
+sudo cp -r isilon_usage-*/isilon_usage /opt/isilon_edge/
+# 결과: /opt/isilon_edge/isilon_usage/  (패키지)  → python3 -m isilon_usage 가능
 python3 -m isilon_usage --version                  # 동작 확인(해당 폴더에서)
 ```
 
@@ -38,7 +38,7 @@ sudo useradd --system --no-create-home --shell /usr/sbin/nologin isilon
 ```bash
 sudo cp packaging/isilon_usage.service /etc/systemd/system/isilon_usage.service
 sudo vi /etc/systemd/system/isilon_usage.service
-#  - WorkingDirectory = /opt/isilon_usage
+#  - WorkingDirectory = /opt/isilon_edge
 #  - --data-dir /data/isilon_usage      (기본값; 절대경로라 코드 업그레이드에도 설정 보존)
 #  - --mount-base /mnt/hadoop           (스캔 허용 경로)
 #  - --host / --port                    (LAN 접근이면 0.0.0.0)
@@ -70,7 +70,7 @@ journalctl -u isilon_usage -f                 # 실시간 로그
 
 ```bash
 # 새 버전 패키지로 교체 후 재시작(스캔은 프론티어가 DB에 있어 '재개'로 이어감)
-sudo cp -r isilon_usage-<새버전>/isilon_usage /opt/isilon_usage/
+sudo cp -r isilon_usage-<새버전>/isilon_usage /opt/isilon_edge/
 sudo systemctl restart isilon_usage
 ```
 
@@ -119,7 +119,7 @@ sudo cp isilon_usage-*/packaging/isilon_usage.service        /etc/systemd/system
 # 포탈 유닛: WorkingDirectory=/opt/isilon_portal, 포트 8800
 sudo cp isilon_usage-*/packaging/isilon_usage_portal.service /etc/systemd/system/
 sudo vi /etc/systemd/system/isilon_usage.service        # WorkingDirectory=/opt/isilon_edge
-sudo vi /etc/systemd/system/isilon_usage_portal.service # WorkingDirectory=/opt/isilon_portal (기본 /opt/isilon_usage 에서 변경)
+sudo vi /etc/systemd/system/isilon_usage_portal.service # WorkingDirectory=/opt/isilon_portal (기본 /opt/isilon_edge 에서 변경)
 sudo systemctl daemon-reload
 sudo systemctl enable --now isilon_usage isilon_usage_portal
 ```
@@ -148,7 +148,7 @@ sudo systemctl restart isilon_usage_portal                          # 포탈만 
 
 ```bash
 # nohup (가장 간단) — 세션 끊겨도 유지
-cd /opt/isilon_usage
+cd /opt/isilon_edge
 nohup python3 -m isilon_usage serve --data-dir /data/isilon_usage \
       --mount-base /mnt/hadoop --host 0.0.0.0 --port 8765 \
       > /var/log/isilon_usage.log 2>&1 &

@@ -253,6 +253,9 @@ def main() -> int:
                                 "region": "EU", "name": "auto1", "hq_base": "http://hq:8800"})
         assert pv["ok"] and pv["registered"] and len(pv["token"]) == 32, pv
         assert pv["script"].startswith("#!/usr/bin/env bash") and "agent-bundle" in pv["script"], pv
+        # 서비스/데이터 경로는 install_edge.sh 와 통일(isilon-edge, /data/isilon_edge_data) — 401/중복 서비스 방지
+        assert "isilon-edge.service" in pv["script"] and "/data/isilon_edge_data" in pv["script"], pv
+        assert "isilon_usage.service" not in pv["script"], "옛 서비스명(isilon_usage)이 남아있음"
         assert any(n["id"] == "auto1" for n in pc.list_nodes()["nodes"]), "노드 자동 등록 실패"
         names = tarfile.open(fileobj=io.BytesIO(portalmod.agent_bundle_bytes()),
                              mode="r:gz").getnames()

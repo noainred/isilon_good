@@ -5,7 +5,7 @@
 #
 # 설치:
 #   1) /etc/systemd/system/isilon_usage_portal.service 로 복사
-#   2) (선택) 경로/포트 수정 — 기본값(WorkingDirectory=/opt/isilon_usage,
+#   2) (선택) 경로/포트 수정 — 기본값(WorkingDirectory=/opt/isilon_edge,
 #      data-dir /var/lib/isilon_portal, :8800)이면 간단 설치에서 그대로 동작한다
 #   3) sudo systemctl daemon-reload
 #   4) sudo systemctl enable --now isilon_usage_portal
@@ -27,11 +27,11 @@ Type=simple
 #Group=isilon
 
 # 코드 디렉터리 — 여기에 isilon_usage/ 패키지가 있어야 한다(python3 -m isilon_usage).
-# 기본은 스캐너와 동일한 /opt/isilon_usage (간단 설치: 한 디렉터리 공유 → 바로 동작).
+# 기본은 스캐너와 동일한 /opt/isilon_edge (간단 설치: 한 디렉터리 공유 → 바로 동작).
 # [업그레이드 격리] 포탈만 따로 교체하려면 /opt/isilon_portal 을 만들어 패키지를
 #   복사한 뒤 이 값을 /opt/isilon_portal 로 바꾼다(docs/SERVICE.md 참고).
 #   주의: 지정한 디렉터리가 없으면 systemd 가 status=200/CHDIR 로 기동 실패한다.
-WorkingDirectory=/opt/isilon_usage
+WorkingDirectory=/opt/isilon_edge
 
 # 포탈 데이터·설정(portal_nodes.json + replicas/) — 스캐너와 동일한 기본 위치
 # /data/isilon_usage 에 저장(업그레이드 시 설정 보존). 앱이 자동 생성한다.

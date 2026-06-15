@@ -226,7 +226,7 @@ def agent_bundle_bytes() -> bytes:
 
 
 def build_provision_script(*, host, port, token, path, hq_base, install="systemd",
-                           data_dir="/data/isilon_usage",
+                           data_dir="/data/isilon_edge_data",
                            edge_dir="/opt/isilon_edge") -> str:
     """엣지에서 복붙 실행할 자동 구성 스크립트(bash)를 만든다.
 
@@ -257,13 +257,14 @@ def build_provision_script(*, host, port, token, path, hq_base, install="systemd
     else:
         tail = (
             '\necho "[2/3] systemd 서비스 설치/기동 (포트 $PORT)"\n'
-            "sudo tee /etc/systemd/system/isilon_usage.service >/dev/null <<UNIT\n"
+            "sudo tee /etc/systemd/system/isilon-edge.service >/dev/null <<UNIT\n"
             "[Unit]\n"
-            "Description=isilon_usage edge scanner\n"
-            "After=network-online.target\n"
+            "Description=Isilon Edge - 디렉터리 사용량 스캐너\n"
+            "After=network-online.target remote-fs.target\n"
             "Wants=network-online.target\n"
             "[Service]\n"
             "Type=simple\n"
+            "User=root\n"
             "WorkingDirectory=$EDGE_DIR\n"
             "ExecStart=/usr/bin/python3 -m isilon_usage serve --data-dir $DATA "
             "--mount-base $MOUNT --host 0.0.0.0 --port $PORT --api-token $TOKEN\n"
@@ -273,14 +274,14 @@ def build_provision_script(*, host, port, token, path, hq_base, install="systemd
             "WantedBy=multi-user.target\n"
             "UNIT\n"
             "sudo systemctl daemon-reload\n"
-            "sudo systemctl enable --now isilon_usage\n"
-            'echo "[3/3] 완료 — http://%s:%d/  ·  journalctl -u isilon_usage -f"\n'
+            "sudo systemctl enable --now isilon-edge\n"
+            'echo "[3/3] 완료 — http://%s:%d/  ·  journalctl -u isilon-edge -f"\n'
         ) % (host, int(port))
     return head + tail
 
 
 def build_upgrade_script(*, hq_base, edge_dir="/opt/isilon_edge",
-                         service="isilon_usage") -> str:
+                         service="isilon-edge") -> str:
     """등록된 엣지를 HQ 의 최신 코드로 올리는 bash 업그레이드 스크립트를 만든다.
 
     HQ 포탈에서 agent-bundle(현재 실행 중 코드)을 받아 엣지 코드 디렉터리에 덮어쓰고
@@ -440,7 +441,7 @@ class PortalController:
         from concurrent.futures import ThreadPoolExecutor
         hq_base = (raw.get("hq_base") or "").strip()
         edge_dir = (raw.get("edge_dir") or "/opt/isilon_edge").strip()
-        service = (raw.get("service") or "isilon_usage").strip()
+        service = (raw.get("service") or "isilon-edge").strip()
         script = build_upgrade_script(hq_base=hq_base, edge_dir=edge_dir, service=service)
         user = (raw.get("ssh_user") or "root").strip()
         password = raw.get("ssh_password") or ""
@@ -1228,7 +1229,7 @@ class PortalController:
         """
         nid = str(raw.get("id") or "").strip()
         edge_dir = (raw.get("edge_dir") or "/opt/isilon_edge").strip()
-        service = (raw.get("service") or "isilon_usage").strip()
+        service = (raw.get("service") or "isilon-edge").strip()
         hq_base = (raw.get("hq_base") or "").strip()
         script = build_upgrade_script(hq_base=hq_base, edge_dir=edge_dir, service=service)
         node_version = None

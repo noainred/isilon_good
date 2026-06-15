@@ -13,6 +13,33 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.65.2] - 2026-06-15
+
+### 변경됨 (Changed) — 엣지 설치 규칙을 install_edge.sh 로 통일(서비스 `isilon-edge`, `/opt/isilon_edge`)
+
+포탈의 '원격 자동 구성'·'원격 업그레이드' 스크립트와 packaging 유닛 템플릿이 옛 이름
+(`isilon_usage` 서비스, `/opt/isilon_usage`, `/data/isilon_usage`)을 써서, `install_edge.sh`
+(`isilon-edge`·`/opt/isilon_edge`·`/data/isilon_edge_data`)로 깐 엣지와 **경로/서비스가
+어긋났다.** 그 결과 한 서버에 서비스가 둘 생기거나, 새로 만든 토큰이 실제 엣지에 적용되지
+않아 포탈 폴링이 **401 Unauthorized** 로 떨어졌다. 사용자 합의(2026-06-15)로 **엣지 규칙을
+`isilon-edge` 로 통일**한다:
+
+- `build_provision_script`: systemd 유닛명 `isilon_usage.service` → **`isilon-edge.service`**,
+  data-dir `/data/isilon_usage` → **`/data/isilon_edge_data`**, `enable --now`/`journalctl`
+  대상도 `isilon-edge`. (코드 디렉터리는 이미 `/opt/isilon_edge`.)
+- `build_upgrade_script`·`push_upgrade_all_ssh`·`upgrade_plan`: 기본 서비스명
+  `isilon_usage` → **`isilon-edge`**.
+- packaging 유닛 템플릿(`isilon_usage.service`·`isilon_usage_portal.service`)과
+  `docs/SERVICE.md` 의 `/opt/isilon_usage` → **`/opt/isilon_edge`**.
+- 회귀 방지: 생성 스크립트가 `isilon-edge.service`·`/data/isilon_edge_data` 를 담고
+  옛 `isilon_usage.service` 가 없음을 테스트로 고정.
+
+> 참고: 과거 기록(CHANGELOG/PROMPT_HISTORY)의 `/opt/isilon_usage` 언급은 그 시점 사실이라
+> 보존한다. manager 기본 data-dir(`/data/isilon_usage`)·packaging 유닛의 `--data-dir`·서비스
+> 파일명은 이번 범위(엣지 `/opt` 경로)에 포함하지 않았다(필요 시 별도 통일).
+
+---
+
 ## [1.65.1] - 2026-06-15
 
 ### 수정됨 (Fixed) — 설치/업그레이드 스크립트가 비공개(private) 저장소에서도 받도록
