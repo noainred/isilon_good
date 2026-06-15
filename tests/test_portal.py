@@ -278,7 +278,19 @@ def main() -> int:
         pc.set_enroll_token("")
         assert pc.delete_node("self1")["ok"] and pc.delete_node("self2")["ok"]
 
-        print("[portal] OK  연결테스트·등록·폴링·복제·롤업·삭제·enroll 통과")
+        # 12) 릴리스 폴더(엣지 오프라인 업그레이드): 최신 패키지 버전 선택 + 정보 노출
+        reld = os.path.join(tmp, "rel"); os.makedirs(reld, exist_ok=True)
+        for fn in ("isilon_usage-1.2.0.tar.gz", "isilon_usage-1.10.0.tar.gz",
+                   "isilon_usage-latest.tar.gz"):
+            with open(os.path.join(reld, fn), "wb") as fh:
+                fh.write(b"x")
+        assert os.path.basename(portalmod.newest_release_archive(reld)) == "isilon_usage-1.10.0.tar.gz"
+        assert portalmod.newest_release_archive(os.path.join(tmp, "nope")) is None
+        ri = pc.set_release_dir(reld)
+        assert ri["ok"] and ri["release_available"] and ri["release_file"] == "isilon_usage-1.10.0.tar.gz", ri
+        assert pc.upgrade_config().get("release_dir") == reld
+
+        print("[portal] OK  연결테스트·등록·폴링·복제·롤업·삭제·enroll·release 통과")
         print("모든 테스트 통과 ✅")
         return 0
     finally:

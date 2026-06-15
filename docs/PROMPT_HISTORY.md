@@ -361,4 +361,11 @@
      정상). 포탈 '보안·감사' 탭에 enroll token UI. 회귀테스트+HTTP 스모크. download/README 한 줄에
      --hq 반영. v1.66.0.
 
+166. 패키지를 포탈 /opt/isilon_release 에 두면 엣지 콘솔에서 1줄로 자동 업그레이드 → 포탈이 그
+     폴더의 최신 tarball 을 GET /api/portal/release 로 서빙(없으면 404), 엣지는
+     `curl …/release | tar -xz -C /opt/isilon_edge --strip-components=1 && 검증 && systemctl restart`.
+     release_dir 설정(기본 /opt/isilon_release)·newest_release_archive(파일명 버전순)·release_info,
+     /release/info, 업그레이드 탭 UI(폴더+현재패키지+엣지 한 줄 자동). 회귀+HTTP 스모크. v1.67.0.
+     (참고: `<GitHub_PAT>` 를 꺾쇠째 붙여 zsh parse error 났던 건 — 꺾쇠 빼고 토큰만; 문서에 경고 추가.)
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

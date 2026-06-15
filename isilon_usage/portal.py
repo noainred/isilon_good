@@ -225,6 +225,33 @@ def agent_bundle_bytes() -> bytes:
     return buf.getvalue()
 
 
+def newest_release_archive(release_dir: str):
+    """release_dir 안의 가장 최신 isilon_usage-*.tar.gz 경로를 반환(없으면 None).
+
+    엣지가 포탈에서 코드를 받아 오프라인(인터넷 없이) 업그레이드하도록, 운영자가 그 폴더에
+    떨군 릴리스 tarball 을 서빙하기 위함이다. 파일명에서 버전을 읽어 최고 버전을 고르고,
+    버전을 못 읽으면(예: isilon_usage-latest.tar.gz) mtime 으로 고른다.
+    """
+    d = (release_dir or "").strip()
+    if not d or not os.path.isdir(d):
+        return None
+    cands = [os.path.join(d, n) for n in os.listdir(d)
+             if n.startswith("isilon_usage-") and n.endswith(".tar.gz")]
+    if not cands:
+        return None
+
+    def _key(p):
+        m = re.search(r"isilon_usage-(\d+)\.(\d+)\.(\d+)\.tar\.gz$", os.path.basename(p))
+        ver = tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
+        try:
+            mt = os.path.getmtime(p)
+        except OSError:
+            mt = 0.0
+        return (ver, mt)
+
+    return max(cands, key=_key)
+
+
 def build_provision_script(*, host, port, token, path, hq_base, install="systemd",
                            data_dir="/data/isilon_edge_data",
                            edge_dir="/opt/isilon_edge") -> str:
@@ -340,7 +367,7 @@ class PortalController:
         out = {"op_password": "", "op_password_encrypted": False,
                "upgrade_watch_dir": "", "upgrade_check_secs": 60,
                "upgrade_source": "off", "upgrade_url": "", "upgrade_auto": False,
-               "enroll_token": ""}
+               "enroll_token": "", "release_dir": "/opt/isilon_release"}
         try:
             with open(portal_settings_path(self.data_dir), encoding="utf-8") as fh:
                 s = json.load(fh)
@@ -357,6 +384,8 @@ class PortalController:
                 out["upgrade_url"] = str(s.get("upgrade_url") or "").strip()
                 out["upgrade_auto"] = bool(s.get("upgrade_auto"))
                 out["enroll_token"] = str(s.get("enroll_token") or "").strip()
+                out["release_dir"] = (str(s.get("release_dir") or "").strip()
+                                      or "/opt/isilon_release")
         except (OSError, ValueError):
             pass
         return out
@@ -398,6 +427,21 @@ class PortalController:
         self._save_settings()
         return {"ok": True, "enroll_token_set": bool(self.settings["enroll_token"])}
 
+    def set_release_dir(self, release_dir: str) -> dict:
+        """엣지가 받아갈 릴리스 패키지 폴더를 설정(비우면 기본 /opt/isilon_release)."""
+        self.settings["release_dir"] = (str(release_dir or "").strip()
+                                        or "/opt/isilon_release")
+        self._save_settings()
+        return dict({"ok": True}, **self.release_info())
+
+    def release_info(self) -> dict:
+        """현재 release_dir 와 거기서 엣지에 내려줄 최신 패키지 정보를 반환."""
+        rel = (self.settings.get("release_dir") or "/opt/isilon_release")
+        arc = newest_release_archive(rel)
+        return {"release_dir": rel,
+                "release_file": os.path.basename(arc) if arc else "",
+                "release_available": bool(arc)}
+
     # --- 자동 업그레이드 ---
     def set_upgrade_watch(self, watch_dir: str, check_secs=None) -> dict:
         self.settings["upgrade_watch_dir"] = str(watch_dir or "").strip()
@@ -411,10 +455,10 @@ class PortalController:
                 "upgrade_check_secs": self.settings["upgrade_check_secs"]}
 
     def upgrade_config(self) -> dict:
-        return {"ok": True, "upgrade_watch_dir": self.settings.get("upgrade_watch_dir", ""),
-                "upgrade_check_secs": self.settings.get("upgrade_check_secs", 60),
-                "enroll_token_set": bool(self.settings.get("enroll_token")),
-                "hq_version": __version__}
+        return dict({"ok": True, "upgrade_watch_dir": self.settings.get("upgrade_watch_dir", ""),
+                     "upgrade_check_secs": self.settings.get("upgrade_check_secs", 60),
+                     "enroll_token_set": bool(self.settings.get("enroll_token")),
+                     "hq_version": __version__}, **self.release_info())
 
     def push_upgrade_all(self) -> dict:
         """등록된 모든 엣지에 현재(=새) 코드 번들을 푸시한다(엣지 api_token 인증)."""
@@ -1484,6 +1528,31 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
                 return
+            if path == "/api/portal/release/info":
+                self._send_json(dict({"ok": True}, **c.release_info()))
+                return
+            if path == "/api/portal/release":   # release_dir 의 최신 패키지를 엣지에 내려줌
+                rel = c.settings.get("release_dir") or "/opt/isilon_release"
+                arc = newest_release_archive(rel)
+                if not arc:
+                    self._send_json({"ok": False, "reason":
+                                     "release 패키지 없음 — %s 에 isilon_usage-*.tar.gz 를 두세요" % rel},
+                                    status=404)
+                    return
+                try:
+                    with open(arc, "rb") as fh:
+                        data = fh.read()
+                except OSError as exc:
+                    self._send_json({"ok": False, "reason": "읽기 실패: %s" % exc}, status=500)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "application/gzip")
+                self.send_header("Content-Disposition",
+                                 'attachment; filename="%s"' % os.path.basename(arc))
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             if path == "/api/portal/compare":
                 qp = parse_qs(urlparse(self.path).query).get("path", [""])[0]
                 if not qp:
@@ -1557,6 +1626,8 @@ class PortalHandler(BaseHTTPRequestHandler):
                                           body.get("upgrade_check_secs"))
                 if "enroll_token" in body:
                     res.update(c.set_enroll_token(body.get("enroll_token") or ""))
+                if "release_dir" in body:
+                    res.update(c.set_release_dir(body.get("release_dir") or ""))
                 self._send_json(res)
                 return
             if path == "/api/portal/upgrade/net":     # 인터넷 자동 업그레이드 설정

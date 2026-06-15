@@ -330,6 +330,19 @@
       </div>
     </details>
   </div>
+
+  <div class="card" style="margin-bottom:14px;">
+    <h2>📦 엣지 오프라인 업그레이드 (포탈 릴리스 폴더 → 엣지가 당겨감)</h2>
+    <div class="sub" style="margin-bottom:8px;">포탈 서버의 이 폴더에 <span class="mono">isilon_usage-*.tar.gz</span> 를 두면, 각 엣지가 인터넷·토큰 없이 포탈에서 받아 스스로 업그레이드합니다(아래 한 줄을 <b>엣지 콘솔</b>에서 실행). 푸시와 달리 엣지가 당겨가므로 노드 등록·인바운드 접근이 필요 없습니다.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <input id="relDir" class="inp mono" placeholder="/opt/isilon_release" style="flex:1; min-width:240px;" />
+      <button id="relSave">릴리스 폴더 저장</button>
+      <span class="sub" id="relMsg"></span>
+    </div>
+    <div class="sub" style="margin-top:8px;">현재 내려줄 패키지: <span class="mono" id="relFile">—</span></div>
+    <div class="sub" style="margin-top:10px;">엣지 콘솔에서 1줄(업그레이드) — 클릭하면 복사:</div>
+    <pre id="relCmd" class="note mono" style="white-space:pre-wrap; word-break:break-all; margin-top:4px; cursor:pointer;" title="클릭하면 복사">—</pre>
+  </div>
   </div>
 
   <!-- ③ 노드 관리 (추가/수정 + 등록 목록) -->
@@ -1235,6 +1248,28 @@ if($("setEnrollBtn")) $("setEnrollBtn").addEventListener("click", async()=>{
     if(j.ok){ $("setEnroll").value=""; if($("setEnroll")) $("setEnroll").placeholder=j.enroll_token_set?"설정됨 — 바꾸려면 새 토큰 입력(비우고 저장=해제)":"enroll 공유 토큰"; } }
   catch(e){ $("setEnrollMsg").textContent=" ✗ "+e; }
 });
+// ── 엣지 오프라인 업그레이드: 릴리스 폴더 + 엣지 한 줄 ──
+async function loadRelease(){
+  try{ const j=await (await fetch("/api/portal/release/info",{cache:"no-store"})).json();
+    if(!j.ok) return;
+    if($("relDir")) $("relDir").value=j.release_dir||"";
+    if($("relFile")) $("relFile").textContent=j.release_available?j.release_file:"(없음 — 폴더에 isilon_usage-*.tar.gz 를 두세요)";
+    if($("relCmd")) $("relCmd").textContent=
+      `curl -fsSL "${location.origin}/api/portal/release" | sudo tar -xz -C /opt/isilon_edge --strip-components=1 && (cd /opt/isilon_edge && python3 -m isilon_usage --version) && sudo systemctl restart isilon-edge`;
+  }catch(e){}
+}
+if($("relSave")) $("relSave").addEventListener("click", async()=>{
+  $("relMsg").textContent=" 저장 중…";
+  try{ const j=await (await fetch("/api/portal/settings",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({release_dir:$("relDir").value.trim()})})).json();
+    $("relMsg").textContent=j.ok?" ✓ 저장됨":(" ✗ "+(j.reason||"실패")); loadRelease(); }
+  catch(e){ $("relMsg").textContent=" ✗ "+e; }
+});
+if($("relCmd")) $("relCmd").addEventListener("click",()=>{
+  if(navigator.clipboard) navigator.clipboard.writeText($("relCmd").textContent);
+  if($("relMsg")) $("relMsg").textContent=" (명령 복사됨)"; });
+loadRelease();
 // ── 서버 디렉터리 브라우저(감시 폴더 선택) — HQ 로컬 경로를 클릭으로 탐색 ──
 let _fbCur="/";
 function fbOpen(){

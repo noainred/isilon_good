@@ -13,6 +13,28 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.67.0] - 2026-06-15
+
+### 추가됨 (Added) — 엣지 오프라인 업그레이드: 포탈 릴리스 폴더에서 엣지가 한 줄로 당겨감
+
+포탈 서버의 **릴리스 폴더**(설정 `release_dir`, 기본 `/opt/isilon_release`)에
+`isilon_usage-*.tar.gz` 를 두면, 각 엣지가 **인터넷·GitHub·토큰 없이** 포탈에서 받아
+업그레이드한다(엣지 콘솔에서 한 줄). 포탈→엣지 푸시와 달리 **엣지가 당겨가므로** 노드
+등록·인바운드 접근이 필요 없다.
+
+- 포탈 `GET /api/portal/release` — `release_dir` 의 **가장 최신 버전** tarball(파일명 버전 기준,
+  못 읽으면 mtime)을 application/gzip 으로 서빙. 없으면 404. `GET /api/portal/release/info`
+  는 현재 폴더·최신 파일명을 JSON 으로.
+- 엣지 한 줄: `curl -fsSL http://<HQ>:8800/api/portal/release | sudo tar -xz -C /opt/isilon_edge
+  --strip-components=1 && (cd /opt/isilon_edge && python3 -m isilon_usage --version)
+  && sudo systemctl restart isilon-edge`.
+- 포탈 '노드 설정 → 업그레이드' 탭에 릴리스 폴더 지정 UI + 현재 패키지 표시 + 엣지 한 줄
+  자동 생성(포탈 주소 채워 클릭 복사).
+- `newest_release_archive()` / `set_release_dir()` / `release_info()` 신설, `upgrade_config`
+  에 release 정보 노출. 회귀 테스트(버전 선택)+HTTP 스모크(404→최신 200) 검증.
+
+---
+
 ## [1.66.0] - 2026-06-15
 
 ### 추가됨 (Added) — 엣지 자기등록(enroll): 설치 한 줄로 포탈에 자동 등록
