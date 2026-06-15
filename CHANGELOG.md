@@ -13,6 +13,20 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.64.1] - 2026-06-15
+
+### 추가됨 (Added) — 엣지 자동 설치/업그레이드 스크립트 (tools/install_edge.sh)
+
+최신 패키지를 인터넷에서 받아 한 번에 설치·서비스 등록·재시작하는 bash 스크립트.
+
+- **다운로드** `/opt` 에 최신 `isilon_usage-<버전>.tar.gz`(versions.json 의 latest) → **설치**
+  `/opt/isilon_edge`(`--strip-components=1`) → **데이터** `/data/isilon_edge_data` 생성 →
+  **검증**(`--version`) → **systemd 서비스 `isilon-edge` 등록 → 재시작**.
+- 다시 실행하면 **최신으로 교체 후 재시작(업그레이드)**. 옵션: `--port`·`--mount-base`·`--branch`·
+  `--data-dir`·`--install-dir`. root 필요, curl/wget 자동 감지, 손상 파일 검사.
+
+---
+
 ## [1.64.0] - 2026-06-15
 
 ### 추가됨 (Added) — 포탈 핑 차트 인터랙션 + 엣지 스캔 이력 별도 메뉴

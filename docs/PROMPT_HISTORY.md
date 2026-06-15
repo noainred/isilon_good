@@ -309,4 +309,8 @@
      더블클릭 확대 모달, 드래그=시점이동·휠=줌·더블클릭=리셋(_drawSpark 공통화). + 엣지 스캔 이력을
      별도 탭(📋 스캔 이력)으로 분리. v1.64.0.
 
+157. zip 최신 다운 링크 / 파일 받아 자동 설치 스크립트(설치 /opt/isilon_edge, 데이터
+     /data/isilon_edge_data, 다운로드 /opt, 최신 자동) + 서비스 등록·재시작. → tools/install_edge.sh
+     (최신 tar 다운→strip-components 설치→데이터 dir→검증→systemd isilon-edge 등록·재시작, 재실행=업그레이드). v1.64.1.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
