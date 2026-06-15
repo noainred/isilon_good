@@ -216,9 +216,12 @@ def main() -> int:
         assert st["api_token"] == "" and st["api_token_set"] is True, st
 
         # 설정 저장 라운드트립
-        up = c.post("/api/settings", {"settings": {"top_n": 3, "scan_workers": 2, "check_readonly": False}})
+        up = c.post("/api/settings", {"settings": {"top_n": 3, "scan_workers": 2, "check_readonly": False,
+                                                   "upgrade_url": "http://mirror.local/isilon_good/download"}})
         assert up["ok"] and up["settings"]["top_n"] == 3 and up["settings"]["scan_workers"] == 2
         assert up["settings"]["check_readonly"] is False, up["settings"]
+        # 업데이트 소스 URL 을 설정에서 바꿔 저장·반영(대시보드 setUpgUrl 과 동일 경로)
+        assert up["settings"]["upgrade_url"] == "http://mirror.local/isilon_good/download", up["settings"]
 
         # 서버 사양 기반 권장 스레드 계산
         rw = c.get("/api/recommend-workers")

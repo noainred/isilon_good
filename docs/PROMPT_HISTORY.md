@@ -454,4 +454,18 @@
      stop_event 를 실제로 따름(검증). test_server 에 pscan 중지 정직성 + threads 정상중지 회귀 추가.
      USER_GUIDE 4.4/5.1/5.2/API표 갱신. ruff+test+JS문법 통과. v1.69.7.
 
+180. 노드 추가 스크립트에서 기존 실행 중인 프로세스·서비스 중단하고 설치하게 변경 → 포탈
+     build_provision_script 맨 앞에 [1/4] '기존 엣지 프로세스·서비스 중단' 단계 추가(현재
+     isilon-edge + 구버전 isilon_usage 서비스 disable --now, 구버전 유닛 파일 rm, 잔여
+     'isilon_usage serve' 프로세스 pkill — 모두 매칭 없어도 계속), 단계 [2/4]~[4/4] 재번호.
+     install_edge.sh 도 동일 보강(기존엔 현재 서비스만 stop). 생성 스크립트 bash -n(systemd·nohup)
+     통과, test_portal 단언을 'tee 로 구버전 유닛 생성 금지 + 중단단계 존재'로 정밀화. v1.69.8.
+
+181. 업데이트 하는 URL 을 사용자가 설정에서 변경할 수 있는 기능 추가 → upgrade_url 설정은 이미
+     끝까지 배선돼 있었으나 입력칸이 '업그레이드 카드'에만 있었음. 엣지 대시보드 '⚙ 설정' 카드에
+     '🌐 업데이트(버전) 소스 URL' 입력(setUpgUrl) 추가, loadSettings/saveSettings 로 같은
+     upgrade_url 에 배선(업그레이드 카드 값과 동기화), 잠금-비활성 목록에 setUpgradeDir·setUpgUrl
+     추가(기존 누락 보정), placeholder 는 사내 미러 예시(폐쇄망). test_server 설정 라운드트립에
+     upgrade_url 검증 추가. USER_GUIDE 5.7 설정표 2행 + 12.4 자동설치 중단 노트. v1.69.8.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

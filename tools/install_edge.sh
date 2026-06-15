@@ -139,7 +139,20 @@ echo -n "→ 패키지 검증: "
 
 # ----- 4) 검증 통과분만 설치 경로로 반영 -----
 echo "→ 설치: $INSTALL_DIR"
-systemctl stop "$SERVICE" >/dev/null 2>&1 || true     # 파일 교체 안정화
+# 파일 교체 전에 기존 엣지를 안전하게 중단(포트 충돌 방지):
+#  현재 서비스 + 구버전 isilon_usage 서비스(있으면 유닛까지 제거) + 잔여 serve 프로세스
+systemctl stop "$SERVICE" >/dev/null 2>&1 || true
+if systemctl list-unit-files 2>/dev/null | grep -q '^isilon_usage\.service'; then
+  systemctl disable --now isilon_usage >/dev/null 2>&1 || true
+fi
+if [ -f /etc/systemd/system/isilon_usage.service ]; then
+  rm -f /etc/systemd/system/isilon_usage.service
+  systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+if pgrep -f 'isilon_usage serve' >/dev/null 2>&1; then
+  pkill -f 'isilon_usage serve' >/dev/null 2>&1 || true
+  sleep 1
+fi
 mkdir -p "$INSTALL_DIR" "$DATA_DIR"
 if command -v rsync >/dev/null 2>&1; then
   rsync -a --delete "$TMP_DIR"/ "$INSTALL_DIR"/

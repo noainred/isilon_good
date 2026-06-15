@@ -286,23 +286,43 @@ def build_provision_script(*, host, port, token, path, hq_base, install="systemd
         "set -euo pipefail\n"
         "# === isilon_usage 엣지 자동 구성 (HQ 포탈 생성) ===\n"
         "EDGE_DIR=%s\nDATA=%s\nMOUNT=%s\nPORT=%d\nTOKEN=%s\nHQ=%s\n\n"
-        'echo "[1/3] HQ 포탈에서 코드 받기 (인터넷 불필요)"\n'
+        'echo "[1/4] 기존 엣지 프로세스·서비스 중단 (포트 충돌 방지)"\n'
+        "# 현재(isilon-edge)·구버전(isilon_usage) 서비스를 멈춘다(없으면 무시).\n"
+        "for _svc in isilon-edge isilon_usage; do\n"
+        '  if systemctl list-unit-files 2>/dev/null | grep -q "^${_svc}\\.service"; then\n'
+        '    sudo systemctl disable --now "$_svc" >/dev/null 2>&1 || true\n'
+        '    echo "  -> ${_svc} 중단"\n'
+        "  fi\n"
+        "done\n"
+        "# 구버전 유닛 파일이 남아 포트를 잡지 않도록 제거(있으면).\n"
+        'if [ -f /etc/systemd/system/isilon_usage.service ]; then\n'
+        "  sudo rm -f /etc/systemd/system/isilon_usage.service\n"
+        "  sudo systemctl daemon-reload || true\n"
+        '  echo "  -> 구버전 isilon_usage.service 유닛 제거"\n'
+        "fi\n"
+        "# nohup 등으로 떠 있는 잔여 serve 프로세스 정리(매칭 없어도 계속).\n"
+        'if pgrep -f "isilon_usage serve" >/dev/null 2>&1; then\n'
+        '  sudo pkill -f "isilon_usage serve" >/dev/null 2>&1 || true\n'
+        "  sleep 1\n"
+        '  echo "  -> 잔여 serve 프로세스 종료"\n'
+        "fi\n\n"
+        'echo "[2/4] HQ 포탈에서 코드 받기 (인터넷 불필요)"\n'
         'sudo mkdir -p "$EDGE_DIR" "$DATA"\n'
         'curl -fsSL "$HQ/api/portal/agent-bundle" | sudo tar -xz -C "$EDGE_DIR"\n'
         '(cd "$EDGE_DIR" && python3 -m isilon_usage --version)\n'
     ) % (q(edge_dir), q(data_dir), q(path), int(port), q(token), q(hq))
     if install == "nohup":
         tail = (
-            '\necho "[2/3] nohup 으로 기동 (포트 $PORT)"\n'
+            '\necho "[3/4] nohup 으로 기동 (포트 $PORT)"\n'
             'cd "$EDGE_DIR"\n'
             'nohup python3 -m isilon_usage serve --data-dir "$DATA" --mount-base "$MOUNT" \\\n'
             '    --host 0.0.0.0 --port "$PORT" --api-token "$TOKEN" \\\n'
             '    > /var/log/isilon_usage.log 2>&1 &\n'
-            'echo "[3/3] 완료 — http://%s:%d/  (HQ 포탈이 자동 폴링)"\n'
+            'echo "[4/4] 완료 — http://%s:%d/  (HQ 포탈이 자동 폴링)"\n'
         ) % (host, int(port))
     else:
         tail = (
-            '\necho "[2/3] systemd 서비스 설치/기동 (포트 $PORT)"\n'
+            '\necho "[3/4] systemd 서비스 설치/기동 (포트 $PORT)"\n'
             "sudo tee /etc/systemd/system/isilon-edge.service >/dev/null <<UNIT\n"
             "[Unit]\n"
             "Description=Isilon Edge - 디렉터리 사용량 스캐너\n"
@@ -321,7 +341,7 @@ def build_provision_script(*, host, port, token, path, hq_base, install="systemd
             "UNIT\n"
             "sudo systemctl daemon-reload\n"
             "sudo systemctl enable --now isilon-edge\n"
-            'echo "[3/3] 완료 — http://%s:%d/  ·  journalctl -u isilon-edge -f"\n'
+            'echo "[4/4] 완료 — http://%s:%d/  ·  journalctl -u isilon-edge -f"\n'
         ) % (host, int(port))
     return head + tail
 

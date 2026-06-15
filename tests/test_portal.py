@@ -255,7 +255,14 @@ def main() -> int:
         assert pv["script"].startswith("#!/usr/bin/env bash") and "agent-bundle" in pv["script"], pv
         # 서비스/데이터 경로는 install_edge.sh 와 통일(isilon-edge, /data/isilon_edge_data) — 401/중복 서비스 방지
         assert "isilon-edge.service" in pv["script"] and "/data/isilon_edge_data" in pv["script"], pv
-        assert "isilon_usage.service" not in pv["script"], "옛 서비스명(isilon_usage)이 남아있음"
+        # 새 유닛은 isilon-edge 로만 '생성'해야 한다(옛 isilon_usage 유닛을 만들면 401/중복).
+        assert "tee /etc/systemd/system/isilon_usage.service" not in pv["script"], \
+            "옛 서비스명(isilon_usage)으로 유닛을 만들면 안 됨"
+        # 설치 전: 기존 프로세스·서비스 중단 단계(포트 충돌 방지) — 구버전 isilon_usage 정리 포함
+        assert "기존 엣지 프로세스·서비스 중단" in pv["script"], "중단 단계 누락"
+        assert "disable --now" in pv["script"], "기존 서비스 중단 누락"
+        assert "rm -f /etc/systemd/system/isilon_usage.service" in pv["script"], "구버전 유닛 제거 누락"
+        assert 'pkill -f "isilon_usage serve"' in pv["script"], "잔여 프로세스 정리 누락"
         assert any(n["id"] == "auto1" for n in pc.list_nodes()["nodes"]), "노드 자동 등록 실패"
         names = tarfile.open(fileobj=io.BytesIO(portalmod.agent_bundle_bytes()),
                              mode="r:gz").getnames()

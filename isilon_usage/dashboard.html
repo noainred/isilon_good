@@ -468,6 +468,11 @@
                  placeholder="예: /opt/isilon_releases — 이 폴더에 새 버전 isilon_usage-*.tar.gz/.zip 을 두면 자동 적용 후 재시작" />
           <div class="sub" style="margin-top:2px;">현재 버전보다 새 압축본만 적용하고, 기존 코드는 백업합니다.</div>
         </label>
+        <label style="display:block; margin-top:12px;">🌐 업데이트(버전) 소스 URL — 빈값=기본
+          <input id="setUpgUrl" class="setinput mono" style="width:100%;"
+                 placeholder="예: http://사내미러/repository/manager-upgrade/isilon_good/raw/브랜치/download" />
+          <div class="sub" style="margin-top:2px;">새 버전 확인·자동 업그레이드가 이 주소에서 <span class="mono">versions.json</span> 과 패키지를 받습니다. 폐쇄망이면 사내 미러 주소를 넣으세요(위 ‘⬆ 자동 업그레이드’ 카드의 ‘소스 주소’와 같은 값).</div>
+        </label>
         <div class="sub" style="margin-top:4px;">설정한 비밀번호는 실행한 디렉터리의 <span class="mono">info.MD</span>(권한 600)에 저장됩니다.</div>
       </div>
 
@@ -1332,6 +1337,7 @@ async function loadSettings() {
     $("setOpPassword").placeholder = s.op_password_set ? "(설정됨 — 변경 시에만 입력)" : "(미설정)";
     if ($("setOpEncrypt")) $("setOpEncrypt").checked = !!s.op_password_encrypted;
     if ($("setUpgradeDir")) $("setUpgradeDir").value = s.upgrade_watch_dir || "";
+    if ($("setUpgUrl") && document.activeElement !== $("setUpgUrl")) $("setUpgUrl").value = s.upgrade_url || "";
     $("setIsilonUrl").value = s.isilon_url || "";
     $("setIsilonUser").value = s.isilon_user || "";
     $("setIsilonPass").value = "";
@@ -1376,7 +1382,7 @@ async function loadSettings() {
     // 편집 가능 여부
     $("settingsLockMsg").style.display = j.locked ? "block" : "none";
     ["setBackend","setSize","setOFS","setReadonly","setBatch","setSample","setTopN","setRefresh",
-     "setWorkers","setFoldDepth","setDbMaxGb","setMaxDepth","setMinFreeGb","setHardlink","setRetention","setWebhook","setApiToken","setOpLock","setOpPassword",
+     "setWorkers","setFoldDepth","setDbMaxGb","setMaxDepth","setMinFreeGb","setHardlink","setRetention","setWebhook","setUpgradeDir","setUpgUrl","setApiToken","setOpLock","setOpPassword",
      "setIsilonUrl","setIsilonUser","setIsilonPass","setIsilonVerify",
      "setPsUrl","setPsUser","setPsPass","setPsVerify",
      "arrType","arrName","arrUrl","arrUser","arrPass","arrVerify","arrAdd","setMounts","saveSettingsBtn",
@@ -2019,6 +2025,7 @@ async function saveSettings() {
     op_password: $("setOpPassword").value,
     op_password_encrypted: $("setOpEncrypt") ? $("setOpEncrypt").checked : false,
     upgrade_watch_dir: $("setUpgradeDir") ? $("setUpgradeDir").value.trim() : "",
+    upgrade_url: $("setUpgUrl") ? $("setUpgUrl").value.trim() : "",
     isilon_url: $("setIsilonUrl").value.trim(),
     isilon_user: $("setIsilonUser").value.trim(),
     isilon_password: $("setIsilonPass").value,
