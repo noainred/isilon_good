@@ -313,4 +313,7 @@
      /data/isilon_edge_data, 다운로드 /opt, 최신 자동) + 서비스 등록·재시작. → tools/install_edge.sh
      (최신 tar 다운→strip-components 설치→데이터 dir→검증→systemd isilon-edge 등록·재시작, 재실행=업그레이드). v1.64.1.
 
+158. 임시작업 디렉터리는 /tmp/isilon_edge. → install_edge.sh 가 /tmp/isilon_edge 에 풀어 검증 후
+     통과분만 /opt/isilon_edge 반영(rsync/cp), 실패 시 기존 보존. --tmp-dir 옵션. v1.64.2.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

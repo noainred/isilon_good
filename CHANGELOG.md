@@ -13,6 +13,16 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.64.2] - 2026-06-15
+
+### 변경됨 (Changed) — 엣지 설치 스크립트: 임시 작업 디렉터리(/tmp/isilon_edge) staging
+
+`install_edge.sh` 가 다운로드한 패키지를 **`/tmp/isilon_edge` 에 먼저 풀어 검증**한 뒤, **통과분만**
+설치 경로 `/opt/isilon_edge` 로 반영한다(rsync 있으면 `--delete`, 없으면 `cp -a`). 검증(`--version`)
+실패 시 **기존 설치를 그대로 보존**하고 중단해 안전하다. `--tmp-dir` 옵션 추가.
+
+---
+
 ## [1.64.1] - 2026-06-15
 
 ### 추가됨 (Added) — 엣지 자동 설치/업그레이드 스크립트 (tools/install_edge.sh)

@@ -18,6 +18,7 @@ DL_DIR="/opt"                            # 다운로드(압축본) 저장 경로
 PORT="8765"                              # 대시보드 포트
 MOUNT_BASE=""                            # 스캔 허용 경로(예: /mnt/isilon). 비우면 전체 허용
 SERVICE="isilon-edge"                    # systemd 서비스 이름
+TMP_DIR="/tmp/isilon_edge"               # 임시 작업(압축 해제·검증) 디렉터리
 
 # ===== 인자로 덮어쓰기 =====
 while [ $# -gt 0 ]; do
@@ -27,6 +28,7 @@ while [ $# -gt 0 ]; do
     --branch)      BRANCH="$2";      shift 2;;
     --data-dir)    DATA_DIR="$2";    shift 2;;
     --install-dir) INSTALL_DIR="$2"; shift 2;;
+    --tmp-dir)     TMP_DIR="$2";     shift 2;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     *) echo "알 수 없는 옵션: $1 (도움말: --help)"; exit 1;;
   esac
@@ -68,18 +70,25 @@ GET "$DEST" "$BASE_URL/$TARBALL" || { echo "✗ 다운로드 실패."; exit 1; }
 # 무결성 간단 확인(정상 gzip tar 인지)
 tar tzf "$DEST" >/dev/null 2>&1 || { echo "✗ 내려받은 파일이 손상되었습니다."; exit 1; }
 
-# ----- 3) 설치(압축 해제: 최상위 isilon_usage-<버전>/ 제거) -----
-echo "→ 설치: $INSTALL_DIR"
-mkdir -p "$INSTALL_DIR"
-# 실행 중 서비스가 있으면 잠시 멈춰 파일 교체 안정화
-systemctl stop "$SERVICE" >/dev/null 2>&1 || true
-tar xzf "$DEST" -C "$INSTALL_DIR" --strip-components=1
-mkdir -p "$DATA_DIR"
+# ----- 3) 임시 디렉터리에 압축 해제 + 검증(최상위 isilon_usage-<버전>/ 제거) -----
+echo "→ 임시 작업: $TMP_DIR"
+rm -rf "$TMP_DIR"; mkdir -p "$TMP_DIR"
+tar xzf "$DEST" -C "$TMP_DIR" --strip-components=1
+echo -n "→ 패키지 검증: "
+( cd "$TMP_DIR" && python3 -m isilon_usage --version ) \
+  || { echo "✗ 검증 실패 — 설치 중단(기존 설치 그대로 유지)."; rm -rf "$TMP_DIR"; exit 1; }
 
-# ----- 4) 설치 확인 -----
+# ----- 4) 검증 통과분만 설치 경로로 반영 -----
+echo "→ 설치: $INSTALL_DIR"
+systemctl stop "$SERVICE" >/dev/null 2>&1 || true     # 파일 교체 안정화
+mkdir -p "$INSTALL_DIR" "$DATA_DIR"
+if command -v rsync >/dev/null 2>&1; then
+  rsync -a --delete "$TMP_DIR"/ "$INSTALL_DIR"/
+else
+  cp -a "$TMP_DIR"/. "$INSTALL_DIR"/
+fi
+rm -rf "$TMP_DIR"
 cd "$INSTALL_DIR"
-echo -n "→ 설치 확인: "
-python3 -m isilon_usage --version || { echo "✗ 실행 확인 실패."; exit 1; }
 
 # ----- 5) systemd 서비스 등록 -----
 UNIT="/etc/systemd/system/${SERVICE}.service"
