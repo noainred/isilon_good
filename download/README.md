@@ -9,6 +9,10 @@ git 없이 브라우저/`wget` 으로 원하는 버전을 받아 폐쇄망 서�
 새 엣지(스캐너) 서버에서 **한 줄**이면: 최신본 다운로드 → 검증 → `/opt/isilon_edge` 설치 →
 systemd 서비스(`isilon-edge`) 등록·기동까지 끝납니다. 같은 줄을 다시 실행하면 업그레이드입니다.
 
+> ⚠ **`<GitHub_PAT>`·`<HQ-IP>` 같은 꺾쇠 표기는 자리표시자입니다 — 꺾쇠 `< >` 는 빼고 실제 값만**
+> 넣으세요. `< >` 를 그대로 두면 셸이 리다이렉션으로 해석해 `parse error near ';'` 가 납니다.
+> 예: `TOKEN=ghp_AbC123...`. (root 로 실행 중이면 `sudo` 는 빼도 됩니다.)
+
 **비공개(private) 저장소 — GitHub 토큰(PAT) 필요** (대개 이 경우):
 ```bash
 TOKEN=<GitHub_PAT>; S=$(curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/noainred/isilon_good/contents/tools/install_edge.sh?ref=claude/upbeat-bell-cXX8f") && printf '%s\n' "$S" | sudo GITHUB_TOKEN="$TOKEN" bash -s -- --mount-base /mnt/isilon
