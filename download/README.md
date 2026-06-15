@@ -4,6 +4,36 @@
 git 없이 브라우저/`wget` 으로 원하는 버전을 받아 폐쇄망 서버로 옮겨 바로 실행하세요.
 (`tar.gz` 또는 `zip` **한 개가 프로그램 전체**입니다.)
 
+## 🚀 엣지 신규 설치 — 한 줄 (curl | bash)
+
+새 엣지(스캐너) 서버에서 **한 줄**이면: 최신본 다운로드 → 검증 → `/opt/isilon_edge` 설치 →
+systemd 서비스(`isilon-edge`) 등록·기동까지 끝납니다. 같은 줄을 다시 실행하면 업그레이드입니다.
+
+**비공개(private) 저장소 — GitHub 토큰(PAT) 필요** (대개 이 경우):
+```bash
+TOKEN=<GitHub_PAT>; S=$(curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/noainred/isilon_good/contents/tools/install_edge.sh?ref=claude/upbeat-bell-cXX8f") && printf '%s\n' "$S" | sudo GITHUB_TOKEN="$TOKEN" bash -s -- --mount-base /mnt/isilon
+```
+- `<GitHub_PAT>` = 이 repo **읽기** 권한이 있는 개인 액세스 토큰. 토큰을 한 번만 넣으면
+  스크립트 내려받기와 패키지 다운로드 양쪽에 쓰입니다.
+- `--mount-base /mnt/isilon` 뒤에 옵션을 더 붙일 수 있습니다:
+  `--port 8765` · `--api-token <포탈연동토큰>` · `--data-dir DIR` · `--branch <브랜치>`.
+
+`curl` 이 없으면 `wget`:
+```bash
+TOKEN=<GitHub_PAT>; S=$(wget -qO- --header="Authorization: Bearer $TOKEN" --header="Accept: application/vnd.github.raw" "https://api.github.com/repos/noainred/isilon_good/contents/tools/install_edge.sh?ref=claude/upbeat-bell-cXX8f") && printf '%s\n' "$S" | sudo GITHUB_TOKEN="$TOKEN" bash -s -- --mount-base /mnt/isilon
+```
+
+**공개(public) 저장소라면** 토큰 없이:
+```bash
+curl -fsSL "https://raw.githubusercontent.com/noainred/isilon_good/claude/upbeat-bell-cXX8f/tools/install_edge.sh" | sudo bash -s -- --mount-base /mnt/isilon
+```
+
+> 설치 후 접속: `http://<서버IP>:8765/` · 로그: `journalctl -u isilon-edge -f`
+> 여러 노드를 포탈에 한꺼번에 붙이려면 HQ 포탈의 **노드 설정 → 원격 자동 구성**(IP만 입력)
+> 또는 **SSH 원격 자동 설치**가 더 편합니다.
+
+---
+
 ## 📦 버전 목록 (버전별 다운로드)
 표의 링크를 `wget` 하거나 브라우저로 받으세요. 기계 판독용 목록은 `versions.json`.
 

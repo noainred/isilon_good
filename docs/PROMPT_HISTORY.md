@@ -344,4 +344,10 @@
      data /data/isilon_usage→/data/isilon_edge_data. 이어서 "/opt/isilon_usage→/opt/isilon_edge
      모두 변경"(운영 파일 일괄 치환; 과거 기록은 보존). 회귀 테스트 추가. v1.65.2.
 
+163. 완전 신규 설치하는 1줄 스크립트 만들어줘 → 비공개 저장소라 install_edge.sh 도 토큰으로 받아
+     바로 실행하는 curl|bash 한 줄을 download/README.md 상단에 문서화. `TOKEN=<PAT>; S=$(curl -H
+     Authorization ... contents/tools/install_edge.sh?ref=…) && printf %s "$S" | sudo
+     GITHUB_TOKEN=$TOKEN bash -s -- --mount-base …`. 토큰 1번으로 스크립트+패키지 양쪽 인증.
+     wget/공개 변형도 첨부. 경로(raw 200)·sudo env 전달·bash -n 검증. 문서 변경(패키지 코드 무변).
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
