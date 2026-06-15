@@ -517,4 +517,11 @@
      isilon_usage-1.70.1.tar.gz 로 백엔드는 정상. ‘없음’은 UI stale(로드/저장 때만 갱신). showSub 가
      ‘🔄 업그레이드’ 탭 열 때 loadRelease()/loadNetUpg() 자동 호출하도록 하여 라이브 갱신. v1.71.2.
 
+190. (포탈 1.71.2로 올림) 릴리스 풀=엣지 1.69.4·전노드 푸시=엣지 1.69.6(+2개 HTTP400)·포탈 헤더
+     1.71.2 — 불일치. 측정 확인: newest_release_archive/release_info 가 버전을 '파일명'에서만 읽음 →
+     잘못 라벨된 tar.gz(파일명 1.70.1/내용 구버전)면 info 는 1.70.1, 엣지는 '내용' 버전을 받음.
+     release_info 에 실제 내용 버전 검증(read_package_members/members_version)+mismatch, UI '엣지가 받을
+     실제 버전' 표시·경고. push_upgrade_all=agent_bundle(포탈 디스크 코드) 푸시임을 명확화. 회귀 테스트.
+     v1.71.3. (근본원인은 사용자 측 파일 내용/엣지 import 측정 필요 — 추측 금지, 사실만.)
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

@@ -1356,9 +1356,20 @@ async function loadRelease(){
   try{ const j=await (await fetch("/api/portal/release/info",{cache:"no-store"})).json();
     if(!j.ok) return;
     if($("relDir")) $("relDir").value=j.release_dir||"";
-    if($("relFile")) $("relFile").innerHTML = j.release_available
-      ? `${(""+(j.release_file||"")).replace(/</g,"&lt;")} <span style="color:var(--ok)">(v${j.release_version||"?"})</span>`
-      : `<span style="color:var(--warn)">(없음)</span> <span class="sub">${(""+(j.release_reason||"폴더에 isilon_usage-*.tar.gz 를 두세요")).replace(/</g,"&lt;")}</span>`;
+    if($("relFile")){
+      const fn=(""+(j.release_file||"")).replace(/</g,"&lt;");
+      const rs=(""+(j.release_reason||"")).replace(/</g,"&lt;");
+      if(!j.release_available){
+        $("relFile").innerHTML=`<span style="color:var(--warn)">(없음)</span> <span class="sub">${rs||"폴더에 isilon_usage-*.tar.gz 를 두세요"}</span>`;
+      } else if(j.release_version_mismatch){
+        $("relFile").innerHTML=`${fn} <span style="color:var(--danger);font-weight:700">⚠ 엣지가 받을 실제 버전 v${j.release_content_version||"?"} · 파일명은 v${j.release_version||"?"}</span>`
+          +`<div class="sub" style="color:var(--danger)">${rs}</div>`;
+      } else {
+        const cv=j.release_content_version||j.release_version||"?";
+        $("relFile").innerHTML=`${fn} <span style="color:var(--ok)">→ 엣지가 받을 버전 <b>v${cv}</b></span>`
+          +(rs?` <span class="sub">${rs}</span>`:"");
+      }
+    }
     if($("relSeen")){
       const host=j.release_host?` · 포탈 서버 <b>${(""+j.release_host).replace(/</g,"&lt;")}</b>`:"";
       const seen=(j.release_seen||[]);

@@ -317,6 +317,17 @@ def main() -> int:
         dn = pc.set_release_dir(os.path.join(tmp, "no_such_dir"))
         assert (not dn["release_available"] and not dn["release_dir_exists"]
                 and "폴더가 없습니다" in dn["release_reason"]), dn
+
+        # 12-d) '파일명 ≠ 내용' 잘못 라벨된 tar.gz 적발 — 엣지가 받는 건 파일명이 아니라 '내용' 버전.
+        reld3 = os.path.join(tmp, "rel3"); os.makedirs(reld3, exist_ok=True)
+        with tarfile.open(os.path.join(reld3, "isilon_usage-9.9.9.tar.gz"), "w:gz") as tf:
+            data = b'__version__ = "1.0.0"\n'   # 파일명은 9.9.9, 내용은 1.0.0
+            ti = tarfile.TarInfo("isilon_usage-9.9.9/isilon_usage/__init__.py"); ti.size = len(data)
+            tf.addfile(ti, io.BytesIO(data))
+        mm = pc.set_release_dir(reld3)
+        assert mm["release_available"] and mm["release_version"] == "9.9.9", mm
+        assert mm["release_content_version"] == "1.0.0" and mm["release_version_mismatch"], mm
+        assert "잘못" in mm["release_reason"], mm
         pc.set_release_dir(reld)   # 원복
 
         # 13) 업그레이드 상태: 노드 버전이 HQ보다 낮으면 '구버전'으로 집계('모두 최신' 착시 방지)

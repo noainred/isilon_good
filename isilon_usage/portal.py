@@ -501,6 +501,17 @@ class PortalController:
             m = re.search(r"isilon_usage-(\d+\.\d+\.\d+)", os.path.basename(arc))
             ver = m.group(1) if m else ""
         reason = ""
+        # 파일명이 아니라 '실제 내용(__init__.py 의 __version__)'을 확인한다 — 엣지가 진짜 받게 될
+        # 버전. 파일명만 1.70.1 이고 내용은 구버전인 '잘못 라벨된 tar.gz' 를 적발하기 위함이다.
+        content_ver = ""
+        if arc:
+            try:
+                from . import upgrade as _upg
+                cv = _upg.members_version(_upg.read_package_members(arc))
+                content_ver = _upg.vstr(cv) if cv else ""
+            except Exception:   # noqa: BLE001 — 손상/이상 아카이브여도 정보 표시는 계속
+                content_ver = ""
+        mismatch = bool(content_ver and ver and content_ver != ver)
         if not arc:
             if not exists:
                 reason = ("폴더가 없습니다: %s — 파일을 '이 포탈 서버(%s)'의 이 경로에 두세요."
@@ -511,11 +522,18 @@ class PortalController:
             else:
                 reason = ("isilon_usage-*.tar.gz 가 안 보입니다(폴더 파일 %d개). 파일을 '이 포탈 "
                           "서버(%s)'의 %s 에 두었는지 확인하세요." % (n_all, host, rel))
+        elif mismatch:
+            reason = ("⚠ 파일명은 v%s 인데 내용(실제 코드)은 v%s 입니다 — 이 tar.gz 가 잘못 "
+                      "만들어졌습니다(엣지는 파일명이 아니라 내용 v%s 를 받습니다). 올바른 v%s "
+                      "패키지로 교체하세요." % (ver, content_ver, content_ver, ver))
+        elif not content_ver:
+            reason = "내용 버전 확인 실패(손상되었거나 isilon_usage 패키지가 아닐 수 있음)."
         return {"release_dir": rel, "release_dir_exists": exists, "release_host": host,
                 "release_seen": seen[:30], "release_count": n_all,
                 "release_file": os.path.basename(arc) if arc else "",
-                "release_version": ver, "release_available": bool(arc),
-                "release_reason": reason}
+                "release_version": ver, "release_content_version": content_ver,
+                "release_version_mismatch": mismatch,
+                "release_available": bool(arc), "release_reason": reason}
 
     # --- 자동 업그레이드 ---
     def set_upgrade_watch(self, watch_dir: str, check_secs=None) -> dict:
