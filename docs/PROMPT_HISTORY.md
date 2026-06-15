@@ -539,4 +539,8 @@
      sanitize _int 폴백), CLI --workers 기본도 serve/scan/analyze 모두 8→4(웹 UI 기본은 serve 의 pv
      --workers 가 116줄에서 scan_workers 로 들어감). v1.72.2.
 
+194. '총 사용 용량 (전 DC)' 카드에 전체 아이실론 사용량/전체 용량 표시 → kUsed 카드 sub(kUsedSub)에
+     totals.fs_total_bytes/fs_used_bytes(이미 집계됨)로 '아이실론 전체 X 중 사용 Y (Z%)' 추가. UI만.
+     v1.72.3.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

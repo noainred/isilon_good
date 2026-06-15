@@ -112,7 +112,7 @@
 <!-- 글로벌 대시보드 -->
 <div class="wrap view active" id="view-dash">
   <div class="grid cols-4" style="margin-bottom:14px;">
-    <div class="card"><h2>총 사용 용량 (전 DC)</h2><div class="big" id="kUsed">—</div><div class="sub">조사 용량 합계</div></div>
+    <div class="card"><h2>총 사용 용량 (전 DC)</h2><div class="big" id="kUsed">—</div><div class="sub" id="kUsedSub">조사 용량 합계</div></div>
     <div class="card"><h2>스토리지(루트)</h2><div class="big" id="kStorages">—</div><div class="sub">전 노드 합계</div></div>
     <div class="card"><h2>노드 온라인</h2><div class="big" id="kNodes">—</div><div class="sub">최근 동기화 기준</div></div>
     <div class="card"><h2>진행 중 스캔</h2><div class="big" id="kActive">—</div><div class="sub">전 노드 합계</div></div>
@@ -842,6 +842,13 @@ function renderPortalDash(){
   if(j.version) $("ver").textContent = "v"+j.version;
   const t=j.totals||{};
   $("kUsed").textContent=fmtBytes(t.used_bytes); $("kStorages").textContent=fmtNum(t.storages);
+  // '총 사용 용량' 카드에 아이실론 전체 용량/사용량(전 DC fs 합계)도 함께 표시
+  if($("kUsedSub")){
+    const _ft=t.fs_total_bytes||0, _fu=t.fs_used_bytes||0;
+    $("kUsedSub").innerHTML = _ft
+      ? `조사 용량 합계 · 아이실론 전체 <b>${fmtBytes(_ft)}</b> 중 사용 ${fmtBytes(_fu)} (${(_fu/_ft*100).toFixed(1)}%)`
+      : "조사 용량 합계 (전체 용량은 엣지가 fs 용량을 수집하면 표시)";
+  }
   $("kNodes").textContent=(t.nodes_online||0)+" / "+(t.nodes_total||0); $("kActive").textContent=fmtNum(t.active_scans);
   // 전체 스토리지 용량 바(사용/전체 · %)
   const ft=t.fs_total_bytes||0, fu=t.fs_used_bytes||0, fp=ft?Math.min(100,fu/ft*100):0;
