@@ -789,12 +789,14 @@ class ScanController:
                             upgrademod.restart_process()   # 돌아오지 않음
                 # ② 인터넷(GitHub) 소스
                 if (self.settings.get("upgrade_source") or "off").strip() == "github":
-                    info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__)
+                    info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__,
+                                                   token=self.settings.get("upgrade_token") or None)
                     self._upg_set_check(info)
                     if info.get("available") and not busy and bool(self.settings.get("upgrade_auto")):
                         self._upg_log("새 버전 %s 발견 — 자동 설치" % info.get("latest"))
                         res = upgrademod.upgrade_from_remote(
-                            self.settings.get("upgrade_url") or "", code_dir, __version__, dest)
+                            self.settings.get("upgrade_url") or "", code_dir, __version__, dest,
+                            token=self.settings.get("upgrade_token") or None)
                         if res.get("ok"):
                             self._upg_log("자동 업그레이드 %s → %s 완료, 재시작" % (
                                 res.get("from"), res["version"]))
@@ -831,11 +833,13 @@ class ScanController:
         st["auto"] = bool(self.settings.get("upgrade_auto"))
         st["url"] = (self.settings.get("upgrade_url") or upgrademod.DEFAULT_UPGRADE_BASE)
         st["url_custom"] = self.settings.get("upgrade_url") or ""
+        st["token_set"] = bool(self.settings.get("upgrade_token"))   # 값 비노출, 설정 여부만
         st["watch_dir"] = self.settings.get("upgrade_watch_dir", "")
         return {"ok": True, **st}
 
     def upgrade_check(self) -> dict:
-        info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__)
+        info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__,
+                                       token=self.settings.get("upgrade_token") or None)
         self._upg_set_check(info)
         if info.get("error"):
             self._upg_log("확인 실패: %s" % info["error"])
@@ -855,7 +859,8 @@ class ScanController:
             dest = os.path.join(self.data_dir, "upgrades")
             self._upg_log("수동 업그레이드 시작…")
             res = upgrademod.upgrade_from_remote(
-                self.settings.get("upgrade_url") or "", code_dir, __version__, dest)
+                self.settings.get("upgrade_url") or "", code_dir, __version__, dest,
+                token=self.settings.get("upgrade_token") or None)
         finally:
             with self._lock:
                 self._upg_state["installing"] = False

@@ -209,36 +209,89 @@ def restart_process() -> None:
     os.execv(sys.executable, [sys.executable, "-m", "isilon_usage"] + sys.argv[1:])
 
 
-# --- 인터넷(GitHub raw 등) 소스에서 새 버전 확인·다운로드 ---
-# api.github.com 은 막히는 환경이 많아, make_release 가 생성하는 download/versions.json 을
-# raw.githubusercontent.com 으로 받아 최신 버전을 확인한다(HTTPS·읽기 전용).
+# --- 인터넷(GitHub raw·사내 미러·사설 레포) 소스에서 새 버전 확인·다운로드 ---
+# make_release 가 만드는 download/versions.json 을 받아 최신 버전을 확인한다(HTTPS·읽기 전용).
+# 공개 URL 은 토큰 없이, 비공개(사설) 소스는 토큰(PAT)을 Authorization 헤더로 보낸다.
+#  - 비공개 GitHub: raw URL 을 자동으로 contents API(?ref=)로 바꿔 토큰 인증(브랜치에 '/' 있어도 안전).
+#  - 사내 미러/사설 호스트: 준 URL 그대로 Bearer 토큰만 덧붙인다.
 DEFAULT_UPGRADE_BASE = ("https://raw.githubusercontent.com/noainred/isilon_good/"
                         "claude/upbeat-bell-cXX8f/download")
 
+_RAW_GH_RE = re.compile(r"^https?://raw\.githubusercontent\.com/([^/]+)/([^/]+)/(.+)$")
+_WWW_GH_RE = re.compile(r"^https?://github\.com/([^/]+)/([^/]+)/raw/(.+)$")
 
-def fetch_remote_versions(base_url: str, *, timeout: float = 10.0):
-    """base_url/versions.json 을 받아 (data, error). data={latest, versions:[...]}."""
+
+def _to_github_api(base: str) -> str:
+    """공개 raw GitHub 디렉터리 URL 을 (비공개에서도 받는) contents API 로 바꾼다.
+
+    ``raw.githubusercontent.com/{o}/{r}/{ref...}/{dir}`` (또는 ``github.com/{o}/{r}/raw/...``)
+    → ``api.github.com/repos/{o}/{r}/contents/{dir}?ref={ref...}``.
+    마지막 한 segment 를 디렉터리로 보고 나머지를 ref(쿼리)로 분리하므로, ref 에 '/' 가 있어도
+    (예: ``claude/upbeat-bell-cXX8f``) 안전하다. 인식 못 하면 원본을 그대로 반환한다.
+    """
+    m = _RAW_GH_RE.match(base) or _WWW_GH_RE.match(base)
+    if not m:
+        return base
+    owner, repo, rest = m.groups()
+    ref, _, dirpath = rest.rpartition("/")
+    if not ref or not dirpath:
+        return base
+    return "https://api.github.com/repos/%s/%s/contents/%s?ref=%s" % (owner, repo, dirpath, ref)
+
+
+def _resolve_base(base_url: str, token: Optional[str]) -> str:
+    """소스 base URL 을 정규화한다(토큰이 있고 GitHub raw 면 contents API 로 변환)."""
+    base = (base_url or DEFAULT_UPGRADE_BASE).rstrip("/")
+    return _to_github_api(base) if token else base
+
+
+def _join_url(base: str, name: str) -> str:
+    """base 에 파일명을 붙인다. 쿼리(?ref=…)가 있으면 경로 끝(쿼리 앞)에 끼운다."""
+    if "?" in base:
+        head, _, query = base.partition("?")
+        return head.rstrip("/") + "/" + name + "?" + query
+    return base.rstrip("/") + "/" + name
+
+
+def _auth_request(url: str, token: Optional[str]):
+    """urllib Request 생성(토큰 있으면 Authorization; GitHub API 면 raw Accept)."""
+    import urllib.request
+    headers = {}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+        if "api.github.com" in url:
+            headers["Accept"] = "application/vnd.github.raw"
+    return urllib.request.Request(url, headers=headers)
+
+
+def fetch_remote_versions(base_url: str, *, token: Optional[str] = None, timeout: float = 10.0):
+    """base_url/versions.json 을 받아 (data, error). data={latest, versions:[...]}.
+
+    base_url 은 이미 정규화된 base(check_remote 가 _resolve_base 로 변환). 토큰이 있으면 인증.
+    """
     import json
     import urllib.request
-    url = base_url.rstrip("/") + "/versions.json"
+    url = _join_url(base_url, "versions.json")
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
+        with urllib.request.urlopen(_auth_request(url, token), timeout=timeout) as r:
             raw = r.read(4 * 1024 * 1024)
         return json.loads(raw.decode("utf-8")), None
     except Exception as exc:  # noqa: BLE001 — 네트워크/JSON 등 어떤 실패도 '미확인'으로
         return None, "버전 정보 조회 실패: %s" % exc
 
 
-def check_remote(base_url: str, current_version: str, *, timeout: float = 10.0) -> dict:
+def check_remote(base_url: str, current_version: str, *, token: Optional[str] = None,
+                 timeout: float = 10.0) -> dict:
     """원격 versions.json 으로 최신 버전을 확인한다(다운로드/설치는 하지 않음).
 
     반환: {ok, available, latest, current, tar_gz, size_bytes, download_url, checked_at, source}.
+    token(PAT)을 주면 비공개(사설) 소스도 인증해서 확인한다.
     """
-    base = (base_url or DEFAULT_UPGRADE_BASE).rstrip("/")
-    data, err = fetch_remote_versions(base, timeout=timeout)
+    base = _resolve_base(base_url, token)
+    data, err = fetch_remote_versions(base, token=token, timeout=timeout)
     cur = parse_version(current_version) or (0, 0, 0)
     out = {"ok": err is None, "current": vstr(cur), "available": False,
-           "checked_at": time.time(), "source": base + "/versions.json"}
+           "checked_at": time.time(), "source": _join_url(base, "versions.json")}
     if err:
         out["error"] = err
         return out
@@ -251,14 +304,14 @@ def check_remote(base_url: str, current_version: str, *, timeout: float = 10.0) 
             out["tar_gz"] = v.get("tar_gz")
             out["size_bytes"] = v.get("size_bytes")
             if v.get("tar_gz"):
-                out["download_url"] = base + "/" + v["tar_gz"]
+                out["download_url"] = _join_url(base, v["tar_gz"])
             break
     return out
 
 
-def download_archive(url: str, dest_dir: str, *, timeout: float = 120.0,
-                     max_bytes: int = MAX_BUNDLE_BYTES) -> dict:
-    """원격 tar.gz/zip 을 dest_dir 에 내려받는다(파일명 검증·크기 상한).
+def download_archive(url: str, dest_dir: str, *, token: Optional[str] = None,
+                     timeout: float = 120.0, max_bytes: int = MAX_BUNDLE_BYTES) -> dict:
+    """원격 tar.gz/zip 을 dest_dir 에 내려받는다(파일명 검증·크기 상한·토큰 인증).
 
     반환 {ok, path, size} 또는 {ok:False, reason}.
     """
@@ -268,7 +321,7 @@ def download_archive(url: str, dest_dir: str, *, timeout: float = 120.0,
         return {"ok": False, "reason": "허용되지 않는 아카이브 파일명: %s" % (name or "(없음)")}
     try:
         os.makedirs(dest_dir, exist_ok=True)
-        with urllib.request.urlopen(url, timeout=timeout) as r:
+        with urllib.request.urlopen(_auth_request(url, token), timeout=timeout) as r:
             data = r.read(max_bytes + 1)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "reason": "다운로드 실패: %s" % exc}
@@ -281,12 +334,13 @@ def download_archive(url: str, dest_dir: str, *, timeout: float = 120.0,
 
 
 def upgrade_from_remote(base_url: str, code_dir: str, current_version: str,
-                        dest_dir: str, *, timeout: float = 120.0) -> dict:
+                        dest_dir: str, *, token: Optional[str] = None,
+                        timeout: float = 120.0) -> dict:
     """원격에서 최신 아카이브를 받아 설치까지 한다(재시작은 호출 측에서).
 
     반환: check_remote 결과 + 설치 결과(installed/version/from/backup) 또는 사유.
     """
-    info = check_remote(base_url, current_version, timeout=min(timeout, 15))
+    info = check_remote(base_url, current_version, token=token, timeout=min(timeout, 15))
     if not info.get("ok"):
         return {"ok": False, "reason": info.get("error", "버전 확인 실패"), "check": info}
     if not info.get("available"):
@@ -294,7 +348,7 @@ def upgrade_from_remote(base_url: str, code_dir: str, current_version: str,
                 "check": info, "up_to_date": True}
     if not info.get("download_url"):
         return {"ok": False, "reason": "다운로드 URL 을 찾을 수 없음", "check": info}
-    dl = download_archive(info["download_url"], dest_dir, timeout=timeout)
+    dl = download_archive(info["download_url"], dest_dir, token=token, timeout=timeout)
     if not dl.get("ok"):
         return {"ok": False, "reason": dl.get("reason"), "check": info}
     res = upgrade_from_archive(dl["path"], code_dir, current_version)

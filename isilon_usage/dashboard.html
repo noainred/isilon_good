@@ -1105,10 +1105,14 @@
       <label class="sub">소스
         <select id="upgSource" class="optsel">
           <option value="off">끔(수동)</option>
-          <option value="github">GitHub(인터넷) 모니터링</option>
+          <option value="github">인터넷 URL 모니터링</option>
         </select></label>
       <label class="sub" style="flex:1 1 260px; min-width:220px;">소스 주소(빈값=기본 GitHub)
-        <input id="upgUrl" class="inp mono" placeholder="https://raw.githubusercontent.com/.../download" style="width:100%;" /></label>
+        <input id="upgUrl" class="inp mono" placeholder="https://raw… 또는 사내 미러/사설 레포 폴더 주소" style="width:100%;" /></label>
+      <label class="sub" style="flex:1 1 200px; min-width:170px;">토큰(사설·비공개, 선택)
+        <input id="upgToken" class="inp mono" type="password" autocomplete="new-password" placeholder="GitHub PAT 등 — 공개면 비움" style="width:100%;" /></label>
+      <label class="sub" style="display:flex; gap:5px; align-items:center;">
+        <input type="checkbox" id="upgTokenClear" /> 토큰 지우기</label>
       <label class="sub" style="display:flex; gap:5px; align-items:center;">
         <input type="checkbox" id="upgAuto" /> 새 버전 발견 시 자동 설치·재시작</label>
       <label class="sub">확인 주기(초)
@@ -3669,6 +3673,8 @@ function renderUpgrade(j) {
     + `<br><span class="sub">소스: ${j.url || "—"}</span>`;
   if (document.activeElement !== $("upgSource")) $("upgSource").value = j.source_mode || "off";
   if ($("upgUrl") && document.activeElement !== $("upgUrl")) $("upgUrl").value = j.url_custom || "";
+  if ($("upgToken") && document.activeElement !== $("upgToken"))
+    $("upgToken").placeholder = j.token_set ? "•••• 저장됨 (바꾸려면 새로 입력)" : "GitHub PAT 등 — 공개면 비움";
   if (document.activeElement !== $("upgAuto")) $("upgAuto").checked = !!j.auto;
   $("upgInstallBtn").style.display = avail ? "inline-block" : "none";
   const log = j.log || [];
@@ -3701,14 +3707,19 @@ $("upgInstallBtn").addEventListener("click", async () => {
   }
 });
 $("upgSaveBtn").addEventListener("click", async () => {
-  const body = {settings: {upgrade_source: $("upgSource").value,
+  const st = {upgrade_source: $("upgSource").value,
     upgrade_url: $("upgUrl") ? $("upgUrl").value.trim() : "",
     upgrade_auto: $("upgAuto").checked,
-    upgrade_check_secs: parseInt($("upgSecs").value, 10) || 60}};
+    upgrade_check_secs: parseInt($("upgSecs").value, 10) || 60};
+  const _tok = $("upgToken") ? $("upgToken").value : "";
+  if ($("upgTokenClear") && $("upgTokenClear").checked) st.upgrade_token = "";   // 명시적 비움
+  else if (_tok !== "") st.upgrade_token = _tok;        // 빈칸=미전송(기존 토큰 유지)
+  const body = {settings: st};
   try {
     const j = await (await fetch("/api/settings", {method: "POST",
       headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})).json();
     $("upgMsg").textContent = (j.ok !== false) ? "✓ 설정 저장됨" : ("저장 실패: " + (j.error || ""));
+    if ($("upgToken")) $("upgToken").value = ""; if ($("upgTokenClear")) $("upgTokenClear").checked = false;
     loadUpgrade();
   } catch (e) { $("upgMsg").innerHTML = '<span class="err">저장 오류: ' + e + '</span>'; }
 });

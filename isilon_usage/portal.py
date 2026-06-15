@@ -405,7 +405,8 @@ class PortalController:
     def _load_settings(self) -> dict:
         out = {"op_password": "", "op_password_encrypted": False,
                "upgrade_watch_dir": "", "upgrade_check_secs": 60,
-               "upgrade_source": "off", "upgrade_url": "", "upgrade_auto": False,
+               "upgrade_source": "off", "upgrade_url": "", "upgrade_token": "",
+               "upgrade_auto": False,
                "enroll_token": "", "release_dir": "/opt/isilon_release"}
         try:
             with open(portal_settings_path(self.data_dir), encoding="utf-8") as fh:
@@ -421,6 +422,7 @@ class PortalController:
                 _src = str(s.get("upgrade_source") or "off").strip().lower()
                 out["upgrade_source"] = _src if _src in ("off", "github") else "off"
                 out["upgrade_url"] = str(s.get("upgrade_url") or "").strip()
+                out["upgrade_token"] = str(s.get("upgrade_token") or "").strip()
                 out["upgrade_auto"] = bool(s.get("upgrade_auto"))
                 out["enroll_token"] = str(s.get("enroll_token") or "").strip()
                 out["release_dir"] = (str(s.get("release_dir") or "").strip()
@@ -613,7 +615,8 @@ class PortalController:
                         self._upg_state["installing"] = False
         # ② 인터넷(GitHub) 소스
         if (self.settings.get("upgrade_source") or "off").strip() == "github":
-            info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__)
+            info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__,
+                                           token=self.settings.get("upgrade_token") or None)
             self._upg_set_check(info)
             if (info.get("available") and bool(self.settings.get("upgrade_auto"))
                     and self._try_begin_install()):
@@ -621,7 +624,8 @@ class PortalController:
                 dest = os.path.join(self.data_dir, "upgrades")
                 try:
                     res = upgrademod.upgrade_from_remote(
-                        self.settings.get("upgrade_url") or "", code_dir, __version__, dest)
+                        self.settings.get("upgrade_url") or "", code_dir, __version__, dest,
+                        token=self.settings.get("upgrade_token") or None)
                     if res.get("ok"):
                         self._apply_self_upgrade(res, "인터넷")   # 재시작
                         return
@@ -665,6 +669,7 @@ class PortalController:
         st["auto"] = bool(self.settings.get("upgrade_auto"))
         st["url"] = self.settings.get("upgrade_url") or upgrademod.DEFAULT_UPGRADE_BASE
         st["url_custom"] = self.settings.get("upgrade_url") or ""
+        st["token_set"] = bool(self.settings.get("upgrade_token"))   # 값은 노출 안 함(설정 여부만)
         st["check_secs"] = self.settings.get("upgrade_check_secs", 60)
         st["node_count"] = len(nodes)
         # 등록된 엣지가 HQ(현재) 버전보다 낮은지 집계 — HQ 자신만 보고 '모두 최신'이라 하던 착시 방지.
@@ -683,7 +688,8 @@ class PortalController:
         return {"ok": True, **st}
 
     def upgrade_check(self) -> dict:
-        info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__)
+        info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__,
+                                       token=self.settings.get("upgrade_token") or None)
         self._upg_set_check(info)
         if info.get("error"):
             self._upg_log("확인 오류: %s" % info["error"])
@@ -712,7 +718,8 @@ class PortalController:
             src = self.settings.get("upgrade_url") or upgrademod.DEFAULT_UPGRADE_BASE
             self._upg_log("① 최신 코드 내려받는 중… (%s)" % src)
             res = upgrademod.upgrade_from_remote(
-                self.settings.get("upgrade_url") or "", code_dir, __version__, dest)
+                self.settings.get("upgrade_url") or "", code_dir, __version__, dest,
+                token=self.settings.get("upgrade_token") or None)
             if not res.get("ok"):
                 self._upg_log("✗ 설치 실패: %s" % res.get("reason"))
                 with self._lock:
@@ -741,10 +748,12 @@ class PortalController:
                 self._upg_state.update(installing=False, install_done=True,
                                        install_error=str(e))
 
-    def set_upgrade_net(self, source, url, auto, check_secs=None) -> dict:
+    def set_upgrade_net(self, source, url, auto, check_secs=None, token=None) -> dict:
         src = str(source or "off").strip().lower()
         self.settings["upgrade_source"] = src if src in ("off", "github") else "off"
         self.settings["upgrade_url"] = str(url or "").strip()
+        if token is not None:               # None=미전송(기존 유지), ""=명시적 비움
+            self.settings["upgrade_token"] = str(token or "").strip()
         self.settings["upgrade_auto"] = bool(auto)
         if check_secs is not None:
             try:
@@ -1769,7 +1778,8 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self._send_json(c.set_upgrade_net(body.get("upgrade_source"),
                                                   body.get("upgrade_url"),
                                                   body.get("upgrade_auto"),
-                                                  body.get("upgrade_check_secs")))
+                                                  body.get("upgrade_check_secs"),
+                                                  token=body.get("upgrade_token")))
                 return
             if path == "/api/portal/upgrade/check":   # 지금 인터넷에서 최신 확인
                 self._send_json(c.upgrade_check())

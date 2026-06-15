@@ -129,6 +129,76 @@ def main() -> int:
         for d in (srv, rcode, rdl):
             shutil.rmtree(d, ignore_errors=True)
 
+    # --- URL 조립·GitHub raw→API 변환(브랜치에 '/' 있어도 안전) ---
+    assert upgrade._join_url("http://h/a/download", "versions.json") == "http://h/a/download/versions.json"
+    assert (upgrade._join_url("http://h/a/contents/download?ref=cl/x", "versions.json")
+            == "http://h/a/contents/download/versions.json?ref=cl/x")
+    assert (upgrade._to_github_api("https://raw.githubusercontent.com/o/r/claude/upbeat-bell-cXX8f/download")
+            == "https://api.github.com/repos/o/r/contents/download?ref=claude/upbeat-bell-cXX8f")
+    assert (upgrade._to_github_api("https://github.com/o/r/raw/main/download")
+            == "https://api.github.com/repos/o/r/contents/download?ref=main")
+    assert upgrade._to_github_api("http://mirror.local/iu/download") == "http://mirror.local/iu/download"
+    assert "raw.githubusercontent.com" in upgrade._resolve_base(
+        "https://raw.githubusercontent.com/o/r/main/download", None)   # 토큰 없으면 raw 그대로
+    assert "api.github.com" in upgrade._resolve_base(
+        "https://raw.githubusercontent.com/o/r/main/download", "tok")  # 토큰 있으면 contents API
+    print("[upgrade-url] OK  versions.json 조립·raw→contents API 변환·토큰 조건부 변환")
+
+    # --- 사설(비공개) 소스: Authorization 토큰이 있어야만 받아지는 서버로 검증 ---
+    from http.server import BaseHTTPRequestHandler
+    from http.server import HTTPServer as _HTTPServer
+    srv2 = tempfile.mkdtemp(prefix="iu_up_auth_")
+    rcode2 = tempfile.mkdtemp(prefix="iu_up_acode_")
+    rdl2 = tempfile.mkdtemp(prefix="iu_up_adl_")
+    TOKEN = "secret-pat-123"
+    try:
+        _make_archive(os.path.join(srv2, "isilon_usage-9.9.9.tar.gz"), "9.9.9")
+        with open(os.path.join(srv2, "versions.json"), "w") as fh:
+            _json.dump({"latest": "9.9.9", "versions": [
+                {"version": "9.9.9", "tar_gz": "isilon_usage-9.9.9.tar.gz", "size_bytes": 100}]}, fh)
+        os.makedirs(os.path.join(rcode2, "isilon_usage"))
+        with open(os.path.join(rcode2, "isilon_usage", "__init__.py"), "w") as fh:
+            fh.write('__version__ = "1.0.0"\n')
+
+        class _Auth(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                if self.headers.get("Authorization") != "Bearer " + TOKEN:
+                    self.send_response(401)
+                    self.end_headers()
+                    self.wfile.write(b"unauthorized")
+                    return
+                fn = os.path.basename(self.path.split("?")[0])
+                try:
+                    with open(os.path.join(srv2, fn), "rb") as fh:
+                        body = fh.read()
+                except OSError:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        httpd2 = _HTTPServer(("127.0.0.1", 0), _Auth)
+        _th.Thread(target=httpd2.serve_forever, daemon=True).start()
+        base2 = "http://127.0.0.1:%d" % httpd2.server_address[1]
+        assert not upgrade.check_remote(base2, "1.0.0", timeout=5)["ok"]          # 토큰 없으면 거부
+        info = upgrade.check_remote(base2, "1.0.0", token=TOKEN, timeout=5)       # 토큰 주면 확인
+        assert info["ok"] and info["available"] and info["latest"] == "9.9.9", info
+        res = upgrade.upgrade_from_remote(base2, rcode2, "1.0.0", rdl2, token=TOKEN, timeout=10)
+        assert res["ok"] and res["version"] == "9.9.9", res
+        with open(os.path.join(rcode2, "isilon_usage", "__init__.py")) as fh:
+            assert "9.9.9" in fh.read()
+        httpd2.shutdown()
+        print("[remote-auth] OK  토큰 없으면 거부·토큰 있으면 확인/다운로드/설치(사설 소스)")
+    finally:
+        for d in (srv2, rcode2, rdl2):
+            shutil.rmtree(d, ignore_errors=True)
+
     print("모든 테스트 통과 ✅")
     return 0
 

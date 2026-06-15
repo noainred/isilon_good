@@ -500,4 +500,11 @@
      바로 시작, 자동 최적화는 필요 시 체크. 문서(USER_GUIDE 4.5/5.1·INSTALL·GETTING_STARTED)도
      '기본 켜짐'→'기본 꺼짐'으로 정정. JS 문법·기본값 확인. v1.70.1.
 
+187. 특정 인터넷 주소를 모니터링해 자동 업그레이드(사설/비공개 레포 링크) → 인터넷 자동 업그레이드에
+     ① 임의 URL(사내 미러·사설 레포) ② 토큰(PAT) 인증 추가. upgrade.py: `_to_github_api`(raw→contents
+     API, 슬래시 브랜치 안전)·`_join_url`(?ref= 보존)·`_auth_request`(Bearer·GitHub면 raw Accept);
+     fetch/check/download/upgrade_from_remote 에 token 인자. settings `upgrade_token`; portal
+     set_upgrade_net·status(token_set, 값 비노출)·자가/수동/자동 설치 경로 토큰 전달. portal.html 토큰칸+
+     ‘토큰 지우기’, 제목·옵션 ‘GitHub’→‘URL’. 테스트(URL 조립·변환·토큰 401/설치). v1.71.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
