@@ -331,6 +331,23 @@ def main() -> int:
         assert dl["ok"], dl
         assert c.get("/api/scans")["scans"] == []
 
+        # pscan 중지 정직성: pscan 은 자식 프로세스가 끝까지 돌아 중간 중지가 안 되므로
+        # ok:True 로 거짓 성공을 주지 말고 ok:False+engine 으로 사실대로 알려야 한다.
+        ctrl = httpd.controller
+        ev_ps = threading.Event()
+        ctrl._scans[9991] = {"engine": "pscan", "stop": ev_ps, "thread": None, "path": root}
+        rp = c.post("/api/scan/stop", {"scan_id": 9991})
+        assert rp["ok"] is False and rp.get("engine") == "pscan", rp
+        assert "멈출 수 없" in rp["reason"], rp
+        assert not ev_ps.is_set(), "pscan 은 멈추지 못하므로 stop 이벤트도 건드리지 않는다"
+        ctrl._scans.pop(9991, None)
+        # threads 스캔은 중지 신호가 실제로 먹는다(ok:True + stop 이벤트 set)
+        ev_th = threading.Event()
+        ctrl._scans[9992] = {"stop": ev_th, "thread": None, "path": root}
+        rt = c.post("/api/scan/stop", {"scan_id": 9992})
+        assert rt["ok"] and ev_th.is_set(), rt
+        ctrl._scans.pop(9992, None)
+
         print("[server] OK  모든 API 통과")
         print("모든 테스트 통과 ✅")
         return 0

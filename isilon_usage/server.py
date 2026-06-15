@@ -1590,7 +1590,8 @@ class ScanController:
 
         t = threading.Thread(target=worker, name="pscan-%d" % scan_id, daemon=True)
         with self._lock:
-            self._scans[scan_id] = {"stop": stop, "thread": t, "path": path}
+            self._scans[scan_id] = {"stop": stop, "thread": t, "path": path,
+                                    "engine": "pscan"}
         t.start()
 
     @property
@@ -1683,6 +1684,13 @@ class ScanController:
             rec = self._scans.get(scan_id)
         if not rec:
             return {"ok": False, "reason": "실행 중인 스캔이 아닙니다(이미 끝났을 수 있음)."}
+        # pscan(멀티프로세스)은 자식 프로세스가 끝까지 돌고 결과를 마지막에 한 번에
+        # 기록한다 — stop 이벤트를 parallel_scan 이 보지 않으므로 중간 중지가 안 된다.
+        # ok:True 로 거짓 성공을 알리지 말고 사실대로 알려준다(2026-06-15).
+        if rec.get("engine") == "pscan":
+            return {"ok": False, "engine": "pscan", "reason":
+                    "pscan(멀티프로세스)은 시작하면 중간에 멈출 수 없습니다. "
+                    "끝날 때까지 기다리거나, 다음 스캔부터 threads(스레드) 엔진을 쓰세요."}
         rec["stop"].set()
         return {"ok": True, "scan_id": scan_id}
 

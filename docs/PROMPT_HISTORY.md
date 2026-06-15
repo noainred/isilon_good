@@ -444,4 +444,14 @@
      자동 설치 + 등록' primary 버튼 노출(IP+SSH 사용자/포트/비번 → SSH 접속해 설치·기동·토큰맞춤·등록).
      _ssh_run 은 accept-new/ConnectTimeout/sshpass 로 견고. UI 노출만 개선. v1.69.6.
 
+179. 스캔 시작 전에 어떤 옵션으로 시작하는지 콘펌받는 프로세스 추가 + pscan(멀티프로세스) 쓰면
+     빠르지만 멈출 수 없다는 경고 표기 (이유: "내가 멈춰봤는데 중단되지 않아"). 끝나면 문서 업데이트.
+     → 대시보드 startScan() 앞에 confirmScanStart()(경로·엔진·백엔드·용량기준·오토튜닝 요약 확인창)
+     추가, useAuto 또는 engine=pscan 이면 "시작하면 중간에 멈출 수 없음" 경고 동봉. startScanPath
+     (지금 스캔)의 중복 confirm 제거(일원화). 정직성 수정: pscan 의 stop 이벤트는 parallel_scan 이
+     보지 않아 stop_scan 이 ok:True(거짓 성공)였음 → rec 에 engine="pscan" 표시 + stop_scan 이
+     ok:false/engine/reason 로 사실대로 응답, 프론트는 'ℹ pscan 은 멈출 수 없음' 안내. threads 는
+     stop_event 를 실제로 따름(검증). test_server 에 pscan 중지 정직성 + threads 정상중지 회귀 추가.
+     USER_GUIDE 4.4/5.1/5.2/API표 갱신. ruff+test+JS문법 통과. v1.69.7.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
