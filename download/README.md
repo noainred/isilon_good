@@ -32,6 +32,26 @@ curl -fsSL "https://raw.githubusercontent.com/noainred/isilon_good/claude/upbeat
 > 여러 노드를 포탈에 한꺼번에 붙이려면 HQ 포탈의 **노드 설정 → 원격 자동 구성**(IP만 입력)
 > 또는 **SSH 원격 자동 설치**가 더 편합니다.
 
+## 🏛 포탈(HQ) 신규 설치 — 한 줄 (curl | bash)
+
+여러 DC 를 집계하는 **HQ 통합 포탈**을 한 줄로: `/opt/isilon_portal` 설치 ·
+`/data/isilon_portal_data` 데이터 · 포트 8800 · systemd 서비스 `isilon-portal` 등록·기동.
+다시 실행하면 업그레이드. (포탈은 스캔을 안 하므로 `--mount-base` 가 없습니다.)
+
+**비공개(private) 저장소 — 토큰 필요:**
+```bash
+TOKEN=<GitHub_PAT>; S=$(curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/noainred/isilon_good/contents/tools/install_portal.sh?ref=claude/upbeat-bell-cXX8f") && printf '%s\n' "$S" | sudo GITHUB_TOKEN="$TOKEN" bash -s -- --port 8800
+```
+옵션: `--port 8800` · `--data-dir DIR` · `--install-dir DIR` · `--branch <브랜치>`.
+
+**공개(public) 저장소라면** 토큰 없이:
+```bash
+curl -fsSL "https://raw.githubusercontent.com/noainred/isilon_good/claude/upbeat-bell-cXX8f/tools/install_portal.sh" | sudo bash -s -- --port 8800
+```
+
+> 설치 후 접속: `http://<HQ-IP>:8800/` · 로그: `journalctl -u isilon-portal -f`
+> 엣지(스캐너)는 위 '엣지 신규 설치' 한 줄로 따로(보통 다른 서버) 설치하세요.
+
 ---
 
 ## 📦 버전 목록 (버전별 다운로드)

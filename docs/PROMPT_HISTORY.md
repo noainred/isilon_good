@@ -350,4 +350,8 @@
      GITHUB_TOKEN=$TOKEN bash -s -- --mount-base …`. 토큰 1번으로 스크립트+패키지 양쪽 인증.
      wget/공개 변형도 첨부. 경로(raw 200)·sudo env 전달·bash -n 검증. 문서 변경(패키지 코드 무변).
 
+164. 한줄 설치 포탈 → 포탈(HQ)도 동일 패턴의 curl|bash 한 줄을 download/README.md 에 추가
+     (tools/install_portal.sh 토큰 인증 다운로드 → sudo bash -s -- --port 8800; /opt/isilon_portal,
+     /data/isilon_portal_data, isilon-portal). 경로 raw 200·bash -n 검증. 문서 변경.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
