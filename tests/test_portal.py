@@ -325,6 +325,13 @@ def main() -> int:
         assert not p4["ok"], p4
         assert pc.delete_node("ov1-new")["ok"]
 
+        # 16) 폴링 401 → 원시 메시지 대신 '토큰 불일치' 안내(엣지는 'tok' 요구)
+        pc.upsert_node({"id": "wrongtok", "url": ebase, "token": "BADTOKEN"})
+        pc._sync_one("wrongtok", False)
+        wt = next(n for n in pc.list_nodes()["nodes"] if n["id"] == "wrongtok")
+        assert "토큰 불일치" in (wt.get("error") or ""), wt
+        assert pc.delete_node("wrongtok")["ok"]
+
         print("[portal] OK  연결테스트·등록·폴링·복제·롤업·삭제·enroll·release·구버전집계 통과")
         print("모든 테스트 통과 ✅")
         return 0

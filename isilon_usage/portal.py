@@ -258,6 +258,19 @@ def _ver_tuple(v):
     return tuple(int(x) for x in m.groups()) if m else None
 
 
+def _poll_error_msg(exc) -> str:
+    """노드 폴링 예외를 운영자가 바로 고칠 수 있는 안내 문구로 바꾼다(원시 'HTTP Error 401' 대신)."""
+    code = getattr(exc, "code", None)
+    if code == 401:
+        return ("토큰 불일치(401): 엣지의 api_token 과 포탈에 저장된 이 노드의 토큰이 다릅니다. "
+                "엣지에서 설치 한 줄에 --hq 를 붙여 재등록하거나, '노드 관리'에서 토큰을 엣지 값과 맞추세요.")
+    if code == 403:
+        return "거부됨(403): 엣지에 api_token 이 없거나 웹 접근이 막혀 있습니다(엣지 설정 확인)."
+    if code == 404:
+        return "응답 없음(404): 구버전 엣지이거나 주소/경로가 다릅니다."
+    return str(exc)
+
+
 def build_provision_script(*, host, port, token, path, hq_base, install="systemd",
                            data_dir="/data/isilon_edge_data",
                            edge_dir="/opt/isilon_edge") -> str:
@@ -957,13 +970,14 @@ class PortalController:
                     n["last_status"] = "online"
                     n["last_error"] = ""
             except Exception as e:  # noqa: BLE001
+                emsg = _poll_error_msg(e)
                 with self._lock:
                     c = self._cache.get(nid, {})
-                    c.update({"online": False, "error": str(e)})
+                    c.update({"online": False, "error": emsg})
                     self._cache[nid] = c
                     n["last_poll"] = time.time()
                     n["last_status"] = "offline"
-                    n["last_error"] = str(e)
+                    n["last_error"] = emsg
                 return  # 오프라인이면 복제 생략
             if do_rep and n.get("mode") in ("both", "replicate"):
                 try:
