@@ -4,12 +4,12 @@
 # 포탈을 업그레이드·재시작해도 HQ 로컬 디스크 스캔(serve)은 전혀 영향받지 않는다.
 #
 # 설치:
-#   1) /etc/systemd/system/isilon_usage_portal.service 로 복사
+#   1) /etc/systemd/system/isilon-portal.service 로 복사
 #   2) (선택) 경로/포트 수정 — 기본값(WorkingDirectory=/opt/isilon_edge,
 #      data-dir /var/lib/isilon_portal, :8800)이면 간단 설치에서 그대로 동작한다
 #   3) sudo systemctl daemon-reload
-#   4) sudo systemctl enable --now isilon_usage_portal
-#   5) 로그:  journalctl -u isilon_usage_portal -f
+#   4) sudo systemctl enable --now isilon-portal
+#   5) 로그:  journalctl -u isilon-portal -f
 #
 # 자세한 안내: docs/SERVICE.md (HQ 분리 운영 절)
 

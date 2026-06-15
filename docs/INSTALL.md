@@ -175,7 +175,7 @@ python3 -m isilon_usage portal --data-dir /var/lib/isilon_portal --port 8800
 
 ## 8. 서비스로 상시 운영 (systemd)
 
-`/etc/systemd/system/isilon-usage.service`:
+`/etc/systemd/system/isilon-edge.service`:
 ```ini
 [Unit]
 Description=Isilon 디렉터리 사용량 대시보드
@@ -196,8 +196,8 @@ WantedBy=multi-user.target
 ```
 ```bash
 systemctl daemon-reload
-systemctl enable --now isilon-usage
-journalctl -u isilon-usage -f          # 로그 보기
+systemctl enable --now isilon-edge
+journalctl -u isilon-edge -f          # 로그 보기
 ```
 
 자세한 서비스 운영(포탈 포함)은 [docs/SERVICE.md](SERVICE.md).

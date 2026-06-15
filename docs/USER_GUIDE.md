@@ -503,7 +503,7 @@ tools/make_tree.py   tests/   docs/USER_GUIDE.md   README.md   CHANGELOG.md
 ## 9. 운영(서비스 등록·보안·백업)
 
 ### 9.1 systemd 서비스
-`/etc/systemd/system/isilon-usage.service`:
+`/etc/systemd/system/isilon-edge.service`:
 ```ini
 [Unit]
 Description=Isilon 디렉터리 사용량 대시보드
@@ -525,8 +525,8 @@ WantedBy=multi-user.target
 ```bash
 mkdir -p /var/lib/isilon_usage
 systemctl daemon-reload
-systemctl enable --now isilon-usage
-journalctl -u isilon-usage -f
+systemctl enable --now isilon-edge
+journalctl -u isilon-edge -f
 ```
 
 ### 9.2 보안

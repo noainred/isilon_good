@@ -13,6 +13,27 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.67.1] - 2026-06-15
+
+### 변경됨 (Changed) — systemd 서비스/유닛 이름을 isilon-edge / isilon-portal 로 통일
+
+packaging 유닛 템플릿과 운영 문서가 옛 서비스명(`isilon_usage`·`isilon_usage_portal`,
+일부 `isilon-usage`)을 써서 `install_edge.sh`(`isilon-edge`)·포탈 생성 스크립트와 어긋났다.
+그 결과 업그레이드/재시작이 **엉뚱한 유닛을 가리켜 서비스 장애**가 났다. **서비스/유닛/문서
+이름만** `isilon-edge`/`isilon-portal` 로 통일한다. **파이썬 패키지(`isilon_usage`)·릴리스
+파일명(`isilon_usage-*.tar.gz`)·agent-bundle·기존 데이터 경로(`/data/isilon_usage`)는 호환을
+위해 그대로** 둔다(`ExecStart=python3 -m isilon_usage …` 유지).
+
+- `packaging/isilon_usage.service` → **`packaging/isilon-edge.service`**(서비스 `isilon-edge`)
+- `packaging/isilon_usage_portal.service` → **`packaging/isilon-portal.service`**(서비스 `isilon-portal`)
+- `docs/SERVICE.md`·`USER_GUIDE.md`·`INSTALL.md` 의 `systemctl`/`journalctl`/유닛 파일명/
+  서비스명 참조를 새 이름으로(콘솔 명령 `isilon-usage`(pip 진입점)·패키지 디렉터리 언급은 유지).
+
+> 이미 배포된 서버는 유닛 파일이 디스크에 남아 있으므로, 옛 `isilon_usage(.service)` 유닛을
+> 멈춰 비활성화한 뒤 새 `isilon-edge`/`isilon-portal` 로 재설치(또는 유닛 파일명 변경)해야 한다.
+
+---
+
 ## [1.67.0] - 2026-06-15
 
 ### 추가됨 (Added) — 엣지 오프라인 업그레이드: 포탈 릴리스 폴더에서 엣지가 한 줄로 당겨감

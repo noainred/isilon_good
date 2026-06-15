@@ -4,7 +4,7 @@
 자동 재시작, SSH 세션이 끊겨도 계속 실행, `journalctl` 로 로그 확인이 됩니다.
 (Rocky/RHEL/CentOS 등 systemd 환경 기준.)
 
-> 유닛 템플릿: [`packaging/isilon_usage.service`](../packaging/isilon_usage.service)
+> 유닛 템플릿: [`packaging/isilon-edge.service`](../packaging/isilon-edge.service)
 
 ---
 
@@ -36,8 +36,8 @@ sudo useradd --system --no-create-home --shell /usr/sbin/nologin isilon
 ## 3. 유닛 설치 + 수정
 
 ```bash
-sudo cp packaging/isilon_usage.service /etc/systemd/system/isilon_usage.service
-sudo vi /etc/systemd/system/isilon_usage.service
+sudo cp packaging/isilon-edge.service /etc/systemd/system/isilon-edge.service
+sudo vi /etc/systemd/system/isilon-edge.service
 #  - WorkingDirectory = /opt/isilon_edge
 #  - --data-dir /data/isilon_usage      (기본값; 절대경로라 코드 업그레이드에도 설정 보존)
 #  - --mount-base /mnt/hadoop           (스캔 허용 경로)
@@ -48,9 +48,9 @@ sudo vi /etc/systemd/system/isilon_usage.service
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now isilon_usage      # 지금 시작 + 부팅 시 자동 시작
-sudo systemctl status isilon_usage            # 상태 확인
-journalctl -u isilon_usage -f                 # 실시간 로그
+sudo systemctl enable --now isilon-edge      # 지금 시작 + 부팅 시 자동 시작
+sudo systemctl status isilon-edge            # 상태 확인
+journalctl -u isilon-edge -f                 # 실시간 로그
 ```
 
 브라우저로 `http://<서버IP>:8765/` 접속 → 대시보드. 스캔은 웹의 **'새 스캔 시작'** 에서.
@@ -61,17 +61,17 @@ journalctl -u isilon_usage -f                 # 실시간 로그
 
 | 동작 | 명령 |
 |---|---|
-| 상태 | `systemctl status isilon_usage` |
-| 시작/중지/재시작 | `systemctl {start,stop,restart} isilon_usage` |
-| 로그(실시간/최근) | `journalctl -u isilon_usage -f` / `journalctl -u isilon_usage -n 200` |
-| 자동시작 끄기 | `systemctl disable isilon_usage` |
+| 상태 | `systemctl status isilon-edge` |
+| 시작/중지/재시작 | `systemctl {start,stop,restart} isilon-edge` |
+| 로그(실시간/최근) | `journalctl -u isilon-edge -f` / `journalctl -u isilon-edge -n 200` |
+| 자동시작 끄기 | `systemctl disable isilon-edge` |
 
 ## 코드 업데이트
 
 ```bash
 # 새 버전 패키지로 교체 후 재시작(스캔은 프론티어가 DB에 있어 '재개'로 이어감)
 sudo cp -r isilon_usage-<새버전>/isilon_usage /opt/isilon_edge/
-sudo systemctl restart isilon_usage
+sudo systemctl restart isilon-edge
 ```
 
 > 대시보드 화면만 바꾸는 경우(프론트 전용 변경)는 `isilon_usage/dashboard.html` 만
@@ -103,9 +103,9 @@ HQ 서버가 **로컬 디스크 스캔(`serve`)** 과 **글로벌 집계 포탈(
 ```
 HQ 서버
 ├── /opt/isilon_edge/isilon_usage/     ← 스캐너 코드(serve)        :8765
-│   └─ 서비스 isilon_usage         data-dir /data/isilon_usage
+│   └─ 서비스 isilon-edge         data-dir /data/isilon_usage
 └── /opt/isilon_portal/isilon_usage/   ← 포탈 코드(portal)         :8800
-    └─ 서비스 isilon_usage_portal  data-dir /data/isilon_usage (스캐너와 공유 안전)
+    └─ 서비스 isilon-portal  data-dir /data/isilon_usage (스캐너와 공유 안전)
 ```
 
 **설치 (두 디렉터리에 각각 패키지 배치)**
@@ -115,19 +115,19 @@ sudo cp -r isilon_usage-*/isilon_usage /opt/isilon_edge/      # 스캐너용
 sudo cp -r isilon_usage-*/isilon_usage /opt/isilon_portal/    # 포탈용(별도 사본)
 
 # 스캐너 유닛: WorkingDirectory=/opt/isilon_edge
-sudo cp isilon_usage-*/packaging/isilon_usage.service        /etc/systemd/system/
+sudo cp isilon_usage-*/packaging/isilon-edge.service        /etc/systemd/system/
 # 포탈 유닛: WorkingDirectory=/opt/isilon_portal, 포트 8800
-sudo cp isilon_usage-*/packaging/isilon_usage_portal.service /etc/systemd/system/
-sudo vi /etc/systemd/system/isilon_usage.service        # WorkingDirectory=/opt/isilon_edge
-sudo vi /etc/systemd/system/isilon_usage_portal.service # WorkingDirectory=/opt/isilon_portal (기본 /opt/isilon_edge 에서 변경)
+sudo cp isilon_usage-*/packaging/isilon-portal.service /etc/systemd/system/
+sudo vi /etc/systemd/system/isilon-edge.service        # WorkingDirectory=/opt/isilon_edge
+sudo vi /etc/systemd/system/isilon-portal.service # WorkingDirectory=/opt/isilon_portal (기본 /opt/isilon_edge 에서 변경)
 sudo systemctl daemon-reload
-sudo systemctl enable --now isilon_usage isilon_usage_portal
+sudo systemctl enable --now isilon-edge isilon-portal
 ```
 
 **포탈만 업그레이드 (스캔 무중단)**
 ```bash
 sudo cp -r isilon_usage-<새버전>/isilon_usage /opt/isilon_portal/   # 포탈 코드만 교체
-sudo systemctl restart isilon_usage_portal                          # 포탈만 재시작
+sudo systemctl restart isilon-portal                          # 포탈만 재시작
 # → /opt/isilon_edge 와 isilon_usage(스캐너)는 손대지 않음 = HQ 디스크 스캔 계속 진행
 ```
 

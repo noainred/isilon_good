@@ -368,4 +368,12 @@
      /release/info, 업그레이드 탭 UI(폴더+현재패키지+엣지 한 줄 자동). 회귀+HTTP 스모크. v1.67.0.
      (참고: `<GitHub_PAT>` 를 꺾쇠째 붙여 zsh parse error 났던 건 — 꺾쇠 빼고 토큰만; 문서에 경고 추가.)
 
+167. 모든 파일에서 isilon_usage→isilon_edge(서비스 파일이 아직 isilon_usage라 서비스 장애) → 정직히
+     구분: isilon_usage 는 (A)서비스/유닛 이름과 (B)파이썬 패키지명 둘 다. (B)를 바꾸면 ExecStart
+     `python3 -m isilon_usage`·릴리스 isilon_usage-*.tar.gz·agent-bundle·기존 설치가 다 깨짐.
+     사용자 선택=‘서비스/유닛/경로만(권장)’. packaging/isilon_usage.service→isilon-edge.service,
+     isilon_usage_portal.service→isilon-portal.service(서비스명도), docs(SERVICE/USER_GUIDE/INSTALL)의
+     systemctl/journalctl/유닛파일명/서비스명만 isilon-edge·isilon-portal 로(하이픈 변형 포함).
+     패키지·릴리스명·/data/isilon_usage·콘솔명령 isilon-usage 는 보존. 잔재 0 검증, 13테스트·ruff 통과. v1.67.1.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
