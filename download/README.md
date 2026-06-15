@@ -68,7 +68,7 @@ curl -fsSL "https://raw.githubusercontent.com/noainred/isilon_good/claude/upbeat
 각 엣지가 **인터넷·GitHub·토큰 없이** 포탈에서 받아 업그레이드합니다. 포탈 **노드 설정 →
 업그레이드** 탭에서 폴더를 지정·확인할 수 있고(거기 한 줄 명령도 자동 표시), **엣지 콘솔**에서:
 ```bash
-curl -fsSL "http://<HQ-IP>:8800/api/portal/release" | sudo tar -xz -C /opt/isilon_edge --strip-components=1 && (cd /opt/isilon_edge && python3 -m isilon_usage --version) && sudo systemctl restart isilon-edge
+curl -fsSL "http://<HQ-IP>:8800/api/portal/release" | sudo tar -xz -C /opt/isilon_edge --strip-components=1 && sudo find /opt/isilon_edge -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null; (cd /opt/isilon_edge && python3 -m isilon_usage --version) && sudo systemctl restart isilon-edge
 ```
 - 포탈이 그 폴더의 **가장 최신 버전** tarball 을 내려줍니다(파일명 버전 기준).
 - 푸시(포탈→엣지)와 달리 **엣지가 당겨가므로** 노드 등록·인바운드 접근이 필요 없습니다.
@@ -82,7 +82,8 @@ curl -fsSL "http://<HQ-IP>:8800/api/portal/release" | sudo tar -xz -C /opt/isilo
 <!-- VERSIONS:START -->
 | 버전 | 호환 | tar.gz | zip |
 |------|------|--------|-----|
-| **1.72.0** (latest) | Python 3.6+ | [tar.gz](https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.72.0.tar.gz) (366 KB) | [zip](https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.72.0.zip) |
+| **1.72.1** (latest) | Python 3.6+ | [tar.gz](https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.72.1.tar.gz) (367 KB) | [zip](https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.72.1.zip) |
+| **1.72.0** | Python 3.6+ | [tar.gz](https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.72.0.tar.gz) (366 KB) | [zip](https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.72.0.zip) |
 | **1.71.3** | Python 3.6+ | [tar.gz](https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.71.3.tar.gz) (365 KB) | [zip](https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.71.3.zip) |
 | **1.71.2** | Python 3.6+ | [tar.gz](https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.71.2.tar.gz) (364 KB) | [zip](https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.71.2.zip) |
 | **1.71.1** | Python 3.6+ | [tar.gz](https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.71.1.tar.gz) (363 KB) | [zip](https://github.com/noainred/isilon_good/raw/claude/upbeat-bell-cXX8f/download/isilon_usage-1.71.1.zip) |

@@ -280,7 +280,7 @@
     <div class="setgrid">
       <label class="fld">대상 노드 id(표시용·선택)<input id="ugId" class="inp mono" placeholder="(노드 id)" /></label>
       <label class="fld">엣지 코드 디렉터리<input id="ugDir" class="inp mono" value="/opt/isilon_edge" /></label>
-      <label class="fld">systemd 서비스명<input id="ugSvc" class="inp mono" value="isilon_usage" /></label>
+      <label class="fld">systemd 서비스명<input id="ugSvc" class="inp mono" value="isilon-edge" /></label>
     </div>
     <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center;">
       <button id="ugGenBtn" class="primary">① 업그레이드 스크립트 생성</button>
@@ -1378,7 +1378,7 @@ async function loadRelease(){
         : `이 폴더에서 isilon_usage-* 패키지가 안 보입니다${host}. (파일을 <b>이 포탈 서버</b>의 위 경로에 두었는지 확인)`;
     }
     if($("relCmd")) $("relCmd").textContent=
-      `curl -fsSL "${location.origin}/api/portal/release" | sudo tar -xz -C /opt/isilon_edge --strip-components=1 && (cd /opt/isilon_edge && python3 -m isilon_usage --version) && sudo systemctl restart isilon-edge`;
+      `curl -fsSL "${location.origin}/api/portal/release" | sudo tar -xz -C /opt/isilon_edge --strip-components=1 && sudo find /opt/isilon_edge -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null; (cd /opt/isilon_edge && python3 -m isilon_usage --version) && sudo systemctl restart isilon-edge`;
   }catch(e){}
 }
 if($("relSave")) $("relSave").addEventListener("click", async()=>{

@@ -330,6 +330,13 @@ def main() -> int:
         assert "잘못" in mm["release_reason"], mm
         pc.set_release_dir(reld)   # 원복
 
+        # 12-e) 원격 업그레이드 스크립트: 낡은 바이트코드(__pycache__) 정리 + 서비스명 자동 탐색 포함
+        #        (tar 덮어쓰기 후 옛 .pyc 가 남아 구버전이 보고/실행되거나, 서비스명 불일치로 재시작
+        #         안 되는 문제를 방지)
+        scr = portalmod.build_upgrade_script(hq_base="http://hq:8800")
+        assert "agent-bundle" in scr and "__pycache__" in scr, scr
+        assert 'for s in isilon-edge isilon_usage' in scr, scr
+
         # 13) 업그레이드 상태: 노드 버전이 HQ보다 낮으면 '구버전'으로 집계('모두 최신' 착시 방지)
         assert pc.upsert_node({"id": "old-node", "url": "http://10.9.9.1:8765", "token": "x"})["ok"]
         with pc._lock:

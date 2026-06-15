@@ -309,6 +309,7 @@ def build_provision_script(*, host, port, token, path, hq_base, install="systemd
         'echo "[2/4] HQ 포탈에서 코드 받기 (인터넷 불필요)"\n'
         'sudo mkdir -p "$EDGE_DIR" "$DATA"\n'
         'curl -fsSL "$HQ/api/portal/agent-bundle" | sudo tar -xz -C "$EDGE_DIR"\n'
+        'sudo find "$EDGE_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true\n'
         '(cd "$EDGE_DIR" && python3 -m isilon_usage --version)\n'
     ) % (q(edge_dir), q(data_dir), q(path), int(port), q(token), q(hq))
     if install == "nohup":
@@ -360,6 +361,12 @@ def build_upgrade_script(*, hq_base, edge_dir="/opt/isilon_edge",
         "set -euo pipefail\n"
         "# === isilon_usage 엣지 원격 업그레이드 (HQ 포탈 생성) ===\n"
         "EDGE_DIR=%s\nHQ=%s\nSERVICE=%s\n\n"
+        "# 지정한 서비스 유닛이 없으면 실제 설치된 isilon 엣지 서비스를 자동 탐색(이름 불일치 방지)\n"
+        'if ! systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE}\\.service"; then\n'
+        '  for s in isilon-edge isilon_usage; do\n'
+        '    if systemctl list-unit-files 2>/dev/null | grep -q "^${s}\\.service"; then SERVICE="$s"; break; fi\n'
+        "  done\n"
+        "fi\n"
         "# 서비스의 실제 코드 디렉터리를 systemd 에서 자동 감지(없으면 EDGE_DIR)\n"
         'WD=$(systemctl show -p WorkingDirectory --value "$SERVICE" 2>/dev/null || true)\n'
         'TARGET="${WD:-$EDGE_DIR}"; [ -z "$TARGET" ] && TARGET="$EDGE_DIR"\n'
@@ -367,6 +374,8 @@ def build_upgrade_script(*, hq_base, edge_dir="/opt/isilon_edge",
         'echo "[1/3] HQ 에서 최신 코드 받기 -> $TARGET (현재 $OLDV)"\n'
         'sudo mkdir -p "$TARGET"\n'
         'curl -fsSL "$HQ/api/portal/agent-bundle" | sudo tar -xz -C "$TARGET"\n'
+        "# 낡은 바이트코드 캐시 제거 — 안 그러면 새 코드를 깔아도 옛 버전이 보고/실행될 수 있음\n"
+        'sudo find "$TARGET" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true\n'
         'NEWV=$(cd "$TARGET" && python3 -m isilon_usage --version 2>/dev/null || echo "?")\n'
         'echo "  -> 새 코드: $NEWV"\n'
         'echo "[2/3] 서비스 재시작: $SERVICE"\n'
