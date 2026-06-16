@@ -557,4 +557,8 @@
      {download,save}(인증 게이트 안). portal.html 보안·감사 탭 백업 카드(다운로드 blob·서버 저장),
      읽기전용 비활성. test_portal 12-g. v1.74.0.
 
+198. (스토리지 2개일 때) 노드 '스캔 중' 경과 시간이 멈춘 값(updated_at-started)으로 나옴 → 라이브로.
+     portal.html elapsedLive(srv+수신후경과)·elapsedSpan(.js-elapsed)·tickElapsed(1초)·_ovFetch(loadOverview
+     수신시각). 노드 헤더 runLine·루트별 진행 모두 적용. 시계오차 안전(서버경과+클라델타). v1.74.1.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

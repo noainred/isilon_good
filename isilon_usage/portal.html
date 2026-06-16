@@ -847,7 +847,7 @@ let pingResults={};
 async function loadOverview(){
   try {
     const j = await (await fetch("/api/portal/overview",{cache:"no-store"})).json();
-    if(!j.ok) return; pOverview=j; renderPortalDash();
+    if(!j.ok) return; pOverview=j; _ovFetch=Date.now(); renderPortalDash();
   } catch(e){ /* 무시 */ }
 }
 async function loadPing(){
@@ -866,8 +866,16 @@ async function loadPing(){
   if(btn){ btn.disabled=false; btn.textContent="📡 Ping 체크"; }
 }
 function statRank(n){ return n.online ? (n.active_scans>0?2:1) : 0; }
-function scanElapsed(n){ const rn=n&&n.running; if(!rn) return 0;   // 진행 중 스캔 경과(초)
-  return Math.max(0,(rn.updated_at||rn.started_at||0)-(rn.started_at||0)); }
+let _ovFetch=Date.now();   // 마지막 오버뷰 수신 시각(클라) — 경과를 라이브로 더해 시계오차에도 안전
+function elapsedLive(srv){ return Math.max(0,(srv||0)+(Date.now()-_ovFetch)/1000); }
+function elapsedSpan(started, updated){   // 진행 중 경과를 1초마다 라이브로 틱업하는 span(멈춤 방지)
+  const srv=Math.max(0,((+updated||+started||0)-(+started||0)));
+  return `<span class="js-elapsed" data-srv="${srv}">${fmtDur(elapsedLive(srv))}</span>`;
+}
+function tickElapsed(){ document.querySelectorAll(".js-elapsed").forEach(el=>{
+  el.textContent=fmtDur(elapsedLive(+el.dataset.srv||0)); }); }
+function scanElapsed(n){ const rn=n&&n.running; if(!rn) return 0;   // 진행 중 스캔 경과(초, 라이브)
+  return elapsedLive(Math.max(0,(rn.updated_at||rn.started_at||0)-(rn.started_at||0))); }
 function scanProgress(r){   // 루트별 스캔 단계/진행률
   if(!r) return "";
   if(r.status==="done") return "✅ 완료";
@@ -945,7 +953,7 @@ function renderPortalDash(){
            : `연결 실패: ${a.error||""}`}</td></tr>`).join("");
     const roots = arrRows + (n.roots||[]).map(r=>{
       const act=(r.status==="discovering"||r.status==="sizing");
-      const startTxt=(act&&r.started_at)?(" · 시작 "+fmtClock(r.started_at)+" · 진행 "+fmtDur((r.updated_at||r.started_at)-r.started_at)):"";
+      const startTxt=(act&&r.started_at)?(" · 시작 "+fmtClock(r.started_at)+" · 진행 "+elapsedSpan(r.started_at, r.updated_at)):"";
       const fsTxt=r.fs_total_bytes?(" of "+fmtBytes(r.fs_total_bytes)+" ("+Math.round((r.fs_used_bytes||0)/r.fs_total_bytes*100)+"%)"):"";
       return `<tr class="rr-${idx}" style="display:none; background:#121a24;"><td></td>
         <td colspan="8" class="sub mono">📁 ${r.root_path} — 조사 ${fmtBytes(r.scanned_bytes)} · fs ${fmtBytes(r.fs_used_bytes)}${fsTxt} · ${scanProgress(r)}${startTxt}${r.finished_at?(" · 완료 "+ago(r.finished_at)):(r.updated_at?(" · 갱신 "+ago(r.updated_at)):"")}</td></tr>`;
@@ -959,7 +967,7 @@ function renderPortalDash(){
         ? ` <span class="pill" title="HQ→노드 왕복${pr.error?(' · '+pr.error):''}" style="color:${pr.latency_ms<150?'#7be0aa':(pr.latency_ms<600?'#f0c86a':'#ff9a9a')};border-color:${pr.latency_ms<150?'#2f6f50':(pr.latency_ms<600?'#6a5a25':'#7a3030')}">${pr.latency_ms} ms</span>`
         : ` <span class="pill" title="${pr.error||'실패'}" style="color:#ff9a9a;border-color:#7a3030">✕</span>`) : "";
     const rn=n.running;
-    const runLine = rn ? `<div class="sub" style="white-space:nowrap; margin-top:3px;">⏱ ${fmtDur((rn.updated_at||rn.started_at||0)-(rn.started_at||0))} · 시작 ${fmtClock(rn.started_at)}</div>` : "";
+    const runLine = rn ? `<div class="sub" style="white-space:nowrap; margin-top:3px;">⏱ ${elapsedSpan(rn.started_at, rn.updated_at)} · 시작 ${fmtClock(rn.started_at)}</div>` : "";
     return `<tr class="noderow" data-idx="${idx}" style="cursor:pointer;" title="클릭하면 스토리지/어레이 펼침">
       <td><b>${n.id}</b>${verBadge}${arrBadges}<div class="sub mono">${n.hostname||""}</div></td><td>${n.region||"—"}</td>
       <td class="num">▸ ${fmtNum(n.storages)}</td><td class="num">${fmtBytes(n.used_bytes)}</td>
@@ -1235,7 +1243,7 @@ $("ugSshBtn").addEventListener("click", async()=>{
 });
 
 function tickClock(){ const el=$("clock"); if(el) el.textContent=new Date().toLocaleString("ko-KR",{hour12:false}); }
-tickClock(); setInterval(tickClock,1000);
+tickClock(); setInterval(()=>{ tickClock(); tickElapsed(); },1000);
 if($("loginBtn")) $("loginBtn").addEventListener("click", async()=>{
   if(_opRequired && canMutate()) doLogout(); else await doLogin(); });
 if($("roLoginBtn")) $("roLoginBtn").addEventListener("click", doLogin);
