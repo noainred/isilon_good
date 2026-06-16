@@ -740,6 +740,7 @@ function netmonStop(){ if(netmonTimer){ clearInterval(netmonTimer); netmonTimer=
 // ---- 인프라 체크: 서버별 핑 이력(1년 누적) ----
 let phRange=86400, phTimer=null, phInflight=false, _phLast=null, _phRz=null;
 const _he=s=>String(s==null?"":s).replace(/[<>&"]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;"}[c]));
+const esc=_he;   // 여러 함수(히스토리·파일브라우저·업그레이드표)가 전역 esc 를 쓴다(예전엔 일부 함수에만 지역 정의돼 ReferenceError 발생)
 async function loadPingHistory(){
   if(phInflight) return; phInflight=true;
   try{
@@ -1380,7 +1381,6 @@ if($("setPwClearBtn")) $("setPwClearBtn").addEventListener("click", async()=>{
   catch(e){ msg.textContent=" ✗ "+e; }
 });
 async function pLoadAudit(){
-  const esc=s=>String(s==null?"":s).replace(/[<>&"]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;"}[c]));
   $("pAuditMsg").textContent=" 불러오는 중…";
   try{ const j=await (await fetch("/api/portal/audit",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})).json();
     if(!j.ok){ $("pAuditMsg").textContent=" "+(j.error||j.reason||"실패"); return; }

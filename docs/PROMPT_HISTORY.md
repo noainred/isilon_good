@@ -639,4 +639,8 @@
      생성→삭제, 통합). docs/PERFORMANCE.md 신규(측정 병목·pscan 실측·무의미목록·권장설정·6PB 네이티브
      미검증) + README 색인 링크. v1.79.2.
 
+216. (버그) 포탈 업그레이드 기록 '불러오기 실패: ReferenceError: esc is not defined' → esc 가 pLoadAudit
+     함수 지역에만 정의돼 히스토리·파일브라우저·업그레이드표 등 다른 함수의 전역 esc 호출이 미정의였음.
+     전역 const esc=_he; 추가 + 지역 중복 제거. portal.html 은 매 요청 디스크 read 라 강력새로고침이면 반영. v1.79.3.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
