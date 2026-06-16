@@ -251,11 +251,11 @@
       <label class="fld">소스<select id="nuSource" class="inp">
         <option value="off">끔(수동)</option>
         <option value="github">Update Server</option></select></label>
-      <label class="fld">versions.json URL(빈값=기본 raw GitHub)
+      <label class="fld">Site Info(URL)
         <input id="nuUrl" class="inp mono" placeholder="https://raw… 또는 사내 미러/사설 레포 폴더 주소" /></label>
-      <label class="fld">토큰(사설·비공개 소스, 선택)
+      <label class="fld">인증토큰
         <input id="nuToken" class="inp mono" type="password" autocomplete="new-password"
-          placeholder="GitHub PAT 등 — 공개 소스면 비움" /></label>
+          placeholder="인증토큰" /></label>
       <label class="fld">확인 주기(초)<input id="nuSecs" class="inp" type="number" min="10" value="60" /></label>
       <label class="fld" style="flex-direction:row; align-items:center; gap:6px;">
         <input type="checkbox" id="nuAuto" /> 새 버전 자동 설치·재시작(+엣지 전파)</label>
@@ -965,7 +965,8 @@ function renderPortalDash(){
     const canScan = n.enabled && n.online && n.active_scans===0 && !n.running && n.roots && n.roots.length;
     const scanBtn = canScan
       ? ` <button class="ssbtn" data-id="${escAttr(n.id)}" title="마지막 스캔과 동일한 경로로 새 스캔 시작">▶ 스캔 시작</button>` : "";
-    const open = `<a class="link" href="${n.url}" target="_blank" rel="noopener">열기 ↗</a>`;
+    // 새창(엣지 대시보드)을 열 때 포탈의 노드명(예: WA)을 넘겨, 새창 제목이 호스트네임 대신 노드명으로 뜨게 한다
+    const open = `<a class="link" href="${n.url}${n.url.includes("?")?"&":"?"}node=${encodeURIComponent(n.id)}" target="_blank" rel="noopener">열기 ↗</a>`;
     // 스토리지 어레이(아이실론/PowerStore) — storage 리스트, 없으면 isilon 단일로 폴백
     const arrays = (n.storage && n.storage.length) ? n.storage
                    : ((n.isilon && n.isilon.configured !== false) ? [n.isilon] : []);

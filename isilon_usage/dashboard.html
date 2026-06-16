@@ -125,7 +125,7 @@
 <body>
 <header>
   <div>
-    <h1>📦 Isilon 디렉터리 사용량 스캐너</h1>
+    <h1>📦 Isilon 디렉터리 사용량 스캐너 <span id="nodeTag" class="pill" style="display:none; font-size:13px; vertical-align:middle;"></span></h1>
     <div class="root" id="rootPath">대상 경로 로딩 중…</div>
   </div>
   <nav id="nav">
@@ -2963,13 +2963,22 @@ function renderOverview(j) {
   // 웹 스캔 가능 여부 / 실행 중 스캔 / 허용 경로
   runningSet = new Set(j.running || []);
   renderHistory(allScans);   // 회차별 소요 시간·결과(runningSet 확정 후)
-  // 브라우저 탭 제목에 노드명(호스트) + 스캔 중 표시 — 여러 탭에서 어느 노드인지 구분
-  const _node = ((j.hostname) || (allScans.find(s => s && s.hostname) || {}).hostname
+  // 브라우저 탭 제목에 노드명 + 스캔 중 표시 — 여러 탭에서 어느 노드인지 구분.
+  // 포탈에서 '열기 ↗'로 띄우면 ?node=<노드명>이 붙어오므로, 그 땐 호스트네임 대신 노드명(예: WA)을 쓴다.
+  const _hostnm = ((j.hostname) || (allScans.find(s => s && s.hostname) || {}).hostname
                  || location.hostname || "").trim();
+  const _qnode = (new URLSearchParams(location.search).get("node") || "").trim();
+  const _node = _qnode || _hostnm;
   const _np = _node ? (_node + " · ") : "";
   document.title = _np + ((runningSet.size > 0)
     ? "● 스캔중 · Isilon 디렉터리 사용량 대시보드"
     : "Isilon 디렉터리 사용량 대시보드");
+  // 헤더에도 노드명 배지 표시(포탈에서 넘어온 경우). 실제 호스트네임은 툴팁으로 확인.
+  const _tag = $("nodeTag");
+  if (_tag) {
+    if (_qnode) { _tag.textContent = _qnode; _tag.title = "노드: " + _qnode + (_hostnm ? (" (" + _hostnm + ")") : ""); _tag.style.display = ""; }
+    else _tag.style.display = "none";
+  }
   canScan = !!j.can_scan;
   _opRequired = !!j.op_required;   // 작업 보호 비밀번호 설정 여부
   updateLockBadge();

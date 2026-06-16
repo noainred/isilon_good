@@ -595,4 +595,10 @@
 207. 비밀번호 설정+비로그인이면 '노드 설정'(관리) 탭 숨김+접근차단 → updateLoginUI 에서 nav[data-view=
      nodes] 숨기고 view-nodes 활성 시 dash 로, show()에서 nodes 전환 차단. 조회 뷰는 유지. v1.76.6.
 
+208. (포탈) ① '열기 ↗' 새창으로 엣지 대시보드를 띄울 때 호스트네임 말고 노드명(예: WA)으로 표시 →
+     portal.html open 링크에 ?node=<n.id> 부착, dashboard.html 제목 로직에서 URLSearchParams node
+     우선(없으면 호스트네임), 헤더 h1 에 nodeTag 배지 추가(호스트네임은 툴팁). ② Update Server 설정
+     라벨 정리: 'versions.json URL(빈값=기본 raw GitHub)'→'Site Info(URL)', 토큰 라벨/placeholder
+     'GitHub PAT 등 — 공개 소스면 비움'→'인증토큰'. v1.76.7.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
