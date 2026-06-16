@@ -1215,8 +1215,31 @@ function opRelock() {
   try { sessionStorage.removeItem("opToken"); } catch (e) {}
   updateLockBadge();
 }
+// 비밀번호 입력 모달(브라우저 prompt 은 평문 노출 → type=password 로 마스킹). Promise<string|null>.
+function passwordPrompt(msg) {
+  return new Promise(resolve => {
+    const ov = document.createElement("div");
+    ov.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center;";
+    const box = document.createElement("div");
+    box.style.cssText = "background:#16202c;border:1px solid #2a3550;border-radius:10px;padding:18px;min-width:300px;box-shadow:0 12px 40px rgba(0,0,0,.55);";
+    const lbl = document.createElement("div"); lbl.textContent = msg || "비밀번호를 입력하세요:";
+    lbl.style.cssText = "margin-bottom:10px;font-size:14px;color:#dfe8f3;";
+    const inp = document.createElement("input"); inp.type = "password"; inp.autocomplete = "current-password";
+    inp.style.cssText = "width:100%;box-sizing:border-box;padding:8px 10px;border-radius:7px;border:1px solid #2a3550;background:#0e1620;color:#dfe8f3;font:inherit;";
+    const btns = document.createElement("div"); btns.style.cssText = "margin-top:12px;display:flex;gap:8px;justify-content:flex-end;";
+    const cancel = document.createElement("button"); cancel.textContent = "취소"; cancel.type = "button";
+    const ok = document.createElement("button"); ok.textContent = "로그인"; ok.type = "button";
+    btns.appendChild(cancel); btns.appendChild(ok);
+    box.appendChild(lbl); box.appendChild(inp); box.appendChild(btns); ov.appendChild(box);
+    document.body.appendChild(ov); setTimeout(() => inp.focus(), 20);
+    function done(v) { try { document.body.removeChild(ov); } catch (e) {} resolve(v); }
+    cancel.onclick = () => done(null); ok.onclick = () => done(inp.value);
+    inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); done(inp.value); } else if (e.key === "Escape") { e.preventDefault(); done(null); } });
+    ov.addEventListener("mousedown", e => { if (e.target === ov) done(null); });
+  });
+}
 async function promptUnlock() {
-  const pw = window.prompt("로그인 — 비밀번호를 입력하세요:");
+  const pw = await passwordPrompt("로그인 — 비밀번호를 입력하세요:");
   if (pw == null) return false;
   try {
     const r = await _origFetch("/api/unlock", {method: "POST",

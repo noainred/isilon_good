@@ -643,4 +643,9 @@
      함수 지역에만 정의돼 히스토리·파일브라우저·업그레이드표 등 다른 함수의 전역 esc 호출이 미정의였음.
      전역 const esc=_he; 추가 + 지역 중복 제거. portal.html 은 매 요청 디스크 read 라 강력새로고침이면 반영. v1.79.3.
 
+217. ① 비밀번호 입력 *로 마스킹 → 로그인이 window.prompt(평문)였음. portal.html doLogin·dashboard.html
+     promptUnlock 을 passwordPrompt(type=password 모달, Enter/Esc) 로 교체(설정 칸들은 이미 password).
+     ② 업그레이드 기록 20줄 + '더 보기' → loadHistory 를 loadHistory+renderHist 로 분리, _histLimit=20,
+     histMore 버튼 클릭 시 전체 표시. v1.79.4.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

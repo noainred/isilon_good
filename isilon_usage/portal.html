@@ -624,8 +624,31 @@ async function loadAuth(){
   }catch(e){}
   updateLoginUI();
 }
+// 비밀번호 입력 모달(브라우저 prompt 은 평문 노출 → type=password 로 마스킹). Promise<string|null>.
+function passwordPrompt(msg){
+  return new Promise(resolve=>{
+    const ov=document.createElement("div");
+    ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center;";
+    const box=document.createElement("div");
+    box.style.cssText="background:#16202c;border:1px solid #2a3550;border-radius:10px;padding:18px;min-width:300px;box-shadow:0 12px 40px rgba(0,0,0,.55);";
+    const lbl=document.createElement("div"); lbl.textContent=msg||"비밀번호를 입력하세요:";
+    lbl.style.cssText="margin-bottom:10px;font-size:14px;color:#dfe8f3;";
+    const inp=document.createElement("input"); inp.type="password"; inp.autocomplete="current-password";
+    inp.style.cssText="width:100%;box-sizing:border-box;padding:8px 10px;border-radius:7px;border:1px solid #2a3550;background:#0e1620;color:#dfe8f3;font:inherit;";
+    const btns=document.createElement("div"); btns.style.cssText="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;";
+    const cancel=document.createElement("button"); cancel.textContent="취소"; cancel.type="button";
+    const ok=document.createElement("button"); ok.textContent="로그인"; ok.type="button"; ok.className="primary";
+    btns.appendChild(cancel); btns.appendChild(ok);
+    box.appendChild(lbl); box.appendChild(inp); box.appendChild(btns); ov.appendChild(box);
+    document.body.appendChild(ov); setTimeout(()=>inp.focus(),20);
+    function done(v){ try{document.body.removeChild(ov);}catch(e){} resolve(v); }
+    cancel.onclick=()=>done(null); ok.onclick=()=>done(inp.value);
+    inp.addEventListener("keydown",e=>{ if(e.key==="Enter"){e.preventDefault();done(inp.value);} else if(e.key==="Escape"){e.preventDefault();done(null);} });
+    ov.addEventListener("mousedown",e=>{ if(e.target===ov) done(null); });
+  });
+}
 async function doLogin(){
-  const pw=window.prompt("로그인 — 비밀번호를 입력하세요:"); if(pw==null) return false;
+  const pw=await passwordPrompt("로그인 — 비밀번호를 입력하세요:"); if(pw==null) return false;
   try{ const r=await _origFetch("/api/portal/login",{method:"POST",
       headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pw})});
     const j=await r.json();
@@ -1731,11 +1754,19 @@ async function loadHistory(){
     if(!r.ok){ box.innerHTML='<span style="color:var(--warn)">기록을 불러올 수 없습니다 (HTTP '+r.status+')'
       +(r.status===404?' — 포탈(백엔드)이 구버전입니다. <b>포탈을 재시작/업데이트</b>하면 기록 기능이 켜집니다.':'')+'</span>'; return; }
     const j=await r.json();
-    const ev=(j&&j.events)||[]; window._histEvents=ev;
-    if(!ev.length){ box.innerHTML='<span class="sub">아직 기록이 없습니다 (포탈 v'+(j.version||"?")+'). 자동·수동·전 노드 푸시·재설치 업그레이드가 일어나면 여기에 남습니다.</span>'; return; }
-    box.innerHTML='<table style="width:100%;font-size:12.5px;border-collapse:collapse;"><thead><tr class="sub" style="text-align:left;">'
-      +'<th style="padding:5px 8px;">시각</th><th style="padding:5px 8px;">종류</th><th style="padding:5px 8px;">버전</th><th style="padding:5px 8px;">결과</th><th style="padding:5px 8px;">엣지</th><th></th></tr></thead><tbody>'
-      +ev.map((e,i)=>{
+    window._histEvents=(j&&j.events)||[]; window._histVer=j.version; window._histLimit=20;
+    renderHist();
+  }catch(e){ box.innerHTML='<span class="sub">불러오기 실패: '+e+'</span>'; }
+}
+// 기본 20줄만 보이고, '더 보기'를 누르면 나머지를 펼친다.
+function renderHist(){
+  const box=$("histList"); if(!box) return;
+  const ev=window._histEvents||[];
+  if(!ev.length){ box.innerHTML='<span class="sub">아직 기록이 없습니다 (포탈 v'+(window._histVer||"?")+'). 자동·수동·전 노드 푸시·재설치 업그레이드가 일어나면 여기에 남습니다.</span>'; return; }
+  const lim=window._histLimit||20;
+  box.innerHTML='<table style="width:100%;font-size:12.5px;border-collapse:collapse;"><thead><tr class="sub" style="text-align:left;">'
+    +'<th style="padding:5px 8px;">시각</th><th style="padding:5px 8px;">종류</th><th style="padding:5px 8px;">버전</th><th style="padding:5px 8px;">결과</th><th style="padding:5px 8px;">엣지</th><th></th></tr></thead><tbody>'
+    +ev.slice(0,lim).map((e,i)=>{
         const res=e.ok?'<span style="color:var(--ok)">✓ 성공</span>':'<span style="color:var(--danger)">✗ 실패</span>';
         const ver=(e.from?("v"+e.from+" → "):"")+(e.to?("v"+e.to):(e.bundle_version?("v"+e.bundle_version):"—"));
         const edges=(e.push_total!=null)?((e.push_ok||0)+"/"+e.push_total):"—";
@@ -1746,9 +1777,12 @@ async function loadHistory(){
           +'<td style="padding:5px 8px;">'+res+(e.error?(' <span class="sub">'+esc(e.error)+'</span>'):'')+'</td>'
           +'<td style="padding:5px 8px;">'+edges+'</td>'
           +'<td style="padding:5px 8px;"><button class="histDetail" data-i="'+i+'" style="padding:2px 10px;">세부</button></td></tr>';
-      }).join("")+'</tbody></table>';
-    box.querySelectorAll(".histDetail").forEach(b=>b.addEventListener("click",()=>showHist(+b.dataset.i)));
-  }catch(e){ box.innerHTML='<span class="sub">불러오기 실패: '+e+'</span>'; }
+      }).join("")+'</tbody></table>'
+    +(ev.length>lim
+       ? '<div style="margin-top:8px;text-align:center;"><button id="histMore" style="padding:4px 16px;">더 보기 ('+(ev.length-lim)+'개 더) ▾</button></div>'
+       : (ev.length>20?'<div class="sub" style="margin-top:6px;text-align:center;">전체 '+ev.length+'건 표시</div>':''));
+  box.querySelectorAll(".histDetail").forEach(b=>b.addEventListener("click",()=>showHist(+b.dataset.i)));
+  const mb=$("histMore"); if(mb) mb.addEventListener("click",()=>{ window._histLimit=ev.length; renderHist(); });
 }
 function showHist(i){
   const e=(window._histEvents||[])[i]; if(!e) return; const m=$("histModal"); if(!m) return;
