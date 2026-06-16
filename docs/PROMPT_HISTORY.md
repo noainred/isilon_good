@@ -581,4 +581,7 @@
      조회를 등록 노드만 반환(필터), _prune_ping_history 가 등록 노드 아닌 옛 id 샘플 삭제, delete_node 시
      ping_samples 삭제. test_portal 12-j. v1.76.2.
 
+204. (엣지) ① '튜닝 점검' 탭 삭제(navbtn 제거, 뷰/JS 는 남겨 복구 쉽게). ② 브라우저 탭 제목 앞에
+     노드명(호스트) 추가: j.hostname || 스캔 hostname || location.hostname. dashboard.html. v1.76.3.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
