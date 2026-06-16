@@ -561,4 +561,9 @@
      portal.html elapsedLive(srv+수신후경과)·elapsedSpan(.js-elapsed)·tickElapsed(1초)·_ovFetch(loadOverview
      수신시각). 노드 헤더 runLine·루트별 진행 모두 적용. 시계오차 안전(서버경과+클라델타). v1.74.1.
 
+199. 백업 설정: 1시간마다 최대 100개 자동 저장 + 사용자가 일정/보관 수 지정 → settings backup_dir/
+     backup_every_hours/backup_keep, _maybe_scheduled_backup(주기 루프·폴더 최신 mtime 기준 중복방지)·
+     _list_backups·_prune_backups(초과분 삭제)·backup_info·set_backup_config, 라우트 /backup/config,
+     upgrade_config 에 backup_info. portal.html 백업 카드 일정/보관 입력·현황. test_portal 12-h. v1.75.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

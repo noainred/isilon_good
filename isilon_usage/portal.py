@@ -429,7 +429,8 @@ class PortalController:
                "upgrade_watch_dir": "", "upgrade_check_secs": 60,
                "upgrade_source": "off", "upgrade_url": "", "upgrade_token": "",
                "upgrade_auto": False,
-               "enroll_token": "", "release_dir": "/opt/isilon_release"}
+               "enroll_token": "", "release_dir": "/opt/isilon_release",
+               "backup_dir": "", "backup_every_hours": 1.0, "backup_keep": 100}
         try:
             with open(portal_settings_path(self.data_dir), encoding="utf-8") as fh:
                 s = json.load(fh)
@@ -449,6 +450,15 @@ class PortalController:
                 out["enroll_token"] = str(s.get("enroll_token") or "").strip()
                 out["release_dir"] = (str(s.get("release_dir") or "").strip()
                                       or "/opt/isilon_release")
+                out["backup_dir"] = str(s.get("backup_dir") or "").strip()
+                try:
+                    out["backup_every_hours"] = max(0.1, float(s.get("backup_every_hours", 1) or 1))
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    out["backup_keep"] = min(1000, max(1, int(s.get("backup_keep", 100) or 100)))
+                except (TypeError, ValueError):
+                    pass
         except (OSError, ValueError):
             pass
         return out
@@ -602,6 +612,81 @@ class PortalController:
             return {"ok": False, "reason": "저장 실패: %s" % exc}
         return {"ok": True, "path": path, "size": len(data)}
 
+    # --- 자동 백업 일정/보관 ---
+    _BACKUP_RE = re.compile(r"^isilon_portal_backup-\d{8}-\d{6}\.tar\.gz$")
+
+    def _list_backups(self, bdir) -> list:
+        """bdir 의 백업 파일을 오래된→최신 순으로 [{name,size,mtime}] 반환."""
+        d = (bdir or "").strip()
+        out = []
+        if d and os.path.isdir(d):
+            for n in os.listdir(d):
+                if self._BACKUP_RE.match(n):
+                    p = os.path.join(d, n)
+                    try:
+                        out.append({"name": n, "size": os.path.getsize(p),
+                                    "mtime": os.path.getmtime(p)})
+                    except OSError:
+                        pass
+        out.sort(key=lambda x: x["mtime"])
+        return out
+
+    def _prune_backups(self, bdir, keep) -> int:
+        """최신 keep 개만 남기고 오래된 백업을 지운다(지운 개수 반환)."""
+        files = self._list_backups(bdir)
+        keep = max(1, int(keep or 1))
+        removed = 0
+        for f in (files[:-keep] if len(files) > keep else []):
+            try:
+                os.remove(os.path.join(bdir, f["name"]))
+                removed += 1
+            except OSError:
+                pass
+        return removed
+
+    def backup_info(self) -> dict:
+        """자동 백업 설정 + 현재 보관 현황(개수·용량·최근·다음 예정)."""
+        bdir = (self.settings.get("backup_dir") or "").strip()
+        every = float(self.settings.get("backup_every_hours") or 1)
+        keep = int(self.settings.get("backup_keep") or 100)
+        files = self._list_backups(bdir)
+        last = files[-1]["mtime"] if files else 0
+        return {"backup_dir": bdir, "backup_every_hours": every, "backup_keep": keep,
+                "backup_count": len(files),
+                "backup_total_bytes": sum(f["size"] for f in files),
+                "backup_last": last, "backup_newest": (files[-1]["name"] if files else ""),
+                "backup_next": (last + every * 3600) if (bdir and last) else 0}
+
+    def set_backup_config(self, dest_dir, every_hours, keep) -> dict:
+        """자동 백업 폴더·주기(시간)·최대 보관 수를 저장(폴더 비우면 자동 백업 끔)."""
+        self.settings["backup_dir"] = str(dest_dir or "").strip()
+        try:
+            self.settings["backup_every_hours"] = max(0.1, float(every_hours))
+        except (TypeError, ValueError):
+            pass
+        try:
+            self.settings["backup_keep"] = min(1000, max(1, int(keep)))
+        except (TypeError, ValueError):
+            pass
+        self._save_settings()
+        return dict({"ok": True}, **self.backup_info())
+
+    def _maybe_scheduled_backup(self, now) -> None:
+        """주기 루프에서 호출 — 자동 백업 시간이 됐으면 저장 + 오래된 것 정리."""
+        bdir = (self.settings.get("backup_dir") or "").strip()
+        if not bdir:
+            return
+        every = max(300.0, float(self.settings.get("backup_every_hours") or 1) * 3600)
+        files = self._list_backups(bdir)
+        last = files[-1]["mtime"] if files else 0
+        if now - last < every:
+            return
+        res = self.save_backup(bdir)
+        if res.get("ok"):
+            self._prune_backups(bdir, int(self.settings.get("backup_keep") or 100))
+            auditmod.record(self.data_dir, action="backup_auto", ok=True,
+                            detail=res.get("path", ""))
+
     # --- 자동 업그레이드 ---
     def set_upgrade_watch(self, watch_dir: str, check_secs=None) -> dict:
         self.settings["upgrade_watch_dir"] = str(watch_dir or "").strip()
@@ -621,7 +706,7 @@ class PortalController:
                      "enroll_token_set": bool(self.settings.get("enroll_token")),
                      "hq_version": __version__, "bundle_version": bver,
                      "bundle_stale": bool(bver and bver != __version__)},
-                    **self.release_info())
+                    **self.release_info(), **self.backup_info())
 
     def push_upgrade_all(self) -> dict:
         """등록된 모든 엣지에 현재(=디스크) 코드 번들을 동기로 푸시한다(엣지 api_token 인증)."""
@@ -1133,6 +1218,7 @@ class PortalController:
         while not self._stop.is_set():
             try:
                 now = time.time()
+                self._maybe_scheduled_backup(now)
                 secs = int(self.settings.get("upgrade_check_secs", 60) or 60)
                 if now - self._last_upgrade_check >= max(10, secs):
                     self._last_upgrade_check = now
@@ -1956,6 +2042,10 @@ class PortalHandler(BaseHTTPRequestHandler):
             self._audit(path, True)              # 인증 통과한 변경 작업 기록
             if path == "/api/portal/backup/save":      # 포탈+노드 백업을 서버 디렉터리에 저장
                 self._send_json(c.save_backup(body.get("dir") or body.get("path") or ""))
+                return
+            if path == "/api/portal/backup/config":    # 자동 백업 일정(시간)·최대 보관 수 설정
+                self._send_json(c.set_backup_config(body.get("dir"), body.get("every_hours"),
+                                                    body.get("keep")))
                 return
             if path == "/api/portal/backup/download":  # 포탈+노드 백업 tar.gz 다운로드(민감)
                 data, fname = c.make_backup_bytes()

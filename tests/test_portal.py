@@ -360,6 +360,23 @@ def main() -> int:
         assert sv["ok"] and os.path.isfile(sv["path"]) and sv["size"] > 0, sv
         assert not pc.save_backup("")["ok"]      # 빈 경로 거부
 
+        # 12-h) 자동 백업 일정/보관: 설정 저장 + 최대 보관 수 초과분 정리(prune)
+        abk = os.path.join(tmp, "autobk")
+        cbk = pc.set_backup_config(abk, 2, 3)    # 2시간마다, 최대 3개
+        assert (cbk["ok"] and cbk["backup_dir"] == abk and cbk["backup_every_hours"] == 2
+                and cbk["backup_keep"] == 3), cbk
+        os.makedirs(abk, exist_ok=True)
+        for i in range(5):                       # 더미 백업 5개(오래된→최신 mtime)
+            p = os.path.join(abk, "isilon_portal_backup-2026010%d-000000.tar.gz" % (i + 1))
+            with open(p, "wb") as fh:
+                fh.write(b"x")
+            os.utime(p, (1_000_000 + i, 1_000_000 + i))
+        assert len(pc._list_backups(abk)) == 5
+        assert pc._prune_backups(abk, 3) == 2 and len(pc._list_backups(abk)) == 3   # 최신 3개만
+        bi = pc.backup_info()
+        assert bi["backup_count"] == 3 and bi["backup_keep"] == 3, bi
+        pc.set_backup_config("", 1, 100)         # 자동 백업 끔(원복)
+
         # 13) 업그레이드 상태: 노드 버전이 HQ보다 낮으면 '구버전'으로 집계('모두 최신' 착시 방지)
         assert pc.upsert_node({"id": "old-node", "url": "http://10.9.9.1:8765", "token": "x"})["ok"]
         with pc._lock:

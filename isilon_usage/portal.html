@@ -499,9 +499,17 @@
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
       <button id="bkDownload" class="primary">⬇ 백업 다운로드</button>
       <input id="bkDir" class="inp mono" placeholder="서버에 저장할 폴더 (예: /opt/isilon_backups)" style="flex:1; min-width:260px;" />
-      <button id="bkSave">📁 서버에 저장</button>
+      <button id="bkSave">📁 지금 저장</button>
       <span class="sub" id="bkMsg"></span>
     </div>
+    <div class="sub" style="margin-top:12px; border-top:1px solid var(--line); padding-top:10px;">⏰ <b>자동 백업 일정</b> — 위 <b>폴더</b>에 주기적으로 저장하고, <b>최대 보관 수</b>를 넘으면 오래된 것부터 지웁니다(폴더가 비어 있으면 자동 백업 끔).</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px;">
+      <label class="sub">주기(시간)<input id="bkEvery" class="inp" type="number" min="0.1" step="0.5" value="1" style="width:84px; margin-left:5px;" /></label>
+      <label class="sub">최대 보관 수<input id="bkKeep" class="inp" type="number" min="1" max="1000" value="100" style="width:92px; margin-left:5px;" /></label>
+      <button id="bkSchedSave">일정 저장</button>
+      <span class="sub" id="bkSchedMsg"></span>
+    </div>
+    <div class="sub" id="bkStatus" style="margin-top:7px;"></div>
   </div>
   </div>
 </div>
@@ -553,7 +561,7 @@ function updateLoginUI(){
       btn.textContent="🔓 로그아웃 ("+(m>0?m+"분":_opLeft()+"초")+")"; }
     else btn.textContent="🔑 로그인";
   }
-  ["addBtn","testBtn","pvGenBtn","pvSshBtn","setPwBtn","setPwClearBtn","ugGenBtn","ugSshBtn","pAuditBtn","ugWatchSave","ugPushAll","ugPushAllSsh","bkDownload","bkSave"].forEach(id=>{ const e=$(id); if(e) e.disabled=ro; });
+  ["addBtn","testBtn","pvGenBtn","pvSshBtn","setPwBtn","setPwClearBtn","ugGenBtn","ugSshBtn","pAuditBtn","ugWatchSave","ugPushAll","ugPushAllSsh","bkDownload","bkSave","bkSchedSave"].forEach(id=>{ const e=$(id); if(e) e.disabled=ro; });
 }
 async function loadAuth(){
   try{ const j=await (await _origFetch("/api/portal/auth",{cache:"no-store"})).json();
@@ -618,6 +626,7 @@ function showSub(id){
   document.querySelectorAll("#view-nodes .stab").forEach(b=>b.classList.toggle("active", b.dataset.pane===id));
   // 업그레이드 탭을 열 때마다 릴리스 폴더/인터넷 업그레이드 상태를 라이브로 새로고침(stale 표시 방지).
   if(id==="np-upgrade"){ try{ loadRelease(); loadNetUpg(); }catch(e){} }
+  if(id==="np-security"){ try{ pLoadUpgradeCfg(); }catch(e){} }   // 백업 현황 갱신
 }
 document.querySelectorAll("#view-nodes .stab").forEach(b=>b.addEventListener("click",()=>showSub(b.dataset.pane)));
 
@@ -1307,9 +1316,29 @@ if($("bkSave")) $("bkSave").addEventListener("click", async()=>{
 async function pLoadUpgradeCfg(){
   try{ const j=await (await fetch("/api/portal/settings",{cache:"no-store"})).json();
     if(j.ok && $("ugWatchDir")) $("ugWatchDir").value=j.upgrade_watch_dir||"";
-    if(j.ok && $("setEnroll")) $("setEnroll").placeholder=j.enroll_token_set?"설정됨 — 바꾸려면 새 토큰 입력(비우고 저장=해제)":"enroll 공유 토큰"; }catch(e){}
+    if(j.ok && $("setEnroll")) $("setEnroll").placeholder=j.enroll_token_set?"설정됨 — 바꾸려면 새 토큰 입력(비우고 저장=해제)":"enroll 공유 토큰";
+    if(j.ok) renderBackup(j); }catch(e){}
   loadNetUpg();
 }
+function renderBackup(j){
+  if($("bkDir") && document.activeElement!==$("bkDir")) $("bkDir").value=j.backup_dir||"";
+  if($("bkEvery") && document.activeElement!==$("bkEvery")) $("bkEvery").value=j.backup_every_hours||1;
+  if($("bkKeep") && document.activeElement!==$("bkKeep")) $("bkKeep").value=j.backup_keep||100;
+  if($("bkStatus")){
+    if(j.backup_dir){
+      const nxt=j.backup_next?("다음 예정 "+new Date(j.backup_next*1000).toLocaleString("ko-KR")):"첫 주기 대기";
+      $("bkStatus").innerHTML=`<span style="color:var(--ok)">⏰ 자동 백업 켜짐</span> · 보관 <b>${j.backup_count||0}</b>/${j.backup_keep||100}개 (${fmtBytes(j.backup_total_bytes||0)})`
+        +(j.backup_newest?` · 최근 <span class="mono">${j.backup_newest}</span>`:"")+` · ${nxt}`;
+    } else $("bkStatus").innerHTML='<span class="sub">자동 백업 꺼짐 — 폴더를 넣고 ‘일정 저장’ 하면 켜집니다.</span>';
+  }
+}
+if($("bkSchedSave")) $("bkSchedSave").addEventListener("click", async()=>{
+  $("bkSchedMsg").textContent=" 저장 중…";
+  try{ const j=await (await fetch("/api/portal/backup/config",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({dir:$("bkDir").value.trim(), every_hours:parseFloat($("bkEvery").value)||1, keep:parseInt($("bkKeep").value,10)||100})})).json();
+    if(j.ok){ $("bkSchedMsg").textContent=" ✓ 저장됨"; renderBackup(j); } else $("bkSchedMsg").textContent=" ✗ "+(j.reason||j.error||"실패"); }
+  catch(e){ $("bkSchedMsg").textContent=" ✗ "+e; }
+});
 // 인터넷(GitHub) 자동 업그레이드 — 포탈 자가 + 전 엣지 전파
 async function loadNetUpg(){
   try{ renderNetUpg(await (await fetch("/api/portal/upgrade/status",{cache:"no-store"})).json()); }catch(e){}
