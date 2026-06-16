@@ -566,4 +566,7 @@
      _list_backups·_prune_backups(초과분 삭제)·backup_info·set_backup_config, 라우트 /backup/config,
      upgrade_config 에 backup_info. portal.html 백업 카드 일정/보관 입력·현황. test_portal 12-h. v1.75.0.
 
+200. 엣지 탭 모든 라벨에 아이콘(🏠 Summary·📉 추세·비교·📁 디렉터리) + '디렉터리'→'디렉터리 분석'
+     이름변경. dashboard.html navbtn 라벨만 변경. v1.75.1.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
