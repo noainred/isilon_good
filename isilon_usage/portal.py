@@ -225,6 +225,19 @@ def agent_bundle_bytes() -> bytes:
     return buf.getvalue()
 
 
+def agent_bundle_version() -> str:
+    """포탈이 엣지에 푸시할(=디스크 HERE 의) isilon_usage 코드 버전(__init__.py 의 __version__).
+
+    실행 중 메모리 버전(__version__)과 다르면 '코드는 갱신됐는데 재시작이 안 됨'을 뜻한다.
+    """
+    try:
+        with open(os.path.join(HERE, "__init__.py"), encoding="utf-8") as fh:
+            m = re.search(r"""__version__\s*=\s*["'](\d+\.\d+\.\d+)["']""", fh.read())
+        return m.group(1) if m else ""
+    except OSError:
+        return ""
+
+
 def newest_release_archive(release_dir: str):
     """release_dir 안의 가장 최신 isilon_usage-*.tar.gz 경로를 반환(없으면 None).
 
@@ -557,21 +570,71 @@ class PortalController:
                 "upgrade_check_secs": self.settings["upgrade_check_secs"]}
 
     def upgrade_config(self) -> dict:
+        bver = agent_bundle_version()
         return dict({"ok": True, "upgrade_watch_dir": self.settings.get("upgrade_watch_dir", ""),
                      "upgrade_check_secs": self.settings.get("upgrade_check_secs", 60),
                      "enroll_token_set": bool(self.settings.get("enroll_token")),
-                     "hq_version": __version__}, **self.release_info())
+                     "hq_version": __version__, "bundle_version": bver,
+                     "bundle_stale": bool(bver and bver != __version__)},
+                    **self.release_info())
 
     def push_upgrade_all(self) -> dict:
-        """등록된 모든 엣지에 현재(=새) 코드 번들을 푸시한다(엣지 api_token 인증).
-
-        진행 상황을 _upg_log 에 엣지별로 남겨, 업그레이드 모달이 라이브로 보여줄 수 있게 한다.
-        """
+        """등록된 모든 엣지에 현재(=디스크) 코드 번들을 동기로 푸시한다(엣지 api_token 인증)."""
         data = agent_bundle_bytes()
-        results = []
+        bver = agent_bundle_version() or "?"
+        nodes = self._push_init(bver)
+        results = self._push_loop(data, bver, nodes)
+        return {"ok": True, "hq_version": __version__, "bundle_version": bver, "results": results}
+
+    def start_push_all(self) -> dict:
+        """전 노드 푸시를 백그라운드로 시작하고 즉시 반환(모달이 진행 상태를 폴링해 라이브 표시)."""
+        with self._lock:
+            if (self._upg_state.get("push") or {}).get("active"):
+                return {"ok": False, "error": "이미 전파 중입니다."}
+        data = agent_bundle_bytes()
+        bver = agent_bundle_version() or "?"
+        nodes = self._push_init(bver)     # 모달이 즉시 보도록 동기 초기화
+        threading.Thread(target=lambda: self._push_loop(data, bver, nodes),
+                         name="push-all", daemon=True).start()
+        return {"ok": True, "started": True, "bundle_version": bver, "total": len(nodes)}
+
+    def _push_init(self, bver: str) -> list:
+        """전 노드 푸시용 진행 상태(_upg_state['push'])를 초기화하고 노드 목록을 반환한다."""
         nodes = list(self.nodes)
-        self._upg_log("③ 엣지 전파 시작 — %d대 (각 엣지가 새 코드 받아 재시작)" % len(nodes))
-        for n in nodes:
+        with self._lock:
+            cache = dict(self._cache)
+            self._upg_state["push"] = {
+                "active": True, "bundle_version": bver, "total": len(nodes),
+                "done": 0, "ok": 0, "fail": 0, "started": time.time(), "finished": None,
+                "nodes": [{"id": n["id"], "region": n.get("region", ""),
+                           "current": (cache.get(n["id"]) or {}).get("version"),
+                           "state": "pending", "reason": "", "version": None}
+                          for n in nodes],
+            }
+        return nodes
+
+    def _push_set(self, idx: int, **kw) -> None:
+        """푸시 진행 상태에서 idx 노드를 갱신하고 done/ok/fail 카운트를 다시 센다."""
+        with self._lock:
+            p = self._upg_state.get("push")
+            if not p or idx >= len(p["nodes"]):
+                return
+            p["nodes"][idx].update(kw)
+            states = [x["state"] for x in p["nodes"]]
+            p["done"] = sum(1 for s in states if s in ("ok", "fail"))
+            p["ok"] = states.count("ok")
+            p["fail"] = states.count("fail")
+
+    def _push_loop(self, data: bytes, bver: str, nodes: list) -> list:
+        """각 엣지에 번들을 POST 하고 노드별 진행 상태를 갱신한다(동기). 결과 리스트 반환."""
+        results = []
+        self._upg_log("③ 엣지 전파 시작 — 보내는 코드 v%s, %d대 (이 버전이 엣지보다 낮거나 같으면 거부)"
+                      % (bver, len(nodes)))
+        if bver and bver != "?" and bver != __version__:
+            self._upg_log("   ⚠ 포탈 실행 v%s ≠ 디스크 코드 v%s — 포탈을 재시작해야 최신을 보냅니다."
+                          % (__version__, bver))
+        for idx, n in enumerate(nodes):
+            self._push_set(idx, state="sending")
             url = n["url"].rstrip("/") + "/api/upgrade"
             try:
                 req = urllib.request.Request(url, data=data, method="POST")
@@ -580,24 +643,42 @@ class PortalController:
                     req.add_header("X-Auth-Token", n["token"])
                 resp = urllib.request.urlopen(req, timeout=120)
                 j = json.loads(resp.read().decode("utf-8"))
-                results.append({"id": n["id"], "ok": bool(j.get("ok")),
+                ok = bool(j.get("ok"))
+                results.append({"id": n["id"], "ok": ok,
                                 "version": j.get("version"), "reason": j.get("reason")})
+                self._push_set(idx, state=("ok" if ok else "fail"),
+                               version=j.get("version"), reason=j.get("reason") or "")
             except urllib.error.HTTPError as e:  # type: ignore[attr-defined]
-                reason = ("구버전 엣지(<1.41.0): 푸시 미지원 — SSH 업그레이드로 부트스트랩 필요"
-                          if e.code == 404 else
-                          "거부됨 — 엣지에 api_token 설정 필요" if e.code == 403 else
-                          "HTTP %d" % e.code)
+                detail = ""
+                try:
+                    detail = (json.loads(e.read().decode("utf-8")) or {}).get("reason") or ""
+                except Exception:   # noqa: BLE001 — 에러 본문이 JSON 이 아니어도 무시
+                    detail = ""
+                if e.code == 404:
+                    reason = "구버전 엣지(<1.41.0): 푸시 미지원 — SSH 업그레이드로 부트스트랩 필요"
+                elif e.code == 403:
+                    reason = "거부됨 — 엣지에 api_token 설정 필요"
+                else:
+                    reason = detail or ("HTTP %d" % e.code)
                 results.append({"id": n["id"], "ok": False, "reason": reason})
+                self._push_set(idx, state="fail", reason=reason)
             except Exception as e:  # noqa: BLE001
                 results.append({"id": n["id"], "ok": False, "reason": str(e)})
+                self._push_set(idx, state="fail", reason=str(e))
             r = results[-1]
-            if r.get("ok"):
-                self._upg_log("   • %s → ✓ v%s" % (n["id"], r.get("version") or "?"))
-            else:
-                self._upg_log("   • %s → ✗ %s" % (n["id"], r.get("reason") or "실패"))
+            self._upg_log(("   • %s → ✓ v%s" % (n["id"], r.get("version") or "?")) if r.get("ok")
+                          else ("   • %s → ✗ %s" % (n["id"], r.get("reason") or "실패")))
         okn = sum(1 for r in results if r.get("ok"))
-        self._upg_log("③ 엣지 전파 완료 — 성공 %d/%d" % (okn, len(nodes)))
-        return {"ok": True, "hq_version": __version__, "results": results}
+        if nodes and okn == 0 and any("더 새 버전" in (r.get("reason") or "") for r in results):
+            self._upg_log("⚠ 전부 '더 새 버전 아님'으로 거부 — 포탈 배포 코드 v%s 가 엣지보다 낮거나 "
+                          "같습니다. 포탈을 먼저 최신으로 올린 뒤 다시 푸시하세요." % bver)
+        with self._lock:
+            p = self._upg_state.get("push")
+            if p:
+                p["active"] = False
+                p["finished"] = time.time()
+        self._upg_log("③ 엣지 전파 완료 — 성공 %d/%d (보낸 버전 v%s)" % (okn, len(nodes), bver))
+        return results
 
     def push_upgrade_all_ssh(self, raw: dict) -> dict:
         """[부트스트랩] 등록된 모든 엣지에 SSH 로 접속해 업그레이드 스크립트를 실행한다.
@@ -726,6 +807,8 @@ class PortalController:
             nodes = list(self.nodes)
             cache = dict(self._cache)
         st["current"] = __version__
+        st["bundle_version"] = agent_bundle_version()      # 엣지에 보낼 디스크 코드 버전
+        st["bundle_stale"] = bool(st["bundle_version"] and st["bundle_version"] != __version__)
         st["source_mode"] = self.settings.get("upgrade_source", "off")
         st["auto"] = bool(self.settings.get("upgrade_auto"))
         st["url"] = self.settings.get("upgrade_url") or upgrademod.DEFAULT_UPGRADE_BASE
@@ -1849,7 +1932,7 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self._send_json(c.upgrade_install(propagate=bool(body.get("propagate", True))))
                 return
             if path == "/api/portal/upgrade-all":
-                self._send_json(c.push_upgrade_all())
+                self._send_json(c.start_push_all())     # 백그라운드 푸시 — 모달이 진행 폴링
                 return
             if path == "/api/portal/upgrade-all/ssh":
                 self._send_json(c.push_upgrade_all_ssh(body))

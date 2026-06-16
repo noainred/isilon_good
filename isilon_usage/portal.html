@@ -368,6 +368,36 @@
       </div>
     </div>
   </div>
+
+  <!-- 전 노드 업그레이드 — 노드별 라이브 상세 진행 팝업 -->
+  <div id="pushModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.62); z-index:2000; align-items:center; justify-content:center;">
+    <div style="background:#141a2b; border:1px solid #2a3550; border-radius:12px; width:min(900px,96vw); max-height:90vh; display:flex; flex-direction:column; box-shadow:0 14px 44px rgba(0,0,0,.55);">
+      <div style="padding:13px 18px; border-bottom:1px solid #2a3550; display:flex; align-items:center; gap:10px;">
+        <span style="font-size:18px;">⬆️</span><b style="font-size:15px;">전 노드 업그레이드 진행</b>
+        <span id="pushModalStat" class="sub" style="margin-left:auto;"></span>
+      </div>
+      <div style="padding:12px 18px; border-bottom:1px solid #2a3550;">
+        <div id="pushModalHead" class="sub" style="margin-bottom:7px;">시작하는 중…</div>
+        <div class="capbar" style="height:18px; border-radius:9px;"><i id="pushBar" style="width:0"></i><b id="pushBarTxt">—</b></div>
+      </div>
+      <div style="overflow:auto; flex:1; min-height:260px;">
+        <table style="width:100%; font-size:12.5px; border-collapse:collapse;">
+          <thead><tr style="position:sticky; top:0; background:#141a2b; z-index:1;">
+            <th style="text-align:left; padding:7px 18px;">노드</th>
+            <th style="text-align:left; padding:7px 8px;">지역</th>
+            <th style="text-align:left; padding:7px 8px;">현재</th>
+            <th style="text-align:left; padding:7px 8px;">상태</th>
+            <th style="text-align:left; padding:7px 18px;">상세 (새 버전 / 사유)</th>
+          </tr></thead>
+          <tbody id="pushTbody"></tbody>
+        </table>
+      </div>
+      <div style="padding:10px 18px; border-top:1px solid #2a3550; display:flex; align-items:center; gap:10px;">
+        <span class="sub">닫아도 전파는 백그라운드로 계속됩니다.</span>
+        <button id="pushModalClose" style="margin-left:auto;">닫기</button>
+      </div>
+    </div>
+  </div>
   </div>
 
   <!-- ③ 노드 관리 (추가/수정 + 등록 목록) -->
@@ -1256,6 +1286,11 @@ function renderNetUpg(j){
              ? ` <span class="sub">(${j.edges_outdated_list.map(e=>`${e.id} v${e.version}`).join(", ")})</span>` : "")
         : ((j.node_count>0&&j.edges_unknown<j.node_count) ? ` · <span style="color:var(--ok)">엣지 모두 최신</span>` : ""))
     +((j.edges_unknown>0)?` <span class="sub">· ${j.edges_unknown}대 버전 미확인</span>`:"")
+    +(j.bundle_version
+        ? (j.bundle_stale
+            ? `<br><span style="color:var(--danger);font-weight:700">⚠ 엣지에 보낼 배포 코드 v${j.bundle_version} ≠ 실행 v${j.current} — 포탈 재시작 필요</span>`
+            : `<br><span class="sub">엣지에 보낼 배포 코드 <b>v${j.bundle_version}</b> (실행 버전과 일치)</span>`)
+        : "")
     +(j.check_error?`<br><span style="color:var(--danger)">확인 오류: ${j.check_error}</span>`:"")
     +`<br><span class="sub">소스: ${j.url||"—"}</span>`;
   if(document.activeElement!==$("nuSource")) $("nuSource").value=j.source_mode||"off";
@@ -1456,17 +1491,64 @@ async function fbBrowse(p){
   }catch(e){ if(errEl) errEl.textContent="오류: "+e; }
 }
 if($("ugWatchBrowse")) $("ugWatchBrowse").addEventListener("click", fbOpen);
+// 전 노드 업그레이드 진행 팝업 — /upgrade/status 의 push 를 폴링해 노드별 라이브 표시
+let _pushTimer=null;
+function closePushModal(){ if(_pushTimer){clearTimeout(_pushTimer);_pushTimer=null;} const m=$("pushModal"); if(m) m.style.display="none"; }
+function _pushBadge(s){
+  if(s==="ok")      return '<span style="color:var(--ok);font-weight:700">✓ 성공</span>';
+  if(s==="fail")    return '<span style="color:var(--danger);font-weight:700">✗ 실패</span>';
+  if(s==="sending") return '<span style="color:var(--warn)">⏳ 전송 중…</span>';
+  return '<span class="sub">· 대기</span>';
+}
+function renderPush(p){
+  if(!p) return;
+  const tot=p.total||0, done=p.done||0, ok=p.ok||0, fail=p.fail||0;
+  const pct=tot?Math.round(done/tot*100):0;
+  if($("pushBar")){ $("pushBar").style.width=pct+"%";
+    $("pushBar").style.background = (!p.active && fail) ? "var(--danger)" : (!p.active ? "var(--ok)" : "var(--warn)"); }
+  if($("pushBarTxt")) $("pushBarTxt").textContent = done+" / "+tot;
+  if($("pushModalHead")) $("pushModalHead").innerHTML =
+    `보내는 코드 <b>v${p.bundle_version||"?"}</b> · 성공 <b style="color:var(--ok)">${ok}</b> · 실패 <b style="color:var(--danger)">${fail}</b> / 전체 ${tot}대`;
+  if($("pushModalStat")) $("pushModalStat").innerHTML = p.active
+    ? '<span style="color:var(--warn)">⏳ 진행 중…</span>'
+    : (fail? `<span style="color:var(--danger)">완료 — 실패 ${fail}대 (사유는 아래 표)</span>` : '<span style="color:var(--ok)">✅ 모두 성공</span>');
+  if($("pushTbody")) $("pushTbody").innerHTML=(p.nodes||[]).map(n=>{
+    const detail = n.state==="ok" ? ("→ v"+(n.version||"?")) : (n.reason||"");
+    return `<tr style="border-top:1px solid #222c44">`
+      +`<td class="mono" style="padding:5px 18px">${esc(n.id)}</td>`
+      +`<td class="sub" style="padding:5px 8px">${esc(n.region||"")}</td>`
+      +`<td class="mono sub" style="padding:5px 8px">${n.current?("v"+esc(""+n.current)):"—"}</td>`
+      +`<td style="padding:5px 8px">${_pushBadge(n.state)}</td>`
+      +`<td class="${n.state==="fail"?"":"sub"}" style="padding:5px 18px; ${n.state==="fail"?"color:var(--danger)":""}">${esc(detail)}</td></tr>`;
+  }).join("");
+}
+async function pollPush(){
+  let j=null;
+  try{ j=await (await fetch("/api/portal/upgrade/status",{cache:"no-store"})).json(); }catch(e){}
+  if(j&&j.push) renderPush(j.push);
+  _pushTimer = (j&&j.push&&j.push.active) ? setTimeout(pollPush, 1000) : null;
+}
+function openPushModal(){
+  const m=$("pushModal"); if(!m) return;
+  m.style.display="flex";
+  if($("pushModalHead")) $("pushModalHead").textContent="시작하는 중…";
+  if($("pushTbody")) $("pushTbody").innerHTML="";
+  if($("pushBar")){ $("pushBar").style.width="0"; $("pushBar").style.background="var(--warn)"; }
+  if($("pushBarTxt")) $("pushBarTxt").textContent="—";
+  if($("pushModalStat")) $("pushModalStat").innerHTML='<span style="color:var(--warn)">⏳ 시작</span>';
+  if(_pushTimer){clearTimeout(_pushTimer);_pushTimer=null;}
+  pollPush();
+}
+if($("pushModalClose")) $("pushModalClose").addEventListener("click", closePushModal);
 if($("ugPushAll")) $("ugPushAll").addEventListener("click", async()=>{
-  if(!confirm("등록된 모든 엣지를 현재 HQ 버전으로 업그레이드할까요?")) return;
-  $("ugPushAll").disabled=true; $("ugWatchMsg").textContent=" 푸시 중…";
+  if(!confirm("등록된 모든 엣지를 현재 HQ 코드로 업그레이드할까요?")) return;
+  $("ugPushAll").disabled=true; $("ugWatchMsg").textContent=" 시작…";
+  openPushModal();
   try{ const j=await (await fetch("/api/portal/upgrade-all",{method:"POST",
       headers:{"Content-Type":"application/json"},body:"{}"})).json();
-    if(j.ok){ const ok=j.results.filter(r=>r.ok).length, fail=j.results.length-ok;
-      $("ugWatchMsg").textContent=" HQ v"+(j.hq_version||"?")+" · 성공 "+ok+" · 실패 "+fail;
-      $("ugPushOut").style.display=""; $("ugPushOut").textContent=
-        j.results.map(r=> r.ok ? `✓ ${r.id} — 성공 (v${r.version||"?"})`
-          : `✗ ${r.id} — 실패: ${r.reason||""}`).join("\n"); }
-    else $("ugWatchMsg").textContent=" ✗ "+(j.reason||j.error||"실패"); }
+    if(j.ok){ $("ugWatchMsg").textContent=" 전파 시작 — 보내는 코드 v"+(j.bundle_version||"?")+" · "+(j.total||0)+"대"; }
+    else { $("ugWatchMsg").textContent=" ✗ "+(j.error||j.reason||"실패");
+      if($("pushModalStat")) $("pushModalStat").innerHTML=`<span style="color:var(--danger)">시작 실패: ${(j.error||j.reason||"")}</span>`; } }
   catch(e){ $("ugWatchMsg").textContent=" ✗ "+e; }
   $("ugPushAll").disabled=false;
 });

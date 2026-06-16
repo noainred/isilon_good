@@ -337,6 +337,16 @@ def main() -> int:
         assert "agent-bundle" in scr and "__pycache__" in scr, scr
         assert 'for s in isilon-edge isilon_usage' in scr, scr
 
+        # 12-f) 전 노드 푸시: 배포 코드 버전 노출 + 모달용 진행 상태(노드 없는 새 컨트롤러로 격리)
+        assert portalmod.agent_bundle_version()                       # 디스크 __init__ 의 버전
+        pc2 = portalmod.PortalController(os.path.join(tmp, "pc2"))
+        sp = pc2.start_push_all()
+        assert sp["ok"] and sp.get("started") and sp.get("bundle_version"), sp
+        pst = pc2.upgrade_status().get("push") or {}
+        assert pst.get("total") == 0 and "nodes" in pst and pst.get("bundle_version"), pst
+        cfg = pc2.upgrade_config()
+        assert "bundle_version" in cfg and "bundle_stale" in cfg, cfg
+
         # 13) 업그레이드 상태: 노드 버전이 HQ보다 낮으면 '구버전'으로 집계('모두 최신' 착시 방지)
         assert pc.upsert_node({"id": "old-node", "url": "http://10.9.9.1:8765", "token": "x"})["ok"]
         with pc._lock:

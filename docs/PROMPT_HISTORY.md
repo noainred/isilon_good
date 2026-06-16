@@ -543,4 +543,9 @@
      totals.fs_total_bytes/fs_used_bytes(이미 집계됨)로 '아이실론 전체 X 중 사용 Y (Z%)' 추가. UI만.
      v1.72.3.
 
+195. (둘 다 해줘) 포탈 배포 코드 버전 표시 + 전 노드 상세 진행 팝업 → portal.py agent_bundle_version,
+     upgrade_config/upgrade_status 에 bundle_version/bundle_stale, 푸시를 _push_init/_push_loop/_push_set
+     으로 리팩터링 + start_push_all(백그라운드), /upgrade-all 라우트 비동기화. portal.html pushModal(노드별
+     표·진행바·성공/실패), renderNetUpg 배포코드/불일치 경고, 푸시 거부 실제 사유 노출. test_portal 12-f. v1.73.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
