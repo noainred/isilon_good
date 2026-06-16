@@ -410,6 +410,16 @@ def main() -> int:
         cx.close()
         assert "pingnode" not in left2, left2                                  # 노드삭제 시 핑도 삭제
 
+        # 12-k) 기동 시 포탈 버전 변경(셸 재설치 등) 자동 기록 + 같은 버전 중복 방지
+        import isilon_usage as _iu
+        pc._set_version_marker("0.0.1")          # 직전 버전을 다르게 만들어 둠
+        n0 = len(pc.upgrade_history(200))
+        pc._record_startup_version()
+        h = pc.upgrade_history(200)
+        assert len(h) == n0 + 1 and h[0]["kind"] == "포탈 기동" and h[0]["to"] == _iu.__version__, h[0]
+        pc._record_startup_version()             # 같은 버전이면 추가 기록 없음
+        assert len(pc.upgrade_history(200)) == n0 + 1, "same version must not re-record"
+
         # 13) 업그레이드 상태: 노드 버전이 HQ보다 낮으면 '구버전'으로 집계('모두 최신' 착시 방지)
         assert pc.upsert_node({"id": "old-node", "url": "http://10.9.9.1:8765", "token": "x"})["ok"]
         with pc._lock:

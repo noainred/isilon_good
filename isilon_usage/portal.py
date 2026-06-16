@@ -926,14 +926,15 @@ class PortalController:
         except Exception:  # noqa: BLE001
             pass
         self._record_upgrade(kind=how, ok=True, frm=res.get("from"),
-                             to=res.get("version"), push=push)
+                             to=res.get("version"), push=push, bump_marker=True)
         upgrademod.restart_process()
 
     # --- 업그레이드 기록(History): 자동/수동/푸시 결과를 디스크에 남겨 세부 조회 가능하게 ---
     _HISTORY_FILE = "upgrade_history.jsonl"
     _HISTORY_MAX = 200
 
-    def _record_upgrade(self, *, kind, ok, frm=None, to=None, push=None, error=None) -> None:
+    def _record_upgrade(self, *, kind, ok, frm=None, to=None, push=None, error=None,
+                        bump_marker=False) -> None:
         """업그레이드 1건(단계 로그·엣지별 결과 포함)을 jsonl 에 append(재시작에도 보존, 상한 유지)."""
         with self._lock:
             log = list(self._upg_state.get("log") or [])[-80:]
@@ -955,8 +956,35 @@ class PortalController:
             if len(lines) > self._HISTORY_MAX:
                 with open(path, "w", encoding="utf-8") as fh:
                     fh.writelines(lines[-self._HISTORY_MAX:])
+            if bump_marker and to:           # 자가 업그레이드 성공 → 마커 갱신(기동 시 중복기록 방지)
+                self._set_version_marker(to)
         except OSError:
             pass
+
+    def _set_version_marker(self, v) -> None:
+        try:
+            os.makedirs(self.data_dir, exist_ok=True)
+            with open(os.path.join(self.data_dir, "portal_last_version"), "w",
+                      encoding="utf-8") as fh:
+                fh.write(str(v or ""))
+        except OSError:
+            pass
+
+    def _record_startup_version(self) -> None:
+        """기동 시 포탈 버전이 직전 기록과 다르면(재설치/외부 업그레이드/첫 기동) History 에 남긴다.
+
+        포탈 자가 업그레이드는 재시작 직전 bump_marker 로 마커를 갱신하므로 여기서 중복 기록되지 않는다
+        — 셸 재설치(install_portal.sh) 등 '코드 밖' 업그레이드만 이 경로로 잡힌다.
+        """
+        path = os.path.join(self.data_dir, "portal_last_version")
+        try:
+            with open(path, encoding="utf-8") as fh:
+                last = fh.read().strip()
+        except OSError:
+            last = ""
+        if last != __version__:
+            self._record_upgrade(kind="포탈 기동", ok=True, frm=(last or None), to=__version__)
+            self._set_version_marker(__version__)
 
     def upgrade_history(self, limit: int = 100) -> list:
         """업그레이드 기록을 최신순으로 반환(세부 log/nodes 포함)."""
@@ -1069,7 +1097,7 @@ class PortalController:
             auditmod.record(self.data_dir, action="self_upgrade_manual", ok=True,
                             detail="-> %s" % res.get("version"))
             self._record_upgrade(kind="수동", ok=True, frm=res.get("from"),
-                                 to=res.get("version"), push=push)
+                                 to=res.get("version"), push=push, bump_marker=True)
             self._upg_log("④ 곧 포탈을 재시작합니다 (약 1.5초) — 새 버전 v%s 로 돌아옵니다"
                           % res.get("version"))
             with self._lock:        # 재시작 직전까지 installing 유지(1.5초 틈새 중복 설치 차단)
@@ -1276,6 +1304,7 @@ class PortalController:
     # --- 동기화(폴링 + 복제) ---
     def start(self) -> None:
         if self._thread is None:
+            self._record_startup_version()      # 기동/재설치 시 버전 변경을 기록(History)
             self._thread = threading.Thread(target=self._loop, name="portal-sync",
                                             daemon=True)
             self._thread.start()

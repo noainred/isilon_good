@@ -1642,7 +1642,10 @@ if($("ugPushAll")) $("ugPushAll").addEventListener("click", async()=>{
 // 업그레이드 기록(History) — 목록 + 세부 모달
 async function loadHistory(){
   const box=$("histList"); if(!box) return;
-  try{ const j=await (await fetch("/api/portal/upgrade/history",{cache:"no-store"})).json();
+  try{ const r=await fetch("/api/portal/upgrade/history",{cache:"no-store"});
+    if(!r.ok){ box.innerHTML='<span style="color:var(--warn)">기록을 불러올 수 없습니다 (HTTP '+r.status+')'
+      +(r.status===404?' — 포탈(백엔드)이 구버전입니다. <b>포탈을 재시작/업데이트</b>하면 기록 기능이 켜집니다.':'')+'</span>'; return; }
+    const j=await r.json();
     const ev=(j&&j.events)||[]; window._histEvents=ev;
     if(!ev.length){ box.innerHTML='<span class="sub">아직 기록이 없습니다.</span>'; return; }
     box.innerHTML='<table style="width:100%;font-size:12.5px;border-collapse:collapse;"><thead><tr class="sub" style="text-align:left;">'
@@ -1660,7 +1663,7 @@ async function loadHistory(){
           +'<td style="padding:5px 8px;"><button class="histDetail" data-i="'+i+'" style="padding:2px 10px;">세부</button></td></tr>';
       }).join("")+'</tbody></table>';
     box.querySelectorAll(".histDetail").forEach(b=>b.addEventListener("click",()=>showHist(+b.dataset.i)));
-  }catch(e){ box.innerHTML='<span class="sub">불러오기 실패</span>'; }
+  }catch(e){ box.innerHTML='<span class="sub">불러오기 실패: '+e+'</span>'; }
 }
 function showHist(i){
   const e=(window._histEvents||[])[i]; if(!e) return; const m=$("histModal"); if(!m) return;

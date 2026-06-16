@@ -584,4 +584,9 @@
 204. (엣지) ① '튜닝 점검' 탭 삭제(navbtn 제거, 뷰/JS 는 남겨 복구 쉽게). ② 브라우저 탭 제목 앞에
      노드명(호스트) 추가: j.hostname || 스캔 hostname || location.hostname. dashboard.html. v1.76.3.
 
+205. (History '불러오기 실패'/'하나도 없어') 원인=실행 프로세스 구버전(라우트 404)+포탈 내부 업그레이드만
+     기록. → _record_startup_version(기동 시 버전 변경=셸 재설치도 기록, 마커로 자가업그레이드 중복방지),
+     start()에서 호출, _record_upgrade bump_marker. loadHistory r.ok 체크 → 404=백엔드 구버전 안내.
+     test_portal 12-k. v1.76.4.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
