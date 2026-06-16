@@ -5,7 +5,7 @@
 """
 
 # 애플리케이션 버전(릴리즈노트 CHANGELOG.md 와 git 태그 v<버전>에 대응)
-__version__ = "1.79.0"
+__version__ = "1.79.1"
 
 # DB 스키마 버전. 스키마가 바뀌면 1씩 올리고 마이그레이션을 추가한다.
 # (per-run DB / manager DB 의 PRAGMA user_version 에 기록된다)

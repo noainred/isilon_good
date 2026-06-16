@@ -628,4 +628,9 @@
      portal.html 보안·감사 탭에 '🔐 노드 작업 비밀번호' 카드(npNode 드롭다운=전체/개별, 설정·해제).
      test_server set_op_password, test_portal 실엣지 push→op_required 토글 검증. v1.79.0.
 
+214. 포탈 제목을 옵션에서 지정 → settings portal_title/portal_subtitle, auth_status·upgrade_config
+     노출, POST /api/portal/settings 에 set_title 연결(로그인 필요). portal.html 보안·감사 탭에
+     '🏷 포탈 제목(브랜딩)' 카드 + setTitleBtn, loadAuth 에서 applyPortalTitle 로 헤더 h1·document.title
+     반영(비우면 기본 '다빈치 글로벌 아이실론 관제센터 — 한국 HQ'). test_portal 검증. v1.79.1.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

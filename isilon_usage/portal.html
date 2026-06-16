@@ -485,6 +485,16 @@
   <!-- ④ 보안 · 감사 -->
   <div class="subpane" id="np-security">
   <div class="card" style="margin-bottom:14px;">
+    <h2>🏷 포탈 제목 (브랜딩)</h2>
+    <div class="sub" style="margin-bottom:8px;">상단 제목과 브라우저 탭 제목을 바꿉니다. 둘 다 비우면 기본값(“다빈치 글로벌 아이실론 관제센터 — 한국 HQ”)을 씁니다.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <input id="setTitle" class="inp" placeholder="제목 (예: 다빈치 글로벌 아이실론 관제센터)" style="flex:2; min-width:240px;" />
+      <input id="setSubtitle" class="inp" placeholder="부제 (예: 한국 HQ) — 선택" style="flex:1; min-width:140px;" />
+      <button id="setTitleBtn" class="primary">제목 저장</button>
+      <span class="sub" id="setTitleMsg"></span>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:14px;">
     <h2>🔒 접속 보안 (로그인 비밀번호)</h2>
     <div class="sub" style="margin-bottom:8px;">비밀번호를 설정하면 접속 시 <b>읽기 전용</b>이 되고, 우상단 <b>로그인</b> 후 노드 등록·원격 구성 등 변경 작업을 할 수 있습니다. 비우고 저장하면 보호가 해제됩니다.</div>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -596,9 +606,22 @@ function updateLoginUI(){
   }
   ["addBtn","testBtn","pvGenBtn","pvSshBtn","setPwBtn","setPwClearBtn","ugGenBtn","ugSshBtn","pAuditBtn","ugWatchSave","ugPushAll","ugPushAllSsh","bkDownload","bkSave","bkSchedSave"].forEach(id=>{ const e=$(id); if(e) e.disabled=ro; });
 }
+// 상단/탭 제목(브랜딩) 적용 — 옵션에서 지정한 값이 있으면 그것으로, 없으면 기본값.
+function applyPortalTitle(title, sub){
+  title=(title||"").trim(); sub=(sub||"").trim();
+  const t = title || "다빈치 글로벌 아이실론 관제센터";
+  const s = title ? sub : (sub || "한국 HQ");   // 커스텀 제목이 없으면 기본 부제 유지
+  document.title = t;
+  const h=document.querySelector("header h1");
+  if(h) h.innerHTML = '🛰 '+_he(t)+(s?(' <span class="sub" style="font-weight:400">— '+_he(s)+'</span>'):'');
+}
 async function loadAuth(){
   try{ const j=await (await _origFetch("/api/portal/auth",{cache:"no-store"})).json();
-    _opRequired=!!j.op_required; }catch(e){}
+    _opRequired=!!j.op_required;
+    applyPortalTitle(j.portal_title, j.portal_subtitle);
+    const ti=$("setTitle"), su=$("setSubtitle");
+    if(ti) ti.value=j.portal_title||""; if(su) su.value=j.portal_subtitle||"";
+  }catch(e){}
   updateLoginUI();
 }
 async function doLogin(){
@@ -1102,6 +1125,19 @@ async function nodePassword(clear){
 }
 $("npSetBtn").addEventListener("click",()=>nodePassword(false));
 $("npClearBtn").addEventListener("click",()=>nodePassword(true));
+
+// 포탈 제목(브랜딩) 저장
+$("setTitleBtn").addEventListener("click",async()=>{
+  const msg=$("setTitleMsg"); msg.textContent="저장 중…";
+  try{
+    const j=await (await fetch("/api/portal/settings",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({portal_title:$("setTitle").value.trim(),
+                           portal_subtitle:$("setSubtitle").value.trim()})})).json();
+    if(j.ok){ msg.textContent="✓ 저장됨"; applyPortalTitle(j.portal_title,j.portal_subtitle); }
+    else msg.textContent="실패: "+(j.reason||"locked?");
+  }catch(e){ msg.textContent="오류: "+e; }
+});
 
 // 복제 반복주기 선택기(예약 스캔과 같은 시작 + 반복주기 모델)
 const N_DOW = ["일","월","화","수","목","금","토"]; let nWsel = new Set([1]);

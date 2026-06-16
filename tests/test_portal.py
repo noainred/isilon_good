@@ -226,6 +226,13 @@ def main() -> int:
         assert cp["ok"] and cp["ok_count"] == 1, cp
         assert not edge.controller.op_required()             # 해제됨
 
+        # 6f) 포탈 제목(브랜딩) 설정 → auth_status/upgrade_config 에 노출, 비우면 기본 폴백
+        assert pc.set_title("테스트 관제센터", "DC-OC2")["ok"]
+        a = pc.auth_status()
+        assert a["portal_title"] == "테스트 관제센터" and a["portal_subtitle"] == "DC-OC2", a
+        assert pc.upgrade_config()["portal_title"] == "테스트 관제센터"
+        assert pc.set_title("", "")["ok"] and pc.auth_status()["portal_title"] == ""
+
         # 7) 복제본(완료 DB + meta.json) 존재
         rep = os.path.join(portal_data, "replicas", "dc-test")
         assert os.path.exists(os.path.join(rep, "meta.json")), rep

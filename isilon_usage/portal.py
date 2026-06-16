@@ -430,7 +430,8 @@ class PortalController:
                "upgrade_source": "off", "upgrade_url": "", "upgrade_token": "",
                "upgrade_auto": False,
                "enroll_token": "", "release_dir": "/opt/isilon_release",
-               "backup_dir": "", "backup_every_hours": 1.0, "backup_keep": 100}
+               "backup_dir": "", "backup_every_hours": 1.0, "backup_keep": 100,
+               "portal_title": "", "portal_subtitle": ""}
         try:
             with open(portal_settings_path(self.data_dir), encoding="utf-8") as fh:
                 s = json.load(fh)
@@ -459,6 +460,8 @@ class PortalController:
                     out["backup_keep"] = min(1000, max(1, int(s.get("backup_keep", 100) or 100)))
                 except (TypeError, ValueError):
                     pass
+                out["portal_title"] = str(s.get("portal_title") or "").strip()
+                out["portal_subtitle"] = str(s.get("portal_subtitle") or "").strip()
         except (OSError, ValueError):
             pass
         return out
@@ -476,7 +479,17 @@ class PortalController:
 
     def auth_status(self) -> dict:
         return {"ok": True, "op_required": self._auth.required(),
-                "encrypted": bool(self.settings.get("op_password_encrypted"))}
+                "encrypted": bool(self.settings.get("op_password_encrypted")),
+                "portal_title": self.settings.get("portal_title") or "",
+                "portal_subtitle": self.settings.get("portal_subtitle") or ""}
+
+    def set_title(self, title: str, subtitle: str) -> dict:
+        """상단/탭 제목(브랜딩)을 설정한다. 호출 측(핸들러)에서 인증을 확인한다."""
+        self.settings["portal_title"] = str(title or "").strip()
+        self.settings["portal_subtitle"] = str(subtitle or "").strip()
+        self._save_settings()
+        return {"ok": True, "portal_title": self.settings["portal_title"],
+                "portal_subtitle": self.settings["portal_subtitle"]}
 
     def login(self, password: str) -> dict:
         return self._auth.login(password)
@@ -705,7 +718,9 @@ class PortalController:
                      "upgrade_check_secs": self.settings.get("upgrade_check_secs", 60),
                      "enroll_token_set": bool(self.settings.get("enroll_token")),
                      "hq_version": __version__, "bundle_version": bver,
-                     "bundle_stale": bool(bver and bver != __version__)},
+                     "bundle_stale": bool(bver and bver != __version__),
+                     "portal_title": self.settings.get("portal_title") or "",
+                     "portal_subtitle": self.settings.get("portal_subtitle") or ""},
                     **self.release_info(), **self.backup_info())
 
     def push_upgrade_all(self) -> dict:
@@ -2214,6 +2229,9 @@ class PortalHandler(BaseHTTPRequestHandler):
                     res.update(c.set_enroll_token(body.get("enroll_token") or ""))
                 if "release_dir" in body:
                     res.update(c.set_release_dir(body.get("release_dir") or ""))
+                if "portal_title" in body or "portal_subtitle" in body:
+                    res.update(c.set_title(body.get("portal_title") or "",
+                                           body.get("portal_subtitle") or ""))
                 self._send_json(res)
                 return
             if path == "/api/portal/upgrade/net":     # 인터넷 자동 업그레이드 설정
