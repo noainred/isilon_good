@@ -639,6 +639,7 @@ class ScanController:
         self.settings = setmod.load(data_dir)
         self._scans: Dict[int, dict] = {}   # manager scan_id -> {stop, thread}
         self._lock = threading.Lock()
+        self._pause_watch: Dict[int, dict] = {}   # 중단 후 N분 미재시작 감시: scan_id -> {due, root}
         self._storage_cache = None          # 스토리지 어레이(아이실론/PowerStore) 상태 캐시
         self._storage_ts = 0.0
         self._bench = None                  # 실측 보정(시범 스캔) 진행 상태(단계별 표시용)
@@ -1695,22 +1696,72 @@ class ScanController:
                     "scanned_human": human,
                     "hostname": row["hostname"],
                 })
-            # 완료/오류 메일
-            if self.settings.get("notify_email") and self.settings.get("smtp_host"):
-                subject = "[isilon_usage] 스캔 %s: %s" % (row["status"], row["root_path"])
-                bodytxt = (
-                    "스캔 #%d 결과\n\n"
-                    "경로     : %s\n호스트   : %s\n상태     : %s\n"
-                    "디렉터리 : %s\n파일 수  : %s\n조사 용량: %s\n"
-                ) % (scan_id, row["root_path"], row["hostname"], row["status"],
-                     row["total_dirs"], row["total_files"], human)
-                notifymod.send_email(self.settings, subject, bodytxt)
+            # 메일 알림 — 이벤트(완료/장애/중단)별로 켜진 조건만 발송
+            status = row["status"]
+            label = {"done": "스캔 완료", "error": "스캔 오류(장애)",
+                     "paused": "스캔 중단"}.get(status, "스캔 종료(%s)" % status)
+            gate = {"done": ("notify_on_done", True), "error": ("notify_on_error", True),
+                    "paused": ("notify_on_stopped", False)}.get(status)
+            if gate and self.settings.get(gate[0], gate[1]):
+                self._email_scan(scan_id, row, label)
+            # 중단(paused) 후 N분간 재시작/재개가 없으면 별도 알림 — 감시 등록
+            if status == "paused" and self.settings.get("notify_on_stalled", False):
+                mins = max(1, int(self.settings.get("notify_stall_minutes", 10) or 10))
+                with self._lock:
+                    self._pause_watch[scan_id] = {"due": time.time() + mins * 60,
+                                                  "root": row["root_path"]}
             keep = int(self.settings.get("retention_per_root", 0))
             if keep > 0 and row["status"] in ("done", "error"):
                 mgrmod.prune_scans(self.data_dir, keep_per_root=keep,
                                    running_ids=self.running_ids())
         except Exception:
             pass
+
+    def _email_scan(self, scan_id, row, label: str) -> None:
+        """스캔 한 건에 대한 알림 메일을 보낸다(받는 메일+SMTP 설정 있을 때만)."""
+        if not (self.settings.get("notify_email") and self.settings.get("smtp_host")):
+            return
+        human = _human_bytes(row["scanned_bytes"])
+        subject = "[isilon_usage] %s: %s" % (label, row["root_path"])
+        bodytxt = (
+            "%s\n\n스캔 #%d\n"
+            "경로     : %s\n호스트   : %s\n상태     : %s\n"
+            "디렉터리 : %s\n파일 수  : %s\n조사 용량: %s\n"
+        ) % (label, scan_id, row["root_path"], row["hostname"], row["status"],
+             row["total_dirs"], row["total_files"], human)
+        from . import notify as notifymod
+        notifymod.send_email(self.settings, subject, bodytxt)
+
+    def _check_pause_watch(self, now: float) -> None:
+        """중단(paused)된 스캔이 N분간 재시작/재개되지 않으면 알림 메일을 보낸다.
+
+        같은 스캔이 재개되었거나(running_ids), 같은 루트로 새 스캔이 돌면(running_paths)
+        '재시작됨'으로 보고 감시를 해제한다.
+        """
+        if not self._pause_watch:
+            return
+        running = set(self.running_ids())
+        rpaths = self.running_paths()
+        with self._lock:
+            items = list(self._pause_watch.items())
+        for sid, info in items:
+            if sid in running or info.get("root") in rpaths:
+                self._pause_watch.pop(sid, None)        # 재시작/재개됨 → 알림 안 함
+                continue
+            if now < info.get("due", 0):
+                continue
+            self._pause_watch.pop(sid, None)
+            if self._scan_status(sid) != "paused":      # 그새 상태가 바뀌었으면 보류
+                continue
+            try:
+                mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+                row = mgrmod.get_scan(mc, sid)
+                mc.close()
+            except Exception:
+                row = None
+            if row is not None:
+                mins = max(1, int(self.settings.get("notify_stall_minutes", 10) or 10))
+                self._email_scan(sid, row, "스캔 중단 후 %d분간 재시작 없음" % mins)
 
     # ----- 재개 -----
     def resume_scan(self, scan_id: int) -> dict:
@@ -1782,6 +1833,10 @@ class ScanController:
         while not self._sched_stop.wait(20):
             try:
                 self._check_schedules()
+            except Exception:
+                pass
+            try:
+                self._check_pause_watch(time.time())
             except Exception:
                 pass
 

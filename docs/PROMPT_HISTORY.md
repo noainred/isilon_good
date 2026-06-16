@@ -616,4 +616,10 @@
      체인 종료. _chain_start/_scan_status(매니저 get_scan) 헬퍼. dashboard 예약 UI 에 '＋ 경로'로
      순차 목록(schPaths) 구성 + renderSchedules '외 N개·순차' 표시. test_server 순차 검증. v1.77.0.
 
+212. 메일 알림 조건 다양화(완료/장애/중단/중단후N분미재시작) + 다중 수신자 → settings notify_on_done/
+     error/stopped/stalled + notify_stall_minutes(기본10). notify.send_email 수신자 분해(쉼표/공백/세미
+     콜론/줄바꿈)→To 합침. server _on_scan_finished 이벤트별 게이트 + _email_scan 헬퍼 + 중단 감시
+     _pause_watch/_check_pause_watch(재개·동일루트 새스캔이면 해제), 스케줄러 루프에서 점검. dashboard
+     설정에 조건 체크박스 4종+분 입력, load/save 연결. test_server 검증. v1.78.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

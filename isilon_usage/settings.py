@@ -116,6 +116,12 @@ def sanitize(raw: dict) -> dict:
     s["smtp_password"] = str(s.get("smtp_password") or "")
     s["smtp_from"] = str(s.get("smtp_from") or "").strip()
     s["smtp_tls"] = bool(s.get("smtp_tls", True))
+    # 메일 알림 조건(이벤트별 on/off). 다중 수신자는 notify_email 에 쉼표/공백으로 여러 개.
+    s["notify_on_done"] = bool(s.get("notify_on_done", True))        # 작업 완료시
+    s["notify_on_error"] = bool(s.get("notify_on_error", True))      # 장애(오류) 발생시
+    s["notify_on_stopped"] = bool(s.get("notify_on_stopped", False))  # 작업 중단시
+    s["notify_on_stalled"] = bool(s.get("notify_on_stalled", False))  # 중단 후 N분간 재시작 없을 때
+    s["notify_stall_minutes"] = _int(s.get("notify_stall_minutes", 10), 1, 1440, 10)
     s["api_token"] = str(s.get("api_token") or "").strip()
     s["op_password"] = str(s.get("op_password") or "")
     s["op_password_encrypted"] = bool(s.get("op_password_encrypted", False))

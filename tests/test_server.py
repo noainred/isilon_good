@@ -197,10 +197,95 @@ def _check_sequential_schedule() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _check_email_notifications() -> None:
+    """메일 알림: 다중 수신자 파싱 + 이벤트별 조건 게이트 + 중단 N분 미재시작 알림."""
+    import shutil
+
+    from isilon_usage import manager as mgrmod
+    from isilon_usage import notify as notifymod
+    from isilon_usage.server import ScanController
+
+    # 1) 다중 수신자: 쉼표/세미콜론/공백/줄바꿈 섞여도 모두 To 로 합쳐진다(smtplib 모킹).
+    sent = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=0): sent["host"] = host
+        def starttls(self): pass
+        def login(self, u, p): pass
+        def send_message(self, msg): sent["to"] = msg["To"]
+        def quit(self): pass
+
+    orig_smtp = notifymod.smtplib.SMTP
+    notifymod.smtplib.SMTP = FakeSMTP
+    try:
+        ok = notifymod.send_email(
+            {"notify_email": "a@x.com, b@y.com; c@z.com\n d@w.com",
+             "smtp_host": "smtp.local", "smtp_port": 587, "smtp_tls": False},
+            "subj", "body")
+        assert ok, "발송 실패"
+        assert sent["to"] == "a@x.com, b@y.com, c@z.com, d@w.com", sent.get("to")
+        # 받는 사람 없으면 발송 안 함
+        assert notifymod.send_email({"notify_email": "", "smtp_host": "h"}, "s", "b") is False
+    finally:
+        notifymod.smtplib.SMTP = orig_smtp
+
+    d = tempfile.mkdtemp(prefix="isilon_mail_")
+    orig_get = mgrmod.get_scan
+    try:
+        c = ScanController(os.path.join(d, "data"))
+        os.makedirs(c.data_dir, exist_ok=True)
+        calls = []
+        c._email_scan = lambda sid, row, label: calls.append(label)  # type: ignore[assignment]
+
+        def fake_row(status):
+            return {"scanned_bytes": 0, "status": status, "root_path": "/p",
+                    "hostname": "h", "total_dirs": 0, "total_files": 0}
+        rowbox = {"row": None}
+        mgrmod.get_scan = lambda conn, sid: rowbox["row"]   # type: ignore[assignment]
+
+        # 완료만 켠 상태: done→발송, error/paused→무시
+        c.settings.update({"notify_email": "x@y", "smtp_host": "h",
+                           "notify_on_done": True, "notify_on_error": False,
+                           "notify_on_stopped": False, "notify_on_stalled": False})
+        for st in ("done", "error", "paused"):
+            rowbox["row"] = fake_row(st); c._on_scan_finished(1)
+        assert calls == ["스캔 완료"], calls
+
+        # 장애 + 중단 켜기: error·paused 발송, done 무시
+        calls.clear()
+        c.settings.update({"notify_on_done": False, "notify_on_error": True,
+                           "notify_on_stopped": True})
+        for st in ("done", "error", "paused"):
+            rowbox["row"] = fake_row(st); c._on_scan_finished(1)
+        assert calls == ["스캔 오류(장애)", "스캔 중단"], calls
+
+        # 중단 N분 미재시작 감시: 시간이 지났고 그대로 paused 면 알림
+        calls.clear()
+        c._scan_status = lambda sid: "paused"            # type: ignore[assignment]
+        c.running_ids = lambda: []                       # type: ignore[assignment]
+        c.running_paths = lambda: set()                  # type: ignore[assignment]
+        rowbox["row"] = fake_row("paused")
+        c._pause_watch = {42: {"due": time.time() - 1, "root": "/p"}}
+        c._check_pause_watch(time.time())
+        assert len(calls) == 1 and "재시작 없음" in calls[0], calls
+        assert 42 not in c._pause_watch
+        # 재시작(같은 루트로 스캔 중)이면 알림 안 함
+        calls.clear()
+        c.running_paths = lambda: {"/p"}                 # type: ignore[assignment]
+        c._pause_watch = {43: {"due": time.time() - 1, "root": "/p"}}
+        c._check_pause_watch(time.time())
+        assert calls == [] and 43 not in c._pause_watch, calls
+        print("[email-notify] OK  다중수신자·완료/장애/중단 조건 게이트·중단N분 미재시작 알림")
+    finally:
+        mgrmod.get_scan = orig_get
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     _check_insecure_warning()
     _check_resume_after_upgrade()
     _check_sequential_schedule()
+    _check_email_notifications()
     tmp = tempfile.mkdtemp(prefix="isilon_srv_")
     root = os.path.join(tmp, "tree")
     _make_tree(root)

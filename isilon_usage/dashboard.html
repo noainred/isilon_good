@@ -553,7 +553,7 @@
       </div>
 
       <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
-        <div class="sub" style="margin-bottom:6px;">완료/오류 메일 알림 (SMTP) — 받는 메일 + SMTP 서버가 모두 있어야 발송</div>
+        <div class="sub" style="margin-bottom:6px;">메일 알림 (SMTP) — 받는 메일 + SMTP 서버가 모두 있어야 발송 · 받는 메일은 쉼표로 여러 명 지정 가능</div>
         <div class="setgrid">
           <label>받는 메일(쉼표로 여러 명)
             <input id="setEmail" type="text" class="setinput mono" placeholder="ops@example.com" />
@@ -576,6 +576,14 @@
           <label>보내는 사람(비우면 사용자)
             <input id="setSmtpFrom" type="text" class="setinput mono" />
           </label>
+        </div>
+        <div class="sub" style="margin-top:10px; margin-bottom:4px;">알림 조건 — 어떤 상황에 메일을 받을지 선택(여러 개 가능)</div>
+        <div style="display:flex; gap:18px; flex-wrap:wrap; align-items:center;">
+          <label style="display:inline-flex; align-items:center; gap:5px;"><input type="checkbox" id="setNotifyDone" /> 작업 완료시</label>
+          <label style="display:inline-flex; align-items:center; gap:5px;"><input type="checkbox" id="setNotifyError" /> 장애(오류) 발생시</label>
+          <label style="display:inline-flex; align-items:center; gap:5px;"><input type="checkbox" id="setNotifyStopped" /> 작업 중단시</label>
+          <label style="display:inline-flex; align-items:center; gap:5px;"><input type="checkbox" id="setNotifyStalled" /> 작업 중단 후
+            <input type="number" id="setNotifyStallMin" min="1" max="1440" class="setinput" style="width:62px;" value="10" /> 분간 재시작 없을 때</label>
         </div>
       </div>
 
@@ -1376,6 +1384,11 @@ async function loadSettings() {
     $("setSmtpFrom").value = s.smtp_from || "";
     $("setSmtpPass").value = "";
     $("setSmtpPass").placeholder = s.smtp_password_set ? "(설정됨 — 변경 시에만 입력)" : "(설정 안 됨)";
+    $("setNotifyDone").checked = s.notify_on_done !== false;
+    $("setNotifyError").checked = s.notify_on_error !== false;
+    $("setNotifyStopped").checked = !!s.notify_on_stopped;
+    $("setNotifyStalled").checked = !!s.notify_on_stalled;
+    $("setNotifyStallMin").value = s.notify_stall_minutes || 10;
     storageArrays = (s.storage_arrays || []).map(x => ({...x}));
     renderStorageArrays();
     schedules = (s.schedules || []).map(x => ({...x}));
@@ -1404,7 +1417,8 @@ async function loadSettings() {
      "arrType","arrName","arrUrl","arrUser","arrPass","arrVerify","arrAdd","setMounts","saveSettingsBtn",
      "schPath","schUnit","schEvery","schAt","schMonth","schDay","schBackend","schPathAdd","schAdd",
      "setLogPath","setEmail","setSmtpHost","setSmtpPort","setSmtpTls",
-     "setSmtpUser","setSmtpPass","setSmtpFrom"].forEach(id => { $(id).disabled = !j.editable; });
+     "setSmtpUser","setSmtpPass","setSmtpFrom",
+     "setNotifyDone","setNotifyError","setNotifyStopped","setNotifyStalled","setNotifyStallMin"].forEach(id => { $(id).disabled = !j.editable; });
     // 서버 정보(읽기 전용)
     const sv = j.server || {};
     $("serverInfo").innerHTML =
@@ -2060,6 +2074,11 @@ async function saveSettings() {
     smtp_tls: $("setSmtpTls").value === "true",
     smtp_user: $("setSmtpUser").value.trim(),
     smtp_from: $("setSmtpFrom").value.trim(),
+    notify_on_done: $("setNotifyDone").checked,
+    notify_on_error: $("setNotifyError").checked,
+    notify_on_stopped: $("setNotifyStopped").checked,
+    notify_on_stalled: $("setNotifyStalled").checked,
+    notify_stall_minutes: parseInt($("setNotifyStallMin").value) || 10,
   };
   // 비밀번호는 입력했을 때만 전송(빈값이면 기존 유지)
   const _pw = $("setSmtpPass").value;

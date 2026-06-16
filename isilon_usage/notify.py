@@ -7,6 +7,7 @@ Slack 수신 웹훅 등 일반 웹훅과 호환되도록 'text' 필드도 함께
 
 
 import json
+import re
 import smtplib
 import urllib.request
 from email.message import EmailMessage
@@ -39,17 +40,19 @@ def send_email(settings: dict, subject: str, body: str, *, timeout: float = 20.0
     """설정의 SMTP 로 완료/오류 메일을 보낸다(베스트 에포트, 실패해도 무시).
 
     notify_email(받는 사람)과 smtp_host 가 모두 있어야 보낸다.
+    받는 사람은 쉼표/세미콜론/공백으로 여러 명을 적을 수 있다(다중 수신자).
     포트 465 는 SSL, 그 외(587/25)는 STARTTLS(smtp_tls).
     """
-    to = (settings.get("notify_email") or "").strip()
+    raw = (settings.get("notify_email") or "").strip()
+    recipients = [a for a in re.split(r"[,;\s]+", raw) if a]
     host = (settings.get("smtp_host") or "").strip()
-    if not to or not host:
+    if not recipients or not host:
         return False
     sender = (settings.get("smtp_from") or settings.get("smtp_user")
               or "isilon-usage@localhost")
     msg = EmailMessage()
     msg["From"] = sender
-    msg["To"] = to
+    msg["To"] = ", ".join(recipients)
     msg["Subject"] = subject
     msg.set_content(body)
     try:
