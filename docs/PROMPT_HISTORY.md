@@ -574,4 +574,7 @@
      upgrade_install 성공/실패)·전노드푸시(_push_loop record=True) 모두 훅. 라우트 /upgrade/history.
      portal.html 업그레이드 탭 History 카드 + 세부 모달(histModal)·showSub 연동. test_portal 12-i. v1.76.0.
 
+202. 자동 업그레이드 소스 드롭다운 '인터넷 URL 모니터링' → 'Update Server'(포탈 nuSource·엣지 upgSource;
+     'Serer' 오타는 'Server'로 보정). v1.76.1.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
