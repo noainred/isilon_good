@@ -610,4 +610,10 @@
      동일 용량) 대신 직전 완료 스캔의 정확한 값을 기본 표시, 선택이 done 이라 진행중 배너도 자동 숨김.
      /api/status?scan=selectedScan 이므로 배너(analysisNotice)는 추가 수정 불필요. v1.76.8.
 
+211. 순차 예약(2개 이상 디렉터리를 1달에 1번, A 끝나면 B) → settings 스케줄에 paths(순서)·chain_i·
+     chain_scan_id 추가(구버전 path 호환). server _check_schedules 를 체인으로 재작성: due 면 paths[0]
+     시작→그 스캔 done 이면 다음 경로 시작, 진행중이면 대기, paused 면 자동진행 안 함, 마지막 끝나면
+     체인 종료. _chain_start/_scan_status(매니저 get_scan) 헬퍼. dashboard 예약 UI 에 '＋ 경로'로
+     순차 목록(schPaths) 구성 + renderSchedules '외 N개·순차' 표시. test_server 순차 검증. v1.77.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

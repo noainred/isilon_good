@@ -129,9 +129,78 @@ def _check_resume_after_upgrade() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _check_sequential_schedule() -> None:
+    """순차 예약: 한 예약의 여러 경로를 A 끝나면 B 식으로 순서대로 실행한다."""
+    import shutil
+
+    from isilon_usage.server import ScanController
+    d = tempfile.mkdtemp(prefix="isilon_chain_")
+    try:
+        c = ScanController(os.path.join(d, "data"))
+        started = []
+        ids = iter([101, 102, 103])
+
+        def fake_start(path, **_kw):
+            sid = next(ids)
+            started.append((sid, path))
+            return {"ok": True, "scan_id": sid}
+
+        run = {"ids": set(), "status": {}}
+        c.start_scan = fake_start                                          # type: ignore[assignment]
+        c.scan_path_check = lambda p, confirm_outside=False: (True, None)   # type: ignore[assignment]
+        c.running_ids = lambda: list(run["ids"])                           # type: ignore[assignment]
+        c.running_paths = lambda: set()                                    # type: ignore[assignment]
+        c._scan_status = lambda sid: run["status"].get(sid)                # type: ignore[assignment]
+        # 분 단위·즉시 due 인 순차 예약(A→B)
+        c.settings["schedules"] = [{
+            "paths": ["/data/A", "/data/B"], "path": "/data/A",
+            "unit": "minute", "every": 1, "last_run": 0,
+            "backend": "native", "size_mode": "disk", "enabled": True,
+        }]
+
+        def sc():
+            return c.settings["schedules"][0]
+
+        # (1) 첫 점검: A 시작
+        c._check_schedules()
+        assert started == [(101, "/data/A")], started
+        assert sc()["chain_scan_id"] == 101 and sc()["chain_i"] == 0
+        run["ids"] = {101}
+        # (2) A 진행 중에는 B 를 시작하지 않는다
+        c._check_schedules()
+        assert started == [(101, "/data/A")], "A 진행 중 B 조기 시작 금지"
+        # (3) A 완료 → B 자동 시작
+        run["ids"] = set(); run["status"][101] = "done"
+        c._check_schedules()
+        assert started == [(101, "/data/A"), (102, "/data/B")], started
+        assert sc()["chain_scan_id"] == 102 and sc()["chain_i"] == 1
+        run["ids"] = {102}
+        # (4) B 완료 → 체인 종료(재시작·추가 시작 없음)
+        run["ids"] = set(); run["status"][102] = "done"
+        c._check_schedules()
+        assert sc()["chain_scan_id"] is None and sc()["chain_i"] == 0
+        c._check_schedules()                                  # 같은 주기 내 재시작 금지
+        assert len(started) == 2, started
+        # (5) 일시정지 단계는 자동 진행하지 않는다
+        c.settings["schedules"] = [{
+            "paths": ["/data/X", "/data/Y"], "unit": "minute", "every": 1,
+            "last_run": 0, "enabled": True,
+        }]
+        c._check_schedules()                                  # X 시작(=103)
+        xsid = sc()["chain_scan_id"]
+        run["ids"] = set(); run["status"][xsid] = "paused"
+        before = len(started)
+        c._check_schedules()
+        assert len(started) == before, "일시정지 단계에서 다음 경로 자동 시작 금지"
+        print("[sequential-schedule] OK  A→B 순차 실행·조기시작 금지·완료 종료·일시정지 대기")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     _check_insecure_warning()
     _check_resume_after_upgrade()
+    _check_sequential_schedule()
     tmp = tempfile.mkdtemp(prefix="isilon_srv_")
     root = os.path.join(tmp, "tree")
     _make_tree(root)

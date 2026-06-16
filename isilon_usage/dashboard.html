@@ -604,10 +604,15 @@
           <select id="schDay" class="optsel" style="display:none;" title="시작 일"></select>
           <input id="schAt" type="time" class="setinput" style="width:110px; display:none;" value="03:00" title="실행 시각" />
           <select id="schBackend" class="optsel"><option value="native">native</option><option value="du">du</option></select>
+          <button id="schPathAdd" title="선택한 경로를 순차 목록에 추가 — A가 끝나면 B 식으로 순서대로 스캔">＋ 경로</button>
           <button id="schAdd">예약 추가</button>
         </div>
+        <div class="sub" id="schChainBox" style="margin-top:6px; display:none;">
+          순차 경로(순서대로): <span id="schChainList"></span>
+          <span style="opacity:.7;"> — ‘예약 추가’를 누르면 이 순서로 한 예약에 묶입니다(A 끝나면 B).</span>
+        </div>
         <div class="sub" id="schSummary" style="margin-top:6px;"></div>
-        <div class="sub">추가/삭제 후 아래 “설정 저장”을 눌러야 반영됩니다.</div>
+        <div class="sub">여러 경로를 ‘＋ 경로’로 담으면 한 예약이 그 순서대로 순차 스캔합니다. 추가/삭제 후 아래 “설정 저장”을 눌러야 반영됩니다.</div>
       </div>
 
       <div style="display:flex; gap:12px; align-items:center; margin-top:12px; flex-wrap:wrap;">
@@ -1397,7 +1402,7 @@ async function loadSettings() {
      "setIsilonUrl","setIsilonUser","setIsilonPass","setIsilonVerify",
      "setPsUrl","setPsUser","setPsPass","setPsVerify",
      "arrType","arrName","arrUrl","arrUser","arrPass","arrVerify","arrAdd","setMounts","saveSettingsBtn",
-     "schPath","schUnit","schEvery","schAt","schMonth","schDay","schBackend","schAdd",
+     "schPath","schUnit","schEvery","schAt","schMonth","schDay","schBackend","schPathAdd","schAdd",
      "setLogPath","setEmail","setSmtpHost","setSmtpPort","setSmtpTls",
      "setSmtpUser","setSmtpPass","setSmtpFrom"].forEach(id => { $(id).disabled = !j.editable; });
     // 서버 정보(읽기 전용)
@@ -2855,6 +2860,22 @@ function renderStorageArrays() {
 }
 const SCHED_DOW = ["일", "월", "화", "수", "목", "금", "토"];
 let schWsel = new Set([1]);   // 예약 추가용 요일 선택(기본 월)
+let schPaths = [];            // 예약 추가용 순차 경로(순서대로 A→B→C)
+
+// 순차 경로 목록 표시(‘＋ 경로’로 담은 경로들)
+function renderSchChain() {
+  const box = $("schChainBox"), list = $("schChainList");
+  if (!box || !list) return;
+  if (!schPaths.length) { box.style.display = "none"; list.innerHTML = ""; return; }
+  box.style.display = "";
+  list.innerHTML = schPaths.map((p, i) =>
+    `<span class="chip on" style="cursor:default;">${i + 1}. <span class="mono">${p}</span> ` +
+    `<a href="#" data-chdel="${i}" title="제거" style="color:#ff9a9a; text-decoration:none;">✕</a></span>`
+  ).join(' <span class="sub">→</span> ');
+  list.querySelectorAll("a[data-chdel]").forEach(a => a.addEventListener("click", e => {
+    e.preventDefault(); schPaths.splice(parseInt(a.dataset.chdel), 1); renderSchChain();
+  }));
+}
 
 function scheduleSummary(s) {
   const u = s.unit || "minute", y = s.every || s.every_minutes || 1;
@@ -2898,12 +2919,16 @@ function updateSchUnit() {
 function renderSchedules() {
   const tb = $("schedBody");
   if (!schedules.length) { tb.innerHTML = '<tr><td colspan="5" class="sub">예약 없음</td></tr>'; return; }
-  tb.innerHTML = schedules.map((s, i) =>
-    `<tr><td class="mono" style="max-width:240px; overflow:hidden; text-overflow:ellipsis;" title="${s.path}">${s.path}</td>
+  tb.innerHTML = schedules.map((s, i) => {
+    const pths = (s.paths && s.paths.length) ? s.paths : (s.path ? [s.path] : []);
+    const pcell = pths.length > 1
+      ? `${pths[0]} <span class="sub">외 ${pths.length - 1}개 · 순차</span>`
+      : (pths[0] || "");
+    return `<tr><td class="mono" style="max-width:240px; overflow:hidden; text-overflow:ellipsis;" title="${pths.join('  →  ')}">${pcell}</td>
      <td>${scheduleSummary(s)}</td><td>${s.backend}</td>
      <td>${s.enabled ? "✓" : "✕"}</td>
-     <td><button class="stopbtn" data-schdel="${i}">✕</button></td></tr>`
-  ).join("");
+     <td><button class="stopbtn" data-schdel="${i}">✕</button></td></tr>`;
+  }).join("");
   tb.querySelectorAll("button[data-schdel]").forEach(b => b.addEventListener("click", () => {
     schedules.splice(parseInt(b.dataset.schdel), 1); renderSchedules();
   }));
@@ -3606,16 +3631,24 @@ $("arrAdd").addEventListener("click", () => {
 $("exportCsv").addEventListener("click", () => { if (selectedScan != null) location.href = "/api/export?scan=" + selectedScan + "&format=csv"; });
 $("exportJson").addEventListener("click", () => { if (selectedScan != null) location.href = "/api/export?scan=" + selectedScan + "&format=json"; });
 // 예약 추가
+// ‘＋ 경로’: 선택한 루트를 순차 목록에 담는다(A 끝나면 B…).
+$("schPathAdd").addEventListener("click", () => {
+  const p = $("schPath").value.trim();
+  if (!p) { alert("스캔 이력에서 루트를 선택하세요."); return; }
+  schPaths.push(p); renderSchChain();
+});
 $("schAdd").addEventListener("click", () => {
-  const path = $("schPath").value.trim();
-  if (!path) { alert("스캔 이력에서 루트를 선택하세요."); return; }
+  const single = $("schPath").value.trim();
+  const list = schPaths.length ? schPaths.slice() : (single ? [single] : []);
+  if (!list.length) { alert("스캔 이력에서 루트를 선택하거나 ‘＋ 경로’로 순차 목록을 만드세요."); return; }
   const u = $("schUnit").value;
   if (u === "week" && !schWsel.size) { alert("요일을 하나 이상 선택하세요."); return; }
-  schedules.push({path, unit: u, every: Math.max(1, parseInt($("schEvery").value) || 1),
+  schedules.push({paths: list, path: list[0], unit: u, every: Math.max(1, parseInt($("schEvery").value) || 1),
     at: $("schAt").value || "03:00", weekdays: [...schWsel].sort((a, b) => a - b),
     start_month: parseInt($("schMonth").value) || 1, start_day: parseInt($("schDay").value) || 1,
     backend: $("schBackend").value, size_mode: "disk", one_file_system: false,
     enabled: true, last_run: 0});
+  schPaths = []; renderSchChain();
   $("schPath").value = ""; renderSchedules();
 });
 $("schUnit").addEventListener("change", updateSchUnit);

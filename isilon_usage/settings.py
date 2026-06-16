@@ -204,9 +204,17 @@ def _sanitize_schedules(raw) -> list:
     for it in raw:
         if not isinstance(it, dict):
             continue
+        # 경로: 단일 path(구버전) 또는 순차 스캔용 paths(여러 개, 순서대로 A→B→C).
         path = str(it.get("path") or "").strip()
-        if not path:
+        raw_paths = it.get("paths")
+        plist = ([str(p).strip() for p in raw_paths if str(p or "").strip()]
+                 if isinstance(raw_paths, list) else [])
+        if not plist and path:
+            plist = [path]
+        if not plist:
             continue
+        plist = [os.path.abspath(p) for p in plist]
+        path = plist[0]
 
         def _int(key, lo, hi, dflt, _it=it):
             try:
@@ -245,8 +253,21 @@ def _sanitize_schedules(raw) -> list:
         hh, mm = parse_at(it.get("at"))
         # minute 일 때 every_minutes 도 유지(구버전 읽기 호환)
         every_minutes = every if unit == "minute" else _int("every_minutes", 1, 100000, 60)
+        # 순차 체인 진행 상태(런타임): chain_i=현재 단계 인덱스, chain_scan_id=그 단계의 스캔 id
+        try:
+            chain_i = max(0, int(it.get("chain_i", 0) or 0))
+        except (TypeError, ValueError):
+            chain_i = 0
+        _csid = it.get("chain_scan_id")
+        try:
+            chain_scan_id = int(_csid) if _csid not in (None, "", 0, "0") else None
+        except (TypeError, ValueError):
+            chain_scan_id = None
         out.append({
-            "path": os.path.abspath(path),
+            "path": path,            # 호환: 첫 경로(paths[0])
+            "paths": plist,          # 순차 스캔 대상(순서대로)
+            "chain_i": chain_i,
+            "chain_scan_id": chain_scan_id,
             "unit": unit,
             "every": every,
             "at": "%02d:%02d" % (hh, mm),

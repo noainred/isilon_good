@@ -1790,30 +1790,75 @@ class ScanController:
         if not schedules:
             return
         now = time.time()
+        running = set(self.running_ids())
         running_paths = self.running_paths()
         changed = False
         for sc in schedules:
+            # 경로 목록(순차 스캔). 구버전 호환: paths 없으면 [path].
+            paths = sc.get("paths") or ([sc["path"]] if sc.get("path") else [])
+            if not paths:
+                continue
+            csid = sc.get("chain_scan_id")
+            # (1) 진행 중인 체인: 현재 단계가 끝났으면 다음 경로로 넘어간다(A 끝나면 B…).
+            if csid:
+                if csid in running:
+                    continue                       # 현재 단계 아직 진행 중 → 대기
+                if self._scan_status(csid) == "paused":
+                    continue                       # 사용자가 멈춤 → 자동 진행 안 함
+                nxt = int(sc.get("chain_i", 0) or 0) + 1
+                if nxt < len(paths):
+                    sc["chain_scan_id"] = self._chain_start(
+                        sc, paths[nxt], running, running_paths)  # 실패 시 None → 체인 종료
+                    sc["chain_i"] = nxt
+                else:
+                    sc["chain_i"] = 0
+                    sc["chain_scan_id"] = None      # 체인 완료
+                changed = True
+                continue
+            # (2) 진행 중 체인 없음: 활성 + 차례면 첫 경로부터 체인 시작.
             if not sc.get("enabled", True):
                 continue
             if not setmod.schedule_due(sc, now):
                 continue
-            path = sc["path"]
-            if path in running_paths:
-                continue
-            # 예약은 관리자가 미리 지정한 경로라 '지정 경로 밖'이어도 컨펌 없이 진행
-            ok, _ = self.scan_path_check(path, confirm_outside=True)
-            if not ok:
-                continue
-            res = self.start_scan(path, backend=sc.get("backend"),
-                                  size_mode=sc.get("size_mode"),
-                                  one_file_system=sc.get("one_file_system"),
-                                  confirm_outside=True)
-            if res.get("ok"):
+            sid = self._chain_start(sc, paths[0], running, running_paths)
+            if sid is not None:
+                sc["chain_i"] = 0
+                sc["chain_scan_id"] = sid
                 sc["last_run"] = now
                 changed = True
         if changed:
-            # last_run 갱신을 settings.json 에 반영
+            # last_run / 체인 진행 상태를 settings.json 에 반영
             self.settings = setmod.save(self.data_dir, self.settings)
+
+    def _chain_start(self, sc, path, running, running_paths):
+        """예약 체인의 한 단계를 시작한다. 성공 시 scan_id, 실패 시 None."""
+        if path in running_paths:
+            return None
+        # 예약은 관리자가 미리 지정한 경로라 '지정 경로 밖'이어도 컨펌 없이 진행
+        ok, _ = self.scan_path_check(path, confirm_outside=True)
+        if not ok:
+            return None
+        res = self.start_scan(path, backend=sc.get("backend"),
+                              size_mode=sc.get("size_mode"),
+                              one_file_system=sc.get("one_file_system"),
+                              confirm_outside=True)
+        if not res.get("ok"):
+            return None
+        sid = res.get("scan_id")
+        running_paths.add(path)             # 같은 틱에서 중복 시작 방지
+        if sid is not None:
+            running.add(sid)
+        return sid
+
+    def _scan_status(self, scan_id):
+        """매니저 DB 에서 스캔 상태 문자열을 읽는다(없으면 None)."""
+        try:
+            mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+            row = mgrmod.get_scan(mc, scan_id)
+            mc.close()
+            return row["status"] if row else None
+        except Exception:
+            return None
 
     def stop_all(self):
         sched_stop = getattr(self, "_sched_stop", None)
