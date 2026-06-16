@@ -389,6 +389,27 @@ def main() -> int:
         assert hi["to"] == "2.0.0" and hi["push_ok"] == 1 and hi["push_total"] == 2, hi
         assert any(n["id"] == "e2" for n in hi["nodes"]), hi                   # 세부 노드 보존
 
+        # 12-j) 핑 이력: 등록 노드만 조회 + 옛 id(유령) prune/노드삭제 시 정리
+        from isilon_usage import db as _db
+        pc.upsert_node({"id": "pingnode", "url": "http://10.0.0.9:8765", "token": "t"})
+        cx = _db.connect(portalmod.ping_history_path(pc.data_dir))
+        cx.executemany("INSERT INTO ping_samples (ts,node_id,latency_ms,up) VALUES (?,?,?,?)",
+                       [(int(time.time()), "pingnode", 5.0, 1),
+                        (int(time.time()), "192.168.84.221", 9.0, 1)])         # 등록 안 된 유령
+        cx.commit(); cx.close()
+        seen = {n["id"] for n in pc.ping_history(86400)["nodes"]}
+        assert "pingnode" in seen and "192.168.84.221" not in seen, seen       # 유령은 안 보임
+        pc._prune_ping_history()
+        cx = _db.connect(portalmod.ping_history_path(pc.data_dir))
+        left = {r[0] for r in cx.execute("SELECT DISTINCT node_id FROM ping_samples").fetchall()}
+        cx.close()
+        assert "192.168.84.221" not in left and "pingnode" in left, left       # DB 에서도 정리
+        pc.delete_node("pingnode")
+        cx = _db.connect(portalmod.ping_history_path(pc.data_dir))
+        left2 = {r[0] for r in cx.execute("SELECT DISTINCT node_id FROM ping_samples").fetchall()}
+        cx.close()
+        assert "pingnode" not in left2, left2                                  # 노드삭제 시 핑도 삭제
+
         # 13) 업그레이드 상태: 노드 버전이 HQ보다 낮으면 '구버전'으로 집계('모두 최신' 착시 방지)
         assert pc.upsert_node({"id": "old-node", "url": "http://10.9.9.1:8765", "token": "x"})["ok"]
         with pc._lock:

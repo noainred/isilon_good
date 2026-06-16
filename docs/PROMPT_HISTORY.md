@@ -577,4 +577,8 @@
 202. 자동 업그레이드 소스 드롭다운 '인터넷 URL 모니터링' → 'Update Server'(포탈 nuSource·엣지 upgSource;
      'Serer' 오타는 'Server'로 보정). v1.76.1.
 
+203. 네트워크 모니터링 '기타'에 목록에 없는 유령 ping 차트(옛 id/IP/호스트명) → 쓰레기 처리. ping_history
+     조회를 등록 노드만 반환(필터), _prune_ping_history 가 등록 노드 아닌 옛 id 샘플 삭제, delete_node 시
+     ping_samples 삭제. test_portal 12-j. v1.76.2.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

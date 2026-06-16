@@ -1232,8 +1232,17 @@ class PortalController:
             self.nodes = [x for x in self.nodes if x["id"] != nid]
             self._cache.pop(nid, None)
             self._save()
-        # 복제본도 정리(베스트 에포트)
+        # 복제본·핑 이력도 정리(베스트 에포트)
         shutil.rmtree(os.path.join(self.replicas_dir, nid), ignore_errors=True)
+        try:
+            conn = dbmod.connect(ping_history_path(self.data_dir))
+            try:
+                conn.execute("DELETE FROM ping_samples WHERE node_id=?", (nid,))
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001
+            pass
         return {"ok": before != len(self.nodes)}
 
     def test_node(self, raw: dict) -> dict:
@@ -1572,10 +1581,14 @@ class PortalController:
 
     def _prune_ping_history(self) -> None:
         try:
+            ids = [x["id"] for x in list(self.nodes)]
             conn = dbmod.connect(ping_history_path(self.data_dir))
             try:
                 conn.execute("DELETE FROM ping_samples WHERE ts < ?",
                              (int(time.time()) - 366 * 86400,))
+                if ids:           # 등록 노드가 아닌(삭제/개명된) 옛 id 의 샘플 정리(쓰레기 수거)
+                    ph = ",".join("?" * len(ids))
+                    conn.execute("DELETE FROM ping_samples WHERE node_id NOT IN (%s)" % ph, ids)
                 conn.commit()
             finally:
                 conn.close()
@@ -1612,6 +1625,8 @@ class PortalController:
             return {"ok": False, "reason": str(e), "nodes": []}
         out = []
         for nid, series in by_node.items():
+            if nid not in reg:        # 등록 노드가 아닌(삭제/개명된) 옛 id 의 이력은 표시하지 않음
+                continue
             vals = [p["ms"] for p in series if p["ms"] is not None]
             med = round(statistics.median(vals), 2) if vals else None
             out.append({"id": nid, "region": reg.get(nid) or "", "median": med,
