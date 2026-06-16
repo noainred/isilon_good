@@ -552,4 +552,9 @@
      디렉터리·🔧튜닝점검·📋스캔이력·⚙설정·🧪테스트데이터·📖버전기록. 요청 11개에 없던 '추세·비교'는
      사용자 확인 후 처리량 추이 옆에 유지(12개 보존). dashboard.html navbtn 순서만 변경. v1.73.1.
 
+197. 포탈+노드 백업 기능(서버 디렉터리 저장 + 다운로드) → portal.py make_backup_bytes(설정·노드·
+     audit·ping + manifest tar.gz, replicas 제외)·save_backup(dir), 라우트 /api/portal/backup/
+     {download,save}(인증 게이트 안). portal.html 보안·감사 탭 백업 카드(다운로드 blob·서버 저장),
+     읽기전용 비활성. test_portal 12-g. v1.74.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

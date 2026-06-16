@@ -557,6 +557,51 @@ class PortalController:
                 "release_version_mismatch": mismatch,
                 "release_available": bool(arc), "release_reason": reason}
 
+    # --- 백업: 포탈 설정 + 노드 목록(+감사/핑) 을 tar.gz 하나로 ---
+    _BACKUP_FILES = ("portal_settings.json", "portal_nodes.json", "audit.log", "ping_history.db")
+
+    def make_backup_bytes(self):
+        """포탈 설정·노드 목록(+감사/핑)을 tar.gz 로 묶어 (bytes, filename) 반환.
+
+        대용량/재생성 가능한 replicas/·upgrades/ 는 제외한다. 노드 api_token·op 비밀번호가
+        포함되므로 백업 파일은 민감 정보로 다룬다.
+        """
+        import socket
+        buf = io.BytesIO()
+        included = []
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            for name in self._BACKUP_FILES:
+                p = os.path.join(self.data_dir, name)
+                if os.path.isfile(p):
+                    tf.add(p, arcname="portal_backup/" + name)
+                    included.append(name)
+            manifest = {"kind": "isilon_portal_backup", "version": __version__,
+                        "created_at": time.time(), "hostname": socket.gethostname(),
+                        "node_count": len(self.nodes), "files": included}
+            md = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
+            ti = tarfile.TarInfo("portal_backup/backup_manifest.json")
+            ti.size = len(md)
+            tf.addfile(ti, io.BytesIO(md))
+        fname = "isilon_portal_backup-%s.tar.gz" % time.strftime("%Y%m%d-%H%M%S")
+        return buf.getvalue(), fname
+
+    def save_backup(self, dest_dir: str) -> dict:
+        """백업 tar.gz 를 서버의 dest_dir 에 저장한다(폴더 없으면 생성)."""
+        d = (dest_dir or "").strip()
+        if not d:
+            return {"ok": False, "reason": "저장할 디렉터리를 입력하세요."}
+        data, fname = self.make_backup_bytes()
+        try:
+            os.makedirs(d, exist_ok=True)
+            path = os.path.join(d, fname)
+            tmp = path + ".tmp"
+            with open(tmp, "wb") as fh:
+                fh.write(data)
+            os.replace(tmp, path)
+        except OSError as exc:
+            return {"ok": False, "reason": "저장 실패: %s" % exc}
+        return {"ok": True, "path": path, "size": len(data)}
+
     # --- 자동 업그레이드 ---
     def set_upgrade_watch(self, watch_dir: str, check_secs=None) -> dict:
         self.settings["upgrade_watch_dir"] = str(watch_dir or "").strip()
@@ -1909,6 +1954,18 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "events": auditmod.tail(self.data_dir, 300)})
                 return
             self._audit(path, True)              # 인증 통과한 변경 작업 기록
+            if path == "/api/portal/backup/save":      # 포탈+노드 백업을 서버 디렉터리에 저장
+                self._send_json(c.save_backup(body.get("dir") or body.get("path") or ""))
+                return
+            if path == "/api/portal/backup/download":  # 포탈+노드 백업 tar.gz 다운로드(민감)
+                data, fname = c.make_backup_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/gzip")
+                self.send_header("Content-Disposition", 'attachment; filename="%s"' % fname)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             if path == "/api/portal/settings":
                 res = c.set_upgrade_watch(body.get("upgrade_watch_dir") or "",
                                           body.get("upgrade_check_secs"))

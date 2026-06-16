@@ -493,6 +493,16 @@
       <span class="sub" id="setEnrollMsg"></span>
     </div>
   </div>
+  <div class="card" style="margin-bottom:14px;">
+    <h2>💾 백업 (포탈 설정 + 노드 목록)</h2>
+    <div class="sub" style="margin-bottom:8px;">포탈 설정·등록 노드 목록(+감사 로그·핑 이력)을 <b>tar.gz 하나</b>로 묶습니다. 노드 <b>api_token·로그인 비밀번호</b>가 포함되니 안전하게 보관하세요. (대용량 <span class="mono">replicas/</span> 는 제외)</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <button id="bkDownload" class="primary">⬇ 백업 다운로드</button>
+      <input id="bkDir" class="inp mono" placeholder="서버에 저장할 폴더 (예: /opt/isilon_backups)" style="flex:1; min-width:260px;" />
+      <button id="bkSave">📁 서버에 저장</button>
+      <span class="sub" id="bkMsg"></span>
+    </div>
+  </div>
   </div>
 </div>
 
@@ -543,7 +553,7 @@ function updateLoginUI(){
       btn.textContent="🔓 로그아웃 ("+(m>0?m+"분":_opLeft()+"초")+")"; }
     else btn.textContent="🔑 로그인";
   }
-  ["addBtn","testBtn","pvGenBtn","pvSshBtn","setPwBtn","setPwClearBtn","ugGenBtn","ugSshBtn","pAuditBtn","ugWatchSave","ugPushAll","ugPushAllSsh"].forEach(id=>{ const e=$(id); if(e) e.disabled=ro; });
+  ["addBtn","testBtn","pvGenBtn","pvSshBtn","setPwBtn","setPwClearBtn","ugGenBtn","ugSshBtn","pAuditBtn","ugWatchSave","ugPushAll","ugPushAllSsh","bkDownload","bkSave"].forEach(id=>{ const e=$(id); if(e) e.disabled=ro; });
 }
 async function loadAuth(){
   try{ const j=await (await _origFetch("/api/portal/auth",{cache:"no-store"})).json();
@@ -1263,6 +1273,29 @@ async function pLoadAudit(){
   }catch(e){ $("pAuditMsg").textContent=" 오류: "+e; }
 }
 if($("pAuditBtn")) $("pAuditBtn").addEventListener("click", pLoadAudit);
+// 백업 — 포탈 설정 + 노드 목록(+감사/핑) tar.gz 다운로드 / 서버 저장 (fetch 가 op-token 자동 첨부)
+if($("bkDownload")) $("bkDownload").addEventListener("click", async()=>{
+  $("bkMsg").textContent=" 백업 만드는 중…";
+  try{
+    const r=await fetch("/api/portal/backup/download",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+    if(!r.ok){ let j={}; try{ j=await r.json(); }catch(e){} $("bkMsg").textContent=" ✗ "+(j.error||j.reason||("HTTP "+r.status)); return; }
+    const blob=await r.blob();
+    const cd=r.headers.get("Content-Disposition")||"", m=cd.match(/filename="([^"]+)"/);
+    const fname=m?m[1]:"isilon_portal_backup.tar.gz";
+    const url=URL.createObjectURL(blob), a=document.createElement("a");
+    a.href=url; a.download=fname; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+    $("bkMsg").textContent=" ✓ 다운로드: "+fname+" ("+fmtBytes(blob.size)+")";
+  }catch(e){ $("bkMsg").textContent=" ✗ "+e; }
+});
+if($("bkSave")) $("bkSave").addEventListener("click", async()=>{
+  const dir=$("bkDir").value.trim();
+  if(!dir){ $("bkMsg").textContent=" 저장할 폴더를 입력하세요."; return; }
+  $("bkMsg").textContent=" 저장 중…";
+  try{ const j=await (await fetch("/api/portal/backup/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({dir})})).json();
+    $("bkMsg").textContent = j.ok ? (" ✓ 저장됨: "+j.path+" ("+fmtBytes(j.size)+")") : (" ✗ "+(j.reason||j.error||"실패")); }
+  catch(e){ $("bkMsg").textContent=" ✗ "+e; }
+});
 async function pLoadUpgradeCfg(){
   try{ const j=await (await fetch("/api/portal/settings",{cache:"no-store"})).json();
     if(j.ok && $("ugWatchDir")) $("ugWatchDir").value=j.upgrade_watch_dir||"";

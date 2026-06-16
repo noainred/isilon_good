@@ -347,6 +347,19 @@ def main() -> int:
         cfg = pc2.upgrade_config()
         assert "bundle_version" in cfg and "bundle_stale" in cfg, cfg
 
+        # 12-g) 백업: 포탈 설정+노드 목록 tar.gz (다운로드 바이트 / 서버 디렉터리 저장)
+        import io as _io
+        import tarfile as _tf
+        bdata, bname = pc.make_backup_bytes()
+        assert bname.startswith("isilon_portal_backup-") and bname.endswith(".tar.gz"), bname
+        with _tf.open(fileobj=_io.BytesIO(bdata), mode="r:gz") as t:
+            bnames = t.getnames()
+        assert any(n.endswith("backup_manifest.json") for n in bnames), bnames
+        assert any(n.endswith("portal_nodes.json") for n in bnames), bnames    # 노드 목록 포함
+        sv = pc.save_backup(os.path.join(tmp, "bk"))
+        assert sv["ok"] and os.path.isfile(sv["path"]) and sv["size"] > 0, sv
+        assert not pc.save_backup("")["ok"]      # 빈 경로 거부
+
         # 13) 업그레이드 상태: 노드 버전이 HQ보다 낮으면 '구버전'으로 집계('모두 최신' 착시 방지)
         assert pc.upsert_node({"id": "old-node", "url": "http://10.9.9.1:8765", "token": "x"})["ok"]
         with pc._lock:
