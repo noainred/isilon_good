@@ -1009,6 +1009,26 @@ class ScanController:
             self._write_info_md(op_changed)
         return {"ok": True, "settings": _public_settings(self.settings)}
 
+    def set_op_password(self, password: str, *, clear: bool = False) -> dict:
+        """작업 보호 비밀번호를 설정/변경/해제한다(포탈이 api_token 으로 푸시).
+
+        update_settings 의 op_password 처리와 같은 저장 규칙(암호화 여부·info.MD)을 따른다.
+        clear=True 면 보호 해제(비밀번호 제거).
+        """
+        if self.lock_settings:
+            return {"ok": False, "reason": "설정이 잠겨 있습니다(--lock-settings)."}
+        pw = "" if clear else str(password or "")
+        if not clear and not pw.strip():
+            return {"ok": False, "reason": "빈 비밀번호는 설정할 수 없습니다."}
+        enc = bool(self.settings.get("op_password_encrypted"))
+        merged = dict(self.settings)
+        merged["op_password"] = authmod.store_password(pw, encrypt=enc)
+        self.settings = setmod.save(self.data_dir, merged)
+        if pw and not enc:                 # 평문 저장 + 새로 설정/변경 → 복구용 info.MD
+            self._write_info_md(pw)
+        return {"ok": True, "cleared": not merged["op_password"],
+                "op_required": bool(merged["op_password"])}
+
     def _log(self, msg: str) -> None:
         """log_path 가 설정돼 있으면 한 줄 추가한다(베스트 에포트)."""
         p = self.settings.get("log_path")
@@ -2700,6 +2720,27 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.controller._restart_for_upgrade()
             threading.Thread(target=_later, name="upgrade-restart", daemon=True).start()
 
+    def _handle_op_password_push(self) -> None:
+        """포탈이 푸시한 작업 보호 비밀번호 설정/변경/해제(api_token 인증).
+
+        op_password 가 아니라 api_token(X-Auth-Token)으로 인증한다 — 그래야 포탈이
+        엣지 비밀번호를 모르는 상태에서도 설정/변경/해제할 수 있다(/api/upgrade 와 같은 권한 모델).
+        """
+        qs = parse_qs(urlparse(self.path).query)
+        tok = (self._current_settings().get("api_token") or "").strip()
+        if not tok:
+            self._send_json({"ok": False,
+                             "reason": "원격 비밀번호 관리는 api_token 설정이 필요합니다."}, status=403)
+            return
+        if not self._authorized(qs):
+            self._send_json({"ok": False, "reason": "unauthorized"}, status=401)
+            return
+        body = self._read_json_body()
+        res = self.controller.set_op_password(
+            str(body.get("password") or ""), clear=bool(body.get("clear")))
+        self._audit("op_password_push", bool(res.get("ok")), res.get("reason") or "")
+        self._send_json(res, status=200 if res.get("ok") else 400)
+
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
@@ -2710,6 +2751,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/upgrade":            # 포탈이 푸시하는 원격 업그레이드(api_token 인증)
             self._handle_upgrade_push()
+            return
+        if path == "/api/op-password":        # 포탈이 푸시하는 작업 비밀번호 관리(api_token 인증)
+            self._handle_op_password_push()
             return
         body = self._read_json_body()
         try:

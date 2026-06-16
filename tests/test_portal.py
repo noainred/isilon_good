@@ -217,6 +217,15 @@ def main() -> int:
         assert ns["ok"] and ns.get("scan_id") and ns.get("path"), ns
         _wait_done(ebase, ns["scan_id"])                     # 재시작 스캔도 완료까지 대기
 
+        # 6e) 포탈에서 엣지 작업 비밀번호 설정/해제(api_token 인증으로 푸시)
+        assert not edge.controller.op_required()
+        sp = pc.set_node_password(["dc-test"], "edgepw")
+        assert sp["ok"] and sp["ok_count"] == 1, sp
+        assert edge.controller.op_required()                 # 엣지에 비번 설정됨
+        cp = pc.set_node_password(["dc-test"], "", clear=True)
+        assert cp["ok"] and cp["ok_count"] == 1, cp
+        assert not edge.controller.op_required()             # 해제됨
+
         # 7) 복제본(완료 DB + meta.json) 존재
         rep = os.path.join(portal_data, "replicas", "dc-test")
         assert os.path.exists(os.path.join(rep, "meta.json")), rep

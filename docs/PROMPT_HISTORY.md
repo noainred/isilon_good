@@ -622,4 +622,10 @@
      _pause_watch/_check_pause_watch(재개·동일루트 새스캔이면 해제), 스케줄러 루프에서 점검. dashboard
      설정에 조건 체크박스 4종+분 입력, load/save 연결. test_server 검증. v1.78.0.
 
+213. (질문→구현) 포탈에서 엣지 작업 비밀번호 관리 → 엣지 set_op_password(설정/변경/해제, update_settings
+     와 같은 저장규칙) + POST /api/op-password(api_token 인증, op 게이트 앞, /api/upgrade 패턴). 포탈
+     set_node_password(ids/전체, X-Auth-Token 푸시, 토큰없는 노드 사유) + POST /api/portal/node-password.
+     portal.html 보안·감사 탭에 '🔐 노드 작업 비밀번호' 카드(npNode 드롭다운=전체/개별, 설정·해제).
+     test_server set_op_password, test_portal 실엣지 push→op_required 토글 검증. v1.79.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

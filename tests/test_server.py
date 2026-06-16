@@ -281,11 +281,35 @@ def _check_email_notifications() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _check_op_password() -> None:
+    """포탈 푸시용 set_op_password: 설정/변경/해제 + 빈 비번 거부."""
+    import shutil
+
+    from isilon_usage.server import ScanController
+    d = tempfile.mkdtemp(prefix="isilon_oppw_")
+    try:
+        c = ScanController(os.path.join(d, "data"))
+        os.makedirs(c.data_dir, exist_ok=True)
+        assert not c.op_required()
+        assert c.set_op_password("secret")["ok"]
+        assert c.op_required()                                   # 설정됨
+        assert c.set_op_password("", clear=False)["ok"] is False  # 빈 비번 거부
+        assert c.op_required()                                   # 거부됐으니 그대로
+        assert c.set_op_password("new-pass-2")["ok"]            # 변경
+        assert c.op_required()
+        assert c.set_op_password("", clear=True)["ok"]          # 해제
+        assert not c.op_required()
+        print("[op-password] OK  포탈 푸시용 설정/변경/해제·빈 비번 거부")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     _check_insecure_warning()
     _check_resume_after_upgrade()
     _check_sequential_schedule()
     _check_email_notifications()
+    _check_op_password()
     tmp = tempfile.mkdtemp(prefix="isilon_srv_")
     root = os.path.join(tmp, "tree")
     _make_tree(root)

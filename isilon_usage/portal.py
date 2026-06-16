@@ -1725,6 +1725,47 @@ class PortalController:
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "reason": str(e), "path": path}
 
+    def set_node_password(self, ids, password: str, *, clear: bool = False) -> dict:
+        """선택한(또는 전체) 노드의 작업 보호 비밀번호를 설정/변경/해제한다.
+
+        엣지의 /api/op-password 로 api_token(X-Auth-Token) 인증으로 푸시한다. 토큰이 없는
+        노드는 푸시할 수 없어 사유를 돌려준다. ids 가 비면 전체 노드가 대상이다.
+        """
+        with self._lock:
+            allnodes = [dict(n) for n in self.nodes]
+        idset = {str(i) for i in (ids or [])}
+        targets = allnodes if not idset else [n for n in allnodes if n["id"] in idset]
+        if not targets:
+            return {"ok": False, "reason": "대상 노드가 없습니다."}
+        payload = json.dumps({"password": "" if clear else str(password or ""),
+                              "clear": bool(clear)}).encode("utf-8")
+        results, ok_n = [], 0
+        for n in targets:
+            if not n.get("token"):
+                results.append({"id": n["id"], "ok": False,
+                                "reason": "api_token(토큰) 미등록 — 푸시할 수 없음"})
+                continue
+            url = n["url"].rstrip("/") + "/api/op-password"
+            req = urllib.request.Request(url, data=payload, method="POST")
+            req.add_header("Content-Type", "application/json")
+            req.add_header("X-Auth-Token", n["token"])
+            try:
+                resp = urllib.request.urlopen(req, timeout=20)
+                j = json.loads(resp.read().decode("utf-8"))
+                ok = bool(j.get("ok"))
+                results.append({"id": n["id"], "ok": ok,
+                                "reason": "" if ok else (j.get("reason") or "거부됨")})
+                ok_n += 1 if ok else 0
+            except urllib.error.HTTPError as e:
+                reason = ("인증 실패(api_token 불일치)" if e.code in (401, 403)
+                          else "엣지에 비밀번호 관리 API 없음(구버전)" if e.code == 404
+                          else "HTTP %d" % e.code)
+                results.append({"id": n["id"], "ok": False, "reason": reason})
+            except Exception as e:  # noqa: BLE001
+                results.append({"id": n["id"], "ok": False, "reason": str(e)})
+        return {"ok": ok_n > 0, "total": len(targets), "ok_count": ok_n,
+                "cleared": bool(clear), "results": results}
+
     # --- 원격 자동 구성 ---
     def provision_plan(self, raw: dict) -> dict:
         """IP/포트/경로 등으로 엣지 설치 스크립트를 생성하고 노드를 자동 등록한다(SSH 없음).
@@ -2211,6 +2252,11 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/portal/node-scan":
                 self._send_json(c.node_scan(str(body.get("id") or "")))
+                return
+            if path == "/api/portal/node-password":   # 노드 작업 비밀번호 설정/변경/해제(포탈→엣지)
+                self._send_json(c.set_node_password(
+                    body.get("ids") or [], str(body.get("password") or ""),
+                    clear=bool(body.get("clear"))))
                 return
             if path == "/api/portal/provision":
                 self._send_json(c.provision_plan(body))

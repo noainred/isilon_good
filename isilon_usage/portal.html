@@ -502,6 +502,18 @@
     </div>
   </div>
   <div class="card" style="margin-bottom:14px;">
+    <h2>🔐 노드 작업 비밀번호 (포탈에서 설정)</h2>
+    <div class="sub" style="margin-bottom:8px;">엣지의 <b>작업 보호 비밀번호</b>를 포탈에서 일괄/개별로 설정·변경·해제합니다. <b>api_token(토큰)이 등록된 노드</b>만 적용되며, 엣지 비밀번호를 몰라도 api_token 인증으로 푸시합니다.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <select id="npNode" class="inp" style="min-width:200px;" title="대상 노드(전체 또는 개별)"><option value="">전체 노드</option></select>
+      <input id="npPass" type="password" class="inp mono" placeholder="새 비밀번호" style="flex:1; min-width:200px;" />
+      <button id="npSetBtn" class="primary">설정/변경</button>
+      <button id="npClearBtn" title="선택 노드의 비밀번호를 지워 보호를 끕니다">🔓 해제</button>
+      <span class="sub" id="npMsg"></span>
+    </div>
+    <div id="npResult" class="sub" style="margin-top:8px;"></div>
+  </div>
+  <div class="card" style="margin-bottom:14px;">
     <h2>🔑 엣지 자기등록 토큰 (enroll token)</h2>
     <div class="sub" style="margin-bottom:8px;">엣지 설치 시 <span class="mono">--hq http://&lt;이포탈&gt;:8800</span> 을 주면 엣지가 스스로 등록됩니다. 포탈에 <b>로그인 비밀번호가 설정된 경우</b>엔 엣지가 이 공유 토큰을 함께 보내야 등록됩니다(엣지 쪽 <span class="mono">--enroll &lt;토큰&gt;</span>). 비밀번호가 없으면(신뢰망) 토큰 없이도 등록됩니다. 비우고 저장하면 토큰 검사를 끕니다.</div>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -1060,8 +1072,36 @@ async function loadNodes(){
       nWsel=new Set(n.weekdays&&n.weekdays.length?n.weekdays:[1]); buildNW();
       $("nMode").value=n.mode||"both"; $("nEnabled").checked=!!n.enabled; updateNUnit();
       show("nodes"); $("nodeMsg").textContent="수정 모드: "+n.id; }));
+    // 노드 비밀번호 관리 드롭다운(전체 + 개별, 토큰 없는 노드 표시)
+    const np=$("npNode");
+    if(np){ const cur=np.value;
+      np.innerHTML='<option value="">전체 노드</option>'+rows.map(n=>
+        `<option value="${escAttr(n.id)}">${n.id}${n.token_set===false?" (토큰없음)":""}</option>`).join("");
+      np.value=cur; }
   } catch(e){ /* 무시 */ }
 }
+
+// 노드 작업 비밀번호 설정/변경/해제(포탈→엣지 /api/op-password 푸시)
+async function nodePassword(clear){
+  const id=$("npNode").value, ids=id?[id]:[], pass=$("npPass").value;
+  if(!clear && !pass){ $("npMsg").textContent="새 비밀번호를 입력하세요."; return; }
+  const tgt=id?("노드 ‘"+id+"’"):"전체 노드";
+  if(!confirm(tgt+" 의 작업 비밀번호를 "+(clear?"해제":"설정/변경")+"할까요?")) return;
+  $("npMsg").textContent="적용 중…"; $("npResult").innerHTML="";
+  try{
+    const j=await (await fetch("/api/portal/node-password",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({ids, password:pass, clear:!!clear})})).json();
+    if(!j.ok && j.reason){ $("npMsg").textContent="실패: "+j.reason; return; }
+    $("npMsg").textContent=`${j.ok_count||0}/${j.total||0} 노드 ${clear?"해제":"설정"} 완료`;
+    $("npPass").value="";
+    $("npResult").innerHTML=(j.results||[]).map(r=>
+      `<div>${r.ok?"✅":"❌"} <span class="mono">${r.id}</span>${r.reason?(" — "+r.reason):""}</div>`).join("");
+    loadNodes();
+  }catch(e){ $("npMsg").textContent="요청 오류: "+e; }
+}
+$("npSetBtn").addEventListener("click",()=>nodePassword(false));
+$("npClearBtn").addEventListener("click",()=>nodePassword(true));
 
 // 복제 반복주기 선택기(예약 스캔과 같은 시작 + 반복주기 모델)
 const N_DOW = ["일","월","화","수","목","금","토"]; let nWsel = new Set([1]);
