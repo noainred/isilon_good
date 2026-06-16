@@ -2022,7 +2022,8 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self._send_json(c.upgrade_status())
                 return
             if path == "/api/portal/upgrade/history":   # 업그레이드 기록(자동/수동/푸시 + 세부)
-                self._send_json({"ok": True, "events": c.upgrade_history(100)})
+                self._send_json({"ok": True, "events": c.upgrade_history(100),
+                                 "version": __version__})
                 return
             if path == "/api/portal/ping-history":
                 qs = parse_qs(urlparse(self.path).query)

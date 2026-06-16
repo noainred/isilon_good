@@ -1647,7 +1647,7 @@ async function loadHistory(){
       +(r.status===404?' — 포탈(백엔드)이 구버전입니다. <b>포탈을 재시작/업데이트</b>하면 기록 기능이 켜집니다.':'')+'</span>'; return; }
     const j=await r.json();
     const ev=(j&&j.events)||[]; window._histEvents=ev;
-    if(!ev.length){ box.innerHTML='<span class="sub">아직 기록이 없습니다.</span>'; return; }
+    if(!ev.length){ box.innerHTML='<span class="sub">아직 기록이 없습니다 (포탈 v'+(j.version||"?")+'). 자동·수동·전 노드 푸시·재설치 업그레이드가 일어나면 여기에 남습니다.</span>'; return; }
     box.innerHTML='<table style="width:100%;font-size:12.5px;border-collapse:collapse;"><thead><tr class="sub" style="text-align:left;">'
       +'<th style="padding:5px 8px;">시각</th><th style="padding:5px 8px;">종류</th><th style="padding:5px 8px;">버전</th><th style="padding:5px 8px;">결과</th><th style="padding:5px 8px;">엣지</th><th></th></tr></thead><tbody>'
       +ev.map((e,i)=>{

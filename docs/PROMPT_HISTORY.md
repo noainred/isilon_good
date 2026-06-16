@@ -589,4 +589,7 @@
      start()에서 호출, _record_upgrade bump_marker. loadHistory r.ok 체크 → 404=백엔드 구버전 안내.
      test_portal 12-k. v1.76.4.
 
+206. 트러블슈팅 탭 아이콘 🩺→🔧. + 업그레이드 기록 빈 화면에 포탈 버전 표시(history route 에 version,
+     loadHistory 빈 메시지) → 실행 중 포탈 버전(1.76.4+ 인지) 확인 도움. v1.76.5.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
