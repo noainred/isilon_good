@@ -963,8 +963,11 @@ function renderPortalDash(){
                   : '<span class="badge b-offline">오프라인</span>');
     // 온라인인데 스캔 안 함 + 이전 스캔 기록 있음 → '스캔 시작'(마지막 경로와 동일)
     const canScan = n.enabled && n.online && n.active_scans===0 && !n.running && n.roots && n.roots.length;
-    const scanBtn = canScan
-      ? ` <button class="ssbtn" data-id="${escAttr(n.id)}" title="마지막 스캔과 동일한 경로로 새 스캔 시작">▶ 스캔 시작</button>` : "";
+    const scanLocked = _opRequired && !canMutate();   // 비번설정+비로그인이면 스캔 시작 잠금
+    const scanBtn = !canScan ? ""
+      : scanLocked
+        ? ` <button class="ssbtn" disabled title="로그인 후 스캔을 시작할 수 있습니다">🔒 스캔 시작</button>`
+        : ` <button class="ssbtn" data-id="${escAttr(n.id)}" title="마지막 스캔과 동일한 경로로 새 스캔 시작">▶ 스캔 시작</button>`;
     // 새창(엣지 대시보드)을 열 때 포탈의 노드명(예: WA)을 넘겨, 새창 제목이 호스트네임 대신 노드명으로 뜨게 한다
     const open = `<a class="link" href="${n.url}${n.url.includes("?")?"&":"?"}node=${encodeURIComponent(n.id)}" target="_blank" rel="noopener">열기 ↗</a>`;
     // 스토리지 어레이(아이실론/PowerStore) — storage 리스트, 없으면 isilon 단일로 폴백

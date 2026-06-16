@@ -601,4 +601,13 @@
      라벨 정리: 'versions.json URL(빈값=기본 raw GitHub)'→'Site Info(URL)', 토큰 라벨/placeholder
      'GitHub PAT 등 — 공개 소스면 비움'→'인증토큰'. v1.76.7.
 
+209. (포탈) '스캔 시작' 버튼은 로그인 이후에만 → portal.html 노드행 scanBtn 을 scanLocked(_opRequired
+     && !canMutate())이면 disabled '🔒 스캔 시작'(안내 title)로, 아니면 종전 '▶ 스캔 시작'. 백엔드
+     POST 는 이미 401 보호. v1.76.8.
+
+210. (엣지) '디렉터리 분석'은 이전 완료 스캔 데이터가 있으면 그걸로 표시 → populateScanSelect 자동선택
+     로직을 '완료(done) 우선'으로 변경: done?done.id:(active?active.id:scans[0]). 진행 중 임시값(전부
+     동일 용량) 대신 직전 완료 스캔의 정확한 값을 기본 표시, 선택이 done 이라 진행중 배너도 자동 숨김.
+     /api/status?scan=selectedScan 이므로 배너(analysisNotice)는 추가 수정 불필요. v1.76.8.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

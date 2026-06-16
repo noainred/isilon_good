@@ -3039,10 +3039,12 @@ function renderOverview(j) {
     return `<option value="${s.id}">#${s.id} · ${s.root_path} · ${statusKo[s.status] || s.status} · ${t}</option>`;
   }).join("");
 
-  // 사용자가 직접 고르지 않았으면 진행중(없으면 최신) 스캔을 자동 추적
+  // 사용자가 직접 고르지 않았으면: 이전에 '완료'된 스캔이 있으면 그 데이터(정확한 값)를 기본으로 보여준다.
+  // (스캔 진행 중에는 집계 전 임시값이 나오므로, 직전 완료 스캔이 있으면 그쪽을 우선) — 없으면 진행중, 그것도 없으면 최신.
   if (!userPicked) {
+    const done = scans.find(s => s.status === "done");      // 목록은 최신순 → 가장 최근 완료 스캔
     const active = scans.find(s => s.status === "discovering" || s.status === "sizing");
-    selectedScan = active ? active.id : (scans.length ? scans[0].id : null);
+    selectedScan = done ? done.id : (active ? active.id : (scans.length ? scans[0].id : null));
   }
   if (selectedScan != null) sel.value = String(selectedScan);
 }
