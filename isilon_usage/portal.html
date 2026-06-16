@@ -354,6 +354,23 @@
     <pre id="relCmd" class="note mono" style="white-space:pre-wrap; word-break:break-all; margin-top:4px; cursor:pointer;" title="클릭하면 복사">—</pre>
   </div>
 
+  <div class="card" style="margin-bottom:14px;">
+    <h2>📜 업그레이드 기록 (History) <button id="histRefresh" class="sub" style="float:right; font-weight:400; padding:2px 8px;">↻ 새로고침</button></h2>
+    <div class="sub" style="margin-bottom:8px;">자동(인터넷·감시 폴더)·수동·전 노드 푸시 업그레이드가 일어나면 여기에 남습니다(포탈 재시작에도 보존). <b>세부</b>를 누르면 단계 로그와 엣지별 결과를 봅니다.</div>
+    <div id="histList" class="sub">불러오는 중…</div>
+  </div>
+
+  <!-- 업그레이드 기록 세부 모달 -->
+  <div id="histModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.62); z-index:2000; align-items:center; justify-content:center;">
+    <div style="background:#141a2b; border:1px solid #2a3550; border-radius:12px; width:min(820px,95vw); max-height:90vh; display:flex; flex-direction:column; box-shadow:0 14px 44px rgba(0,0,0,.55);">
+      <div style="padding:13px 18px; border-bottom:1px solid #2a3550; display:flex; align-items:center; gap:10px;">
+        <span style="font-size:18px;">📜</span><b style="font-size:15px;" id="histModalTitle">업그레이드 세부</b>
+        <button id="histModalClose" style="margin-left:auto;">닫기</button>
+      </div>
+      <div id="histModalBody" style="padding:14px 18px; overflow:auto; flex:1; min-height:240px;"></div>
+    </div>
+  </div>
+
   <!-- 업그레이드 진행 모달(단계별 라이브 로그) -->
   <div id="upgModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.62); z-index:2000; align-items:center; justify-content:center;">
     <div style="background:#141a2b; border:1px solid #2a3550; border-radius:12px; width:min(760px,94vw); max-height:88vh; display:flex; flex-direction:column; box-shadow:0 14px 44px rgba(0,0,0,.55);">
@@ -625,7 +642,7 @@ function showSub(id){
   document.querySelectorAll("#view-nodes .subpane").forEach(p=>p.classList.toggle("active", p.id===id));
   document.querySelectorAll("#view-nodes .stab").forEach(b=>b.classList.toggle("active", b.dataset.pane===id));
   // 업그레이드 탭을 열 때마다 릴리스 폴더/인터넷 업그레이드 상태를 라이브로 새로고침(stale 표시 방지).
-  if(id==="np-upgrade"){ try{ loadRelease(); loadNetUpg(); }catch(e){} }
+  if(id==="np-upgrade"){ try{ loadRelease(); loadNetUpg(); loadHistory(); }catch(e){} }
   if(id==="np-security"){ try{ pLoadUpgradeCfg(); }catch(e){} }   // 백업 현황 갱신
 }
 document.querySelectorAll("#view-nodes .stab").forEach(b=>b.addEventListener("click",()=>showSub(b.dataset.pane)));
@@ -1622,6 +1639,47 @@ if($("ugPushAll")) $("ugPushAll").addEventListener("click", async()=>{
   catch(e){ $("ugWatchMsg").textContent=" ✗ "+e; }
   $("ugPushAll").disabled=false;
 });
+// 업그레이드 기록(History) — 목록 + 세부 모달
+async function loadHistory(){
+  const box=$("histList"); if(!box) return;
+  try{ const j=await (await fetch("/api/portal/upgrade/history",{cache:"no-store"})).json();
+    const ev=(j&&j.events)||[]; window._histEvents=ev;
+    if(!ev.length){ box.innerHTML='<span class="sub">아직 기록이 없습니다.</span>'; return; }
+    box.innerHTML='<table style="width:100%;font-size:12.5px;border-collapse:collapse;"><thead><tr class="sub" style="text-align:left;">'
+      +'<th style="padding:5px 8px;">시각</th><th style="padding:5px 8px;">종류</th><th style="padding:5px 8px;">버전</th><th style="padding:5px 8px;">결과</th><th style="padding:5px 8px;">엣지</th><th></th></tr></thead><tbody>'
+      +ev.map((e,i)=>{
+        const res=e.ok?'<span style="color:var(--ok)">✓ 성공</span>':'<span style="color:var(--danger)">✗ 실패</span>';
+        const ver=(e.from?("v"+e.from+" → "):"")+(e.to?("v"+e.to):(e.bundle_version?("v"+e.bundle_version):"—"));
+        const edges=(e.push_total!=null)?((e.push_ok||0)+"/"+e.push_total):"—";
+        return '<tr style="border-top:1px solid #222c44">'
+          +'<td class="mono" style="padding:5px 8px;">'+new Date(e.ts*1000).toLocaleString("ko-KR")+'</td>'
+          +'<td style="padding:5px 8px;">'+esc(e.kind||"")+'</td>'
+          +'<td class="mono" style="padding:5px 8px;">'+esc(ver)+'</td>'
+          +'<td style="padding:5px 8px;">'+res+(e.error?(' <span class="sub">'+esc(e.error)+'</span>'):'')+'</td>'
+          +'<td style="padding:5px 8px;">'+edges+'</td>'
+          +'<td style="padding:5px 8px;"><button class="histDetail" data-i="'+i+'" style="padding:2px 10px;">세부</button></td></tr>';
+      }).join("")+'</tbody></table>';
+    box.querySelectorAll(".histDetail").forEach(b=>b.addEventListener("click",()=>showHist(+b.dataset.i)));
+  }catch(e){ box.innerHTML='<span class="sub">불러오기 실패</span>'; }
+}
+function showHist(i){
+  const e=(window._histEvents||[])[i]; if(!e) return; const m=$("histModal"); if(!m) return;
+  $("histModalTitle").textContent=(e.kind||"업그레이드")+" — "+new Date(e.ts*1000).toLocaleString("ko-KR")+" ("+(e.ok?"성공":"실패")+")";
+  const ver=(e.from?("v"+e.from+" → "):"")+(e.to||e.bundle_version||"?");
+  let html='<div class="sub" style="margin-bottom:8px;">버전 <b>'+esc(ver)+'</b>'+(e.error?(' · <span style="color:var(--danger)">'+esc(e.error)+'</span>'):'')+'</div>';
+  const log=(e.log||[]);
+  if(log.length) html+='<div class="sub" style="margin-bottom:4px;">단계 로그</div><pre class="mono" style="background:#0d1219;border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;max-height:240px;overflow:auto;font-size:12px;">'
+    +log.map(l=>new Date(l.t*1000).toLocaleTimeString("ko-KR")+"  "+esc(l.msg)).join("\n")+'</pre>';
+  const nodes=(e.nodes||[]);
+  if(nodes.length){ html+='<div class="sub" style="margin:8px 0 4px;">엣지별 결과 ('+(e.push_ok||0)+'/'+(e.push_total||nodes.length)+')</div>'
+    +'<table style="width:100%;font-size:12px;border-collapse:collapse;"><tbody>'
+    +nodes.map(n=>'<tr style="border-top:1px solid #222c44"><td class="mono" style="padding:4px 8px;">'+esc(n.id||"")+'</td>'
+      +'<td style="padding:4px 8px;">'+(n.ok?('<span style="color:var(--ok)">✓ v'+esc(n.version||"?")+'</span>'):('<span style="color:var(--danger)">✗ '+esc(n.reason||"실패")+'</span>'))+'</td></tr>').join("")
+    +'</tbody></table>'; }
+  $("histModalBody").innerHTML=html; m.style.display="flex";
+}
+if($("histModalClose")) $("histModalClose").addEventListener("click",()=>{ const m=$("histModal"); if(m) m.style.display="none"; });
+if($("histRefresh")) $("histRefresh").addEventListener("click", loadHistory);
 if($("ugPushAllSsh")) $("ugPushAllSsh").addEventListener("click", async()=>{
   if(!confirm("등록된 모든 엣지에 SSH로 접속해 업그레이드를 실행할까요?(구버전 부트스트랩)")) return;
   $("ugPushAllSsh").disabled=true; $("ugSshAllMsg").textContent=" SSH 업그레이드 중… (노드 수만큼 시간 소요)";

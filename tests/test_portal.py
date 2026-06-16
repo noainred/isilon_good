@@ -377,6 +377,18 @@ def main() -> int:
         assert bi["backup_count"] == 3 and bi["backup_keep"] == 3, bi
         pc.set_backup_config("", 1, 100)         # 자동 백업 끔(원복)
 
+        # 12-i) 업그레이드 기록(History): 기록 후 최신순 조회 + 세부(엣지별 결과) 보존
+        pc._record_upgrade(kind="인터넷", ok=True, frm="1.0.0", to="2.0.0",
+                           push=[{"id": "e1", "ok": True, "version": "2.0.0"},
+                                 {"id": "e2", "ok": False, "reason": "거부"}])
+        pc._record_upgrade(kind="전 노드 푸시", ok=False, to="2.0.0",
+                           push=[{"id": "e1", "ok": False, "reason": "HTTP 400"}])
+        hist = pc.upgrade_history(50)
+        assert len(hist) >= 2 and hist[0]["kind"] == "전 노드 푸시", hist[0]   # 최신순
+        hi = next(h for h in hist if h["kind"] == "인터넷")
+        assert hi["to"] == "2.0.0" and hi["push_ok"] == 1 and hi["push_total"] == 2, hi
+        assert any(n["id"] == "e2" for n in hi["nodes"]), hi                   # 세부 노드 보존
+
         # 13) 업그레이드 상태: 노드 버전이 HQ보다 낮으면 '구버전'으로 집계('모두 최신' 착시 방지)
         assert pc.upsert_node({"id": "old-node", "url": "http://10.9.9.1:8765", "token": "x"})["ok"]
         with pc._lock:

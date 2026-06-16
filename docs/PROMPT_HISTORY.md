@@ -569,4 +569,9 @@
 200. 엣지 탭 모든 라벨에 아이콘(🏠 Summary·📉 추세·비교·📁 디렉터리) + '디렉터리'→'디렉터리 분석'
      이름변경. dashboard.html navbtn 라벨만 변경. v1.75.1.
 
+201. 자동 업데이트 진행 시 History 기록 + 세부 보기 → portal.py _record_upgrade(jsonl append·단계 로그·
+     엣지별 결과 포함·재시작 직전 기록·상한 200)·upgrade_history, 자동(감시/인터넷 성공·실패)·수동(_do_
+     upgrade_install 성공/실패)·전노드푸시(_push_loop record=True) 모두 훅. 라우트 /upgrade/history.
+     portal.html 업그레이드 탭 History 카드 + 세부 모달(histModal)·showSub 연동. test_portal 12-i. v1.76.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

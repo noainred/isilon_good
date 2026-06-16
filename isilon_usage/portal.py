@@ -724,7 +724,7 @@ class PortalController:
         data = agent_bundle_bytes()
         bver = agent_bundle_version() or "?"
         nodes = self._push_init(bver)     # 모달이 즉시 보도록 동기 초기화
-        threading.Thread(target=lambda: self._push_loop(data, bver, nodes),
+        threading.Thread(target=lambda: self._push_loop(data, bver, nodes, record=True),
                          name="push-all", daemon=True).start()
         return {"ok": True, "started": True, "bundle_version": bver, "total": len(nodes)}
 
@@ -755,8 +755,11 @@ class PortalController:
             p["ok"] = states.count("ok")
             p["fail"] = states.count("fail")
 
-    def _push_loop(self, data: bytes, bver: str, nodes: list) -> list:
-        """각 엣지에 번들을 POST 하고 노드별 진행 상태를 갱신한다(동기). 결과 리스트 반환."""
+    def _push_loop(self, data: bytes, bver: str, nodes: list, *, record: bool = False) -> list:
+        """각 엣지에 번들을 POST 하고 노드별 진행 상태를 갱신한다(동기). 결과 리스트 반환.
+
+        record=True(버튼으로 시작한 단독 푸시)면 끝에 업그레이드 기록(History)도 남긴다.
+        """
         results = []
         self._upg_log("③ 엣지 전파 시작 — 보내는 코드 v%s, %d대 (이 버전이 엣지보다 낮거나 같으면 거부)"
                       % (bver, len(nodes)))
@@ -808,6 +811,9 @@ class PortalController:
                 p["active"] = False
                 p["finished"] = time.time()
         self._upg_log("③ 엣지 전파 완료 — 성공 %d/%d (보낸 버전 v%s)" % (okn, len(nodes), bver))
+        if record:
+            self._record_upgrade(kind="전 노드 푸시", ok=(len(nodes) > 0 and okn == len(nodes)),
+                                 to=bver, push=results)
         return results
 
     def push_upgrade_all_ssh(self, raw: dict) -> dict:
@@ -882,6 +888,7 @@ class PortalController:
                         self._apply_self_upgrade(res, "감시 폴더")   # 재시작(돌아오지 않음)
                         return
                     self._upg_log("감시 폴더 업그레이드 실패: %s" % res.get("reason"))
+                    self._record_upgrade(kind="감시 폴더", ok=False, error=res.get("reason"))
                 finally:
                     with self._lock:
                         self._upg_state["installing"] = False
@@ -902,21 +909,72 @@ class PortalController:
                         self._apply_self_upgrade(res, "인터넷")   # 재시작
                         return
                     self._upg_log("자동 설치 실패: %s" % res.get("reason"))
+                    self._record_upgrade(kind="인터넷", ok=False, error=res.get("reason"))
                 finally:
                     with self._lock:
                         self._upg_state["installing"] = False
 
     def _apply_self_upgrade(self, res: dict, how: str) -> None:
-        """자가 업그레이드 성공 후: 감사로그 → 엣지 전파 → 재시작(돌아오지 않음)."""
+        """자가 업그레이드 성공 후: 감사로그 → 엣지 전파 → 기록(History) → 재시작(돌아오지 않음)."""
         self._upg_log("%s 자가 업그레이드 %s → %s, 엣지 전파 후 재시작" % (
             how, res.get("from"), res.get("version")))
         auditmod.record(self.data_dir, action="self_upgrade", ok=True,
                         detail="%s -> %s (%s)" % (res.get("from"), res.get("version"), how))
+        push = []
         try:                                  # 새 코드가 디스크에 반영됨 → 엣지에도 푸시
-            self.push_upgrade_all()
+            push = (self.push_upgrade_all() or {}).get("results") or []
         except Exception:  # noqa: BLE001
             pass
+        self._record_upgrade(kind=how, ok=True, frm=res.get("from"),
+                             to=res.get("version"), push=push)
         upgrademod.restart_process()
+
+    # --- 업그레이드 기록(History): 자동/수동/푸시 결과를 디스크에 남겨 세부 조회 가능하게 ---
+    _HISTORY_FILE = "upgrade_history.jsonl"
+    _HISTORY_MAX = 200
+
+    def _record_upgrade(self, *, kind, ok, frm=None, to=None, push=None, error=None) -> None:
+        """업그레이드 1건(단계 로그·엣지별 결과 포함)을 jsonl 에 append(재시작에도 보존, 상한 유지)."""
+        with self._lock:
+            log = list(self._upg_state.get("log") or [])[-80:]
+        entry = {"ts": time.time(), "kind": kind, "ok": bool(ok), "from": frm, "to": to,
+                 "bundle_version": agent_bundle_version(), "log": log}
+        if error:
+            entry["error"] = str(error)
+        if push is not None:
+            entry["nodes"] = push
+            entry["push_ok"] = sum(1 for r in push if r.get("ok"))
+            entry["push_total"] = len(push)
+        path = os.path.join(self.data_dir, self._HISTORY_FILE)
+        try:
+            os.makedirs(self.data_dir, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            with open(path, encoding="utf-8") as fh:
+                lines = fh.readlines()
+            if len(lines) > self._HISTORY_MAX:
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.writelines(lines[-self._HISTORY_MAX:])
+        except OSError:
+            pass
+
+    def upgrade_history(self, limit: int = 100) -> list:
+        """업그레이드 기록을 최신순으로 반환(세부 log/nodes 포함)."""
+        path = os.path.join(self.data_dir, self._HISTORY_FILE)
+        out = []
+        try:
+            with open(path, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        try:
+                            out.append(json.loads(line))
+                        except ValueError:
+                            pass
+        except OSError:
+            pass
+        out.reverse()
+        return out[:max(1, int(limit or 100))]
 
     # --- 인터넷 자동 업그레이드 상태/조작(엣지와 동일 + 엣지 전파) ---
     def _upg_log(self, msg: str) -> None:
@@ -996,18 +1054,22 @@ class PortalController:
                 token=self.settings.get("upgrade_token") or None)
             if not res.get("ok"):
                 self._upg_log("✗ 설치 실패: %s" % res.get("reason"))
+                self._record_upgrade(kind="수동", ok=False, error=res.get("reason"))
                 with self._lock:
                     self._upg_state.update(installing=False, install_done=True,
                                            install_error=res.get("reason"))
                 return
             self._upg_log("② HQ 코드 교체 완료: v%s → v%s" % (res.get("from"), res.get("version")))
+            push = []
             if propagate:
                 try:                          # 새 코드를 등록된 엣지에도 전파(엣지별 로그)
-                    self.push_upgrade_all()
+                    push = (self.push_upgrade_all() or {}).get("results") or []
                 except Exception as e:  # noqa: BLE001
                     self._upg_log("③ 엣지 전파 중 오류: %s" % e)
             auditmod.record(self.data_dir, action="self_upgrade_manual", ok=True,
                             detail="-> %s" % res.get("version"))
+            self._record_upgrade(kind="수동", ok=True, frm=res.get("from"),
+                                 to=res.get("version"), push=push)
             self._upg_log("④ 곧 포탈을 재시작합니다 (약 1.5초) — 새 버전 v%s 로 돌아옵니다"
                           % res.get("version"))
             with self._lock:        # 재시작 직전까지 installing 유지(1.5초 틈새 중복 설치 차단)
@@ -1914,6 +1976,9 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/portal/upgrade/status":
                 self._send_json(c.upgrade_status())
+                return
+            if path == "/api/portal/upgrade/history":   # 업그레이드 기록(자동/수동/푸시 + 세부)
+                self._send_json({"ok": True, "events": c.upgrade_history(100)})
                 return
             if path == "/api/portal/ping-history":
                 qs = parse_qs(urlparse(self.path).query)
