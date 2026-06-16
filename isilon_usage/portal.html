@@ -571,6 +571,10 @@ function canMutate(){ return !_opRequired || (!!_opToken() && _opLeft()>0); }
 function updateLoginUI(){
   const ro=_opRequired && !canMutate();
   const b=$("roBanner"); if(b) b.style.display=ro?"":"none";
+  // 비밀번호 설정 + 비로그인이면 '노드 설정'(관리) 탭을 아예 숨기고, 그 화면이면 대시보드로
+  const nodesBtn=document.querySelector('.navbtn[data-view="nodes"]');
+  if(nodesBtn) nodesBtn.style.display=ro?"none":"";
+  if(ro && $("view-nodes") && $("view-nodes").classList.contains("active")) show("dash");
   const btn=$("loginBtn");
   if(btn){
     btn.style.display=_opRequired?"":"none";
@@ -632,7 +636,8 @@ function capCell(used,total){
       <i style="width:${p.toFixed(1)}%;background:${c}"></i><b>${p.toFixed(0)}%</b></div>
       <div class="sub mono" style="white-space:nowrap;margin-top:2px;">${fmtBytes(used)} / ${fmtBytes(total)}</div>`;
 }
-function show(v){ ["dash","compare","nodes","netmon"].forEach(n=>$("view-"+n).classList.toggle("active", n===v));
+function show(v){ if(v==="nodes" && _opRequired && !canMutate()) v="dash";   // 비번설정+비로그인이면 관리 탭 차단
+  ["dash","compare","nodes","netmon"].forEach(n=>$("view-"+n).classList.toggle("active", n===v));
   if(v==="compare") loadCompare();
   if(v==="netmon") netmonStart(); else netmonStop();
   document.querySelectorAll(".navbtn").forEach(b=>b.classList.toggle("active", b.dataset.view===v)); }

@@ -592,4 +592,7 @@
 206. 트러블슈팅 탭 아이콘 🩺→🔧. + 업그레이드 기록 빈 화면에 포탈 버전 표시(history route 에 version,
      loadHistory 빈 메시지) → 실행 중 포탈 버전(1.76.4+ 인지) 확인 도움. v1.76.5.
 
+207. 비밀번호 설정+비로그인이면 '노드 설정'(관리) 탭 숨김+접근차단 → updateLoginUI 에서 nav[data-view=
+     nodes] 숨기고 view-nodes 활성 시 dash 로, show()에서 nodes 전환 차단. 조회 뷰는 유지. v1.76.6.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
