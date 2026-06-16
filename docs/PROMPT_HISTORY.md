@@ -633,4 +633,10 @@
      '🏷 포탈 제목(브랜딩)' 카드 + setTitleBtn, loadAuth 에서 applyPortalTitle 로 헤더 h1·document.title
      반영(비우면 기본 '다빈치 글로벌 아이실론 관제센터 — 한국 HQ'). test_portal 검증. v1.79.1.
 
+215. 보안점검·최적화·문서화 → 실제 코드 점검(auth PBKDF2/상수시간, upgrade _accept_member zip-slip+폭탄상한,
+     _public_settings 마스킹, dbexport api_token 게이트, SSH argv 무셸주입, browse mount_bases 한정) 후
+     기존 SECURITY.md 에 '코드 근거 점검 결과' 절 + 포탈→엣지 비번관리 행 추가(중복 docs/SECURITY.md 는
+     생성→삭제, 통합). docs/PERFORMANCE.md 신규(측정 병목·pscan 실측·무의미목록·권장설정·6PB 네이티브
+     미검증) + README 색인 링크. v1.79.2.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

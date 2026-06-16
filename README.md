@@ -1,6 +1,6 @@
 # Isilon 디렉터리 사용량 스캐너
 
-**[🚀 처음 시작하기](docs/GETTING_STARTED.md)** · [📦 설치 매뉴얼](docs/INSTALL.md) · [📄 솔루션 제품소개(A4)](docs/SOLUTION_BRIEF.html) · [📣 영업 자료](sales/) · [사용 설명서](docs/USER_GUIDE.md) · [변경 이력](CHANGELOG.md) · [보안 가이드](SECURITY.md) · [서비스 실행(systemd)](docs/SERVICE.md) · [화면이 멈췄을 때 — 프로세스 확인/복구](docs/TROUBLESHOOTING-frozen-dashboard.md) · Python 3.6+ · [MIT License](LICENSE)
+**[🚀 처음 시작하기](docs/GETTING_STARTED.md)** · [📦 설치 매뉴얼](docs/INSTALL.md) · [📄 솔루션 제품소개(A4)](docs/SOLUTION_BRIEF.html) · [📣 영업 자료](sales/) · [사용 설명서](docs/USER_GUIDE.md) · [변경 이력](CHANGELOG.md) · [보안 가이드](SECURITY.md) · [성능·최적화](docs/PERFORMANCE.md) · [서비스 실행(systemd)](docs/SERVICE.md) · [화면이 멈췄을 때 — 프로세스 확인/복구](docs/TROUBLESHOOTING-frozen-dashboard.md) · Python 3.6+ · [MIT License](LICENSE)
 
 아이실론(Isilon)처럼 **한 디렉터리에 수천만 개의 파일**이 있는 초대용량 NAS
 에서, 트리 전체에 `du` 를 한 번에 돌리면 메모리를 너무 많이 써서 프로세스가
