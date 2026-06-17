@@ -648,4 +648,9 @@
      ② 업그레이드 기록 20줄 + '더 보기' → loadHistory 를 loadHistory+renderHist 로 분리, _histLimit=20,
      histMore 버튼 클릭 시 전체 표시. v1.79.4.
 
+218. '전체 용량 관리 개요(관리 DB)' 표에서 결과를 선택해 보게 → 파이·상위디렉터리 카드는 JS가 view-analysis
+     로 옮겨져 있어, ovBody #번호 클릭(selectScan)은 선택만 되고 화면 전환이 없어 안 보였음. ovBody 행
+     전체 클릭(tr.ovrow, 버튼 제외) + #번호 링크에서 selectScan 후 showView("analysis") 추가. 스캔 이력
+     goScan 도 동일 일관화. 진행중 스캔도 수동선택 가능(userPicked). dashboard.html. v1.79.5.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

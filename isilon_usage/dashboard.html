@@ -3014,7 +3014,7 @@ function renderHistory(scans) {
     </tr>`;
   }).join("");
   body.querySelectorAll("a.goScan").forEach(a =>
-    a.addEventListener("click", (e) => { e.preventDefault(); selectScan(parseInt(a.dataset.scan)); }));
+    a.addEventListener("click", (e) => { e.preventDefault(); selectScan(parseInt(a.dataset.scan)); showView("analysis"); }));
 }
 
 function renderOverview(j) {
@@ -3072,7 +3072,7 @@ function renderOverview(j) {
           act += ` <button class="stopbtn" data-del="${r.scan_id}" title="삭제">✕</button>`;
         }
       }
-      return `<tr>
+      return `<tr class="ovrow" data-scan="${r.scan_id}" style="cursor:pointer;" title="클릭: 이 스캔 결과를 ‘디렉터리 분석’에서 보기">
         <td class="path" title="${r.root_path}">${r.root_path}</td>
         <td>${r.hostname || "—"}</td>
         <td class="num">${fmtBytes(r.scanned_bytes)}</td>
@@ -3084,7 +3084,12 @@ function renderOverview(j) {
       </tr>`;
     }).join("");
     body.querySelectorAll("a.goScan").forEach(a =>
-      a.addEventListener("click", (e) => { e.preventDefault(); selectScan(parseInt(a.dataset.scan)); }));
+      a.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); selectScan(parseInt(a.dataset.scan)); showView("analysis"); }));
+    body.querySelectorAll("tr.ovrow").forEach(tr =>
+      tr.addEventListener("click", (e) => {
+        if (e.target.closest("a,button")) return;   // 링크·동작 버튼(중지/재개/삭제)은 각자 처리
+        selectScan(parseInt(tr.dataset.scan)); showView("analysis");
+      }));
     body.querySelectorAll("button[data-stop]").forEach(b =>
       b.addEventListener("click", () => stopScan(parseInt(b.dataset.stop))));
     body.querySelectorAll("button[data-resume]").forEach(b =>
