@@ -666,4 +666,8 @@
      유지), paused/error 면 pop 만(멈춤). /api/scan/start 가 auto_restart 수신. dashboard 폼에 '🔁 완료 후
      자동 재시작' 체크박스 + reqScanStart 전달 + 확인창 표시. test_server 검증. 메모리 보관(재시작 시 풀림). v1.80.0.
 
+222. 설정에서 (포탈)이름 변경 → 기능은 v1.79.1에 이미 있었으나 '보안·감사'에 묻혀 안 보였음. 발견성 개선:
+     헤더 h1 을 클릭 가능(✏)으로 만들고 editPortalTitle 모달(제목·부제 입력→/api/portal/settings 저장,
+     비번 설정 시 doLogin 선행) 추가. applyPortalTitle 에서 onclick 연결. portal.html. v1.80.1.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
