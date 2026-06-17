@@ -598,6 +598,11 @@
 
       <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
         <div class="sub" style="margin-bottom:6px;">예약 스캔(반복) — 기존에 스캔한 루트를 골라 “시작 + 반복주기”로 자동 스캔</div>
+        <div id="schedLockMsg" style="display:none; margin-bottom:8px; padding:9px 12px; border-radius:8px; border:1px solid #7a3030; background:#2a1414; color:#ff8a8a; font-weight:700;">
+          🔁 <b>반복 스캔이 켜져 있습니다</b> — 완료 후 자동 재시작이 도는 동안에는 예약 스캔을 설정할 수 없습니다.
+          <span style="font-weight:400;">반복을 끄려면 위 ‘전체 용량 관리 개요’에서 해당 스캔을 <b>‘중지’</b>하세요.</span>
+        </div>
+        <div id="schedFormWrap">
         <table><thead><tr><th>경로</th><th>반복주기</th><th>백엔드</th><th>사용</th><th></th></tr></thead>
           <tbody id="schedBody"><tr><td colspan="5" class="sub">예약 없음</td></tr></tbody></table>
         <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; align-items:center;">
@@ -625,6 +630,7 @@
         </div>
         <div class="sub" id="schSummary" style="margin-top:6px;"></div>
         <div class="sub">여러 경로를 ‘＋ 경로’로 담으면 한 예약이 그 순서대로 순차 스캔합니다. 추가/삭제 후 아래 “설정 저장”을 눌러야 반영됩니다.</div>
+        </div><!-- /schedFormWrap -->
       </div>
 
       <div style="display:flex; gap:12px; align-items:center; margin-top:12px; flex-wrap:wrap;">
@@ -1328,6 +1334,7 @@ let lastSeries = [];
 let selectedScan = null;   // null → 진행중/최신 스캔 자동 추적
 let userPicked = false;    // 사용자가 직접 고르면 자동 추적 중지
 let runningSet = new Set();
+let autoRestartSet = new Set();   // 완료 후 자동 재시작(반복)이 켜진 스캔 id
 let canScan = false;
 let mountBases = [];
 
@@ -3023,6 +3030,13 @@ function renderHistory(scans) {
     a.addEventListener("click", (e) => { e.preventDefault(); selectScan(parseInt(a.dataset.scan)); showView("analysis"); }));
 }
 
+// 반복 스캔(자동 재시작)이 켜져 있으면 예약 스캔 폼을 잠그고(클릭 차단·흐리게) 빨간 안내를 띄운다.
+function updateScheduleLock() {
+  const locked = autoRestartSet.size > 0;
+  const msg = $("schedLockMsg"), wrap = $("schedFormWrap");
+  if (msg) msg.style.display = locked ? "block" : "none";
+  if (wrap) { wrap.style.opacity = locked ? "0.4" : ""; wrap.style.pointerEvents = locked ? "none" : ""; }
+}
 function renderOverview(j) {
   if (j.version) $("verPill").textContent = "v" + j.version;
   allScans = j.scans || [];
@@ -3035,6 +3049,8 @@ function renderOverview(j) {
 
   // 웹 스캔 가능 여부 / 실행 중 스캔 / 허용 경로
   runningSet = new Set(j.running || []);
+  autoRestartSet = new Set(j.auto_restart || []);   // 반복(자동 재시작) 중인 스캔
+  updateScheduleLock();                              // 반복 중이면 예약 스캔 폼 잠금 + 빨간 안내
   renderHistory(allScans);   // 회차별 소요 시간·결과(runningSet 확정 후)
   // 브라우저 탭 제목에 노드명 + 스캔 중 표시 — 여러 탭에서 어느 노드인지 구분.
   // 포탈에서 '열기 ↗'로 띄우면 ?node=<노드명>이 붙어오므로, 그 땐 호스트네임 대신 노드명(예: WA)을 쓴다.
@@ -3070,6 +3086,8 @@ function renderOverview(j) {
       const endt = r.finished_at || r.updated_at;
       const el = (r.started_at && endt) ? (endt - r.started_at) : null;
       const running = runningSet.has(r.scan_id);
+      const loop = autoRestartSet.has(r.scan_id);   // 완료 후 자동 재시작(반복) 중
+      const loopBadge = loop ? ` <span style="color:#ff5c5c; font-weight:700; white-space:nowrap;" title="완료되면 같은 설정으로 자동 재시작됩니다(반복). 끄려면 '중지'.">🔁 반복 동작 중</span>` : "";
       let act = `<a href="#" class="goScan" data-scan="${r.scan_id}">#${r.scan_id}</a>`;
       if (canMutate()) {
         if (running) act += ` <button class="stopbtn" data-stop="${r.scan_id}">중지</button>`;
@@ -3085,7 +3103,7 @@ function renderOverview(j) {
         <td class="num">${fmtBytes(r.fs_used_bytes)}</td>
         <td class="num">${pct.toFixed(1)}%</td>
         <td class="num">${el == null ? "—" : fmtDur(el)}</td>
-        <td>${running && (r.status === "paused" || r.status === "done") ? "실행 중" : (statusKo[r.status] || r.status)}</td>
+        <td>${running && (r.status === "paused" || r.status === "done") ? "실행 중" : (statusKo[r.status] || r.status)}${loopBadge}</td>
         <td>${act}</td>
       </tr>`;
     }).join("");

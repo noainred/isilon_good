@@ -670,4 +670,8 @@
      헤더 h1 을 클릭 가능(✏)으로 만들고 editPortalTitle 모달(제목·부제 입력→/api/portal/settings 저장,
      비번 설정 시 doLogin 선행) 추가. applyPortalTitle 에서 onclick 연결. portal.html. v1.80.1.
 
+223. ① 반복 스캔 중이면 '전체 용량 관리 개요'에 빨간 '🔁 반복 동작 중' 배지. ② 반복 스캔 켜져 있으면 예약
+     스캔 폼 잠금(schedFormWrap pointer-events:none+흐리게)+빨간 안내(schedLockMsg). 엣지 /api/scans 에
+     auto_restart(=auto_restart_ids) 노출, dashboard autoRestartSet+updateScheduleLock. v1.80.2.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

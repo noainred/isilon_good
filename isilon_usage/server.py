@@ -1867,6 +1867,11 @@ class ScanController:
         with self._lock:
             return sorted(self._scans.keys())
 
+    def auto_restart_ids(self) -> list:
+        """완료 후 자동 재시작(반복)이 켜진 채 도는 스캔 id 목록."""
+        with self._lock:
+            return sorted(self._auto_restart.keys())
+
     def running_paths(self) -> set:
         with self._lock:
             return {rec.get("path") for rec in self._scans.values()}
@@ -2140,6 +2145,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "overall": mgrmod.overall_capacity(mconn),
                     "scans": mgrmod.list_scans(mconn),
                     "running": ctrl.running_ids() if ctrl else [],
+                    "auto_restart": ctrl.auto_restart_ids() if ctrl else [],
                     "mount_bases": ctrl.mount_bases if ctrl else [],
                     "can_scan": ctrl is not None,
                     "have_psutil": monmod.have_psutil(),
