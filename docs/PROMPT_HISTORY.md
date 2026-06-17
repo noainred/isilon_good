@@ -681,4 +681,10 @@
      dash/netmon/compare) settings+auth_status+set_nav_hidden+POST. loadAuth 에서 applyNavHidden/renderNavMenu.
      jsdom 으로 재배치 결과 검증. test_portal 6g. v1.81.0.
 
+225. (아이실론 엣지 설정도 종류별 탭으로 정리) → settingsCard 의 각 섹션에 data-scat(scan/storage/security/
+     alert/general) 부여 + .stab/.subtabs CSS + setTabs 탭바 + setShowCat(표시 토글, 값 유지). 5탭: 스캔·성능/
+     스토리지/보안·연동/알림·예약/일반. webhook→alert, mount_bases→scan, serverInfo→general. jsdom 검증.
+226. 설정 맨 아래 제작자 크레딧(JunHo Park) — 엣지(serverInfo 다음)·포탈(view-nodes 끝) 양쪽에 작은 멋진
+     크레딧(글로우 텍스트) 추가. v1.82.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
