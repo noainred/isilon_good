@@ -653,4 +653,7 @@
      전체 클릭(tr.ovrow, 버튼 제외) + #번호 링크에서 selectScan 후 showView("analysis") 추가. 스캔 이력
      goScan 도 동일 일관화. 진행중 스캔도 수동선택 가능(userPicked). dashboard.html. v1.79.5.
 
+219. '상세 보기 스캔'(scanSelectCard)을 디스크 사용량 파이 위로 → view-analysis 이동 배열 순서를
+     [pieCard,scanSelectCard,...] → [scanSelectCard,pieCard,...] 로 변경. dashboard.html. v1.79.6.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

@@ -3707,10 +3707,11 @@ buildSchWeekdays(); fillSchSel("schMonth", 12, "월"); fillSchSel("schDay", 31, 
 (function () {
   const sc = $("settingsCard"), vs = $("view-settings");
   if (sc && vs) { vs.appendChild(sc); sc.open = true; sc.style.marginBottom = "0"; }
-  // 디렉터리(분석) 화면: 파이·상세보기·상위 디렉터리·드릴다운.
+  // 디렉터리(분석) 화면: 상세보기(스캔 선택)·파이·상위 디렉터리·드릴다운.
+  //  → 스캔 선택 카드를 파이 '위'에 둔다(어느 스캔을 보는지 먼저 고르고 파이를 본다).
   const va = $("view-analysis");
   if (va) {
-    ["pieCard", "scanSelectCard", "secTopDirs", "secTree"].forEach(id => {
+    ["scanSelectCard", "pieCard", "secTopDirs", "secTree"].forEach(id => {
       const el = $(id);
       if (el) va.appendChild(el);
     });
