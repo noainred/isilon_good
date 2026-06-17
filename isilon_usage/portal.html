@@ -677,10 +677,45 @@ async function loadAuth(){
     _opRequired=!!j.op_required;
     applyPortalTitle(j.portal_title, j.portal_subtitle);
     applyNavHidden(j.nav_hidden); renderNavMenu(j.nav_hidden);   // 상단 메뉴 표시 적용 + 선택 UI
+    if(!window._updChecked){ window._updChecked=true; checkUpdatePopup(j.version); }   // 업그레이드 후 첫 접속 안내
     const ti=$("setTitle"), su=$("setSubtitle");
     if(ti) ti.value=j.portal_title||""; if(su) su.value=j.portal_subtitle||"";
   }catch(e){}
   updateLoginUI();
+}
+// ── 업그레이드 후 첫 접속 안내 팝업 (브라우저별 1회) ──
+function _changelogSection(text, ver){
+  if(!text||!ver) return "";
+  const re=new RegExp("^##\\s*\\[?"+ver.replace(/\./g,"\\.")+"\\]?.*$","m");
+  const m=re.exec(text); if(!m) return "";
+  const rest=text.slice(m.index+m[0].length);
+  const nx=rest.search(/\n##\s*\[/);
+  return ((nx>=0)?rest.slice(0,nx):rest).replace(/\n---\s*$/,"").trim();
+}
+function showUpdatePopup(ver, notes){
+  const ov=document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;";
+  const box=document.createElement("div");
+  box.style.cssText="background:#16202c;border:1px solid #2a3550;border-radius:12px;max-width:640px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 16px 50px rgba(0,0,0,.6);";
+  const hd=document.createElement("div");
+  hd.style.cssText="padding:16px 20px;border-bottom:1px solid #2a3550;display:flex;align-items:center;gap:10px;";
+  hd.innerHTML='<span style="font-size:22px;">🎉</span><b style="font-size:16px;color:#dfe8f3;">업데이트됨 — v'+ver+'</b><div style="flex:1"></div>';
+  const close=document.createElement("button"); close.textContent="닫기"; close.style.cssText="padding:4px 14px;";
+  hd.appendChild(close);
+  const body=document.createElement("div");
+  body.style.cssText="padding:14px 20px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.6;color:#cfe0f0;font-family:ui-monospace,Menlo,monospace;";
+  body.textContent=notes||("v"+ver+" 로 업데이트되었습니다.");
+  box.appendChild(hd); box.appendChild(body); ov.appendChild(box); document.body.appendChild(ov);
+  function done(){ try{document.body.removeChild(ov);}catch(e){} }
+  close.onclick=done;
+  ov.addEventListener("mousedown",e=>{ if(e.target===ov) done(); });
+}
+async function checkUpdatePopup(ver){
+  if(!ver) return;
+  let seen=null; try{ seen=localStorage.getItem("portalSeenVer"); localStorage.setItem("portalSeenVer", ver); }catch(e){}
+  if(!seen || seen===ver) return;   // 첫 방문이거나 같은 버전이면 안 띄움(업그레이드된 경우만)
+  let notes=""; try{ const j=await (await fetch("/api/portal/changelog",{cache:"no-store"})).json(); notes=_changelogSection(j.changelog||"", ver); }catch(e){}
+  showUpdatePopup(ver, notes);
 }
 // 비밀번호 입력 모달(브라우저 prompt 은 평문 노출 → type=password 로 마스킹). Promise<string|null>.
 function passwordPrompt(msg){

@@ -483,6 +483,7 @@ class PortalController:
     def auth_status(self) -> dict:
         return {"ok": True, "op_required": self._auth.required(),
                 "encrypted": bool(self.settings.get("op_password_encrypted")),
+                "version": __version__,
                 "portal_title": self.settings.get("portal_title") or "",
                 "portal_subtitle": self.settings.get("portal_subtitle") or "",
                 "nav_hidden": self.settings.get("nav_hidden") or []}
@@ -2081,6 +2082,18 @@ class PortalHandler(BaseHTTPRequestHandler):
         try:
             if path == "/api/portal/auth":
                 self._send_json(c.auth_status())
+                return
+            if path == "/api/portal/changelog":
+                text = None
+                for cand in (os.path.join(os.path.dirname(HERE), "CHANGELOG.md"),
+                             os.path.join(os.getcwd(), "CHANGELOG.md")):
+                    try:
+                        with open(cand, "r", encoding="utf-8") as fh:
+                            text = fh.read()
+                        break
+                    except OSError:
+                        continue
+                self._send_json({"ok": True, "version": __version__, "changelog": text})
                 return
             if path == "/api/portal/settings":
                 self._send_json(c.upgrade_config())

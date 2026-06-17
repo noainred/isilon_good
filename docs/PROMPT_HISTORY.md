@@ -687,4 +687,9 @@
 226. 설정 맨 아래 제작자 크레딧(JunHo Park) — 엣지(serverInfo 다음)·포탈(view-nodes 끝) 양쪽에 작은 멋진
      크레딧(글로우 텍스트) 추가. v1.82.0.
 
+227. (업그레이드 후 첫 접속 시 업데이트 안내 팝업, 모든 사용자에게) → 브라우저별 localStorage(isiSeenVer/
+     portalSeenVer)에 마지막 본 버전 저장, 현재 버전과 다르면 CHANGELOG 해당 섹션을 팝업으로. 엣지
+     /api/changelog(기존)+renderOverview 호출, 포탈 /api/portal/changelog(신규)+auth_status version 노출+
+     loadAuth 호출. _changelogSection/showUpdatePopup/checkUpdatePopup(both). jsdom 추출 검증. v1.83.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
