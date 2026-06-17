@@ -661,4 +661,9 @@
      전환에서 self._status/_phase 세팅 + _update_manager(force=True), resume_scan 재개 즉시 매니저
      status='discovering', dashboard ovBody 행은 running+paused/done 이면 '실행 중' 표시. v1.79.7.
 
+221. (현재 작업 끝나면 같은 설정으로 자동 재시작 옵션) → start_scan(auto_restart=) 가 해소설정을
+     _auto_restart[scan_id] 에 저장, _on_scan_finished 가 done 이면 같은 설정으로 재시작(auto_restart
+     유지), paused/error 면 pop 만(멈춤). /api/scan/start 가 auto_restart 수신. dashboard 폼에 '🔁 완료 후
+     자동 재시작' 체크박스 + reqScanStart 전달 + 확인창 표시. test_server 검증. 메모리 보관(재시작 시 풀림). v1.80.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

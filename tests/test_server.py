@@ -304,12 +304,62 @@ def _check_op_password() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _check_auto_restart() -> None:
+    """완료 후 자동 재시작(반복): start_scan 저장 + done 재시작 / 중지·오류 멈춤."""
+    import shutil
+
+    from isilon_usage import manager as mgrmod
+    from isilon_usage.server import ScanController
+    d = tempfile.mkdtemp(prefix="isilon_loop_")
+    orig_get = mgrmod.get_scan
+    try:
+        # 1) start_scan(auto_restart=True) 가 설정을 _auto_restart 에 등록(launch 는 모킹)
+        c = ScanController(os.path.join(d, "data"))
+        os.makedirs(c.data_dir, exist_ok=True)
+        c._launch = lambda *a, **k: None          # type: ignore[assignment]
+        c._launch_pscan = lambda *a, **k: None     # type: ignore[assignment]
+        c.scan_path_check = lambda p, confirm_outside=False: (True, None)  # type: ignore[assignment]
+        res = c.start_scan(d, auto_restart=True)
+        assert res["ok"] and res["scan_id"] in c._auto_restart, (res, c._auto_restart)
+        assert c._auto_restart[res["scan_id"]]["path"] == os.path.abspath(d)
+
+        # 2) _on_scan_finished: done 이면 같은 설정으로 재시작(auto_restart=True 유지)
+        calls = []
+        c.start_scan = lambda path, **kw: (calls.append((path, kw.get("auto_restart"))) or {"ok": True, "scan_id": 999})  # type: ignore[assignment]
+        rowbox = {"row": None}
+        mgrmod.get_scan = lambda conn, sid: rowbox["row"]   # type: ignore[assignment]
+
+        def fake_row(status):
+            return {"scanned_bytes": 0, "status": status, "root_path": "/p", "hostname": "h",
+                    "total_dirs": 0, "total_files": 0}
+        sid = res["scan_id"]
+        rowbox["row"] = fake_row("done")
+        c._on_scan_finished(sid)
+        assert calls and calls[-1][0] == os.path.abspath(d) and calls[-1][1] is True, calls
+        assert sid not in c._auto_restart
+
+        # 3) 중지(paused)·오류(error)면 재시작하지 않고 반복을 멈춘다
+        for st in ("paused", "error"):
+            calls.clear()
+            c._auto_restart[42] = {"path": "/p", "backend": "native", "size_mode": "disk",
+                                   "one_file_system": False, "engine": "threads",
+                                   "processes": None, "threads": None}
+            rowbox["row"] = fake_row(st)
+            c._on_scan_finished(42)
+            assert calls == [] and 42 not in c._auto_restart, (st, calls)
+        print("[auto-restart] OK  설정 저장·done 재시작·중지/오류 멈춤")
+    finally:
+        mgrmod.get_scan = orig_get
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     _check_insecure_warning()
     _check_resume_after_upgrade()
     _check_sequential_schedule()
     _check_email_notifications()
     _check_op_password()
+    _check_auto_restart()
     tmp = tempfile.mkdtemp(prefix="isilon_srv_")
     root = os.path.join(tmp, "tree")
     _make_tree(root)

@@ -337,6 +337,10 @@
                title="단일/멀티프로세스/2단 병렬을 짧게 측정해 가장 빠른 방법을 자동으로 고른 뒤 스캔을 시작합니다(엔진·워커 자동).">
           <input type="checkbox" id="optAutotune" /> 🔬 오토튜닝(최적 방법 자동·기본 꺼짐)
         </label>
+        <label class="sub" style="display:flex; align-items:center; gap:6px; padding-bottom:9px;"
+               title="이 스캔이 정상 완료(done)되면 같은 경로·설정으로 자동으로 새 스캔을 시작합니다(반복). 스캔을 '중지'하면 반복이 멈춥니다.">
+          <input type="checkbox" id="optAutoRestart" /> 🔁 완료 후 자동 재시작(같은 설정 반복)
+        </label>
         </div><!-- /scanInputs -->
         <button id="startBtn" style="border-color:var(--accent2); color:#cfe; font-weight:700; padding:9px 16px;">
           ▶ 이 디렉터리 스캔 시작
@@ -2245,6 +2249,7 @@ async function reqScanStart(path, confirmOut) {
       size_mode: $("optSize").value,
       one_file_system: $("optOFS").checked,
       engine: $("optEngine") ? $("optEngine").value : "threads",
+      auto_restart: $("optAutoRestart") ? $("optAutoRestart").checked : false,
       confirm_outside: confirmOut,
     }),
   })).json();
@@ -2268,6 +2273,7 @@ function confirmScanStart(path, useAuto) {
     "• 용량 기준: " + selText("optSize"),
     "• 한 파일시스템(-x): " + (ofs ? "켜짐" : "꺼짐"),
     "• 오토튜닝: " + (useAuto ? "사용(최적 방법 자동)" : "사용 안 함"),
+    "• 완료 후 자동 재시작: " + (($("optAutoRestart") && $("optAutoRestart").checked) ? "켜짐(완료되면 같은 설정으로 반복 — 중지하면 멈춤)" : "꺼짐"),
   ];
   // pscan 은 결과를 마지막에 한 번에 기록 → 시작 후 중간에 멈출 수 없다(서버 _launch_pscan 주석과 일치).
   if (useAuto || engineVal === "pscan") {

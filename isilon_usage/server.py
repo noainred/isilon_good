@@ -640,6 +640,7 @@ class ScanController:
         self._scans: Dict[int, dict] = {}   # manager scan_id -> {stop, thread}
         self._lock = threading.Lock()
         self._pause_watch: Dict[int, dict] = {}   # 중단 후 N분 미재시작 감시: scan_id -> {due, root}
+        self._auto_restart: Dict[int, dict] = {}  # 완료 후 자동 재시작(반복): scan_id -> {경로·설정}
         self._storage_cache = None          # 스토리지 어레이(아이실론/PowerStore) 상태 캐시
         self._storage_ts = 0.0
         self._bench = None                  # 실측 보정(시범 스캔) 진행 상태(단계별 표시용)
@@ -1502,7 +1503,8 @@ class ScanController:
     # ----- 시작 -----
     def start_scan(self, path: str, *, backend=None, size_mode=None,
                    one_file_system=None, engine=None,
-                   processes=None, threads=None, confirm_outside=False) -> dict:
+                   processes=None, threads=None, confirm_outside=False,
+                   auto_restart=False) -> dict:
         path = os.path.abspath(path)
         ok, err = self.scan_path_check(path, confirm_outside)
         if not ok:
@@ -1530,8 +1532,15 @@ class ScanController:
             backend=("pscan" if engine == "pscan" else backend), size_mode=size_mode,
         )
         readonly = _path_readonly(path) if self.settings.get("check_readonly", True) else None
-        self._log("scan #%d start: %s (engine=%s, backend=%s, size=%s, x=%s, ro=%s)" % (
-            scan_id, path, engine, backend, size_mode, one_file_system, readonly))
+        if auto_restart:                    # 완료(done) 시 같은 설정으로 자동 재시작(반복)
+            with self._lock:
+                self._auto_restart[scan_id] = {
+                    "path": path, "backend": backend, "size_mode": size_mode,
+                    "one_file_system": one_file_system, "engine": engine,
+                    "processes": processes, "threads": threads,
+                }
+        self._log("scan #%d start: %s (engine=%s, backend=%s, size=%s, x=%s, ro=%s, loop=%s)" % (
+            scan_id, path, engine, backend, size_mode, one_file_system, readonly, auto_restart))
         if engine == "pscan":
             self._launch_pscan(scan_id, db_path, path, size_mode,
                                processes=processes, threads=threads)
@@ -1702,6 +1711,18 @@ class ScanController:
             self._log("scan #%d %s: %s (dirs=%s files=%s, %s)" % (
                 scan_id, row["status"], row["root_path"],
                 row["total_dirs"], row["total_files"], human))
+            # 완료 후 자동 재시작(반복): 사용자가 켰고 'done'(정상 완료)이면 같은 설정으로 새 스캔.
+            # 중지(paused)·오류(error)면 반복을 멈춘다(꺼내기만). 경로가 사라졌으면 재시작이 실패해 자연히 멈춘다.
+            with self._lock:
+                ar_cfg = self._auto_restart.pop(scan_id, None)
+            if ar_cfg and row["status"] == "done":
+                self._log("scan #%d done → 자동 재시작(반복): %s" % (scan_id, ar_cfg["path"]))
+                self.start_scan(ar_cfg["path"], backend=ar_cfg["backend"],
+                                size_mode=ar_cfg["size_mode"],
+                                one_file_system=ar_cfg["one_file_system"],
+                                engine=ar_cfg["engine"], processes=ar_cfg["processes"],
+                                threads=ar_cfg["threads"], confirm_outside=True,
+                                auto_restart=True)
             from . import notify as notifymod
             webhook = self.settings.get("notify_webhook", "")
             if webhook:
@@ -2800,6 +2821,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     one_file_system=None if ofs is None else bool(ofs),
                     engine=body.get("engine"),
                     confirm_outside=bool(body.get("confirm_outside")),
+                    auto_restart=bool(body.get("auto_restart")),
                 )
                 self._send_json(result, status=200 if result.get("ok") else 400)
                 return
