@@ -13,6 +13,23 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.84.0] - 2026-06-16
+
+### 추가됨 (Added) — 외부 서버용 ‘집계 사용량’ API (읽기 전용)
+
+- **다른 서버가 전사 집계(총용량·노드·루트)를 JSON 으로 가져갈 수 있는 읽기 전용 API**를 포탈에 추가했다.
+  - 엔드포인트: `GET /api/portal/usage`
+  - 안정 스키마(`"schema": "isilon_usage.usage/v1"`): `totals{nodes_total, nodes_online, storages,
+    scanned_bytes, fs_total_bytes, fs_used_bytes, active_scans}` · `regions[]` ·
+    `nodes[]{id, region, hostname, online, scanned_bytes, fs_*_bytes, last_scan_at, roots[]{root_path,
+    scanned_bytes, fs_*_bytes, total_files, status, scan_id, finished_at}}` · `generated_at` · `portal_version`.
+  - 내부 UI 응답(overview)과 분리된 **고정 스키마**라 외부 연동이 깨지지 않는다.
+- **토큰 보호(선택)**: 설정 ▸ 일반 ▸ ‘🔌 외부 사용량 API’에서 토큰을 정하면 `X-Auth-Token` 헤더(또는
+  `?token=`)가 일치해야 응답한다(상수시간 비교). 비우면 공개(포탈 읽기 모델과 동일). UI에 엔드포인트·예시 표시.
+- tests: 스키마·토큰 게이트 검증(test_portal 6h).
+
+---
+
 ## [1.83.0] - 2026-06-16
 
 ### 추가됨 (Added) — 업그레이드 후 첫 접속 시 ‘업데이트 안내’ 팝업

@@ -238,6 +238,16 @@ def main() -> int:
         assert pc.auth_status()["nav_hidden"] == ["compare", "netmon"]
         assert pc.set_nav_hidden([])["nav_hidden"] == []
 
+        # 6h) 외부 사용량 API(/api/portal/usage) — 안정 스키마 + 토큰 게이트
+        ux = pc.usage_export()
+        assert ux["ok"] and ux["schema"] == "isilon_usage.usage/v1", ux
+        assert ux["totals"]["nodes_total"] >= 1 and ux["totals"]["scanned_bytes"] > 0, ux["totals"]
+        assert ux["nodes"] and ux["nodes"][0]["roots"] and ux["nodes"][0]["roots"][0]["root_path"], ux["nodes"]
+        assert pc.export_token_ok("anything")                       # 미설정이면 공개
+        pc.set_export_token("SECRET")
+        assert (not pc.export_token_ok("wrong")) and pc.export_token_ok("SECRET")
+        assert pc.set_export_token("")["export_token_set"] is False and pc.export_token_ok("x")  # 해제
+
         # 7) 복제본(완료 DB + meta.json) 존재
         rep = os.path.join(portal_data, "replicas", "dc-test")
         assert os.path.exists(os.path.join(rep, "meta.json")), rep

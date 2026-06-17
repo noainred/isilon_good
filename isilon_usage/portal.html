@@ -210,6 +210,16 @@
       <div id="navMenuBox" style="display:flex; gap:18px; flex-wrap:wrap; align-items:center;"></div>
       <span class="sub" id="navMenuMsg" style="display:block; margin-top:6px;"></span>
     </div>
+    <div class="card" style="margin-bottom:14px;">
+      <h2>🔌 외부 사용량 API (집계 데이터 제공)</h2>
+      <div class="sub" style="margin-bottom:8px;">다른 서버가 전사 집계(총용량·노드·루트)를 <b>JSON</b> 으로 가져갈 수 있는 <b>읽기 전용 API</b> 입니다. 토큰을 설정하면 <span class="mono">X-Auth-Token</span> 헤더(또는 <span class="mono">?token=</span>)가 일치해야 응답합니다(비우면 공개).</div>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <input id="setExportToken" type="password" class="inp mono" placeholder="API 토큰(비우면 공개)" style="flex:1; min-width:220px;" autocomplete="new-password" />
+        <button id="setExportTokenBtn" class="primary">토큰 저장</button>
+        <span class="sub" id="setExportMsg"></span>
+      </div>
+      <div class="sub mono" id="exportEndpoint" style="margin-top:8px; word-break:break-all;"></div>
+    </div>
   </div>
 
   <!-- ① 설치 · 구성 (원격 자동 구성) → JS 가 '노드 관리'로 옮김 -->
@@ -1294,6 +1304,26 @@ $("setTitleBtn").addEventListener("click",async()=>{
     else msg.textContent="실패: "+(j.reason||"locked?");
   }catch(e){ msg.textContent="오류: "+e; }
 });
+
+// 외부 사용량 API — 엔드포인트 안내 + 토큰 설정/해제
+function loadExportApi(){
+  const ep=$("exportEndpoint");
+  if(ep){ const url=location.origin+"/api/portal/usage";
+    ep.innerHTML='엔드포인트: <b>GET '+_he(url)+'</b><br>예시: curl -H "X-Auth-Token: &lt;토큰&gt;" '+_he(url); }
+  fetch("/api/portal/settings",{cache:"no-store"}).then(r=>r.json()).then(j=>{
+    const m=$("setExportMsg"); if(m) m.textContent=j.export_token_set?" (현재: 토큰 보호됨)":" (현재: 공개)";
+  }).catch(()=>{});
+}
+if($("setExportTokenBtn")) $("setExportTokenBtn").addEventListener("click",async()=>{
+  const msg=$("setExportMsg"); msg.textContent=" 저장 중…";
+  try{
+    const j=await (await fetch("/api/portal/settings",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({export_token:$("setExportToken").value})})).json();
+    if(j.ok){ msg.textContent=j.export_token_set?" ✓ 저장됨(토큰 보호)":" ✓ 저장됨(공개)"; $("setExportToken").value=""; }
+    else msg.textContent=" 실패: "+(j.reason||"로그인이 필요할 수 있습니다");
+  }catch(e){ msg.textContent=" 오류: "+e; }
+});
+loadExportApi();
 
 // 복제 반복주기 선택기(예약 스캔과 같은 시작 + 반복주기 모델)
 const N_DOW = ["일","월","화","수","목","금","토"]; let nWsel = new Set([1]);

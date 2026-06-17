@@ -692,4 +692,9 @@
      /api/changelog(기존)+renderOverview 호출, 포탈 /api/portal/changelog(신규)+auth_status version 노출+
      loadAuth 호출. _changelogSection/showUpdatePopup/checkUpdatePopup(both). jsdom 추출 검증. v1.83.0.
 
+228. (집계 정보를 API로 다른 서버에 제공) → 포탈 GET /api/portal/usage 읽기전용 API. usage_export()가
+     overview를 고정 스키마(isilon_usage.usage/v1: totals/regions/nodes/roots)로 추림. export_token
+     설정(상수시간 hmac, X-Auth-Token/?token=, 미설정=공개) + set_export_token + upgrade_config
+     export_token_set. portal.html 일반 탭 '🔌 외부 사용량 API' 카드(엔드포인트·예시·토큰). test_portal 6h. v1.84.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

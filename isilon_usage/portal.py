@@ -13,6 +13,7 @@ from typing import Optional
 
 import io
 import json
+import hmac
 import os
 import re
 import secrets
@@ -431,7 +432,8 @@ class PortalController:
                "upgrade_auto": False,
                "enroll_token": "", "release_dir": "/opt/isilon_release",
                "backup_dir": "", "backup_every_hours": 1.0, "backup_keep": 100,
-               "portal_title": "", "portal_subtitle": "", "nav_hidden": []}
+               "portal_title": "", "portal_subtitle": "", "nav_hidden": [],
+               "export_token": ""}
         try:
             with open(portal_settings_path(self.data_dir), encoding="utf-8") as fh:
                 s = json.load(fh)
@@ -465,6 +467,7 @@ class PortalController:
                 # 상단 메뉴 숨김 목록('nodes'=노드 설정은 잠금 방지를 위해 숨길 수 없음)
                 out["nav_hidden"] = [v for v in (s.get("nav_hidden") or [])
                                      if v in ("dash", "netmon", "compare")]
+                out["export_token"] = str(s.get("export_token") or "").strip()
         except (OSError, ValueError):
             pass
         return out
@@ -732,7 +735,8 @@ class PortalController:
                      "hq_version": __version__, "bundle_version": bver,
                      "bundle_stale": bool(bver and bver != __version__),
                      "portal_title": self.settings.get("portal_title") or "",
-                     "portal_subtitle": self.settings.get("portal_subtitle") or ""},
+                     "portal_subtitle": self.settings.get("portal_subtitle") or "",
+                     "export_token_set": bool(self.settings.get("export_token"))},
                     **self.release_info(), **self.backup_info())
 
     def push_upgrade_all(self) -> dict:
@@ -1565,6 +1569,69 @@ class PortalController:
             "nodes": out_nodes,
         }
 
+    def usage_export(self) -> dict:
+        """집계 사용량을 외부 서버용 '안정 스키마' JSON 으로 제공한다(읽기 전용 API).
+
+        내부 UI 응답(overview)과 달리 스키마를 고정한 외부 연동용이다. url·last_error 등
+        내부 필드는 빼고, 용량·노드·루트의 핵심만 추린다.
+        """
+        ov = self.overview()
+        t = ov.get("totals") or {}
+        nodes = []
+        for n in ov.get("nodes") or []:
+            roots = [{
+                "root_path": r.get("root_path"),
+                "scanned_bytes": int(r.get("scanned_bytes") or 0),
+                "fs_total_bytes": int(r.get("fs_total_bytes") or 0),
+                "fs_used_bytes": int(r.get("fs_used_bytes") or 0),
+                "total_files": int(r.get("total_files") or 0),
+                "status": r.get("status"),
+                "scan_id": r.get("scan_id"),
+                "finished_at": r.get("finished_at"),
+            } for r in (n.get("roots") or [])]
+            nodes.append({
+                "id": n.get("id"), "region": n.get("region"),
+                "hostname": n.get("hostname"), "online": bool(n.get("online")),
+                "scanned_bytes": int(n.get("used_bytes") or 0),
+                "fs_total_bytes": int(n.get("fs_total_bytes") or 0),
+                "fs_used_bytes": int(n.get("fs_used_bytes") or 0),
+                "last_scan_at": n.get("last_scan_at"),
+                "roots": roots,
+            })
+        return {
+            "ok": True,
+            "schema": "isilon_usage.usage/v1",
+            "generated_at": time.time(),
+            "portal_version": __version__,
+            "totals": {
+                "nodes_total": int(t.get("nodes_total") or 0),
+                "nodes_online": int(t.get("nodes_online") or 0),
+                "storages": int(t.get("storages") or 0),
+                "scanned_bytes": int(t.get("used_bytes") or 0),
+                "fs_total_bytes": int(t.get("fs_total_bytes") or 0),
+                "fs_used_bytes": int(t.get("fs_used_bytes") or 0),
+                "active_scans": int(t.get("active_scans") or 0),
+            },
+            "regions": [{"region": r.get("region"),
+                         "scanned_bytes": int(r.get("used_bytes") or 0),
+                         "storages": int(r.get("storages") or 0)}
+                        for r in (ov.get("regions") or [])],
+            "nodes": nodes,
+        }
+
+    def set_export_token(self, token: str) -> dict:
+        """외부 사용량 API(/api/portal/usage) 보호 토큰을 설정/해제한다(빈 값=공개)."""
+        self.settings["export_token"] = str(token or "").strip()
+        self._save_settings()
+        return {"ok": True, "export_token_set": bool(self.settings["export_token"])}
+
+    def export_token_ok(self, given) -> bool:
+        """export_token 이 설정돼 있으면 일치해야 True(미설정이면 공개=True)."""
+        tok = (self.settings.get("export_token") or "").strip()
+        if not tok:
+            return True
+        return hmac.compare_digest(str(given or ""), tok)
+
     # --- 노드 응답시간(핑) ---
     def ping_nodes(self) -> dict:
         """각 노드로 HQ→노드 왕복 응답시간(ms)을 측정한다(가벼운 meta 요청 기준).
@@ -2083,6 +2150,13 @@ class PortalHandler(BaseHTTPRequestHandler):
             if path == "/api/portal/auth":
                 self._send_json(c.auth_status())
                 return
+            if path == "/api/portal/usage":      # 외부 서버용 집계 사용량 API(읽기 전용 · export_token)
+                given = self.headers.get("X-Auth-Token") or (parse_qs(urlparse(self.path).query).get("token", [""])[0])
+                if not c.export_token_ok(given):
+                    self._send_json({"ok": False, "reason": "unauthorized"}, status=401)
+                    return
+                self._send_json(c.usage_export())
+                return
             if path == "/api/portal/changelog":
                 text = None
                 for cand in (os.path.join(os.path.dirname(HERE), "CHANGELOG.md"),
@@ -2258,6 +2332,8 @@ class PortalHandler(BaseHTTPRequestHandler):
                                            body.get("portal_subtitle") or ""))
                 if "nav_hidden" in body:
                     res.update(c.set_nav_hidden(body.get("nav_hidden") or []))
+                if "export_token" in body:
+                    res.update(c.set_export_token(body.get("export_token") or ""))
                 self._send_json(res)
                 return
             if path == "/api/portal/upgrade/net":     # 인터넷 자동 업그레이드 설정
