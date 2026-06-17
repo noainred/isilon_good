@@ -656,4 +656,9 @@
 219. '상세 보기 스캔'(scanSelectCard)을 디스크 사용량 파이 위로 → view-analysis 이동 배열 순서를
      [pieCard,scanSelectCard,...] → [scanSelectCard,pieCard,...] 로 변경. dashboard.html. v1.79.6.
 
+220. (버그) 실행 중 스캔이 '일시정지'로 표시 + active_scans 에서 빠짐 → 스캐너 self._status 가 sizing 전환
+     때 갱신 안 돼 매니저 DB status 가 'paused' 잔류(특히 재개 시). 수정: scanner discovering(630)/sizing(933)
+     전환에서 self._status/_phase 세팅 + _update_manager(force=True), resume_scan 재개 즉시 매니저
+     status='discovering', dashboard ovBody 행은 running+paused/done 이면 '실행 중' 표시. v1.79.7.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

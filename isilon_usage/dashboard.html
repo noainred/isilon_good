@@ -3079,7 +3079,7 @@ function renderOverview(j) {
         <td class="num">${fmtBytes(r.fs_used_bytes)}</td>
         <td class="num">${pct.toFixed(1)}%</td>
         <td class="num">${el == null ? "—" : fmtDur(el)}</td>
-        <td>${statusKo[r.status] || r.status}</td>
+        <td>${running && (r.status === "paused" || r.status === "done") ? "실행 중" : (statusKo[r.status] || r.status)}</td>
         <td>${act}</td>
       </tr>`;
     }).join("");

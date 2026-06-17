@@ -1796,6 +1796,14 @@ class ScanController:
             return {"ok": False, "reason": "없는 scan"}
         if not os.path.exists(row["db_path"]):
             return {"ok": False, "reason": "per-run DB 가 없어 재개할 수 없습니다."}
+        # 재개 즉시 매니저 상태를 '진행 중'으로 되돌린다 — 안 그러면 'paused' 로 남아
+        # 화면엔 '일시정지'로 보이고 active_scans(포탈 집계)에서도 빠진다(스캐너가 곧 정확히 갱신).
+        try:
+            mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+            mgrmod.update_scan(mc, scan_id, status="discovering", phase="discovering")
+            mc.commit(); mc.close()
+        except Exception:
+            pass
         if row["backend"] == "pscan":           # pscan 은 부분 재개가 없으므로 전체 재스캔
             try:
                 os.remove(row["db_path"])       # 깨끗한 per-run DB 로 다시 기록(혼선 방지)

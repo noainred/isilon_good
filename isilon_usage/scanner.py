@@ -627,11 +627,13 @@ class Scanner:
         데드락 없이 병렬성을 얻는다. 메모리에는 워커별로 한 디렉터리의 한 청크만
         올라온다.
         """
+        self._status = "discovering"; self._phase = "discovering"
         dbmod.update_run(conn, self.run_id, status="discovering", phase="discovering")
         # 이전 실행에서 'claimed' 로 남은 것은 다시 pending 으로(재개 안전)
         conn.execute("UPDATE directories SET status='pending' "
                      "WHERE run_id=? AND status='claimed'", (self.run_id,))
         conn.commit()
+        self._update_manager(force=True)   # 매니저 DB 도 즉시 '진행 중'으로(재개 직후 'paused' 잔류 방지)
 
         self._disc_conn = dbmod.connect(self.db_path)
         self._disc_active = 0
@@ -930,8 +932,10 @@ class Scanner:
     # --------------------------------------------------------- 2단계: 상향식 집계
     def _aggregate(self, conn) -> None:
         """가장 깊은 레벨부터 0 까지, 레벨별로 재귀 용량을 집계한다."""
+        self._status = "sizing"; self._phase = "sizing"
         dbmod.update_run(conn, self.run_id, status="sizing", phase="sizing")
         conn.commit()
+        self._update_manager(force=True)   # 매니저 DB 도 '집계 중'으로 즉시 반영(self._status 동기화)
 
         row = conn.execute(
             "SELECT COALESCE(MAX(depth),0) AS d FROM directories WHERE run_id=?",
