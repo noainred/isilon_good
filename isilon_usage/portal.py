@@ -431,7 +431,7 @@ class PortalController:
                "upgrade_auto": False,
                "enroll_token": "", "release_dir": "/opt/isilon_release",
                "backup_dir": "", "backup_every_hours": 1.0, "backup_keep": 100,
-               "portal_title": "", "portal_subtitle": ""}
+               "portal_title": "", "portal_subtitle": "", "nav_hidden": []}
         try:
             with open(portal_settings_path(self.data_dir), encoding="utf-8") as fh:
                 s = json.load(fh)
@@ -462,6 +462,9 @@ class PortalController:
                     pass
                 out["portal_title"] = str(s.get("portal_title") or "").strip()
                 out["portal_subtitle"] = str(s.get("portal_subtitle") or "").strip()
+                # 상단 메뉴 숨김 목록('nodes'=노드 설정은 잠금 방지를 위해 숨길 수 없음)
+                out["nav_hidden"] = [v for v in (s.get("nav_hidden") or [])
+                                     if v in ("dash", "netmon", "compare")]
         except (OSError, ValueError):
             pass
         return out
@@ -481,7 +484,15 @@ class PortalController:
         return {"ok": True, "op_required": self._auth.required(),
                 "encrypted": bool(self.settings.get("op_password_encrypted")),
                 "portal_title": self.settings.get("portal_title") or "",
-                "portal_subtitle": self.settings.get("portal_subtitle") or ""}
+                "portal_subtitle": self.settings.get("portal_subtitle") or "",
+                "nav_hidden": self.settings.get("nav_hidden") or []}
+
+    def set_nav_hidden(self, items) -> dict:
+        """상단에 숨길 메뉴 목록을 저장한다('nodes'=노드 설정은 잠금 방지로 숨길 수 없음)."""
+        hidden = [v for v in (items or []) if v in ("dash", "netmon", "compare")]
+        self.settings["nav_hidden"] = hidden
+        self._save_settings()
+        return {"ok": True, "nav_hidden": hidden}
 
     def set_title(self, title: str, subtitle: str) -> dict:
         """상단/탭 제목(브랜딩)을 설정한다. 호출 측(핸들러)에서 인증을 확인한다."""
@@ -2232,6 +2243,8 @@ class PortalHandler(BaseHTTPRequestHandler):
                 if "portal_title" in body or "portal_subtitle" in body:
                     res.update(c.set_title(body.get("portal_title") or "",
                                            body.get("portal_subtitle") or ""))
+                if "nav_hidden" in body:
+                    res.update(c.set_nav_hidden(body.get("nav_hidden") or []))
                 self._send_json(res)
                 return
             if path == "/api/portal/upgrade/net":     # 인터넷 자동 업그레이드 설정

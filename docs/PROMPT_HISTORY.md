@@ -674,4 +674,11 @@
      스캔 폼 잠금(schedFormWrap pointer-events:none+흐리게)+빨간 안내(schedLockMsg). 엣지 /api/scans 에
      auto_restart(=auto_restart_ids) 노출, dashboard autoRestartSet+updateScheduleLock. v1.80.2.
 
+224. (아이실론 포탈 설정을 Nexus 화면처럼 종류별로 예쁘게 분류 + 상단 표시 메뉴 선택) → 서브탭 4개→5개
+     (노드 관리/계정·보안/자동 업그레이드/모니터링·백업/일반). 카드에 id 부여 후 JS appendChild 재배치
+     (cardProvision→노드관리, cardLoginSec/NodePw/Enroll→계정보안, cardBackup→모니터링백업, cardTitle→일반).
+     일반 탭에 '상단 메뉴 표시' 카드(navMenuBox 체크박스, nodes는 항상). 백엔드 nav_hidden(화이트리스트
+     dash/netmon/compare) settings+auth_status+set_nav_hidden+POST. loadAuth 에서 applyNavHidden/renderNavMenu.
+     jsdom 으로 재배치 결과 검증. test_portal 6g. v1.81.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

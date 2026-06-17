@@ -193,15 +193,28 @@
 <!-- 노드 설정 -->
 <div class="wrap view" id="view-nodes">
   <div class="subtabs">
-    <button class="stab active" data-pane="np-install">🚀 설치 · 구성</button>
-    <button class="stab" data-pane="np-upgrade">🔄 업그레이드</button>
-    <button class="stab" data-pane="np-nodes">🗂 노드 관리</button>
-    <button class="stab" data-pane="np-security">🔒 보안 · 감사</button>
+    <button class="stab active" data-pane="np-nodes">📋 노드 관리</button>
+    <button class="stab" data-pane="np-account">🔑 계정 · 보안</button>
+    <button class="stab" data-pane="np-upgrade">⬆ 자동 업그레이드</button>
+    <button class="stab" data-pane="np-monitor">📈 모니터링 · 백업</button>
+    <button class="stab" data-pane="np-general">⚙ 일반</button>
   </div>
 
-  <!-- ① 설치 · 구성 (원격 자동 구성) -->
-  <div class="subpane active" id="np-install">
-  <div class="card" style="margin-bottom:14px;">
+  <!-- 새 카테고리 패널 — 카드는 아래 JS(카드 재배치)가 종류별로 옮겨 담는다 -->
+  <div class="subpane" id="np-account"></div>
+  <div class="subpane" id="np-monitor"></div>
+  <div class="subpane" id="np-general">
+    <div class="card" style="margin-bottom:14px;">
+      <h2>🧭 상단 메뉴 표시</h2>
+      <div class="sub" style="margin-bottom:8px;">상단 네비게이션에 보여줄 메뉴를 고릅니다. 체크 해제하면 숨겨집니다(‘노드 설정’은 항상 표시).</div>
+      <div id="navMenuBox" style="display:flex; gap:18px; flex-wrap:wrap; align-items:center;"></div>
+      <span class="sub" id="navMenuMsg" style="display:block; margin-top:6px;"></span>
+    </div>
+  </div>
+
+  <!-- ① 설치 · 구성 (원격 자동 구성) → JS 가 '노드 관리'로 옮김 -->
+  <div class="subpane" id="np-install">
+  <div class="card" id="cardProvision" style="margin-bottom:14px;">
     <h2>🚀 원격 자동 구성 — IP만 넣으면 엣지 설치 명령 생성 + 노드 자동 등록</h2>
     <div class="setgrid">
       <label class="fld">원격 IP/주소<input id="pvHost" class="inp mono" placeholder="192.168.40.221" /></label>
@@ -418,7 +431,7 @@
   </div>
 
   <!-- ③ 노드 관리 (추가/수정 + 등록 목록) -->
-  <div class="subpane" id="np-nodes">
+  <div class="subpane active" id="np-nodes">
   <div class="card" style="margin-bottom:14px;">
     <h2>글로벌 노드 추가 / 수정</h2>
     <div class="setgrid">
@@ -484,7 +497,7 @@
 
   <!-- ④ 보안 · 감사 -->
   <div class="subpane" id="np-security">
-  <div class="card" style="margin-bottom:14px;">
+  <div class="card" id="cardTitle" style="margin-bottom:14px;">
     <h2>🏷 포탈 제목 (브랜딩)</h2>
     <div class="sub" style="margin-bottom:8px;">상단 제목과 브라우저 탭 제목을 바꿉니다. 둘 다 비우면 기본값(“다빈치 글로벌 아이실론 관제센터 — 한국 HQ”)을 씁니다.</div>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -494,7 +507,7 @@
       <span class="sub" id="setTitleMsg"></span>
     </div>
   </div>
-  <div class="card" style="margin-bottom:14px;">
+  <div class="card" id="cardLoginSec" style="margin-bottom:14px;">
     <h2>🔒 접속 보안 (로그인 비밀번호)</h2>
     <div class="sub" style="margin-bottom:8px;">비밀번호를 설정하면 접속 시 <b>읽기 전용</b>이 되고, 우상단 <b>로그인</b> 후 노드 등록·원격 구성 등 변경 작업을 할 수 있습니다. 비우고 저장하면 보호가 해제됩니다.</div>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -511,7 +524,7 @@
       <div id="pAuditBox" style="display:none; margin-top:6px; max-height:260px; overflow:auto; border:1px solid #2a3550; border-radius:8px;"></div>
     </div>
   </div>
-  <div class="card" style="margin-bottom:14px;">
+  <div class="card" id="cardNodePw" style="margin-bottom:14px;">
     <h2>🔐 노드 작업 비밀번호 (포탈에서 설정)</h2>
     <div class="sub" style="margin-bottom:8px;">엣지의 <b>작업 보호 비밀번호</b>를 포탈에서 일괄/개별로 설정·변경·해제합니다. <b>api_token(토큰)이 등록된 노드</b>만 적용되며, 엣지 비밀번호를 몰라도 api_token 인증으로 푸시합니다.</div>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -523,7 +536,7 @@
     </div>
     <div id="npResult" class="sub" style="margin-top:8px;"></div>
   </div>
-  <div class="card" style="margin-bottom:14px;">
+  <div class="card" id="cardEnroll" style="margin-bottom:14px;">
     <h2>🔑 엣지 자기등록 토큰 (enroll token)</h2>
     <div class="sub" style="margin-bottom:8px;">엣지 설치 시 <span class="mono">--hq http://&lt;이포탈&gt;:8800</span> 을 주면 엣지가 스스로 등록됩니다. 포탈에 <b>로그인 비밀번호가 설정된 경우</b>엔 엣지가 이 공유 토큰을 함께 보내야 등록됩니다(엣지 쪽 <span class="mono">--enroll &lt;토큰&gt;</span>). 비밀번호가 없으면(신뢰망) 토큰 없이도 등록됩니다. 비우고 저장하면 토큰 검사를 끕니다.</div>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -532,7 +545,7 @@
       <span class="sub" id="setEnrollMsg"></span>
     </div>
   </div>
-  <div class="card" style="margin-bottom:14px;">
+  <div class="card" id="cardBackup" style="margin-bottom:14px;">
     <h2>💾 백업 (포탈 설정 + 노드 목록)</h2>
     <div class="sub" style="margin-bottom:8px;">포탈 설정·등록 노드 목록(+감사 로그·핑 이력)을 <b>tar.gz 하나</b>로 묶습니다. 노드 <b>api_token·로그인 비밀번호</b>가 포함되니 안전하게 보관하세요. (대용량 <span class="mono">replicas/</span> 는 제외)</div>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -660,6 +673,7 @@ async function loadAuth(){
   try{ const j=await (await _origFetch("/api/portal/auth",{cache:"no-store"})).json();
     _opRequired=!!j.op_required;
     applyPortalTitle(j.portal_title, j.portal_subtitle);
+    applyNavHidden(j.nav_hidden); renderNavMenu(j.nav_hidden);   // 상단 메뉴 표시 적용 + 선택 UI
     const ti=$("setTitle"), su=$("setSubtitle");
     if(ti) ti.value=j.portal_title||""; if(su) su.value=j.portal_subtitle||"";
   }catch(e){}
@@ -750,6 +764,45 @@ function showSub(id){
   if(id==="np-security"){ try{ pLoadUpgradeCfg(); }catch(e){} }   // 백업 현황 갱신
 }
 document.querySelectorAll("#view-nodes .stab").forEach(b=>b.addEventListener("click",()=>showSub(b.dataset.pane)));
+
+// 설정 카드를 종류별 탭으로 재배치(노드 관리 / 계정·보안 / 모니터링·백업 / 일반).
+(function(){
+  const moves={ "np-nodes":["cardProvision"], "np-account":["cardLoginSec","cardNodePw","cardEnroll"], "np-monitor":["cardBackup"] };
+  Object.keys(moves).forEach(pane=>{ const p=document.getElementById(pane); if(!p) return;
+    moves[pane].forEach(id=>{ const el=document.getElementById(id); if(el) p.appendChild(el); }); });
+  const g=document.getElementById("np-general"), t=document.getElementById("cardTitle");
+  if(g&&t) g.insertBefore(t, g.firstElementChild);   // 포탈 제목을 '상단 메뉴' 카드 위로
+})();
+
+// 상단 메뉴 표시 선택 — '노드 설정'은 잠금 방지를 위해 항상 표시.
+const NAV_LABELS={dash:"글로벌 대시보드", netmon:"네트워크 모니터링", compare:"경로 비교", nodes:"노드 설정"};
+function applyNavHidden(hidden){
+  const hset=new Set(hidden||[]);
+  document.querySelectorAll(".navbtn").forEach(b=>{
+    const v=b.dataset.view; b.style.display=(v!=="nodes" && hset.has(v))?"none":"";
+  });
+}
+function renderNavMenu(hidden){
+  const box=$("navMenuBox"); if(!box) return;
+  const hset=new Set(hidden||[]);
+  box.innerHTML=Object.keys(NAV_LABELS).map(v=>{
+    const always=(v==="nodes");
+    return '<label style="display:inline-flex; align-items:center; gap:6px;">'
+      +'<input type="checkbox" data-nav="'+v+'" '+(!hset.has(v)?"checked":"")+' '+(always?"disabled":"")+'/> '
+      +NAV_LABELS[v]+(always?" (항상)":"")+'</label>';
+  }).join("");
+  box.querySelectorAll("input[data-nav]").forEach(c=>c.addEventListener("change",saveNavMenu));
+}
+async function saveNavMenu(){
+  const hidden=[];
+  document.querySelectorAll("#navMenuBox input[data-nav]").forEach(c=>{ if(!c.checked && c.dataset.nav!=="nodes") hidden.push(c.dataset.nav); });
+  applyNavHidden(hidden);
+  const msg=$("navMenuMsg"); if(msg) msg.textContent=" 저장 중…";
+  try{
+    const j=await (await fetch("/api/portal/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({nav_hidden:hidden})})).json();
+    if(msg) msg.textContent=j.ok?" ✓ 저장됨":(" 실패: "+(j.reason||"로그인이 필요할 수 있습니다"));
+  }catch(e){ if(msg) msg.textContent=" 오류: "+e; }
+}
 
 // ---- 네트워크 모니터링 (HQ→노드 핑, 5초 자동) ----
 let netmonTimer=null, netmonHist={}, _nmInflight=false;

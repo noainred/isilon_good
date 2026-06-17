@@ -233,6 +233,11 @@ def main() -> int:
         assert pc.upgrade_config()["portal_title"] == "테스트 관제센터"
         assert pc.set_title("", "")["ok"] and pc.auth_status()["portal_title"] == ""
 
+        # 6g) 상단 메뉴 숨김 — 화이트리스트(dash/netmon/compare)만, 'nodes'는 숨길 수 없음
+        assert pc.set_nav_hidden(["compare", "netmon", "nodes", "bad"])["nav_hidden"] == ["compare", "netmon"]
+        assert pc.auth_status()["nav_hidden"] == ["compare", "netmon"]
+        assert pc.set_nav_hidden([])["nav_hidden"] == []
+
         # 7) 복제본(완료 DB + meta.json) 존재
         rep = os.path.join(portal_data, "replicas", "dc-test")
         assert os.path.exists(os.path.join(rep, "meta.json")), rep
