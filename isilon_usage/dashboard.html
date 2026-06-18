@@ -1230,25 +1230,45 @@ function updateLockBadge() {
   }
   applyReadOnlyUI();
 }
+function _opTick() {                 // 1초 카운트다운 본체 — 만료되면 토큰 폐기
+  if (_opLeft() <= 0) {
+    if (_opCountTimer) { clearInterval(_opCountTimer); _opCountTimer = null; }
+    try { sessionStorage.removeItem("opToken"); sessionStorage.removeItem("opExpiry"); } catch (e) {}
+    updateLockBadge();
+    showToast("🔒 세션이 만료되어 다시 읽기 전용입니다 — 필요 시 다시 로그인하세요", 3000);
+  } else { updateLockBadge(); }
+}
+function _opStartTimer() {
+  if (_opCountTimer) clearInterval(_opCountTimer);
+  _opCountTimer = setInterval(_opTick, 1000);
+  updateLockBadge();
+}
 function startOpCountdown(ttl) {
   ttl = ttl || 1800;
   _opExpiry = Date.now() + ttl * 1000;
+  // 만료 시각을 함께 저장 → 새로고침해도 남은 시간을 알 수 있어 다시 로그인할 필요가 없다.
+  try { sessionStorage.setItem("opExpiry", String(_opExpiry)); } catch (e) {}
   showToast("🔓 로그인됨 — 약 <b>" + Math.round(ttl / 60) + "분</b> 후 자동 로그아웃", 3000);
-  if (_opCountTimer) clearInterval(_opCountTimer);
-  _opCountTimer = setInterval(() => {
-    if (_opLeft() <= 0) {
-      clearInterval(_opCountTimer); _opCountTimer = null;
-      try { sessionStorage.removeItem("opToken"); } catch (e) {}
-      updateLockBadge();
-      showToast("🔒 세션이 만료되어 다시 읽기 전용입니다 — 필요 시 다시 로그인하세요", 3000);
-    } else { updateLockBadge(); }
-  }, 1000);
-  updateLockBadge();
+  _opStartTimer();
+}
+// 새로고침 후에도 로그인 유지: sessionStorage 의 토큰+만료시각을 복원해 카운트다운을 이어간다.
+// (서버 토큰은 발급 시점 기준 고정 만료라 절대 만료시각이 서버와 일치한다. 만료가 지났으면 정리.)
+function restoreOpSession() {
+  try {
+    const tok = sessionStorage.getItem("opToken") || "";
+    const exp = parseInt(sessionStorage.getItem("opExpiry") || "0", 10);
+    if (tok && exp > Date.now()) {
+      _opExpiry = exp;
+      _opStartTimer();          // 토스트 없이 타이머만 이어 감(이미 로그인된 세션)
+    } else if (tok) {
+      try { sessionStorage.removeItem("opToken"); sessionStorage.removeItem("opExpiry"); } catch (e) {}
+    }
+  } catch (e) {}
 }
 function opRelock() {
   if (_opCountTimer) { clearInterval(_opCountTimer); _opCountTimer = null; }
   _opExpiry = 0;
-  try { sessionStorage.removeItem("opToken"); } catch (e) {}
+  try { sessionStorage.removeItem("opToken"); sessionStorage.removeItem("opExpiry"); } catch (e) {}
   updateLockBadge();
 }
 // 비밀번호 입력 모달(브라우저 prompt 은 평문 노출 → type=password 로 마스킹). Promise<string|null>.
@@ -3953,6 +3973,7 @@ async function checkUpdatePopup(ver) {
   showUpdatePopup(ver, notes);
 }
 
+restoreOpSession();   // 새로고침/재접속 시 살아있는 로그인 세션 복원(첫 렌더 전에)
 loadMounts();
 loadSettings();
 poll(); schedule();

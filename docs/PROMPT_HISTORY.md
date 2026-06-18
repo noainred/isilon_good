@@ -738,4 +738,10 @@
      reconcile 후·resume 전 복원(done/error prune), start_scan 등록·_on_scan_finished pop 시 디스크 동기화.
      test_server 에 영속화/복원/prune 테스트 추가. server.py. v1.87.1.
 
+240. (패스워드 입력하고 지정 시간 동안 유지돼야 하는데 새로고침하면 초기화돼 다시 입력해야 됨) 원인=세션
+     토큰은 sessionStorage 라 새로고침에 살아남지만 만료시각(_opExpiry)이 JS 메모리 변수라 0으로 초기화
+     →_opLeft()=0→로그아웃처럼 보임(서버 토큰은 발급시점 고정 만료라 유효). 수정: 로그인 시 만료시각도
+     sessionStorage 에 저장(opExpiry/pOpExpiry), 로드 때 restoreOpSession() 으로 토큰+만료시각 복원해
+     카운트다운 이어감(_opStartTimer 분리). dashboard.html·portal.html 둘 다. v1.87.2.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
