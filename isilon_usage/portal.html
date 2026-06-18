@@ -124,7 +124,7 @@
   </div>
 
   <div class="card" style="margin-bottom:14px;">
-    <h2>지역별 롤업</h2>
+    <h2>지역별 스토리지 현황</h2>
     <div class="grid cols-4" id="regions"><div class="sub">—</div></div>
   </div>
 
@@ -1154,8 +1154,8 @@ function renderPortalDash(){
   // 지역 카드(클릭 = 필터 토글)
   $("regions").innerHTML = (j.regions||[]).map(r=>
     `<div class="regcard${regionFilter===r.region?' active':''}" data-region="${r.region}">
-       <div class="big" style="font-size:20px">${fmtBytes(r.used_bytes)}</div>
-       <div class="sub">${r.region} · ${fmtNum(r.storages)} 스토리지</div></div>`
+       <div class="big" style="font-size:20px">${fmtBytes(r.fs_used_bytes)} <span class="sub" style="font-size:13px; font-weight:400;">/ ${fmtBytes(r.fs_total_bytes)}</span></div>
+       <div class="sub">${r.region} · ${fmtNum(r.storages)} 스토리지${r.fs_total_bytes?` · 사용률 ${(r.fs_used_bytes/r.fs_total_bytes*100).toFixed(1)}%`:""}</div></div>`
   ).join("") || '<div class="sub">등록된 노드가 없습니다.</div>';
   $("regions").querySelectorAll(".regcard").forEach(c=>c.addEventListener("click",()=>{
     regionFilter=(regionFilter===c.dataset.region)?"":c.dataset.region; renderPortalDash(); }));

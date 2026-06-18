@@ -1533,7 +1533,8 @@ class PortalController:
             total_used += used
             storages += st
             reg = n.get("region") or "(미지정)"
-            r = regions.setdefault(reg, {"region": reg, "used_bytes": 0, "storages": 0})
+            r = regions.setdefault(reg, {"region": reg, "used_bytes": 0, "storages": 0,
+                                         "fs_used_bytes": 0, "fs_total_bytes": 0})
             r["used_bytes"] += used
             r["storages"] += st
             roots_l = ov.get("roots") or []
@@ -1542,6 +1543,8 @@ class PortalController:
             fs_total, fs_used, fs_free, fs_pct = self._fs_capacity(roots_l)
             total_fs_total += fs_total
             total_fs_used += fs_used
+            r["fs_used_bytes"] += fs_used      # 지역별 디스크 사용량/전체 용량 집계
+            r["fs_total_bytes"] += fs_total
             out_nodes.append({
                 "id": n["id"], "region": n.get("region"), "url": n["url"],
                 "enabled": n.get("enabled"), "online": is_on,

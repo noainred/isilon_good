@@ -716,4 +716,7 @@
      '전체 용량'(fs_total_bytes) th 2개(sortable, th[data-nsort] 클릭 핸들러 자동 적용). capCell 셀→숫자
      2칸(사용량에 % 표시). colspan 8→9(확장행 td+colspan8 은 그대로 9). v1.86.0.
 
+235. ('지역별 롤업'→'지역별 스토리지 현황', 지역별 사용량/전체용량) overview regions 에 fs_used_bytes/
+     fs_total_bytes 합산 추가, portal.html regcard 를 fs_used / fs_total + 사용률% 로, 제목 변경. v1.86.1.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
