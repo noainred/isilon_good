@@ -3144,7 +3144,7 @@ function renderOverview(j) {
         if (running) act += ` <button class="stopbtn" data-stop="${r.scan_id}">중지</button>`;
         else {
           if (r.status === "paused") act += ` <button data-resume="${r.scan_id}" style="padding:2px 8px; font-size:11.5px;">재개</button>`;
-          act += ` <button class="stopbtn" data-del="${r.scan_id}" title="이 스캔을 취소(삭제) — 되돌릴 수 없음">취소</button>`;
+          act += ` <button class="stopbtn" data-del="${r.scan_id}" style="white-space:nowrap;" title="이 스캔의 완료 데이터(per-run DB)를 삭제 — 되돌릴 수 없음">완료데이터 삭제</button>`;
         }
       }
       return `<tr class="ovrow" data-scan="${r.scan_id}" style="cursor:pointer;" title="클릭: 이 스캔 결과를 ‘디렉터리 분석’에서 보기">
@@ -3172,9 +3172,9 @@ function renderOverview(j) {
     body.querySelectorAll("button[data-del]").forEach(b =>
       b.addEventListener("click", () => {
         const id = b.dataset.del;
-        // 취소(삭제)는 되돌릴 수 없으므로 2번 확인한다.
-        if (!confirm("스캔 #" + id + " 을(를) 취소할까요?")) return;
-        if (!confirm("정말 취소하시겠습니까?\n이 스캔의 데이터(per-run DB 파일)가 삭제되며 되돌릴 수 없습니다.")) return;
+        // 삭제는 되돌릴 수 없으므로 2번 확인한다.
+        if (!confirm("스캔 #" + id + " 의 완료 데이터를 삭제할까요?")) return;
+        if (!confirm("정말 삭제하시겠습니까?\n이 스캔의 데이터(per-run DB 파일)가 삭제되며 되돌릴 수 없습니다.")) return;
         scanAction("delete", parseInt(id));
       }));
   }
