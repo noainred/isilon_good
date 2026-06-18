@@ -248,6 +248,23 @@ def main() -> int:
         assert (not pc.export_token_ok("wrong")) and pc.export_token_ok("SECRET")
         assert pc.set_export_token("")["export_token_set"] is False and pc.export_token_ok("x")  # 해제
 
+        # 6i) 로그인 세션 유지 시간 · 업데이트 팝업 표시(set_session_prefs) — 기본/범위/반영
+        assert pc.auth_status()["op_ttl_minutes"] == 30          # 기본 30분
+        assert pc.auth_status()["show_update_popup"] is False     # 기본 끔
+        r = pc.set_session_prefs({"op_ttl_minutes": 120, "show_update_popup": True})
+        assert r["ok"] and r["op_ttl_minutes"] == 120 and r["show_update_popup"] is True
+        assert pc.auth_status()["op_ttl_minutes"] == 120 and pc.auth_status()["show_update_popup"] is True
+        assert pc.set_session_prefs({"op_ttl_minutes": 0})["op_ttl_minutes"] == 1        # 하한 클램프
+        assert pc.set_session_prefs({"op_ttl_minutes": 99999})["op_ttl_minutes"] == 10080  # 상한 클램프
+        assert pc.set_session_prefs({"op_ttl_minutes": "x"})["op_ttl_minutes"] == 30        # 잘못된 값 → 기본
+        # 세션 prefs 저장이 다른 설정(감시 폴더)을 건드리지 않음
+        pc.set_upgrade_watch("/tmp/iso_watch")
+        pc.set_session_prefs({"show_update_popup": False})
+        assert pc.settings.get("upgrade_watch_dir") == "/tmp/iso_watch"
+        # 콜러블 ttl 이 분→초로 반영(120분 = 7200초)
+        pc.set_session_prefs({"op_ttl_minutes": 120})
+        assert int(pc._auth.ttl) == 7200
+
         # 7) 복제본(완료 DB + meta.json) 존재
         rep = os.path.join(portal_data, "replicas", "dc-test")
         assert os.path.exists(os.path.join(rep, "meta.json")), rep

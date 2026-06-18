@@ -54,6 +54,17 @@ def main() -> int:
     t = g2.login("x")["token"]
     assert not g2.token_valid(t)
 
+    # 콜러블 ttl — 설정에서 동적으로 읽기(사용자가 세션 유지 시간 지정)
+    ttlbox = {"sec": 100}
+    g2b = auth.AuthGuard(lambda: "x", ttl=lambda: ttlbox["sec"])
+    assert g2b.ttl == 100
+    tb = g2b.login("x")["token"]
+    assert g2b.token_valid(tb)            # 100초 유지면 유효
+    ttlbox["sec"] = 0                     # 설정을 0으로 바꾸면 즉시 만료(다음 검증부터)
+    assert not g2b.token_valid(tb)
+    ttlbox["sec"] = 600
+    assert g2b.ttl == 600                 # 콜러블이 매번 최신값을 반영
+
     # 무차별 대입 잠금(max_fails 초과 시 lockout)
     box["pw"] = auth.store_password("admin", encrypt=False)
     g3 = auth.AuthGuard(lambda: box["pw"], ttl=100, max_fails=3, lockout=100)

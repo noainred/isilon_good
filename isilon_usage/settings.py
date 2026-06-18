@@ -45,6 +45,8 @@ DEFAULTS: dict = {
     "api_token": "",                    # 글로벌 포탈 복제용 토큰(설정 시 /api/dbexport 인증 필요)
     "op_password": "",                  # 작업(버튼·설정변경) 보호 비밀번호(빈값=잠금 없음)
     "op_password_encrypted": False,     # 참이면 op_password 를 PBKDF2 해시로 저장(평문 미저장)
+    "op_ttl_minutes": 30,               # 로그인 세션 유지 시간(분) — 사용자가 지정
+    "show_update_popup": False,         # 업그레이드 후 첫 접속 시 변경내용 팝업(기본 끔)
     "default_engine": "threads",        # 새 스캔 기본 엔진: threads(상세) | pscan(빠른 용량)
     "upgrade_watch_dir": "",            # 자동 업그레이드 감시 폴더(빈값=끔). 새 버전 압축본 감지
     "upgrade_check_secs": 60,          # 감시 폴더/인터넷 점검 주기(초)
@@ -125,6 +127,8 @@ def sanitize(raw: dict) -> dict:
     s["api_token"] = str(s.get("api_token") or "").strip()
     s["op_password"] = str(s.get("op_password") or "")
     s["op_password_encrypted"] = bool(s.get("op_password_encrypted", False))
+    s["op_ttl_minutes"] = _int(s.get("op_ttl_minutes", 30), 1, 10080, 30)   # 1분~7일
+    s["show_update_popup"] = bool(s.get("show_update_popup", False))
     s["default_engine"] = (s.get("default_engine")
                            if s.get("default_engine") in ("threads", "pscan") else "threads")
     s["upgrade_watch_dir"] = str(s.get("upgrade_watch_dir") or "").strip()

@@ -71,10 +71,10 @@ class AuthGuard:
     비밀번호가 비어 있으면 인증이 필요 없는(전체 공개) 상태로 본다.
     """
 
-    def __init__(self, password_getter, ttl: float = DEFAULT_TTL,
+    def __init__(self, password_getter, ttl=DEFAULT_TTL,
                  max_fails: int = 5, lockout: float = 30.0) -> None:
         self._get_pw = password_getter
-        self._ttl = float(ttl)
+        self._ttl_src = ttl                  # 값 또는 콜러블(설정에서 동적으로 읽기 → 사용자가 세션 시간 지정)
         self._tokens: dict = {}              # token -> 발급 시각
         self._lock = threading.Lock()
         self._max_fails = int(max_fails)     # 연속 로그인 실패 허용 횟수
@@ -82,9 +82,17 @@ class AuthGuard:
         self._fails = 0
         self._locked_until = 0.0
 
+    def _ttl_now(self) -> float:
+        """현재 세션 유효 시간(초). 콜러블이면 호출해 동적으로 읽는다(최소값 가드는 설정에서)."""
+        try:
+            t = self._ttl_src() if callable(self._ttl_src) else self._ttl_src
+            return float(t)
+        except Exception:
+            return DEFAULT_TTL
+
     @property
     def ttl(self) -> int:
-        return int(self._ttl)
+        return int(self._ttl_now())
 
     def required(self) -> bool:
         """변경 작업에 로그인이 필요한가(= 비밀번호가 설정됨)."""
@@ -116,10 +124,11 @@ class AuthGuard:
         token = secrets.token_hex(16)
         with self._lock:
             self._fails = 0
+            ttl = self._ttl_now()
             self._tokens = {t: ts for t, ts in self._tokens.items()
-                            if now - ts < self._ttl}
+                            if now - ts < ttl}
             self._tokens[token] = now
-        return {"ok": True, "token": token, "op_required": True, "ttl": int(self._ttl)}
+        return {"ok": True, "token": token, "op_required": True, "ttl": int(ttl)}
 
     def token_valid(self, token) -> bool:
         """세션 토큰이 유효한가(만료 시 폐기)."""
@@ -130,7 +139,7 @@ class AuthGuard:
             ts = self._tokens.get(token)
             if ts is None:
                 return False
-            if time.time() - ts >= self._ttl:
+            if time.time() - ts >= self._ttl_now():
                 self._tokens.pop(token, None)
                 return False
             return True

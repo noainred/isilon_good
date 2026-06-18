@@ -666,8 +666,9 @@ class ScanController:
         self._upgrade_thread = threading.Thread(
             target=self._upgrade_watch_loop, name="upgrade-watch", daemon=True)
         self._upgrade_thread.start()
-        self._auth = authmod.AuthGuard(lambda: self.settings.get("op_password"),
-                                       ttl=OP_TOKEN_TTL)
+        self._auth = authmod.AuthGuard(
+            lambda: self.settings.get("op_password"),
+            ttl=lambda: float(self.settings.get("op_ttl_minutes", 30) or 30) * 60)
         self._launch_cwd = os.getcwd()      # info.MD 를 저장할 '실행한 디렉터리'
         self._reconcile_orphans()           # 이전 프로세스가 남긴 고아 스캔 정리
         self._resume_after_upgrade()        # 업그레이드 재시작 직전 돌던 스캔을 자동 재개
@@ -2150,6 +2151,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "can_scan": ctrl is not None,
                     "have_psutil": monmod.have_psutil(),
                     "op_required": bool(ctrl and ctrl.op_required()),
+                    "show_update_popup": bool(ctrl and ctrl.settings.get("show_update_popup")),
                 })
                 return
 

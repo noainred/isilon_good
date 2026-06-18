@@ -719,4 +719,16 @@
 235. ('지역별 롤업'→'지역별 스토리지 현황', 지역별 사용량/전체용량) overview regions 에 fs_used_bytes/
      fs_total_bytes 합산 추가, portal.html regcard 를 fs_used / fs_total + 사용률% 로, 제목 변경. v1.86.1.
 
+236. (중지 버튼·취소 버튼 만들어줘 — 정지는 1번, 취소는 정말 취소할거냐고 2번 물어봐) 엣지 '전체 용량
+     관리 개요' ovBody 삭제 버튼 ✕→'취소'(되돌릴 수 없음 안내, confirm 2번: "취소할까요?"+"정말
+     취소하시겠습니까?"). 진행 중 스캔 stopScan 은 '중지'(confirm 1번) 유지. dashboard.html.
+237. (한번 로그인하면 사용자가 지정한 시간만큼 로그인 안 해도 되게) 설정 op_ttl_minutes(기본 30, 1~10080분
+     =7일) 추가. auth.AuthGuard ttl 을 값 또는 콜러블로 받게 바꿔(_ttl_now) 설정에서 동적으로 읽기 →
+     server/portal 둘 다 ttl=lambda: 분*60. settings.sanitize 클램프, 엣지 설정 '보안' 탭 '로그인 유지
+     시간(분)' 입력, 포탈 '로그인 세션/화면 표시' 카드(set_session_prefs). 콜러블 ttl 테스트 추가.
+238. (로그인하면 패치 보는 기능 설정에서 지정+초기값 안 보기) 설정 show_update_popup(기본 False) 추가.
+     엣지·포탈 첫 접속 팝업을 j.show_update_popup True 일 때만(_updChecked 1회) 띄움. 엣지 설정 '일반'
+     탭 체크박스, 포탈 '로그인 세션/화면 표시' 카드 체크박스. (겸사: 포탈 POST /api/portal/settings 가
+     매번 set_upgrade_watch("")로 감시 폴더를 지우던 부분 저장 버그도 보낸 키만 반영하게 수정.) v1.87.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

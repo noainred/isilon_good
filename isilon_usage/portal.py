@@ -411,7 +411,9 @@ class PortalController:
         os.makedirs(self.replicas_dir, exist_ok=True)
         self.nodes = load_nodes(self.data_dir)
         self.settings = self._load_settings()
-        self._auth = authmod.AuthGuard(lambda: self.settings.get("op_password"))
+        self._auth = authmod.AuthGuard(
+            lambda: self.settings.get("op_password"),
+            ttl=lambda: float(self.settings.get("op_ttl_minutes", 30) or 30) * 60)
         self._last_upgrade_check = 0.0
         self._init_ping_db()
         self._cache = {}          # id -> {online, ts, version, hostname, overall, error}
@@ -433,7 +435,7 @@ class PortalController:
                "enroll_token": "", "release_dir": "/opt/isilon_release",
                "backup_dir": "", "backup_every_hours": 1.0, "backup_keep": 100,
                "portal_title": "", "portal_subtitle": "", "nav_hidden": [],
-               "export_token": ""}
+               "export_token": "", "op_ttl_minutes": 30, "show_update_popup": False}
         try:
             with open(portal_settings_path(self.data_dir), encoding="utf-8") as fh:
                 s = json.load(fh)
@@ -468,6 +470,11 @@ class PortalController:
                 out["nav_hidden"] = [v for v in (s.get("nav_hidden") or [])
                                      if v in ("dash", "netmon", "compare")]
                 out["export_token"] = str(s.get("export_token") or "").strip()
+                try:
+                    out["op_ttl_minutes"] = max(1, min(10080, int(s.get("op_ttl_minutes", 30))))
+                except (TypeError, ValueError):
+                    pass
+                out["show_update_popup"] = bool(s.get("show_update_popup", False))
         except (OSError, ValueError):
             pass
         return out
@@ -487,6 +494,8 @@ class PortalController:
         return {"ok": True, "op_required": self._auth.required(),
                 "encrypted": bool(self.settings.get("op_password_encrypted")),
                 "version": __version__,
+                "show_update_popup": bool(self.settings.get("show_update_popup")),
+                "op_ttl_minutes": int(self.settings.get("op_ttl_minutes", 30) or 30),
                 "portal_title": self.settings.get("portal_title") or "",
                 "portal_subtitle": self.settings.get("portal_subtitle") or "",
                 "nav_hidden": self.settings.get("nav_hidden") or []}
@@ -1629,6 +1638,19 @@ class PortalController:
         self._save_settings()
         return {"ok": True, "export_token_set": bool(self.settings["export_token"])}
 
+    def set_session_prefs(self, body) -> dict:
+        """로그인 세션 유지 시간(분)·업데이트 팝업 표시 여부를 저장한다."""
+        if "op_ttl_minutes" in body:
+            try:
+                self.settings["op_ttl_minutes"] = max(1, min(10080, int(body.get("op_ttl_minutes"))))
+            except (TypeError, ValueError):
+                self.settings["op_ttl_minutes"] = 30
+        if "show_update_popup" in body:
+            self.settings["show_update_popup"] = bool(body.get("show_update_popup"))
+        self._save_settings()
+        return {"ok": True, "op_ttl_minutes": self.settings.get("op_ttl_minutes"),
+                "show_update_popup": self.settings.get("show_update_popup")}
+
     def export_token_ok(self, given) -> bool:
         """export_token 이 설정돼 있으면 일치해야 True(미설정이면 공개=True)."""
         tok = (self.settings.get("export_token") or "").strip()
@@ -2325,8 +2347,11 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self.wfile.write(data)
                 return
             if path == "/api/portal/settings":
-                res = c.set_upgrade_watch(body.get("upgrade_watch_dir") or "",
-                                          body.get("upgrade_check_secs"))
+                # 카드별 부분 저장 — 보낸 키만 반영한다(없는 키로 다른 설정을 덮어쓰지 않음).
+                res = {"ok": True}
+                if "upgrade_watch_dir" in body or "upgrade_check_secs" in body:
+                    res.update(c.set_upgrade_watch(body.get("upgrade_watch_dir") or "",
+                                                   body.get("upgrade_check_secs")))
                 if "enroll_token" in body:
                     res.update(c.set_enroll_token(body.get("enroll_token") or ""))
                 if "release_dir" in body:
@@ -2338,6 +2363,8 @@ class PortalHandler(BaseHTTPRequestHandler):
                     res.update(c.set_nav_hidden(body.get("nav_hidden") or []))
                 if "export_token" in body:
                     res.update(c.set_export_token(body.get("export_token") or ""))
+                if "op_ttl_minutes" in body or "show_update_popup" in body:
+                    res.update(c.set_session_prefs(body))
                 self._send_json(res)
                 return
             if path == "/api/portal/upgrade/net":     # 인터넷 자동 업그레이드 설정
