@@ -3825,6 +3825,17 @@ function setShowCat(cat) {
 })();
 const VIEWS = ["summary", "analysis", "depth", "trouble", "tune", "throughput", "trends", "report", "scans", "settings", "gentest", "history"];
 let changelogLoaded = false;
+// 스캔 선택기(+CSV/JSON)와 '진행 중' 배너는 화면마다 복제하지 않고 '단일 요소'를 공유한다.
+// '디렉터리 분석'과 '분석 리포트'가 같은 선택 스캔·같은 배너 정책을 쓰도록, 활성 뷰로 그
+// 블록을 옮겨 한 곳에서만 보여준다(선택기가 둘이면 동기화가 갈라져 일관성이 깨진다).
+function mountScanControls(viewName) {
+  const host = $("view-" + viewName);
+  const card = $("scanSelectCard"), notice = $("analysisNotice");
+  if (!host || !card || !notice) return;
+  const h2 = host.querySelector(":scope > h2");   // 제목 있으면(리포트) 그 아래, 없으면(분석) 맨 위
+  if (h2) h2.after(notice, card);
+  else host.prepend(notice, card);
+}
 function showView(name) {
   if (VIEWS.indexOf(name) < 0) name = "summary";
   VIEWS.forEach(v => {
@@ -3834,6 +3845,7 @@ function showView(name) {
   document.querySelectorAll(".navbtn").forEach(b => b.classList.toggle("active", b.dataset.view === name));
   try { history.replaceState(null, "", "#" + name); } catch (e) { location.hash = name; }
   if (name === "history") { if (!changelogLoaded) loadChangelog(); loadUpgrade(); }
+  if (name === "analysis" || name === "report") mountScanControls(name);
   if (name === "report") loadReport();
   if (name === "trouble") { if (typeof tsRun === "function") tsRun(); if (typeof tsHistLoad === "function") tsHistLoad(); }
   if (name === "tune") { if (typeof tuneRun === "function" && $("tuneResult") && $("tuneResult").style.display === "none") tuneRun(); }
