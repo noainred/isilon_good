@@ -697,4 +697,12 @@
      설정(상수시간 hmac, X-Auth-Token/?token=, 미설정=공개) + set_export_token + upgrade_config
      export_token_set. portal.html 일반 탭 '🔌 외부 사용량 API' 카드(엔드포인트·예시·토큰). test_portal 6h. v1.84.0.
 
+229. ('디렉터리 분석'에서 과거 스캔 #1#2 불러와 분석) → scanSelectCard 가 스캔 중(updateStartButton)이면
+     display:none 으로 숨겨져 과거 회차 선택 불가였음. 분석 전용 카드이므로 항상 display:flex 로 변경 +
+     라벨 '상세 보기 스캔'→'분석할 스캔 · 과거 회차 #번호 불러오기'.
+230. (버그: 173TB 도는데 DB 412KB로 표시 — 진행 패널이 완료 스캔 hadoopmes(412KB)를 보고 도는 hadoop
+     (24MB)을 안 봄) 원인=v1.76.8 selectedScan 기본=완료. poll 의 /api/status 조회를 statusScan=실행 중
+     스캔(runningSet 최대 id) 우선으로 분리(분석 파이/트리는 selectedScan 유지). per-run DB 는 디렉터리
+     개수에 비례(바이트 아님)도 안내. dashboard.html. v1.84.1.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

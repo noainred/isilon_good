@@ -368,7 +368,7 @@
 
   <!-- 스캔 선택 (스캔 중에는 숨김) -->
   <div class="card" id="scanSelectCard" style="margin-bottom:14px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-    <b>상세 보기 스캔</b>
+    <b>분석할 스캔</b><span class="sub" style="margin-left:-4px;">과거 회차 #번호를 골라 불러오기</span>
     <select id="scanSelect" style="background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:6px 10px; font-size:13px; min-width:300px;"></select>
     <button id="exportCsv" title="CSV 내보내기">⬇ CSV</button>
     <button id="exportJson" title="JSON 내보내기">⬇ JSON</button>
@@ -2243,9 +2243,9 @@ function updateStartButton(runningCount) {
   if (bs) bs.style.display = scanning ? "none" : "block";
   const si = $("scanInputs");
   if (si) si.style.display = scanning ? "none" : "flex";
-  // 스캔 중에는 상세 보기/추세/비교 카드도 숨겨 진행 화면만 남긴다.
+  // '디렉터리 분석' 화면의 스캔 선택기는 스캔 중에도 항상 보이게 — 과거 회차(#번호)를 불러와 분석.
   const ssc = $("scanSelectCard");
-  if (ssc) ssc.style.display = scanning ? "none" : "flex";
+  if (ssc) ssc.style.display = "flex";
   const tdr = $("trendDiffRow");
   if (tdr) tdr.style.display = scanning ? "none" : "grid";
 }
@@ -3269,7 +3269,11 @@ async function poll() {
     // (a) 데이터 수신 — 네트워크/타임아웃 실패는 '지연'으로 따로 처리
     let data;
     try {
-      const url = "/api/status" + (selectedScan != null ? ("?scan=" + selectedScan) : "");
+      // '현재 진행 상황·요약·DB 크기'는 실제로 도는 스캔을 보여준다(완료 스캔을 기본 선택해도
+      // 진행 패널이 엉뚱한 DB 를 가리키지 않게). 분석(파이/트리)은 selectedScan 그대로 사용.
+      let statusScan = selectedScan;
+      if (runningSet && runningSet.size > 0) statusScan = Math.max(...runningSet);
+      const url = "/api/status" + (statusScan != null ? ("?scan=" + statusScan) : "");
       data = await fetchJsonTimeout(url, 25000);
     } catch (e) {
       _statusFailStreak++;
