@@ -731,4 +731,11 @@
      탭 체크박스, 포탈 '로그인 세션/화면 표시' 카드 체크박스. (겸사: 포탈 POST /api/portal/settings 가
      매번 set_upgrade_watch("")로 감시 폴더를 지우던 부분 저장 버그도 보낸 키만 반영하게 수정.) v1.87.0.
 
+239. (계속 스캔하게 했는데 한번 돌고 멈춤/초기화 됨 — #4 완료에서 안 돎) 진단: 반복 로직 자체는 정상
+     (E2E로 10초 200회 반복 확인). 진짜 원인=_auto_restart 가 메모리 dict 라 재시작·업그레이드 때 소실,
+     업그레이드 재개 마커는 scan_id 만 보존하고 반복 플래그 미보존 → 재개된 스캔이 한 번 끝나면 반복 끊김.
+     수정: 반복 설정을 data-dir/auto_restart.json 에 영속화(_save/_load_auto_restart), __init__ 에서
+     reconcile 후·resume 전 복원(done/error prune), start_scan 등록·_on_scan_finished pop 시 디스크 동기화.
+     test_server 에 영속화/복원/prune 테스트 추가. server.py. v1.87.1.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

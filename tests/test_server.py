@@ -347,7 +347,53 @@ def _check_auto_restart() -> None:
             rowbox["row"] = fake_row(st)
             c._on_scan_finished(42)
             assert calls == [] and 42 not in c._auto_restart, (st, calls)
-        print("[auto-restart] OK  설정 저장·done 재시작·중지/오류 멈춤")
+
+        # 4) 영속화 — 반복 설정이 디스크에 남아 '재시작'(새 컨트롤러)에도 복원된다.
+        #    (메모리 dict 만으로는 재시작·업그레이드 후 반복이 끊겼다 → data-dir 에 저장/복원)
+        mgrmod.get_scan = orig_get             # 이 구간은 실제 DB 행을 읽어 prune 한다
+        import json as _json
+
+        from isilon_usage import db as dbmod
+        d2 = tempfile.mkdtemp(prefix="isilon_loop_persist_")
+        try:
+            a = ScanController(os.path.join(d2, "data"))
+            os.makedirs(a.data_dir, exist_ok=True)
+            a._launch = lambda *x, **k: None            # type: ignore[assignment]
+            a._launch_pscan = lambda *x, **k: None       # type: ignore[assignment]
+            a.scan_path_check = lambda p, confirm_outside=False: (True, None)  # type: ignore[assignment]
+            r = a.start_scan(d2, auto_restart=True)
+            sidp = r["scan_id"]
+            mark = os.path.join(a.data_dir, ScanController._AUTO_RESTART_MARK)
+            assert os.path.exists(mark), "반복 설정이 디스크에 저장되지 않음"
+            assert str(sidp) in _json.load(open(mark, encoding="utf-8")), "마커에 scan_id 없음"
+
+            # '재시작' = 같은 data-dir 로 새 컨트롤러. reconcile 이 discovering→paused 로 만들고,
+            #  load 가 paused(재개 대상)를 복원해야 한다.
+            b = ScanController(a.data_dir)
+            assert sidp in b._auto_restart, ("재시작 후 반복 복원 실패", b._auto_restart)
+
+            # 복원된 그 스캔이 done 으로 끝나면 반복이 이어진다(start_scan 모킹으로 호출만 확인)
+            b._launch = lambda *x, **k: None             # type: ignore[assignment]
+            b._launch_pscan = lambda *x, **k: None        # type: ignore[assignment]
+            b.scan_path_check = lambda p, confirm_outside=False: (True, None)  # type: ignore[assignment]
+            calls2 = []
+            b.start_scan = lambda path, **kw: (calls2.append(kw.get("auto_restart")) or {"ok": True, "scan_id": 4242})  # type: ignore[assignment]
+            mc = dbmod.connect(mgrmod.manager_db_path(b.data_dir))
+            mgrmod.update_scan(mc, sidp, status="done"); mc.commit(); mc.close()
+            b._on_scan_finished(sidp)
+            assert calls2 == [True], ("재시작 후 반복이 이어지지 않음", calls2)
+
+            # 5) 이미 끝난(done) 반복 항목은 로드 시 버린다(prune) — 좀비 반복 방지
+            cfg = {"path": d2, "backend": "native", "size_mode": "disk",
+                   "one_file_system": False, "engine": "threads",
+                   "processes": None, "threads": None}
+            with open(mark, "w", encoding="utf-8") as fh:
+                _json.dump({str(sidp): cfg}, fh)         # sidp 는 지금 done 상태
+            e = ScanController(a.data_dir)
+            assert sidp not in e._auto_restart, "끝난(done) 반복이 복원됨(prune 실패)"
+        finally:
+            shutil.rmtree(d2, ignore_errors=True)
+        print("[auto-restart] OK  설정 저장·done 재시작·중지/오류 멈춤·재시작 영속화/복원")
     finally:
         mgrmod.get_scan = orig_get
         shutil.rmtree(d, ignore_errors=True)

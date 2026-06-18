@@ -671,6 +671,7 @@ class ScanController:
             ttl=lambda: float(self.settings.get("op_ttl_minutes", 30) or 30) * 60)
         self._launch_cwd = os.getcwd()      # info.MD 를 저장할 '실행한 디렉터리'
         self._reconcile_orphans()           # 이전 프로세스가 남긴 고아 스캔 정리
+        self._load_auto_restart()           # 저장된 반복(자동 재시작) 설정 복원 — 재개될 스캔이 끝나면 이어서 반복
         self._resume_after_upgrade()        # 업그레이드 재시작 직전 돌던 스캔을 자동 재개
 
     def storage_status(self, force: bool = False) -> list:
@@ -797,6 +798,71 @@ class ScanController:
                           % (sid, "재개" if res.get("ok") else res.get("reason")))
             except Exception as exc:   # noqa: BLE001
                 self._log("[upgrade] 자동 재개 실패 scan #%s: %s" % (sid, exc))
+
+    # ----- 반복(완료 후 자동 재시작) 상태 영속화 -----
+    _AUTO_RESTART_MARK = "auto_restart.json"
+
+    def _save_auto_restart(self) -> None:
+        """반복(자동 재시작) 설정을 data-dir 에 저장한다.
+
+        _auto_restart 는 메모리 dict 라 프로세스가 죽으면(재시작·업그레이드) 사라진다.
+        그러면 돌던 스캔이 한 번 끝난 뒤 반복이 끊긴다. 그래서 디스크에도 남겨, 시작 시
+        복원해 반복을 이어간다(data-dir 은 코드 교체와 무관하게 보존된다).
+        """
+        path = os.path.join(self.data_dir, self._AUTO_RESTART_MARK)
+        with self._lock:                       # 스냅샷만 락 안에서(호출부는 락을 풀고 부른다)
+            data = {str(k): v for k, v in self._auto_restart.items()}
+        try:
+            if not data:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                return
+            os.makedirs(self.data_dir, exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+            os.replace(tmp, path)
+        except OSError:
+            pass
+
+    def _load_auto_restart(self) -> None:
+        """저장해 둔 반복 설정을 복원한다(시작 시 1회). 이미 끝난(done/error) 스캔은 버린다."""
+        path = os.path.join(self.data_dir, self._AUTO_RESTART_MARK)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return
+        if not isinstance(data, dict) or not data:
+            return
+        restored: Dict[int, dict] = {}
+        try:
+            mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+            try:
+                for k, cfg in data.items():
+                    try:
+                        sid = int(k)
+                    except (TypeError, ValueError):
+                        continue
+                    row = mgrmod.get_scan(mconn, sid)
+                    if row is None or row["status"] in ("done", "error"):
+                        continue          # 이미 끝난 반복은 복원하지 않음(재개 대상만)
+                    restored[sid] = cfg
+            finally:
+                mconn.close()
+        except Exception:                  # noqa: BLE001 — DB 를 못 읽으면 보수적으로 전부 복원
+            for k, cfg in data.items():
+                try:
+                    restored[int(k)] = cfg
+                except (TypeError, ValueError):
+                    pass
+        if restored:
+            with self._lock:
+                self._auto_restart.update(restored)
+            self._log("[loop] 반복(자동 재시작) 복원: %s" % sorted(restored.keys()))
+        self._save_auto_restart()          # 정리(prune)된 상태를 디스크에 반영
 
     # 설정에서 파생되는 값들(편집되면 즉시 반영)
     @property
@@ -1540,6 +1606,7 @@ class ScanController:
                     "one_file_system": one_file_system, "engine": engine,
                     "processes": processes, "threads": threads,
                 }
+            self._save_auto_restart()       # 재시작·업그레이드 후에도 반복이 살아남도록 디스크에 기록
         self._log("scan #%d start: %s (engine=%s, backend=%s, size=%s, x=%s, ro=%s, loop=%s)" % (
             scan_id, path, engine, backend, size_mode, one_file_system, readonly, auto_restart))
         if engine == "pscan":
@@ -1716,6 +1783,8 @@ class ScanController:
             # 중지(paused)·오류(error)면 반복을 멈춘다(꺼내기만). 경로가 사라졌으면 재시작이 실패해 자연히 멈춘다.
             with self._lock:
                 ar_cfg = self._auto_restart.pop(scan_id, None)
+            if ar_cfg is not None:
+                self._save_auto_restart()   # 이 scan_id 의 반복 항목 제거를 디스크에 반영
             if ar_cfg and row["status"] == "done":
                 self._log("scan #%d done → 자동 재시작(반복): %s" % (scan_id, ar_cfg["path"]))
                 self.start_scan(ar_cfg["path"], backend=ar_cfg["backend"],
