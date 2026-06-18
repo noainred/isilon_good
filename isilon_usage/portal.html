@@ -138,10 +138,11 @@
         <th class="sortable" data-nsort="region" data-label="지역">지역</th>
         <th class="num sortable" data-nsort="storages" data-label="스토리지">스토리지</th>
         <th class="num sortable" data-nsort="used_bytes" data-label="조사 용량">조사 용량</th>
-        <th class="sortable" data-nsort="fs_used_pct" data-label="용량(사용률)">용량(사용률)</th>
+        <th class="num sortable" data-nsort="fs_used_bytes" data-label="사용량">사용량</th>
+        <th class="num sortable" data-nsort="fs_total_bytes" data-label="전체 용량">전체 용량</th>
         <th>마지막 스캔</th>
         <th class="sortable" data-nsort="status" data-label="상태" title="클릭: 스캔 경과시간(오래 스캔한 순)으로 정렬">상태</th><th></th></tr></thead>
-      <tbody id="nodeRows"><tr><td colspan="8" class="sub">불러오는 중…</td></tr></tbody>
+      <tbody id="nodeRows"><tr><td colspan="9" class="sub">불러오는 중…</td></tr></tbody>
     </table>
     <div class="sub" id="dashNote" style="margin-top:8px;"></div>
   </div>
@@ -702,6 +703,21 @@ function _changelogSection(text, ver){
   const nx=rest.search(/\n##\s*\[/);
   return ((nx>=0)?rest.slice(0,nx):rest).replace(/\n---\s*$/,"").trim();
 }
+// 변경 내용을 '간단하게' — 각 ### 헤더의 한 줄 요약만(상세는 '버전 기록').
+function _changelogSummary(text, ver){
+  const section=_changelogSection(text, ver);
+  if(!section) return "";
+  const emo={"추가":"✨","변경":"🔧","수정":"🐛","문서":"📄","보안":"🔒","성능":"⚡"};
+  const out=[];
+  section.split("\n").forEach(ln=>{
+    const m=ln.match(/^###\s+(\S+)/); if(!m) return;
+    const e=emo[m[1].slice(0,2)]||"•";
+    const dash=ln.indexOf("—");
+    const sum=(dash>=0?ln.slice(dash+1):ln.replace(/^###\s+/,"").replace(/\([^)]*\)/,"")).trim();
+    if(sum) out.push(e+" "+sum);
+  });
+  return out.length?out.join("\n"):section;
+}
 function showUpdatePopup(ver, notes){
   const ov=document.createElement("div");
   ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;";
@@ -724,7 +740,7 @@ async function checkUpdatePopup(ver){
   if(!ver) return;
   let seen=null; try{ seen=localStorage.getItem("portalSeenVer"); localStorage.setItem("portalSeenVer", ver); }catch(e){}
   if(!seen || seen===ver) return;   // 첫 방문이거나 같은 버전이면 안 띄움(업그레이드된 경우만)
-  let notes=""; try{ const j=await (await fetch("/api/portal/changelog",{cache:"no-store"})).json(); notes=_changelogSection(j.changelog||"", ver); }catch(e){}
+  let notes=""; try{ const j=await (await fetch("/api/portal/changelog",{cache:"no-store"})).json(); notes=_changelogSummary(j.changelog||"", ver); }catch(e){}
   showUpdatePopup(ver, notes);
 }
 // 비밀번호 입력 모달(브라우저 prompt 은 평문 노출 → type=password 로 마스킹). Promise<string|null>.
@@ -1208,11 +1224,12 @@ function renderPortalDash(){
     return `<tr class="noderow" data-idx="${idx}" style="cursor:pointer;" title="클릭하면 스토리지/어레이 펼침">
       <td><b>${n.id}</b>${verBadge}${arrBadges}<div class="sub mono">${n.hostname||""}</div></td><td>${n.region||"—"}</td>
       <td class="num">▸ ${fmtNum(n.storages)}</td><td class="num">${fmtBytes(n.used_bytes)}</td>
-      <td>${capCell(n.fs_used_bytes,n.fs_total_bytes)}</td>
+      <td class="num">${fmtBytes(n.fs_used_bytes)}${n.fs_total_bytes?` <span class="sub">${n.fs_used_pct}%</span>`:""}</td>
+      <td class="num">${fmtBytes(n.fs_total_bytes)}</td>
       <td class="sub">${ago(n.last_scan_at)}</td>
       <td>${st}${loopBadge}${scanBtn}${pingB}${runLine}</td><td>${open}</td></tr>` + roots +
-      (n.last_error ? `<tr><td colspan="8" class="sub" style="color:#ff9a9a">${n.id}: ${n.last_error}</td></tr>` : "");
-  }).join("") : '<tr><td colspan="8" class="sub">표시할 노드가 없습니다.</td></tr>';
+      (n.last_error ? `<tr><td colspan="9" class="sub" style="color:#ff9a9a">${n.id}: ${n.last_error}</td></tr>` : "");
+  }).join("") : '<tr><td colspan="9" class="sub">표시할 노드가 없습니다.</td></tr>';
   $("nodeRows").querySelectorAll("tr.noderow").forEach(tr=>tr.addEventListener("click",e=>{
     if(e.target.closest("a,button")) return;
     $("nodeRows").querySelectorAll(".rr-"+tr.dataset.idx).forEach(r=>r.style.display = r.style.display==="none"?"table-row":"none");

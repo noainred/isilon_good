@@ -710,4 +710,10 @@
 232. (마지막 동기화/마지막 스캔 중복 → 하나 빼줘) 포탈 노드표에서 '마지막 동기화'(last_poll, 상태/카드와
      중복) 제거, '마지막 스캔'(last_scan_at)만 유지. colspan 9→8. v1.85.0.
 
+233. (버전 업그레이드되면 간단하게 요약) → 업데이트 팝업이 _changelogSummary(### 헤더 한 줄 요약+종류
+     아이콘 ✨🔧🐛📄🔒⚡)로 표시. 엣지·포탈 둘 다 _changelogSection→_changelogSummary.
+234. (포탈 용량을 사용량/전체 용량으로 구분+정렬) 노드표 '용량(사용률)' th 1개 → '사용량'(fs_used_bytes)·
+     '전체 용량'(fs_total_bytes) th 2개(sortable, th[data-nsort] 클릭 핸들러 자동 적용). capCell 셀→숫자
+     2칸(사용량에 % 표시). colspan 8→9(확장행 td+colspan8 은 그대로 9). v1.86.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

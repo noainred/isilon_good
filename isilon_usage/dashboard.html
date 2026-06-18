@@ -3891,6 +3891,21 @@ function _changelogSection(text, ver) {
   const nx = rest.search(/\n##\s*\[/);
   return ((nx >= 0) ? rest.slice(0, nx) : rest).replace(/\n---\s*$/, "").trim();
 }
+// 변경 내용을 '간단하게' — 각 ### 헤더의 한 줄 요약만 뽑아 보여준다(상세 불릿은 '버전 기록'에서).
+function _changelogSummary(text, ver) {
+  const section = _changelogSection(text, ver);
+  if (!section) return "";
+  const emo = {"추가": "✨", "변경": "🔧", "수정": "🐛", "문서": "📄", "보안": "🔒", "성능": "⚡"};
+  const out = [];
+  section.split("\n").forEach(ln => {
+    const m = ln.match(/^###\s+(\S+)/); if (!m) return;
+    const e = emo[m[1].slice(0, 2)] || "•";
+    const dash = ln.indexOf("—");
+    const sum = (dash >= 0 ? ln.slice(dash + 1) : ln.replace(/^###\s+/, "").replace(/\([^)]*\)/, "")).trim();
+    if (sum) out.push(e + " " + sum);
+  });
+  return out.length ? out.join("\n") : section;
+}
 function showUpdatePopup(ver, notes) {
   const ov = document.createElement("div");
   ov.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;";
@@ -3915,7 +3930,7 @@ async function checkUpdatePopup(ver) {
   try { seen = localStorage.getItem("isiSeenVer"); localStorage.setItem("isiSeenVer", ver); } catch (e) {}
   if (!seen || seen === ver) return;   // 첫 방문이거나 같은 버전이면 안 띄움(업그레이드된 경우만)
   let notes = "";
-  try { const j = await (await fetch("/api/changelog", {cache: "no-store"})).json(); notes = _changelogSection(j.changelog || "", ver); } catch (e) {}
+  try { const j = await (await fetch("/api/changelog", {cache: "no-store"})).json(); notes = _changelogSummary(j.changelog || "", ver); } catch (e) {}
   showUpdatePopup(ver, notes);
 }
 
