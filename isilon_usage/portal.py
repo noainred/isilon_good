@@ -1554,6 +1554,7 @@ class PortalController:
                 "fs_total_bytes": fs_total, "fs_used_bytes": fs_used,
                 "fs_free_bytes": fs_free, "fs_used_pct": fs_pct,
                 "running": self._running_scan(roots_l),
+                "auto_restart": any(rt.get("auto_restart") for rt in roots_l),  # 반복 스캔 중
                 "roots": roots_l,
                 "isilon": c.get("isilon") or {"configured": False},
                 "storage": c.get("storage") or [],

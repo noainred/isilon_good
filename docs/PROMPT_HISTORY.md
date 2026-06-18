@@ -705,4 +705,9 @@
      스캔(runningSet 최대 id) 우선으로 분리(분석 파이/트리는 selectedScan 유지). per-run DB 는 디렉터리
      개수에 비례(바이트 아님)도 안내. dashboard.html. v1.84.1.
 
+231. (포탈에도 반복 스캔 표시) → 엣지 _export_dbs meta.overall 루트에 auto_restart 표시(auto_restart_ids),
+     포탈 overview 노드별 auto_restart(any root) + portal.html 노드행 상태칸 '🔁 반복 동작 중' 빨간 배지.
+232. (마지막 동기화/마지막 스캔 중복 → 하나 빼줘) 포탈 노드표에서 '마지막 동기화'(last_poll, 상태/카드와
+     중복) 제거, '마지막 스캔'(last_scan_at)만 유지. colspan 9→8. v1.85.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

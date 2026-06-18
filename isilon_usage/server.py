@@ -2655,6 +2655,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         """
         scans = mgrmod.list_scans(mconn)
         overall = mgrmod.overall_capacity(mconn)
+        # 반복(완료 후 자동 재시작) 중인 루트를 표시해 포탈도 '반복 동작 중'을 알 수 있게 한다.
+        if self.controller:
+            _ar = set(self.controller.auto_restart_ids())
+            if _ar:
+                for _r in overall.get("roots", []):
+                    if _r.get("scan_id") in _ar:
+                        _r["auto_restart"] = True
         terminal = ("done", "paused", "error")
         finished = [s for s in scans
                     if s.get("status") in terminal

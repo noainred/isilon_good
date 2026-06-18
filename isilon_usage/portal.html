@@ -139,9 +139,9 @@
         <th class="num sortable" data-nsort="storages" data-label="스토리지">스토리지</th>
         <th class="num sortable" data-nsort="used_bytes" data-label="조사 용량">조사 용량</th>
         <th class="sortable" data-nsort="fs_used_pct" data-label="용량(사용률)">용량(사용률)</th>
-        <th>마지막 동기화</th><th>마지막 스캔</th>
+        <th>마지막 스캔</th>
         <th class="sortable" data-nsort="status" data-label="상태" title="클릭: 스캔 경과시간(오래 스캔한 순)으로 정렬">상태</th><th></th></tr></thead>
-      <tbody id="nodeRows"><tr><td colspan="9" class="sub">불러오는 중…</td></tr></tbody>
+      <tbody id="nodeRows"><tr><td colspan="8" class="sub">불러오는 중…</td></tr></tbody>
     </table>
     <div class="sub" id="dashNote" style="margin-top:8px;"></div>
   </div>
@@ -1204,15 +1204,15 @@ function renderPortalDash(){
         : ` <span class="pill" title="${pr.error||'실패'}" style="color:#ff9a9a;border-color:#7a3030">✕</span>`) : "";
     const rn=n.running;
     const runLine = rn ? `<div class="sub" style="white-space:nowrap; margin-top:3px;">⏱ ${elapsedSpan(rn.started_at, rn.updated_at)} · 시작 ${fmtClock(rn.started_at)}</div>` : "";
+    const loopBadge = n.auto_restart ? ` <span style="color:#ff5c5c; font-weight:700; white-space:nowrap;" title="완료되면 같은 설정으로 자동 재시작(반복) 중">🔁 반복 동작 중</span>` : "";
     return `<tr class="noderow" data-idx="${idx}" style="cursor:pointer;" title="클릭하면 스토리지/어레이 펼침">
       <td><b>${n.id}</b>${verBadge}${arrBadges}<div class="sub mono">${n.hostname||""}</div></td><td>${n.region||"—"}</td>
       <td class="num">▸ ${fmtNum(n.storages)}</td><td class="num">${fmtBytes(n.used_bytes)}</td>
       <td>${capCell(n.fs_used_bytes,n.fs_total_bytes)}</td>
-      <td class="sub ${freshClass(n.last_poll)}">${ago(n.last_poll)}</td>
       <td class="sub">${ago(n.last_scan_at)}</td>
-      <td>${st}${scanBtn}${pingB}${runLine}</td><td>${open}</td></tr>` + roots +
-      (n.last_error ? `<tr><td colspan="9" class="sub" style="color:#ff9a9a">${n.id}: ${n.last_error}</td></tr>` : "");
-  }).join("") : '<tr><td colspan="9" class="sub">표시할 노드가 없습니다.</td></tr>';
+      <td>${st}${loopBadge}${scanBtn}${pingB}${runLine}</td><td>${open}</td></tr>` + roots +
+      (n.last_error ? `<tr><td colspan="8" class="sub" style="color:#ff9a9a">${n.id}: ${n.last_error}</td></tr>` : "");
+  }).join("") : '<tr><td colspan="8" class="sub">표시할 노드가 없습니다.</td></tr>';
   $("nodeRows").querySelectorAll("tr.noderow").forEach(tr=>tr.addEventListener("click",e=>{
     if(e.target.closest("a,button")) return;
     $("nodeRows").querySelectorAll(".rr-"+tr.dataset.idx).forEach(r=>r.style.display = r.style.display==="none"?"table-row":"none");
