@@ -744,4 +744,11 @@
      sessionStorage 에 저장(opExpiry/pOpExpiry), 로드 때 restoreOpSession() 으로 토큰+만료시각 복원해
      카운트다운 이어감(_opStartTimer 분리). dashboard.html·portal.html 둘 다. v1.87.2.
 
+241. (스캔하고 있는데 포탈은 스캔 안 한다고 나옴) 진단: 포탈 '9시간 전'+manager DB 진행중 0 → 도는 스캔
+     없음(포탈이 정답, updated_at 이 9h 전이면 라이브 스캔이면 불가능). 엣지 자원 패널이 완료된 #4 의
+     9시간 전 마지막 표본(PID 31890·CPU 50%·16 thread)을 라이브처럼 출력해 '스캔 중'으로 오해시킴
+     (server 250-275: 비활성 스캔은 라이브 표본 안 뽑고 recorded_latest 그대로). 수정: dashboard 자원
+     렌더에서 scanRunning=(status discovering/sizing)일 때만 스캐너 PID/CPU/RSS/스레드 라이브 표시,
+     아니면 '—'+'스캔 완료 — 스캐너 현재 실행 안 함' 안내. 도는 스캔은 종전대로. dashboard.html. v1.87.3.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

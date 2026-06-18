@@ -3593,6 +3593,9 @@ function render(d) {
 
   // 자원
   const L = rs.latest;
+  // 스캐너 프로세스 값은 '실제로 도는 스캔'일 때만 라이브로 보여준다. 완료/중지 스캔의
+  // 마지막 표본을 라이브처럼 띄우면 "스캔 중"으로 오해된다(상태 배지는 '완료'인데 PID·CPU가 살아있는 듯).
+  const scanRunning = (r.status === "discovering" || r.status === "sizing");
   if (L) {
     const memPct = L.mem_percent || 0;
     $("memPct").textContent = memPct.toFixed(1) + "%";
@@ -3604,18 +3607,20 @@ function render(d) {
     $("cpuPct").textContent = (L.cpu_percent || 0).toFixed(0) + "%";
     $("load1").textContent = (L.load1 || 0).toFixed(2);
 
-    $("scanRss").textContent = fmtBytes(L.scanner_rss);
-    $("scanCpu").textContent = (L.scanner_cpu || 0).toFixed(0) + "%";
+    $("scanRss").textContent = scanRunning ? fmtBytes(L.scanner_rss) : "—";
+    $("scanCpu").textContent = scanRunning ? ((L.scanner_cpu || 0).toFixed(0) + "%") : "—";
     if (r.backend === "du") {
-      $("duRss").textContent = fmtBytes(L.du_rss);
-      $("duRssRow").textContent = fmtBytes(L.du_rss);
-      $("duCpu").textContent = L.du_pid ? ((L.du_cpu || 0).toFixed(0) + "%") : "—";
-      $("duRssNote").textContent = L.du_pid ? ("실행 중 du PID " + L.du_pid) : "현재 du 실행 안 함";
+      $("duRss").textContent = scanRunning ? fmtBytes(L.du_rss) : "—";
+      $("duRssRow").textContent = scanRunning ? fmtBytes(L.du_rss) : "—";
+      $("duCpu").textContent = (scanRunning && L.du_pid) ? ((L.du_cpu || 0).toFixed(0) + "%") : "—";
+      $("duRssNote").textContent = !scanRunning ? "스캔 완료 — 스캐너 현재 실행 안 함(표·차트는 마지막 스캔 기준)"
+        : (L.du_pid ? ("실행 중 du PID " + L.du_pid) : "현재 du 실행 안 함");
     } else {
-      $("duRss").textContent = fmtBytes(L.scanner_rss);
+      $("duRss").textContent = scanRunning ? fmtBytes(L.scanner_rss) : "—";
       $("duRssRow").textContent = "—";
       $("duCpu").textContent = "—";
-      $("duRssNote").textContent = "native 백엔드 — 스캐너 프로세스가 직접 측정(별도 du 없음)";
+      $("duRssNote").textContent = scanRunning ? "native 백엔드 — 스캐너 프로세스가 직접 측정(별도 du 없음)"
+        : "스캔 완료 — 스캐너 현재 실행 안 함(표·차트는 마지막 스캔 기준)";
     }
   }
   $("peakRss").textContent = fmtBytes(rs.peak_du_rss) + " / " + fmtBytes(rs.peak_scanner_rss);
@@ -3624,7 +3629,7 @@ function render(d) {
   $("fsTotal").textContent = fmtBytes(r.fs_total_bytes);
   $("fsUsed").textContent = fmtBytes(r.fs_used_bytes);
   $("fsFree").textContent = fmtBytes(r.fs_free_bytes);
-  $("pid").textContent = r.scanner_pid || "—";
+  $("pid").textContent = (scanRunning && r.scanner_pid) ? r.scanner_pid : "—";
 
   // 병렬 처리(동시 스캔 스레드) — native 백엔드가 한 프로세스에서 여러 디렉터리를
   // 동시에 훑는 장점을 보여준다. 탐색 중엔 '현재 활성/설정' 을 함께 표시.
