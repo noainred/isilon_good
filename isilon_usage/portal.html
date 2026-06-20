@@ -76,13 +76,49 @@
   .phcard .phhead { display:flex; align-items:baseline; gap:8px; margin-bottom:4px; }
   .phcard canvas { width:100%; height:120px; display:block; }
   .dot { display:inline-block; width:9px; height:9px; border-radius:50%; vertical-align:middle; }
-  /* 노드 설정 하위 탭 */
+  /* 설정 하위 탭 */
   .subtabs { display:flex; gap:7px; flex-wrap:wrap; margin-bottom:16px;
     border-bottom:1px solid var(--line); padding-bottom:12px; }
   .stab { background:var(--panel2); color:var(--muted); border:1px solid var(--line);
     border-radius:9px; padding:9px 16px; cursor:pointer; font-weight:650; font-size:13px; }
   .stab:hover { color:var(--text); } .stab.active { background:#16344f; color:#cfe6ff; border-color:#2f6fb0; }
   .subpane { display:none; } .subpane.active { display:block; }
+  /* ── About / 소개 페이지 ── */
+  .about-hero { border-radius:18px; padding:24px 26px; margin-bottom:16px; position:relative; overflow:hidden;
+    background:linear-gradient(135deg,#1b2740 0%, #131a27 52%, #1d1733 100%);
+    border:1px solid #2c3a57; box-shadow:0 14px 48px rgba(40,80,170,.18); }
+  .about-hero-row { display:flex; align-items:center; gap:18px; }
+  .about-icon { width:66px; height:66px; flex:0 0 66px; border-radius:17px; font-size:34px;
+    display:flex; align-items:center; justify-content:center;
+    background:linear-gradient(135deg,#4f9cff,#38d39f); box-shadow:0 8px 24px rgba(79,156,255,.45); }
+  .about-title { font-size:30px; font-weight:800; letter-spacing:.4px; line-height:1.15;
+    background:linear-gradient(90deg,#dbe7ff,#9fb6e8 70%,#b9a8ff); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .about-tagline { color:var(--muted); font-size:14px; margin-top:4px; }
+  .about-slogan { margin:18px 0 15px; font-size:15px; color:#e3ebf6; }
+  .about-slogan i { color:#86a8ff; font-style:italic; }
+  .about-badges { display:flex; gap:10px; flex-wrap:wrap; }
+  .about-badge { padding:6px 15px; border-radius:10px; font-size:13px; font-weight:700; border:1px solid; }
+  .about-badge.ver { color:#c9b6ff; border-color:#5b4b8a; background:#241d3a; }
+  .about-badge.stack { color:#7fe3d0; border-color:#2f6a5e; background:#143029; }
+  .about-badge.edition { color:#7ee0a8; border-color:#2f6a48; background:#15301f; }
+  .about-2col { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; }
+  .about-label { color:var(--muted); font-size:12px; font-weight:700; letter-spacing:.7px; text-transform:uppercase; margin-bottom:14px; }
+  .about-author-row { display:flex; align-items:center; gap:14px; }
+  .about-avatar { width:50px; height:50px; flex:0 0 50px; border-radius:50%; color:#fff; font-weight:700; font-size:19px;
+    display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#4f9cff,#6f7bff); }
+  .about-author-name { font-size:17px; font-weight:700; }
+  .about-mail { color:var(--accent); text-decoration:none; font-size:14px; }
+  .about-mail:hover { text-decoration:underline; }
+  .about-copy { font-size:27px; font-weight:800; margin-bottom:3px; }
+  .about-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px 30px; }
+  .about-feat { display:flex; gap:12px; align-items:flex-start; }
+  .about-feat .fi { font-size:20px; line-height:1.25; flex:0 0 24px; }
+  .about-feat b { display:block; font-size:14.5px; margin-bottom:3px; color:var(--text); }
+  .about-feat .sub { display:block; line-height:1.5; margin-top:0; }
+  .about-notice { margin-top:4px; border:1px solid #3a3f63; border-left:3px solid var(--accent); border-radius:12px;
+    padding:16px 18px; background:#161a28; color:#c8d2e0; line-height:1.65; }
+  .about-foot { text-align:center; color:var(--muted); font-size:12px; margin:18px 0 4px; letter-spacing:.3px; }
+  @media (max-width:760px){ .about-2col, .about-grid { grid-template-columns:1fr; } .about-title { font-size:24px; } }
 </style>
 </head>
 <body>
@@ -94,7 +130,7 @@
     <button class="navbtn active" data-view="dash">글로벌 대시보드</button>
     <button class="navbtn" data-view="netmon">네트워크 모니터링</button>
     <button class="navbtn" data-view="compare">경로 비교</button>
-    <button class="navbtn" data-view="nodes">노드 설정</button>
+    <button class="navbtn" data-view="nodes">설정</button>
   </nav>
   <span class="sub mono" id="clock" style="min-width:152px; text-align:right;"></span>
   <button id="loginBtn" title="로그인/로그아웃" style="display:none;">🔑 로그인</button>
@@ -201,7 +237,7 @@
   </div>
 </div>
 
-<!-- 노드 설정 -->
+<!-- 설정 -->
 <div class="wrap view" id="view-nodes">
   <div class="subtabs">
     <button class="stab active" data-pane="np-nodes">📋 노드 관리</button>
@@ -209,6 +245,7 @@
     <button class="stab" data-pane="np-upgrade">⬆ 자동 업그레이드</button>
     <button class="stab" data-pane="np-monitor">📈 모니터링 · 백업</button>
     <button class="stab" data-pane="np-general">⚙ 일반</button>
+    <button class="stab" data-pane="np-about">ℹ️ About</button>
   </div>
 
   <!-- 새 카테고리 패널 — 카드는 아래 JS(카드 재배치)가 종류별로 옮겨 담는다 -->
@@ -217,7 +254,7 @@
   <div class="subpane" id="np-general">
     <div class="card" style="margin-bottom:14px;">
       <h2>🧭 상단 메뉴 표시</h2>
-      <div class="sub" style="margin-bottom:8px;">상단 네비게이션에 보여줄 메뉴를 고릅니다. 체크 해제하면 숨겨집니다(‘노드 설정’은 항상 표시).</div>
+      <div class="sub" style="margin-bottom:8px;">상단 네비게이션에 보여줄 메뉴를 고릅니다. 체크 해제하면 숨겨집니다(‘설정’은 항상 표시).</div>
       <div id="navMenuBox" style="display:flex; gap:18px; flex-wrap:wrap; align-items:center;"></div>
       <span class="sub" id="navMenuMsg" style="display:block; margin-top:6px;"></span>
     </div>
@@ -613,6 +650,65 @@
     </div>
   </div>
   </div>
+
+  <div class="subpane" id="np-about">
+    <div class="about-hero">
+      <div class="about-hero-row">
+        <div class="about-icon">📦</div>
+        <div>
+          <div class="about-title">Isilon Global Usage Portal</div>
+          <div class="about-tagline">The Davinci Platform · 전세계 분산 아이실론 사용량 통합 관제</div>
+        </div>
+      </div>
+      <div class="about-slogan">⭐ <b>전세계 최고의 NAS 사용량 관리 솔루션</b> · <i>World's Best Isilon Usage Management Solution</i></div>
+      <div class="about-badges">
+        <span class="about-badge ver" id="aboutVer">v—</span>
+        <span class="about-badge stack">Python · Vanilla JS</span>
+        <span class="about-badge edition">Offline · Air-gapped Edition</span>
+      </div>
+    </div>
+
+    <div class="about-2col">
+      <div class="card">
+        <div class="about-label">저작자 · AUTHOR</div>
+        <div class="about-author-row">
+          <div class="about-avatar">박</div>
+          <div>
+            <div class="about-author-name">박준호 <span class="sub" style="font-weight:400;">(Park Junho)</span></div>
+            <a class="about-mail" href="mailto:noainred@lgcns.com">noainred@lgcns.com</a>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="about-label">저작권 · COPYRIGHT</div>
+        <div class="about-copy">© 2026 박준호</div>
+        <div class="sub">All rights reserved.</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px;">
+      <div class="about-label">주요 기능 · KEY FEATURES</div>
+      <div class="about-grid">
+        <div class="about-feat"><span class="fi">🌐</span><div><b>글로벌 사용량 통합 관제</b><span class="sub">전세계 분산 노드의 루트·용량·파일시스템·스캔을 단일 화면에서 집계</span></div></div>
+        <div class="about-feat"><span class="fi">🗺️</span><div><b>지역·노드 롤업 · 랭킹</b><span class="sub">지역별 요약, 노드 온라인 상태, 용량 큰 루트/노드 순위</span></div></div>
+        <div class="about-feat"><span class="fi">🧭</span><div><b>초대용량 멀티프로세스 스캔</b><span class="sub">pscan 으로 GIL 우회 — 코어 수만큼 선형 가속(수억 파일 대응)</span></div></div>
+        <div class="about-feat"><span class="fi">📊</span><div><b>분석 리포트</b><span class="sub">파일 나이·소유자·확장자·최대 파일 Top·용량 소진 예측</span></div></div>
+        <div class="about-feat"><span class="fi">💬</span><div><b>자연어 물어보기</b><span class="sub">규칙 기반 + 로컬 LLM(Ollama 등) — 숫자는 결정적 계산, 데이터 외부 전송 없음</span></div></div>
+        <div class="about-feat"><span class="fi">🗄️</span><div><b>스토리지 어레이 연동</b><span class="sub">Isilon OneFS·PowerStore·Unity 등 네이티브 API 로 용량·상태 집계</span></div></div>
+        <div class="about-feat"><span class="fi">🛰️</span><div><b>분산 수집 · 자동 배포</b><span class="sub">엣지 에이전트 SSH 자동 설치/원격 업그레이드, 중앙 집계</span></div></div>
+        <div class="about-feat"><span class="fi">⏰</span><div><b>예약 · 반복 스캔 · 알림</b><span class="sub">캘린더/간격 예약, 완료·오류 웹훅·메일 알림, 반복 자동 재시작</span></div></div>
+        <div class="about-feat"><span class="fi">📦</span><div><b>오프라인 설치 · 에어갭</b><span class="sub">인터넷 차단 폐쇄망 배포, 릴리스 SHA-256 검증, 원격 업그레이드</span></div></div>
+        <div class="about-feat"><span class="fi">🔒</span><div><b>보안 · 감사 · 네트워크 점검</b><span class="sub">작업 보호 비밀번호·읽기전용·감사 로그, 노드 Ping·응답시간(1년 누적)</span></div></div>
+      </div>
+    </div>
+
+    <div class="about-notice">
+      본 소프트웨어 <b>Isilon Global Usage Portal</b> 의 모든 저작권은 저작권자 <b>박준호</b> 에게 있습니다. 저작권자의 사전 서면 동의 없이 본 프로그램의 전부 또는 일부를 무단으로 복제·배포·수정·역설계할 수 없습니다.
+      <div class="sub" style="margin-top:8px; font-style:italic;">Copyright © 2026 박준호 (Park Junho). All rights reserved. Unauthorized reproduction or distribution is prohibited.</div>
+    </div>
+    <div class="about-foot">Made with ❤ for global Isilon operations · 2026</div>
+  </div>
+
   <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--line); text-align:center; font-size:11.5px; color:var(--muted); letter-spacing:.4px;">
     ✦ Crafted with care by <b style="color:#cfe6ff; font-weight:800; letter-spacing:.6px; text-shadow:0 0 10px rgba(124,196,255,.45);">JunHo&nbsp;Park</b> ✦ <span style="opacity:.6;">© 2026</span>
   </div>
@@ -658,7 +754,7 @@ function canMutate(){ return !_opRequired || (!!_opToken() && _opLeft()>0); }
 function updateLoginUI(){
   const ro=_opRequired && !canMutate();
   const b=$("roBanner"); if(b) b.style.display=ro?"":"none";
-  // 비밀번호 설정 + 비로그인이면 '노드 설정'(관리) 탭을 아예 숨기고, 그 화면이면 대시보드로
+  // 비밀번호 설정 + 비로그인이면 '설정'(관리) 탭을 아예 숨기고, 그 화면이면 대시보드로
   const nodesBtn=document.querySelector('.navbtn[data-view="nodes"]');
   if(nodesBtn) nodesBtn.style.display=ro?"none":"";
   if(ro && $("view-nodes") && $("view-nodes").classList.contains("active")) show("dash");
@@ -724,6 +820,7 @@ async function editPortalTitle(){
 async function loadAuth(){
   try{ const j=await (await _origFetch("/api/portal/auth",{cache:"no-store"})).json();
     _opRequired=!!j.op_required;
+    if($("aboutVer") && j.version) $("aboutVer").textContent = "v"+j.version;   // About 버전 배지
     applyPortalTitle(j.portal_title, j.portal_subtitle);
     applyNavHidden(j.nav_hidden); renderNavMenu(j.nav_hidden);   // 상단 메뉴 표시 적용 + 선택 UI
     if(!window._updChecked){ window._updChecked=true; if(j.show_update_popup) checkUpdatePopup(j.version); }   // 업그레이드 후 첫 접속 안내(설정 ON일 때만)
@@ -874,7 +971,7 @@ function show(v){ if(v==="nodes" && _opRequired && !canMutate()) v="dash";   // 
   if(v==="netmon") netmonStart(); else netmonStop();
   document.querySelectorAll(".navbtn").forEach(b=>b.classList.toggle("active", b.dataset.view===v)); }
 document.querySelectorAll(".navbtn").forEach(b=>b.addEventListener("click",()=>show(b.dataset.view)));
-// 노드 설정 하위 탭(설치·구성 / 업그레이드 / 노드 관리 / 보안·감사)
+// 설정 하위 탭(설치·구성 / 업그레이드 / 노드 관리 / 보안·감사)
 function showSub(id){
   document.querySelectorAll("#view-nodes .subpane").forEach(p=>p.classList.toggle("active", p.id===id));
   document.querySelectorAll("#view-nodes .stab").forEach(b=>b.classList.toggle("active", b.dataset.pane===id));
@@ -893,8 +990,8 @@ document.querySelectorAll("#view-nodes .stab").forEach(b=>b.addEventListener("cl
   if(g&&t) g.insertBefore(t, g.firstElementChild);   // 포탈 제목을 '상단 메뉴' 카드 위로
 })();
 
-// 상단 메뉴 표시 선택 — '노드 설정'은 잠금 방지를 위해 항상 표시.
-const NAV_LABELS={dash:"글로벌 대시보드", netmon:"네트워크 모니터링", compare:"경로 비교", nodes:"노드 설정"};
+// 상단 메뉴 표시 선택 — '설정'은 잠금 방지를 위해 항상 표시.
+const NAV_LABELS={dash:"글로벌 대시보드", netmon:"네트워크 모니터링", compare:"경로 비교", nodes:"설정"};
 function applyNavHidden(hidden){
   const hset=new Set(hidden||[]);
   document.querySelectorAll(".navbtn").forEach(b=>{
@@ -1569,7 +1666,7 @@ function renderCompare(j){
       <td class="num">${pct.toFixed(0)}%</td>
       <td>${drift?'<span class="badge b-offline">드리프트 ⚠</span>':'<span class="badge b-online">정상</span>'}</td></tr>`;
   }).join("") : '<tr><td colspan="6" class="sub">등록된 노드가 없습니다.</td></tr>';
-  $("cmpNote").textContent = `${found.length}/${all.length} 노드에서 발견 · ‘최대 대비’ 85% 미만이면 드리프트(복제 지연/누락 의심). 마운트 접두어가 다른 노드는 ‘노드 설정’의 경로 별칭으로 매핑하세요.`;
+  $("cmpNote").textContent = `${found.length}/${all.length} 노드에서 발견 · ‘최대 대비’ 85% 미만이면 드리프트(복제 지연/누락 의심). 마운트 접두어가 다른 노드는 ‘설정’의 경로 별칭으로 매핑하세요.`;
 }
 function renderMatrix(j){
   const nodes=j.nodes||[], kids=j.children||[];

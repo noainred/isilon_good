@@ -469,7 +469,7 @@ class PortalController:
                     pass
                 out["portal_title"] = str(s.get("portal_title") or "").strip()
                 out["portal_subtitle"] = str(s.get("portal_subtitle") or "").strip()
-                # 상단 메뉴 숨김 목록('nodes'=노드 설정은 잠금 방지를 위해 숨길 수 없음)
+                # 상단 메뉴 숨김 목록('nodes'=설정은 잠금 방지를 위해 숨길 수 없음)
                 out["nav_hidden"] = [v for v in (s.get("nav_hidden") or [])
                                      if v in ("dash", "netmon", "compare")]
                 out["export_token"] = str(s.get("export_token") or "").strip()
@@ -512,7 +512,7 @@ class PortalController:
                 "nav_hidden": self.settings.get("nav_hidden") or []}
 
     def set_nav_hidden(self, items) -> dict:
-        """상단에 숨길 메뉴 목록을 저장한다('nodes'=노드 설정은 잠금 방지로 숨길 수 없음)."""
+        """상단에 숨길 메뉴 목록을 저장한다('nodes'=설정은 잠금 방지로 숨길 수 없음)."""
         hidden = [v for v in (items or []) if v in ("dash", "netmon", "compare")]
         self.settings["nav_hidden"] = hidden
         self._save_settings()
@@ -942,7 +942,7 @@ class PortalController:
             host = urlparse(n["url"]).hostname or ""
             if not host:
                 return {"id": n["id"], "ok": False,
-                        "reason": "노드 URL 에서 host 를 못 읽음(노드 설정의 url 확인)"}
+                        "reason": "노드 URL 에서 host 를 못 읽음(설정의 url 확인)"}
             res = self._ssh_run({"host": host, "ssh_user": user,
                                  "ssh_password": password, "ssh_port": port}, script)
             if res.get("ok"):

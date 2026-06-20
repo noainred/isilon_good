@@ -788,4 +788,12 @@
      팝업(openThroughputPopup)=오버레이 모달, /api/troubleshoot/throughput?bucket=3600&max=72 재사용해
      시간대별(1h) 막대 표 + 합계(표본 24h 보관 안내). dashboard.html. v1.90.0.
 
+249. (메뉴의 노드 설정을 설정으로 변경) portal.html·portal.py 의 ‘노드 설정’ 전부 ‘설정’으로 통일
+     (nav 라벨·NAV_LABELS·설명문구·안내 메시지·주석). view 식별자(nodes)는 유지.
+
+250. (참고 이미지로 about 자료 멋있게 만들어줘 — Nexus/VMware 포탈 About 디자인) 포탈 ‘설정’에 ℹ️ About
+     서브탭 추가: about CSS(.about-*) — 그라데이션 히어로(아이콘·타이틀 그라데이션 텍스트·배지),
+     저작자/저작권 2열 카드, 주요기능 2열 그리드(10개·isilon 실제 기능), 저작권 고지+푸터. 버전 배지는
+     loadAuth 의 j.version 으로 자동. 저자 박준호/©2026(기존 크레딧 통일). 포탈만(엣지 미적용, 제안). v1.91.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
