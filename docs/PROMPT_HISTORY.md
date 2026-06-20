@@ -807,4 +807,11 @@
      textContent 는 비대상). ③settings.py·portal.py 저장 시 chmod 0600(검증 0o600). ④README·INSTALL
      상단에 배포 전제(신뢰망·TLS프록시·작업비번·mount-base/lock-settings) 명문화. 테스트14·ruff 통과. v1.91.1.
 
+253. (시간당 처리량 보여줘 → 노드 표 아래 법인별로 + 클릭하면 최근 1m/10m/30m/1h/10h/1d → 처리량 기록
+     DB 영구 저장) 포탈에 throughput_history.db(throughput_samples) 추가 — _sync_one 에서 노드별 누적
+     scanned_bytes·files 를 '값 바뀔 때만' 적재(영구·프루닝 없음). throughput_windows(): 라이브
+     overview 로 since_start(시작~지금 평균), 영구 DB 시계열에서 윈도우별 '구간 증가분' 합산(리셋=음수
+     제외). GET /api/portal/throughput. 프론트: view-dash 노드표 아래 '법인별 시간당 처리량' 카드(막대+
+     since_start), 행 클릭 → 1분~1일 윈도우 펼침. 백업목록·테스트(윈도우 합산 검증) 추가. v1.92.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

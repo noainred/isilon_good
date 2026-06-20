@@ -61,6 +61,10 @@ def ping_history_path(data_dir: str) -> str:
     return os.path.join(data_dir, "ping_history.db")
 
 
+def throughput_history_path(data_dir: str) -> str:
+    return os.path.join(data_dir, "throughput_history.db")
+
+
 def sanitize_node(raw: dict) -> Optional[dict]:
     """노드 1건을 보정한다(필수: id, url). 잘못되면 None."""
     if not isinstance(raw, dict):
@@ -417,6 +421,8 @@ class PortalController:
             ttl=lambda: float(self.settings.get("op_ttl_minutes", 30) or 30) * 60)
         self._last_upgrade_check = 0.0
         self._init_ping_db()
+        self._init_throughput_db()
+        self._thru_last = {}      # id -> 마지막 기록한 scanned_bytes(값 바뀔 때만 적재)
         self._cache = {}          # id -> {online, ts, version, hostname, overall, error}
         self._inflight = set()
         self._lock = threading.RLock()
@@ -621,7 +627,8 @@ class PortalController:
                 "release_available": bool(arc), "release_reason": reason}
 
     # --- 백업: 포탈 설정 + 노드 목록(+감사/핑) 을 tar.gz 하나로 ---
-    _BACKUP_FILES = ("portal_settings.json", "portal_nodes.json", "audit.log", "ping_history.db")
+    _BACKUP_FILES = ("portal_settings.json", "portal_nodes.json", "audit.log",
+                     "ping_history.db", "throughput_history.db")
 
     def make_backup_bytes(self):
         """포탈 설정·노드 목록(+감사/핑)을 tar.gz 로 묶어 (bytes, filename) 반환.
@@ -1485,6 +1492,7 @@ class PortalController:
                     n["last_poll"] = time.time()
                     n["last_status"] = "online"
                     n["last_error"] = ""
+                self._record_throughput(nid, meta.get("overall") or {})   # 처리량 시계열(영구)
             except Exception as e:  # noqa: BLE001
                 emsg = _poll_error_msg(e)
                 with self._lock:
@@ -1783,6 +1791,107 @@ class PortalController:
                 conn.close()
         except Exception:  # noqa: BLE001
             pass
+
+    # --- 처리량 히스토리(노드별 scanned_bytes 시계열 · DB 영구 저장 · 프루닝 없음) ---
+    def _init_throughput_db(self) -> None:
+        try:
+            conn = dbmod.connect(throughput_history_path(self.data_dir))
+            try:
+                conn.execute("CREATE TABLE IF NOT EXISTS throughput_samples ("
+                             "ts INTEGER NOT NULL, node_id TEXT NOT NULL, "
+                             "scanned_bytes INTEGER NOT NULL DEFAULT 0, "
+                             "files INTEGER NOT NULL DEFAULT 0)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_thru_node_ts "
+                             "ON throughput_samples(node_id, ts)")
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _record_throughput(self, nid: str, overall: dict) -> None:
+        """노드의 현재 누적 조사량(scanned_bytes)·파일 수를 DB에 영구 적재.
+
+        값이 바뀔 때만 기록한다(유휴 노드는 행이 안 쌓임 → 용량 절약). 프루닝 없음.
+        """
+        try:
+            scanned = int((overall or {}).get("total_scanned_bytes") or 0)
+            files = sum(int(r.get("total_files") or 0) for r in ((overall or {}).get("roots") or []))
+        except (TypeError, ValueError, AttributeError):
+            return
+        if self._thru_last.get(nid) == scanned:   # 변화 없으면 적재 안 함
+            return
+        self._thru_last[nid] = scanned
+        try:
+            conn = dbmod.connect(throughput_history_path(self.data_dir))
+            try:
+                conn.execute("INSERT INTO throughput_samples(ts,node_id,scanned_bytes,files) "
+                             "VALUES (?,?,?,?)", (int(time.time()), nid, scanned, files))
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # 윈도우(초): 1분·10분·30분·1시간·10시간·1일
+    THRU_WINDOWS = (60, 600, 1800, 3600, 36000, 86400)
+
+    def throughput_windows(self) -> dict:
+        """노드(법인)별 시간당 처리량 + 윈도우별(최근 1분~1일) 처리량.
+
+        헤드라인(since_start)은 라이브 overview(시작~지금 평균), 윈도우는 영구 DB의
+        scanned_bytes 시계열에서 '구간 내 증가분'을 합산(스캔 재시작/리셋은 음수라 무시).
+        """
+        now = time.time()
+        # 1) 라이브: 노드별 누적 조사량 + 진행 중 스캔 시작시각
+        live = {}
+        for n in (self.overview().get("nodes") or []):
+            roots = n.get("roots") or []
+            scanned = sum(int(r.get("scanned_bytes") or 0) for r in roots)
+            starts = [r.get("started_at") for r in roots
+                      if r.get("status") in ("discovering", "sizing") and r.get("started_at")]
+            live[n["id"]] = {"region": n.get("region"), "hostname": n.get("hostname"),
+                             "scanned": scanned, "start": (min(starts) if starts else None),
+                             "scanning": bool(starts)}
+        # 2) 히스토리: 최근 1일치 샘플(노드별)
+        by_node = {}
+        try:
+            conn = dbmod.connect(throughput_history_path(self.data_dir))
+            try:
+                cur = conn.execute(
+                    "SELECT node_id, ts, scanned_bytes, files FROM throughput_samples "
+                    "WHERE ts >= ? ORDER BY node_id, ts", (int(now) - max(self.THRU_WINDOWS) - 120,))
+                for nid, ts, sb, fl in cur.fetchall():
+                    by_node.setdefault(nid, []).append((ts, sb, fl))
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001
+            by_node = {}
+        out = []
+        for nid in {x["id"] for x in list(self.nodes)}:
+            lv = live.get(nid, {})
+            samples = by_node.get(nid, [])
+            wins = {}
+            for w in self.THRU_WINDOWS:
+                cutoff = now - w
+                db = df = 0
+                for i in range(1, len(samples)):
+                    (t1, b1, f1), (t2, b2, f2) = samples[i - 1], samples[i]
+                    if t2 >= cutoff:                 # 구간 내 증가분만(리셋=음수는 제외)
+                        if b2 > b1:
+                            db += b2 - b1
+                        if f2 > f1:
+                            df += f2 - f1
+                wins[str(w)] = {"bytes": db, "files": df,
+                                "bph": db / w * 3600.0, "fph": df / w * 3600.0}
+            ss = None
+            if lv.get("start") and lv.get("scanned"):
+                ss = lv["scanned"] / max(1.0, now - lv["start"]) * 3600.0
+            out.append({"id": nid, "region": lv.get("region") or "",
+                        "hostname": lv.get("hostname") or "", "scanning": lv.get("scanning", False),
+                        "since_start_bph": ss, "win": wins})
+        out.sort(key=lambda x: -(x["since_start_bph"] or 0))
+        return {"ok": True, "now": now, "windows": list(self.THRU_WINDOWS), "nodes": out}
 
     def _record_ping(self, results: list) -> None:
         rows = [(int(time.time()), r["id"], r.get("latency_ms"), 1 if r.get("online") else 0)
@@ -2299,6 +2408,9 @@ class PortalHandler(BaseHTTPRequestHandler):
             if path == "/api/portal/ask":      # 자연어 질의응답(읽기 전용)
                 q = (parse_qs(urlparse(self.path).query).get("q", [""])[0] or "").strip()
                 self._send_json(c.ask(q))
+                return
+            if path == "/api/portal/throughput":   # 법인별 시간당 처리량 + 윈도우별(영구 DB)
+                self._send_json(c.throughput_windows())
                 return
             if path == "/api/portal/ping":
                 self._send_json(c.ping_nodes())

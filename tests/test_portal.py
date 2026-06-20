@@ -212,6 +212,30 @@ def main() -> int:
         ad = pc.ask("제일 큰 디렉터리?")
         assert ad["intent"] == "top_dirs" and "노드" in ad["answer"], ad
 
+        # 6b-3) 법인별 처리량 윈도우 — DB 영구 시계열에서 '구간 내 증가분' 합산
+        from isilon_usage import db as dbmod
+        nid = pc.nodes[0]["id"]
+        now = int(time.time())
+        tconn = dbmod.connect(portalmod.throughput_history_path(portal_data))
+        try:
+            tconn.execute("DELETE FROM throughput_samples WHERE node_id=?", (nid,))  # 실제 sync 샘플 제거
+            tconn.executemany(
+                "INSERT INTO throughput_samples(ts,node_id,scanned_bytes,files) VALUES(?,?,?,?)",
+                [(now - 7000, nid, 1000, 10), (now - 1700, nid, 3000, 30),
+                 (now - 90, nid, 5000, 50), (now - 20, nid, 6000, 60)])
+            tconn.commit()
+        finally:
+            tconn.close()
+        tw = pc.throughput_windows()
+        assert tw["ok"], tw
+        row = next((x for x in tw["nodes"] if x["id"] == nid), None)
+        assert row is not None, tw["nodes"]
+        assert row["win"]["60"]["bytes"] == 1000, row["win"]["60"]      # 최근 1분: +1000
+        assert row["win"]["600"]["bytes"] == 3000, row["win"]["600"]    # 최근 10분: +3000
+        assert row["win"]["1800"]["bytes"] == 5000, row["win"]["1800"]  # 최근 30분: +5000
+        assert row["win"]["3600"]["bytes"] == 5000, row["win"]["3600"]  # 최근 1시간: +5000
+        print("[throughput] OK  법인별 윈도우(1분/10분/30분/1시간) 처리량 합산")
+
         # 6c) 노드 응답시간(핑) — 로컬 엣지라 빠르게 응답
         pg = pc.ping_nodes()
         assert pg["ok"] and pg["results"], pg

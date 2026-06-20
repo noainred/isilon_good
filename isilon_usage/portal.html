@@ -192,6 +192,12 @@
     </table>
     <div class="sub" id="dashNote" style="margin-top:8px;"></div>
   </div>
+
+  <div class="card" id="thruCard" style="margin-top:14px;">
+    <h2>📊 법인별 시간당 처리량 <span class="sub" style="float:right; font-weight:400;">행 클릭 = 최근 1분·10분·30분·1시간·10시간·1일 처리량</span></h2>
+    <div class="sub" style="margin:-4px 0 8px;">막대·수치는 <b>조사 용량</b> 기준 시간당 처리량(시작~지금 평균). 윈도우별 값은 포탈에 <b>영구 저장</b>되는 처리량 기록에서 계산합니다(배포 직후엔 짧은 윈도우부터 채워짐).</div>
+    <div id="thruRows"><div class="sub">불러오는 중…</div></div>
+  </div>
 </div>
 
 <!-- 네트워크 모니터링 -->
@@ -2211,9 +2217,48 @@ if($("ugPushAllSsh")) $("ugPushAllSsh").addEventListener("click", async()=>{
 });
 pLoadUpgradeCfg();
 restoreOpSession();   // 새로고침/재접속 시 살아있는 로그인 세션 복원(첫 렌더 전에)
+// ── 📊 법인별 시간당 처리량(윈도우별, 영구 DB) ──
+let _thruData=null; const _thruOpen={};
+const _THRU_LABEL={"60":"최근 1분","600":"최근 10분","1800":"최근 30분","3600":"최근 1시간","36000":"최근 10시간","86400":"최근 1일"};
+function _bph(v){ return (v==null)?"—":(fmtBytes(v)+"/h"); }
+async function loadThroughput(){
+  try{ const j=await (await fetch("/api/portal/throughput",{cache:"no-store"})).json();
+    if(j&&j.ok){ _thruData=j; renderThroughput(); } }catch(e){}
+}
+function renderThroughput(){
+  const box=$("thruRows"); if(!box||!_thruData) return;
+  const nodes=_thruData.nodes||[], wins=_thruData.windows||[];
+  if(!nodes.length){ box.innerHTML='<div class="sub">등록된 노드가 없습니다.</div>'; return; }
+  const peak=Math.max(1, ...nodes.map(n=>n.since_start_bph||0));
+  box.innerHTML=nodes.map(n=>{
+    const bph=n.since_start_bph||0, pct=Math.min(100, bph/peak*100), open=_thruOpen[n.id];
+    const run=n.scanning?'':' <span class="sub">(유휴)</span>';
+    const head=`<div class="thru-row" data-tid="${escAttr(n.id)}" style="display:flex; align-items:center; gap:10px; padding:6px 0; cursor:pointer; border-bottom:1px solid var(--line);">
+        <div style="width:150px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"><b>${escAttr(n.id)}</b> <span class="sub">${escAttr(n.region||"")}</span>${run}</div>
+        <div style="flex:1; min-width:80px;"><div class="capbar" style="height:9px; border-radius:6px;"><i style="width:${pct}%"></i></div></div>
+        <div style="width:120px; text-align:right;"><b>${_bph(n.since_start_bph)}</b></div>
+        <div style="width:16px; color:var(--muted);">${open?"▾":"▸"}</div></div>`;
+    let detail="";
+    if(open){
+      detail='<div style="padding:6px 0 12px 14px;">'+wins.map(w=>{
+        const k=String(w), d=(n.win||{})[k]||{};
+        return `<div style="display:flex; gap:10px; align-items:center; padding:2px 0; font-size:12.5px;">
+          <span class="sub" style="width:84px;">${_THRU_LABEL[k]||k+"s"}</span>
+          <span style="width:120px; text-align:right;"><b>${fmtBytes(d.bytes||0)}</b> <span class="sub">처리</span></span>
+          <span style="width:110px; text-align:right; color:#7fc8ff;">${_bph(d.bph)}</span>
+          <span class="sub" style="white-space:nowrap;">· ${fmtNum(Math.round(d.files||0))} 파일</span></div>`;
+      }).join("")+'</div>';
+    }
+    return head+detail;
+  }).join("");
+  box.querySelectorAll(".thru-row").forEach(r=>r.addEventListener("click",()=>{
+    const id=r.dataset.tid; _thruOpen[id]=!_thruOpen[id]; renderThroughput(); }));
+}
+
 loadAuth();
-loadOverview(); loadNodes();
+loadOverview(); loadNodes(); loadThroughput();
 setInterval(()=>{ loadAuth(); loadOverview(); loadNodes(); }, 5000);
+setInterval(loadThroughput, 20000);
 </script>
 </body>
 </html>
