@@ -796,4 +796,15 @@
      저작자/저작권 2열 카드, 주요기능 2열 그리드(10개·isilon 실제 기능), 저작권 고지+푸터. 버전 배지는
      loadAuth 의 j.version 으로 자동. 저자 박준호/©2026(기존 크레딧 통일). 포탈만(엣지 미적용, 제안). v1.91.0.
 
+251. (대외 배포 완성도 분석 — 사실대로) 진단: ①라이선스 모순(LICENSE=MIT vs 앱=All rights reserved/역설계
+     금지) ②파일명/경로 저장형 XSS(path·name·owner·ext 미이스케이프) ③시크릿 평문+권한 ④평문HTTP·
+     0.0.0.0·아웃바운드 verify_ssl=False(문서화된 설계). 강점: PBKDF2+잠금+토큰, subprocess 인자리스트+
+     shlex.quote, 테스트14·정직한 SECURITY.md.
+
+252. (1,2,3,4 진행) ①독점으로 통일: LICENSE 독점 재작성·setup.cfg(license/classifier)·README·저자
+     noainred→박준호. ②XSS: escHtml(dashboard)/escAttr(portal) 도입해 트리·드릴다운·검색·오류·최대파일·
+     리포트(소유자/확장자)·개요/노드표·지역카드·경로비교 등 신뢰불가 필드 전부 이스케이프(confirm/
+     textContent 는 비대상). ③settings.py·portal.py 저장 시 chmod 0600(검증 0o600). ④README·INSTALL
+     상단에 배포 전제(신뢰망·TLS프록시·작업비번·mount-base/lock-settings) 명문화. 테스트14·ruff 통과. v1.91.1.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

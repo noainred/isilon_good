@@ -1,6 +1,11 @@
 # Isilon 디렉터리 사용량 스캐너
 
-**[🚀 처음 시작하기](docs/GETTING_STARTED.md)** · [📦 설치 매뉴얼](docs/INSTALL.md) · [📄 솔루션 제품소개(A4)](docs/SOLUTION_BRIEF.html) · [📣 영업 자료](sales/) · [사용 설명서](docs/USER_GUIDE.md) · [변경 이력](CHANGELOG.md) · [보안 가이드](SECURITY.md) · [성능·최적화](docs/PERFORMANCE.md) · [서비스 실행(systemd)](docs/SERVICE.md) · [화면이 멈췄을 때 — 프로세스 확인/복구](docs/TROUBLESHOOTING-frozen-dashboard.md) · Python 3.6+ · [MIT License](LICENSE)
+**[🚀 처음 시작하기](docs/GETTING_STARTED.md)** · [📦 설치 매뉴얼](docs/INSTALL.md) · [📄 솔루션 제품소개(A4)](docs/SOLUTION_BRIEF.html) · [📣 영업 자료](sales/) · [사용 설명서](docs/USER_GUIDE.md) · [변경 이력](CHANGELOG.md) · [보안 가이드](SECURITY.md) · [성능·최적화](docs/PERFORMANCE.md) · [서비스 실행(systemd)](docs/SERVICE.md) · [화면이 멈췄을 때 — 프로세스 확인/복구](docs/TROUBLESHOOTING-frozen-dashboard.md) · Python 3.6+ · [라이선스: 독점 · All Rights Reserved](LICENSE)
+
+> ⚠️ **배포 전 필수 전제(보안).** 이 도구는 **신뢰망에서 운영자가 직접 운영**하는 내부 관리 도구입니다.
+> 기본은 **평문 HTTP·다중 사용자 인증 없음**이므로, 대외/운영 배포 시 **반드시 ① 신뢰망 한정(인터넷
+> 비노출), ② TLS 리버스 프록시 뒤에 배치, ③ 작업 보호 비밀번호 설정, ④ `--mount-base`/`--lock-settings`
+> 적용**이 필요합니다. 자세한 내용은 **[보안 가이드(SECURITY.md)](SECURITY.md)** 를 먼저 읽으세요.
 
 아이실론(Isilon)처럼 **한 디렉터리에 수천만 개의 파일**이 있는 초대용량 NAS
 에서, 트리 전체에 `du` 를 한 번에 돌리면 메모리를 너무 많이 써서 프로세스가

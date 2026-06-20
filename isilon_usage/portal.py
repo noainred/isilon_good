@@ -497,6 +497,11 @@ class PortalController:
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(self.settings, fh, ensure_ascii=False, indent=2)
         os.replace(tmp, path)
+        # 로그인 비밀번호·enroll 토큰·LLM 키 등이 들어가므로 소유자만 읽도록 제한.
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
 
     def auth_required(self) -> bool:
         return self._auth.required()

@@ -1305,9 +1305,9 @@ function renderPortalDash(){
   if($("capLabel")) $("capLabel").textContent = ft? ("사용 "+fmtBytes(fu)+" / 전체 "+fmtBytes(ft)+" · 여유 "+fmtBytes(ft-fu)) : "(엣지에서 fs 용량 미수집)";
   // 지역 카드(클릭 = 필터 토글)
   $("regions").innerHTML = (j.regions||[]).map(r=>
-    `<div class="regcard${regionFilter===r.region?' active':''}" data-region="${r.region}">
+    `<div class="regcard${regionFilter===r.region?' active':''}" data-region="${escAttr(r.region)}">
        <div class="big" style="font-size:20px">${fmtBytes(r.fs_used_bytes)} <span class="sub" style="font-size:13px; font-weight:400;">/ ${fmtBytes(r.fs_total_bytes)}</span></div>
-       <div class="sub">${r.region} · ${fmtNum(r.storages)} 스토리지${r.fs_total_bytes?` · 사용률 ${(r.fs_used_bytes/r.fs_total_bytes*100).toFixed(1)}%`:""}</div></div>`
+       <div class="sub">${escAttr(r.region)} · ${fmtNum(r.storages)} 스토리지${r.fs_total_bytes?` · 사용률 ${(r.fs_used_bytes/r.fs_total_bytes*100).toFixed(1)}%`:""}</div></div>`
   ).join("") || '<div class="sub">등록된 노드가 없습니다.</div>';
   $("regions").querySelectorAll(".regcard").forEach(c=>c.addEventListener("click",()=>{
     regionFilter=(regionFilter===c.dataset.region)?"":c.dataset.region; renderPortalDash(); }));
@@ -1360,7 +1360,7 @@ function renderPortalDash(){
       const startTxt=(act&&r.started_at)?(" · 시작 "+fmtClock(r.started_at)+" · 진행 "+elapsedSpan(r.started_at, r.updated_at)):"";
       const fsTxt=r.fs_total_bytes?(" of "+fmtBytes(r.fs_total_bytes)+" ("+Math.round((r.fs_used_bytes||0)/r.fs_total_bytes*100)+"%)"):"";
       return `<tr class="rr-${idx}" style="display:none; background:#121a24;"><td></td>
-        <td colspan="8" class="sub mono">📁 ${r.root_path} — 조사 ${fmtBytes(r.scanned_bytes)} · fs ${fmtBytes(r.fs_used_bytes)}${fsTxt} · ${scanProgress(r)}${startTxt}${r.finished_at?(" · 완료 "+ago(r.finished_at)):(r.updated_at?(" · 갱신 "+ago(r.updated_at)):"")}</td></tr>`;
+        <td colspan="8" class="sub mono">📁 ${escAttr(r.root_path)} — 조사 ${fmtBytes(r.scanned_bytes)} · fs ${fmtBytes(r.fs_used_bytes)}${fsTxt} · ${scanProgress(r)}${startTxt}${r.finished_at?(" · 완료 "+ago(r.finished_at)):(r.updated_at?(" · 갱신 "+ago(r.updated_at)):"")}</td></tr>`;
     }).join("");
     const outdated = j.version && n.version && n.version!==j.version;
     const verBadge = n.version
@@ -1374,7 +1374,7 @@ function renderPortalDash(){
     const runLine = rn ? `<div class="sub" style="white-space:nowrap; margin-top:3px;">⏱ ${elapsedSpan(rn.started_at, rn.updated_at)} · 시작 ${fmtClock(rn.started_at)}</div>` : "";
     const loopBadge = n.auto_restart ? ` <span style="color:#ff5c5c; font-weight:700; white-space:nowrap;" title="완료되면 같은 설정으로 자동 재시작(반복) 중">🔁 반복 동작 중</span>` : "";
     return `<tr class="noderow" data-idx="${idx}" style="cursor:pointer;" title="클릭하면 스토리지/어레이 펼침">
-      <td><b>${n.id}</b>${verBadge}${arrBadges}<div class="sub mono">${n.hostname||""}</div></td><td>${n.region||"—"}</td>
+      <td><b>${escAttr(n.id)}</b>${verBadge}${arrBadges}<div class="sub mono">${escAttr(n.hostname||"")}</div></td><td>${escAttr(n.region||"—")}</td>
       <td class="num">▸ ${fmtNum(n.storages)}</td><td class="num">${fmtBytes(n.used_bytes)}</td>
       <td class="num">${fmtBytes(n.fs_used_bytes)}${n.fs_total_bytes?` <span class="sub">${n.fs_used_pct}%</span>`:""}</td>
       <td class="num">${fmtBytes(n.fs_total_bytes)}</td>
@@ -1598,7 +1598,7 @@ $("testBtn").addEventListener("click", async ()=>{
 $("csvFile").addEventListener("change", async (e)=>{
   const f = e.target.files && e.target.files[0]; if(!f) return;
   try { $("csvText").value = await f.text();
-        $("csvMsg").textContent = `파일 ‘${f.name}’ 불러옴 — ‘가져오기’를 누르세요.`; }
+        $("csvMsg").textContent = `파일 ‘${f.name}’ 불러옴 — ‘가져오기’를 누르세요.`; }   // textContent — 이스케이프 불필요
   catch(err){ $("csvMsg").innerHTML = '<span class="err">파일 읽기 실패: '+err+'</span>'; }
 });
 const CSV_SAMPLE = "id,url,region,token,alias_local,alias_logical\n"
@@ -1675,7 +1675,7 @@ function renderMatrix(j){
   $("cmpMBody").innerHTML = kids.map(k=>{
     const present=nodes.map(n=>k.vals[n]).filter(v=>v!==undefined&&v!==null).sort((a,b)=>a-b);
     const med = present.length? present[Math.floor(present.length/2)] : 0;
-    const name = (k.subdir_count>0) ? `<a href="#" class="link cmpdrill" data-name="${k.name}">${k.name}</a>` : k.name;
+    const name = (k.subdir_count>0) ? `<a href="#" class="link cmpdrill" data-name="${escAttr(k.name)}">${escAttr(k.name)}</a>` : escAttr(k.name);
     const cells = nodes.map(n=>{
       const v=k.vals[n];
       if(v===undefined||v===null) return '<td class="num miss">없음</td>';

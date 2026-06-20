@@ -13,6 +13,26 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.91.1] - 2026-06-20
+
+### 보안·법무 (대외 배포 전 하드닝)
+
+- **수정됨 (Security) — 파일명/경로 저장형 XSS 차단.** 스캔한 디렉터리/파일의 **이름·경로·소유자·확장자**
+  (신뢰할 수 없는 입력)를 화면(innerHTML)에 넣을 때 이스케이프하지 않아, NAS 에 `<img onerror=...>`
+  같은 이름의 파일/폴더가 있으면 운영자 브라우저에서 JS 가 실행될 수 있었다. 프론트에 `escHtml`/`escAttr`
+  를 도입해 상위 디렉터리·드릴다운·트리·검색·오류·최대 파일·리포트·개요표·노드표·지역카드·경로비교 등
+  **신뢰 불가 필드를 전부 이스케이프**했다. (`dashboard.html`·`portal.html`)
+- **수정됨 (Security) — 시크릿 파일 권한 0600.** `settings.json`·`portal_settings.json` 에 SMTP·Isilon·
+  PowerStore·api_token·LLM 키 등이 평문으로 들어가므로, 저장 시 **소유자만 읽도록 `0600`** 으로 제한
+  (POSIX). (`settings.py`·`portal.py`)
+- **변경됨 (License) — 라이선스 모순 정정.** `LICENSE` 가 **MIT** 인데 앱 안 문구는 “All rights reserved ·
+  무단 복제·배포·수정·역설계 금지”(독점)로 **상충**했다. 앱의 명시적 독점 문구에 맞춰 **독점 라이선스로
+  통일**(LICENSE 교체, `setup.cfg` license/classifier, README 표기, 저작권자 표기 `noainred`→`박준호`).
+- **문서 (Docs)** — README·INSTALL 상단에 **배포 전 필수 전제**(신뢰망 한정·TLS 리버스 프록시·작업 보호
+  비밀번호·`--mount-base`/`--lock-settings`)를 명문화하고 `SECURITY.md` 로 연결.
+
+---
+
 ## [1.91.0] - 2026-06-20
 
 ### 추가됨 (Added) — 포탈 ‘설정 ▸ ℹ️ About’ 소개·저작권 페이지

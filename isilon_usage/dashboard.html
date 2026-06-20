@@ -1372,6 +1372,12 @@ function fmtBytes(n) {
   return n.toFixed(n >= 100 ? 0 : (n >= 10 ? 1 : 2)) + " " + u[i];
 }
 function fmtNum(n) { return (Number(n) || 0).toLocaleString("ko-KR"); }
+// HTML 이스케이프 — 스캔한 파일/디렉터리 '이름·경로'는 신뢰할 수 없는 입력이므로(파일명에
+// <script> 같은 게 들어올 수 있음) innerHTML 에 넣기 전 반드시 통과시킨다(저장형 XSS 방지).
+function escHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g,
+    c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+}
 function fmtClock(ts) {
   if (!ts) return "—";
   const d = new Date(ts * 1000), p = n => String(n).padStart(2, "0");
@@ -2292,7 +2298,7 @@ async function doBrowse(path, _confirmed) {
     const items = [];
     (j.dirs || []).forEach(d => {
       items.push(`<div class="diritem" data-go="${encodeURIComponent(d.path)}">
-        <span>📁 ${d.name}</span><span class="sub">선택 ▶</span></div>`);
+        <span>📁 ${escHtml(d.name)}</span><span class="sub">선택 ▶</span></div>`);
     });
     list.innerHTML = items.length ? items.join("")
       : '<span class="sub">하위 디렉터리가 없습니다.</span>';
@@ -2435,7 +2441,7 @@ async function startScan() {
           : (j.mount_readonly
             ? ' · <span style="color:var(--ok)">🔒 읽기전용(ro)</span>'
             : ' · <span style="color:var(--warn)">✏ 쓰기가능(rw)</span>');
-        $("startMsg").innerHTML = `<span style="color:var(--ok)">✓ 스캔 #${j.scan_id} 시작됨: ${j.root_path}</span>${roTxt}`;
+        $("startMsg").innerHTML = `<span style="color:var(--ok)">✓ 스캔 #${j.scan_id} 시작됨: ${escHtml(j.root_path)}</span>${roTxt}`;
         selectedScan = j.scan_id; userPicked = true;
         updateStartButton(1);   // 즉시 빨간 "스캔 중…"
       } else {
@@ -2553,7 +2559,7 @@ function renderPieCrumb(sizeBytes) {
     ? ` · <b style="color:#cfe3ff" title="현재 위치의 재귀 사용 용량">${fmtBytes(sizeBytes)}</b>` : "";
   if (!piePath.length) { el.innerHTML = "(루트)" + szTxt; return; }
   el.innerHTML = "🏠 / " + piePath.map((c, i) =>
-    `<a href="#" class="piecrumb" data-i="${i}">${c.name}</a>`).join(" / ") + szTxt;
+    `<a href="#" class="piecrumb" data-i="${i}">${escHtml(c.name)}</a>`).join(" / ") + szTxt;
   el.querySelectorAll("a.piecrumb").forEach(a => a.addEventListener("click", (e) => {
     e.preventDefault();
     piePath = piePath.slice(0, parseInt(a.dataset.i) + 1);
@@ -2685,7 +2691,7 @@ function renderTopCrumb(sizeBytes) {
     ? ` · <b style="color:#cfe3ff" title="현재 위치의 재귀 사용 용량">${fmtBytes(sizeBytes)}</b>` : "";
   if (!topPath.length) { el.innerHTML = "(루트)" + szTxt; return; }
   el.innerHTML = "🏠 / " + topPath.map((c, i) =>
-    `<a href="#" class="topcrumb" data-i="${i}">${c.name}</a>`).join(" / ") + szTxt;
+    `<a href="#" class="topcrumb" data-i="${i}">${escHtml(c.name)}</a>`).join(" / ") + szTxt;
   el.querySelectorAll("a.topcrumb").forEach(a => a.addEventListener("click", (e) => {
     e.preventDefault();
     topPath = topPath.slice(0, parseInt(a.dataset.i) + 1);
@@ -2725,8 +2731,8 @@ function renderTopDirs(j) {
       : `<span style="color:var(--muted)" title="집계 전 임시값(직속 용량만). 스캔 완료 후 하위를 포함한 재귀 용량으로 바뀝니다.">~${fmtBytes(t.own_bytes)}</span>`;
     const canDrill = (t.subdir_count || 0) > 0;
     const nameCell = canDrill
-      ? `<a href="#" class="topdrill" data-i="${i}" title="클릭하면 하위로 들어갑니다: ${t.path}">${t.path}</a>`
-      : `<span title="${t.path}">${t.path}</span>`;
+      ? `<a href="#" class="topdrill" data-i="${i}" title="클릭하면 하위로 들어갑니다: ${escHtml(t.path)}">${escHtml(t.path)}</a>`
+      : `<span title="${escHtml(t.path)}">${escHtml(t.path)}</span>`;
     return `<tr>
       <td class="num">${i + 1}</td>
       <td class="path">${nameCell}</td>
@@ -2770,14 +2776,14 @@ function renderTree(rows) {
     const pct = (sz / parentTotal * 100);
     const canDesc = r.subdir_count > 0;
     const name = canDesc
-      ? `<a href="#" class="tdesc" data-id="${r.id}" data-name="${r.name}">📁 ${r.name}</a>`
-      : `📄 ${r.name}`;
+      ? `<a href="#" class="tdesc" data-id="${r.id}" data-name="${escHtml(r.name)}">📁 ${escHtml(r.name)}</a>`
+      : `📄 ${escHtml(r.name)}`;
     return `<tr><td class="mono" style="max-width:520px; overflow:hidden; text-overflow:ellipsis;">${name}</td>
       <td class="num">${fmtBytes(sz)}</td>
       <td class="num">${pct.toFixed(1)}%</td>
       <td class="num">${fmtNum(r.total_files || r.file_count)}</td>
       <td class="num">${fmtNum(r.subdir_count)}</td>
-      <td><a href="#" class="tdescbtn" data-id="${r.id}" data-name="${r.name}" ${canDesc ? "" : 'style="display:none"'}>열기 ▶</a></td></tr>`;
+      <td><a href="#" class="tdescbtn" data-id="${r.id}" data-name="${escHtml(r.name)}" ${canDesc ? "" : 'style="display:none"'}>열기 ▶</a></td></tr>`;
   }).join("");
   tb.querySelectorAll("a.tdesc, a.tdescbtn").forEach(a => a.addEventListener("click", (e) => {
     e.preventDefault();
@@ -2793,8 +2799,8 @@ async function treeSearch(q) {
     const tb = $("treeBody");
     tb.innerHTML = rows.length ? rows.map(r => {
       const sz = r.total_bytes > 0 ? r.total_bytes : r.own_bytes;
-      return `<tr><td class="mono" style="max-width:560px; overflow:hidden; text-overflow:ellipsis;" title="${r.path}">
-        <a href="#" class="tdesc" data-id="${r.id}" data-name="${r.path}">${r.path}</a></td>
+      return `<tr><td class="mono" style="max-width:560px; overflow:hidden; text-overflow:ellipsis;" title="${escHtml(r.path)}">
+        <a href="#" class="tdesc" data-id="${r.id}" data-name="${escHtml(r.path)}">${escHtml(r.path)}</a></td>
         <td class="num">${fmtBytes(sz)}</td><td class="num">—</td>
         <td class="num">${fmtNum(r.total_files || r.file_count)}</td>
         <td class="num">${fmtNum(r.subdir_count)}</td><td></td></tr>`;
@@ -2841,11 +2847,11 @@ function renderRepTopFiles() {
   const shown = Math.min(repTopShown, tf.length);
   const body = tf.slice(0, shown).map((f, i) =>
     '<tr><td style="padding:2px 8px; text-align:right; color:var(--muted);">' + (i + 1) + '</td>'
-    + '<td class="mono" style="padding:2px 8px; max-width:520px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + f.path + '">' + f.path + '</td>'
+    + '<td class="mono" style="padding:2px 8px; max-width:520px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + escHtml(f.path) + '">' + escHtml(f.path) + '</td>'
     + '<td style="padding:2px 8px; text-align:right;"><b>' + fmtBytes(f.bytes) + '</b></td>'
     + '<td style="padding:2px 8px; white-space:nowrap;">' + (f.mtime ? new Date(f.mtime * 1000).toLocaleDateString("ko-KR") : "—") + '</td>'
     + '<td style="padding:2px 8px; white-space:nowrap;">' + (f.atime ? new Date(f.atime * 1000).toLocaleDateString("ko-KR") : "—") + '</td>'
-    + '<td style="padding:2px 8px;">' + (f.owner || ("uid " + (f.uid != null ? f.uid : "?"))) + '</td></tr>').join("");
+    + '<td style="padding:2px 8px;">' + escHtml(f.owner || ("uid " + (f.uid != null ? f.uid : "?"))) + '</td></tr>').join("");
   const table = '<table style="border-collapse:collapse; width:100%;"><tr style="color:var(--muted)">'
     + '<td style="padding:2px 8px; text-align:right">#</td><td style="padding:2px 8px">파일</td>'
     + '<td style="padding:2px 8px; text-align:right">크기</td><td style="padding:2px 8px">수정</td>'
@@ -2884,8 +2890,8 @@ async function loadReport() {
         an.innerHTML = '마지막 <b>접근</b>(atime) 기준. 마운트의 atime 정책을 확인하지 못했습니다(커널 기본은 보통 relatime). <b>noatime</b>이면 값이 무의미합니다.';
     }
     $("repOwner").innerHTML = _statBarList(j.owners,
-      i => (i.name ? (i.name + ' <span class="sub">(uid ' + i.key + ')</span>') : ("uid " + i.key)), 25);
-    $("repExt").innerHTML = _statBarList(j.extensions, i => i.key, 25);
+      i => (i.name ? (escHtml(i.name) + ' <span class="sub">(uid ' + i.key + ')</span>') : ("uid " + i.key)), 25);
+    $("repExt").innerHTML = _statBarList(j.extensions, i => escHtml(i.key), 25);
     $("repSize").innerHTML = _statBarList(j.sizes, i => i.key, 10);
     // 최대 파일 Top — 표 (‘더 보기’로 더 많은 행 표시)
     _repTopFiles = j.top_files || [];
@@ -2967,7 +2973,7 @@ async function runDiff() {
     $("diffBody").innerHTML = (j.rows||[]).filter(r=>r.delta!==0 || r.files_delta!==0).slice(0,10).map(r => {
       const up = r.delta >= 0, fd = r.files_delta || 0, fu = fd >= 0;
       return `<tr class="fhrow" data-fhpath="${encodeURIComponent(r.path)}" style="cursor:pointer">
-        <td class="mono" title="${r.path}" style="max-width:300px; overflow:hidden; text-overflow:ellipsis;">${r.path}</td>
+        <td class="mono" title="${escHtml(r.path)}" style="max-width:300px; overflow:hidden; text-overflow:ellipsis;">${escHtml(r.path)}</td>
         <td class="num" style="color:${up?'#ff8b8b':'#65e0b4'}">${up?'+':'−'}${fmtBytes(Math.abs(r.delta))}</td>
         <td class="num" style="color:${fd===0?'var(--muted)':(fu?'#ff8b8b':'#65e0b4')}">${fd===0?'0':(fu?'+':'−')+fmtNum(Math.abs(fd))}</td></tr>`;
     }).join("") || '<tr><td colspan="3" class="sub">변화 없음</td></tr>';
@@ -3013,7 +3019,7 @@ async function loadErrors() {
     const errs = j.errors || [];
     $("errCount").textContent = errs.length;
     $("errBody").innerHTML = errs.length ? errs.map(e =>
-      `<tr><td class="mono" style="max-width:520px; overflow:hidden; text-overflow:ellipsis;" title="${e.path}">${e.path}</td><td class="sub">${e.error||""}</td></tr>`
+      `<tr><td class="mono" style="max-width:520px; overflow:hidden; text-overflow:ellipsis;" title="${escHtml(e.path)}">${escHtml(e.path)}</td><td class="sub">${escHtml(e.error||"")}</td></tr>`
     ).join("") : '<tr><td colspan="2" class="sub">오류 없음</td></tr>';
   } catch (e) { /* ignore */ }
 }
@@ -3137,7 +3143,7 @@ function renderHistory(scans) {
       : (fmtDur(dur) + (running ? " <span style='color:var(--warn)'>(진행중)</span>" : ""));
     return `<tr>
       <td><b>#${r.id}</b></td>
-      <td class="path" title="${r.root_path}">${r.root_path}</td>
+      <td class="path" title="${escHtml(r.root_path)}">${escHtml(r.root_path)}</td>
       <td class="sub">${fmtClock(r.started_at)}</td>
       <td class="num">${durTxt}</td>
       <td class="num">${fmtBytes(r.scanned_bytes)}</td>
@@ -3218,8 +3224,8 @@ function renderOverview(j) {
         }
       }
       return `<tr class="ovrow" data-scan="${r.scan_id}" style="cursor:pointer;" title="클릭: 이 스캔 결과를 ‘디렉터리 분석’에서 보기">
-        <td class="path" title="${r.root_path}">${r.root_path}</td>
-        <td>${r.hostname || "—"}</td>
+        <td class="path" title="${escHtml(r.root_path)}">${escHtml(r.root_path)}</td>
+        <td>${escHtml(r.hostname || "—")}</td>
         <td class="num">${fmtBytes(r.scanned_bytes)}</td>
         <td class="num">${fmtBytes(r.fs_used_bytes)}</td>
         <td class="num">${pct.toFixed(1)}%</td>
@@ -3256,7 +3262,7 @@ function renderOverview(j) {
   const scans = j.scans || [];
   sel.innerHTML = scans.map(s => {
     const t = s.started_at ? new Date(s.started_at * 1000).toLocaleString("ko-KR") : "";
-    return `<option value="${s.id}">#${s.id} · ${s.root_path} · ${statusKo[s.status] || s.status} · ${t}</option>`;
+    return `<option value="${s.id}">#${s.id} · ${escHtml(s.root_path)} · ${statusKo[s.status] || s.status} · ${t}</option>`;
   }).join("");
 
   // 사용자가 직접 고르지 않았으면: 이전에 '완료'된 스캔이 있으면 그 데이터(정확한 값)를 기본으로 보여준다.
@@ -3474,7 +3480,7 @@ function renderNas(roots) {
       ? `<button class="nasScan" data-idx="${idx}" style="padding:2px 8px; font-size:11.5px;">지금 스캔</button>`
       : "—";
     return `<tr>
-      <td class="path" title="${row.path}">${tag}${row.path}</td>
+      <td class="path" title="${escHtml(row.path)}">${tag}${escHtml(row.path)}</td>
       <td class="num">${r ? fmtBytes(r.fs_used_bytes) : "—"}</td>
       <td class="num">${usedPct}</td>
       <td class="num">${r ? fmtNum(r.total_files) : "—"}</td>

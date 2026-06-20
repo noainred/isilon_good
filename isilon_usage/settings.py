@@ -396,6 +396,12 @@ def save(data_dir: str, raw: dict) -> dict:
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(s, fh, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
+    # 서비스 자격증명(SMTP·Isilon·PowerStore·api_token·LLM 키)이 평문으로 들어가므로
+    # 소유자만 읽도록 권한을 제한한다(POSIX). Windows 등에서는 무시.
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
     return s
 
 
