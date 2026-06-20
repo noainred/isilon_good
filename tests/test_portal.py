@@ -205,6 +205,13 @@ def main() -> int:
             assert k in node, (k, node)
         assert "fs_total_bytes" in ov["totals"] and ov["totals"]["fs_total_bytes"] >= 0, ov["totals"]
 
+        # 6b-2) 자연어 질의응답(규칙 기반) — 노드 롤업을 공통 형태로 정규화해 답
+        aq = pc.ask("전체 용량 얼마야?")
+        assert aq["ok"] and aq["intent"] == "total" and aq["source"] == "rules", aq
+        # 포탈엔 디렉터리 상세가 없으므로 '노드(엣지)에서' 안내
+        ad = pc.ask("제일 큰 디렉터리?")
+        assert ad["intent"] == "top_dirs" and "노드" in ad["answer"], ad
+
         # 6c) 노드 응답시간(핑) — 로컬 엣지라 빠르게 응답
         pg = pc.ping_nodes()
         assert pg["ok"] and pg["results"], pg

@@ -771,4 +771,12 @@
      CLAUDE.md ‘대화 원칙’에 추가 — Nexus Repository 통합 관리 화면은 isilon_usage 저장소가 아님,
      코드 손대기 전에 “처리할까요?” 먼저 확인. (직전 네트워크 체크 속도 작업은 검색만 하고 중단, 코드 변경 없음.)
 
+246. (문장으로 물어보면 분석해서 대답하는 기능 추가) 합의: 규칙 기반 + 로컬 LLM(하이브리드), 엣지·포탈
+     둘 다. ‘GPU 있어’ → 외부 API가 아니라 사내 GPU 로컬 LLM(OpenAI 호환)이면 폐쇄망 OK. 설계: 단일
+     엔진 ask.py(숫자는 규칙이 결정적 계산=환각 차단, LLM은 같은 facts 로 문장만 다듬는 선택 레이어,
+     실패/미설정시 규칙 폴백). 엣지/포탈이 가진 데이터를 공통 형태(overall+detail)로 정규화해 같은
+     엔진에 투입(복제 금지=일관 정책). 엣지 GET /api/ask?q=&scan=, 포탈 GET /api/portal/ask?q=.
+     설정키 ask_llm_enabled/endpoint/model/key/timeout(키 마스킹). 양쪽 ‘💬 물어보기’ 상자 + 엣지
+     설정▸일반·포탈 노드설정▸계정보안에 LLM 구성 UI. tests/test_ask.py + 엣지/포탈 통합 테스트. v1.89.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

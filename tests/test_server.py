@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -469,6 +470,15 @@ def main() -> int:
         assert rep["owners"] and sum(o["files"] for o in rep["owners"]) == 4, rep["owners"]
         exts = {e["key"]: e["files"] for e in rep["extensions"]}
         assert exts.get(".bin", 0) >= 1, rep["extensions"]   # _make_tree 는 .bin 파일
+
+        # 자연어 질의응답(규칙 기반) — 엔드포인트 배선 + 선택 스캔 상세 반영
+        a1 = c.get(f"/api/ask?q={urllib.parse.quote('전체 용량 얼마야?')}")
+        assert a1["ok"] and a1["source"] == "rules", a1
+        assert a1["intent"] == "total" and a1["answer"], a1
+        a2 = c.get(f"/api/ask?q={urllib.parse.quote('제일 큰 디렉터리?')}&scan={s1}")
+        assert a2["ok"] and a2["intent"] == "top_dirs" and a2["answer"], a2
+        a3 = c.get(f"/api/ask?q={urllib.parse.quote('안녕')}")   # 미매칭 → 도움말
+        assert a3["intent"] == "help" and a3.get("suggestions"), a3
 
         # 드릴다운: 루트 → 자식
         ch = c.get(f"/api/children?scan={s1}")

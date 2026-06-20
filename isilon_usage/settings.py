@@ -63,6 +63,11 @@ DEFAULTS: dict = {
     "powerstore_password": "",          # PowerStore 비밀번호
     "powerstore_verify_ssl": False,     # 자체 서명 인증서면 False(검증 생략)
     "storage_arrays": [],               # 추가 스토리지 어레이(Unity/PowerMax/VMAX/XtremIO/VPLEX 등)
+    "ask_llm_enabled": False,           # 자연어 질의응답에 로컬 LLM 사용(끄면 규칙 기반만)
+    "ask_llm_endpoint": "",             # 로컬 LLM(OpenAI 호환) 주소(예: http://127.0.0.1:11434/v1)
+    "ask_llm_model": "",                # 모델 이름(예: qwen2.5:7b)
+    "ask_llm_key": "",                  # 인증 토큰(로컬은 보통 불필요)
+    "ask_llm_timeout": 20,              # LLM 응답 대기(초)
 }
 
 EDITABLE_KEYS = set(DEFAULTS.keys())
@@ -125,6 +130,11 @@ def sanitize(raw: dict) -> dict:
     s["notify_on_stalled"] = bool(s.get("notify_on_stalled", False))  # 중단 후 N분간 재시작 없을 때
     s["notify_stall_minutes"] = _int(s.get("notify_stall_minutes", 10), 1, 1440, 10)
     s["api_token"] = str(s.get("api_token") or "").strip()
+    s["ask_llm_enabled"] = bool(s.get("ask_llm_enabled", False))
+    s["ask_llm_endpoint"] = str(s.get("ask_llm_endpoint") or "").strip()
+    s["ask_llm_model"] = str(s.get("ask_llm_model") or "").strip()
+    s["ask_llm_key"] = str(s.get("ask_llm_key") or "")
+    s["ask_llm_timeout"] = _int(s.get("ask_llm_timeout", 20), 1, 600, 20)
     s["op_password"] = str(s.get("op_password") or "")
     s["op_password_encrypted"] = bool(s.get("op_password_encrypted", False))
     s["op_ttl_minutes"] = _int(s.get("op_ttl_minutes", 30), 1, 10080, 30)   # 1분~7일

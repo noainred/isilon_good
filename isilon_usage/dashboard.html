@@ -170,7 +170,18 @@
 <div class="wrap view" id="view-trends" style="display:none;"></div>
 
 <div class="wrap view" id="view-summary">
-  <!-- 자원 모니터링 (맨 위) -->
+  <!-- 💬 자연어 질의응답 (맨 위) -->
+  <div class="card" id="askCard" style="margin-bottom:14px;">
+    <h2 style="margin:0 0 8px;">💬 물어보기 <span class="sub" style="font-weight:400;">— 문장으로 물어보면 분석해서 답합니다 <span id="askLlmTag" class="pill" style="display:none;">LLM</span></span></h2>
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <input id="askInput" type="text" autocomplete="off"
+             placeholder="예: 제일 큰 디렉터리? · 30일 넘게 안 바뀐 데이터 얼마나 돼? · 누가 제일 많이 써?"
+             style="flex:1; min-width:280px; padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:var(--panel2); color:var(--text); font:inherit;" />
+      <button id="askBtn" class="primary">질문</button>
+    </div>
+    <div id="askOut" style="margin-top:10px; line-height:1.55; min-height:1.2em; color:var(--text);"></div>
+  </div>
+  <!-- 자원 모니터링 -->
   <div class="grid cols-3" style="margin-bottom:14px;">
     <div class="card">
       <h2>서버 메모리</h2>
@@ -565,6 +576,28 @@
           <input id="setShowUpdatePopup" type="checkbox" /> 업그레이드 후 첫 접속 시 변경내용 팝업 보기(기본: 끔)
         </label>
         <div class="sub" style="margin-top:2px;">새 버전으로 올라간 뒤 처음 화면을 열 때 무엇이 바뀌었는지 알려주는 창입니다. 필요할 때만 켜세요.</div>
+      </div>
+
+      <div data-scat="general" style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
+        <div class="sub" style="margin-bottom:6px;">💬 질의응답(자연어) — 로컬 LLM</div>
+        <label style="display:flex; align-items:center; gap:8px;">
+          <input id="setAskLlm" type="checkbox" /> 로컬 LLM 사용(끄면 규칙 기반만 — 숫자는 항상 규칙 엔진이 계산)
+        </label>
+        <div class="sub" style="margin:2px 0 8px;">사내 GPU에서 도는 OpenAI 호환 서버(Ollama·vLLM·llama.cpp 등)로 문장만 자연스럽게 다듬습니다. 데이터는 외부로 나가지 않습니다.</div>
+        <div class="setgrid">
+          <label>엔드포인트(OpenAI 호환)
+            <input id="setAskLlmEp" class="setinput mono" placeholder="http://127.0.0.1:11434/v1" />
+          </label>
+          <label>모델 이름
+            <input id="setAskLlmModel" class="setinput mono" placeholder="예: qwen2.5:7b" />
+          </label>
+          <label>응답 대기(초)
+            <input id="setAskLlmTimeout" type="number" min="1" max="600" class="setinput" />
+          </label>
+          <label>인증 토큰(선택)
+            <input id="setAskLlmKey" type="password" class="setinput" autocomplete="new-password" />
+          </label>
+        </div>
       </div>
 
       <div data-scat="general" style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
@@ -1471,6 +1504,16 @@ async function loadSettings() {
     $("setNotifyStopped").checked = !!s.notify_on_stopped;
     $("setNotifyStalled").checked = !!s.notify_on_stalled;
     $("setNotifyStallMin").value = s.notify_stall_minutes || 10;
+    // 질의응답(로컬 LLM) — 선택. 끄면 규칙 기반만.
+    if ($("setAskLlm")) $("setAskLlm").checked = !!s.ask_llm_enabled;
+    if ($("askLlmTag")) $("askLlmTag").style.display = s.ask_llm_enabled ? "inline-block" : "none";
+    if ($("setAskLlmEp")) $("setAskLlmEp").value = s.ask_llm_endpoint || "";
+    if ($("setAskLlmModel")) $("setAskLlmModel").value = s.ask_llm_model || "";
+    if ($("setAskLlmTimeout")) $("setAskLlmTimeout").value = s.ask_llm_timeout || 20;
+    if ($("setAskLlmKey")) {
+      $("setAskLlmKey").value = "";
+      $("setAskLlmKey").placeholder = s.ask_llm_key_set ? "(설정됨 — 변경 시에만)" : "(보통 불필요)";
+    }
     storageArrays = (s.storage_arrays || []).map(x => ({...x}));
     renderStorageArrays();
     schedules = (s.schedules || []).map(x => ({...x}));
@@ -2163,10 +2206,16 @@ async function saveSettings() {
     notify_on_stopped: $("setNotifyStopped").checked,
     notify_on_stalled: $("setNotifyStalled").checked,
     notify_stall_minutes: parseInt($("setNotifyStallMin").value) || 10,
+    ask_llm_enabled: $("setAskLlm") ? $("setAskLlm").checked : false,
+    ask_llm_endpoint: $("setAskLlmEp") ? $("setAskLlmEp").value.trim() : "",
+    ask_llm_model: $("setAskLlmModel") ? $("setAskLlmModel").value.trim() : "",
+    ask_llm_timeout: $("setAskLlmTimeout") ? (parseInt($("setAskLlmTimeout").value) || 20) : 20,
   };
   // 비밀번호는 입력했을 때만 전송(빈값이면 기존 유지)
   const _pw = $("setSmtpPass").value;
   if (_pw) payload.smtp_password = _pw;
+  const _llmKey = $("setAskLlmKey") ? $("setAskLlmKey").value : "";
+  if (_llmKey) payload.ask_llm_key = _llmKey;
   $("saveSettingsBtn").disabled = true;
   $("settingsMsg").textContent = "저장 중…";
   try {
@@ -3690,6 +3739,27 @@ function schedule() {
 }
 $("refreshBtn").addEventListener("click", poll);
 $("autoChk").addEventListener("change", schedule);
+// ── 💬 자연어 질의응답 ──
+function mdLite(s) {   // **굵게** + 줄바꿈만 안전 변환(HTML 이스케이프 후)
+  const esc = String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return esc.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\n/g, "<br>");
+}
+async function doAsk() {
+  const q = ($("askInput").value || "").trim();
+  const out = $("askOut");
+  if (!q) { out.textContent = ""; return; }
+  out.innerHTML = '<span class="sub">분석 중…</span>';
+  const scan = (typeof selectedScan !== "undefined" && selectedScan != null) ? ("&scan=" + selectedScan) : "";
+  try {
+    const j = await (await fetch("/api/ask?q=" + encodeURIComponent(q) + scan, {cache: "no-store"})).json();
+    if (!j || !j.ok) { out.textContent = "답을 만들지 못했습니다."; return; }
+    const llm = (j.source === "rules+llm") ? ' <span class="sub">· 🧠 LLM 다듬음</span>' : "";
+    out.innerHTML = mdLite(j.answer) + llm;
+  } catch (e) { out.textContent = "오류: " + e; }
+}
+if ($("askBtn")) $("askBtn").addEventListener("click", doAsk);
+if ($("askInput")) $("askInput").addEventListener("keydown", (e) => { if (e.key === "Enter") doAsk(); });
 $("staggerBtn").addEventListener("click", staggerSchedules);
 if ($("auditBtn")) $("auditBtn").addEventListener("click", loadAudit);
 // 잠금 배지: 잠겨 있으면 비밀번호로 해제, 해제됨이면 다시 잠금(토큰 제거)

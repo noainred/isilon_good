@@ -35,6 +35,7 @@ from . import auth as authmod
 from . import audit as auditmod
 from . import settings as setmod
 from . import upgrade as upgrademod
+from . import ask as askmod
 from .server import ThreadingHTTPServer, browse_dir  # 3.6 폴백 포함 재사용
 
 
@@ -435,7 +436,9 @@ class PortalController:
                "enroll_token": "", "release_dir": "/opt/isilon_release",
                "backup_dir": "", "backup_every_hours": 1.0, "backup_keep": 100,
                "portal_title": "", "portal_subtitle": "", "nav_hidden": [],
-               "export_token": "", "op_ttl_minutes": 30, "show_update_popup": False}
+               "export_token": "", "op_ttl_minutes": 30, "show_update_popup": False,
+               "ask_llm_enabled": False, "ask_llm_endpoint": "", "ask_llm_model": "",
+               "ask_llm_key": "", "ask_llm_timeout": 20}
         try:
             with open(portal_settings_path(self.data_dir), encoding="utf-8") as fh:
                 s = json.load(fh)
@@ -475,6 +478,14 @@ class PortalController:
                 except (TypeError, ValueError):
                     pass
                 out["show_update_popup"] = bool(s.get("show_update_popup", False))
+                out["ask_llm_enabled"] = bool(s.get("ask_llm_enabled"))
+                out["ask_llm_endpoint"] = str(s.get("ask_llm_endpoint") or "").strip()
+                out["ask_llm_model"] = str(s.get("ask_llm_model") or "").strip()
+                out["ask_llm_key"] = str(s.get("ask_llm_key") or "")
+                try:
+                    out["ask_llm_timeout"] = max(1, min(600, int(s.get("ask_llm_timeout", 20) or 20)))
+                except (TypeError, ValueError):
+                    pass
         except (OSError, ValueError):
             pass
         return out
@@ -745,8 +756,64 @@ class PortalController:
                      "bundle_stale": bool(bver and bver != __version__),
                      "portal_title": self.settings.get("portal_title") or "",
                      "portal_subtitle": self.settings.get("portal_subtitle") or "",
-                     "export_token_set": bool(self.settings.get("export_token"))},
+                     "export_token_set": bool(self.settings.get("export_token")),
+                     "ask_llm_enabled": bool(self.settings.get("ask_llm_enabled")),
+                     "ask_llm_endpoint": self.settings.get("ask_llm_endpoint") or "",
+                     "ask_llm_model": self.settings.get("ask_llm_model") or "",
+                     "ask_llm_timeout": int(self.settings.get("ask_llm_timeout", 20) or 20),
+                     "ask_llm_key_set": bool(self.settings.get("ask_llm_key"))},
                     **self.release_info(), **self.backup_info())
+
+    def set_ask_llm(self, body) -> dict:
+        """자연어 질의응답용 로컬 LLM 설정을 저장한다(보낸 키만 반영)."""
+        if "ask_llm_enabled" in body:
+            self.settings["ask_llm_enabled"] = bool(body.get("ask_llm_enabled"))
+        if "ask_llm_endpoint" in body:
+            self.settings["ask_llm_endpoint"] = str(body.get("ask_llm_endpoint") or "").strip()
+        if "ask_llm_model" in body:
+            self.settings["ask_llm_model"] = str(body.get("ask_llm_model") or "").strip()
+        if "ask_llm_key" in body:
+            self.settings["ask_llm_key"] = str(body.get("ask_llm_key") or "")
+        if "ask_llm_timeout" in body:
+            try:
+                self.settings["ask_llm_timeout"] = max(1, min(600, int(body.get("ask_llm_timeout") or 20)))
+            except (TypeError, ValueError):
+                pass
+        self._save_settings()
+        return {"ok": True, "ask_llm_enabled": bool(self.settings.get("ask_llm_enabled"))}
+
+    def ask(self, question: str) -> dict:
+        """자연어 질의응답(규칙 기반 + 선택적 로컬 LLM). 노드 롤업을 공통 형태로 정규화."""
+        ov = self.overview()
+        roots = []
+        for n in ov.get("nodes") or []:
+            who = n.get("region") or n.get("hostname") or "node"
+            for r in (n.get("roots") or []):
+                roots.append({
+                    "label": who + ":" + str(r.get("root_path")),
+                    "root_path": r.get("root_path"),
+                    "scanned_bytes": int(r.get("scanned_bytes") or 0),
+                    "fs_used_bytes": int(r.get("fs_used_bytes") or 0),
+                    "fs_total_bytes": int(r.get("fs_total_bytes") or 0),
+                    "total_files": int(r.get("total_files") or 0),
+                    "status": r.get("status"),
+                    "finished_at": r.get("finished_at"),
+                })
+        totals = ov.get("totals") or {}
+        overall = {
+            "total_scanned_bytes": int(totals.get("used_bytes")
+                                       or sum(x["scanned_bytes"] for x in roots)),
+            "root_count": len(roots), "scan_count": len(roots),
+            "active_scans": int(totals.get("active_scans") or 0),
+            "roots": roots,
+        }
+        cfg = {"enabled": bool(self.settings.get("ask_llm_enabled")),
+               "endpoint": self.settings.get("ask_llm_endpoint") or "",
+               "model": self.settings.get("ask_llm_model") or "",
+               "key": self.settings.get("ask_llm_key") or "",
+               "timeout": self.settings.get("ask_llm_timeout") or 20}
+        return askmod.respond(question, {"scope": "portal", "overall": overall,
+                                         "detail": None}, cfg)
 
     def push_upgrade_all(self) -> dict:
         """등록된 모든 엣지에 현재(=디스크) 코드 번들을 동기로 푸시한다(엣지 api_token 인증)."""
@@ -2224,6 +2291,10 @@ class PortalHandler(BaseHTTPRequestHandler):
             if path == "/api/portal/overview":
                 self._send_json(c.overview())
                 return
+            if path == "/api/portal/ask":      # 자연어 질의응답(읽기 전용)
+                q = (parse_qs(urlparse(self.path).query).get("q", [""])[0] or "").strip()
+                self._send_json(c.ask(q))
+                return
             if path == "/api/portal/ping":
                 self._send_json(c.ping_nodes())
                 return
@@ -2365,6 +2436,9 @@ class PortalHandler(BaseHTTPRequestHandler):
                     res.update(c.set_export_token(body.get("export_token") or ""))
                 if "op_ttl_minutes" in body or "show_update_popup" in body:
                     res.update(c.set_session_prefs(body))
+                if any(k in body for k in ("ask_llm_enabled", "ask_llm_endpoint",
+                                           "ask_llm_model", "ask_llm_key", "ask_llm_timeout")):
+                    res.update(c.set_ask_llm(body))
                 self._send_json(res)
                 return
             if path == "/api/portal/upgrade/net":     # 인터넷 자동 업그레이드 설정

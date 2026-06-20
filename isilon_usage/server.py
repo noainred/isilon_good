@@ -46,6 +46,7 @@ from . import storage_status as storagemod
 from . import auth as authmod
 from . import audit as auditmod
 from . import upgrade as upgrademod
+from . import ask as askmod
 from .scanner import run_scan
 
 
@@ -161,6 +162,8 @@ def _public_settings(s: dict) -> dict:
     out["isilon_password_set"] = bool((s or {}).get("isilon_password"))
     out["powerstore_password"] = ""
     out["powerstore_password_set"] = bool((s or {}).get("powerstore_password"))
+    out["ask_llm_key"] = ""
+    out["ask_llm_key_set"] = bool((s or {}).get("ask_llm_key"))
     sa = []
     for a in ((s or {}).get("storage_arrays") or []):
         b = dict(a)
@@ -2172,6 +2175,57 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return None, None
         return int(row["id"]), row
 
+    def _ask_llm_cfg(self) -> dict:
+        """설정에서 로컬 LLM(선택) 구성을 모은다. enabled=False 면 규칙 기반만."""
+        s = self._current_settings()
+        return {
+            "enabled": bool(s.get("ask_llm_enabled")),
+            "endpoint": (s.get("ask_llm_endpoint") or "").strip(),
+            "model": (s.get("ask_llm_model") or "").strip(),
+            "key": (s.get("ask_llm_key") or "").strip(),
+            "timeout": float(s.get("ask_llm_timeout") or 20),
+        }
+
+    def _gather_ask_data(self, mconn, scan_id) -> dict:
+        """질의응답 엔진에 줄 공통 데이터(overall + 선택 스캔 상세)를 모은다."""
+        overall = mgrmod.overall_capacity(mconn)
+        for r in overall.get("roots", []):
+            host = r.get("hostname")
+            r["label"] = (host + ":" + r["root_path"]) if host else r["root_path"]
+        data = {"scope": "edge", "overall": overall, "detail": None}
+        scan_id, row = self._resolve_scan_db(mconn, scan_id)
+        if row is None or not os.path.exists(row["db_path"]):
+            return data
+        pconn = dbmod.connect(row["db_path"])
+        try:
+            rid = dbmod.latest_run_id(pconn)
+            if rid is None:
+                return data
+            owners = dbmod.get_scan_stats(pconn, rid, "owner", limit=50)
+            for o in owners:
+                o["name"] = _uid_name(o["key"])
+            topf = dbmod.get_top_files(pconn, rid, limit=30)
+            for f in topf:
+                f["owner"] = _uid_name(f.get("uid"))
+            topdirs = list_top_dirs(pconn, rid, sort="size", order="desc", limit=20).get("rows", [])
+            data["detail"] = {
+                "scan_id": scan_id, "root_path": row["root_path"],
+                "age": dbmod.get_scan_stats(pconn, rid, "age"),
+                "atime_age": dbmod.get_scan_stats(pconn, rid, "atime_age"),
+                "owners": owners,
+                "extensions": dbmod.get_scan_stats(pconn, rid, "ext", limit=50),
+                "sizes": dbmod.get_scan_stats(pconn, rid, "size"),
+                "top_files": topf,
+                "topdirs": [{"path": d.get("path"), "bytes": d.get("total_bytes"),
+                             "files": d.get("total_files")} for d in topdirs],
+                "forecast": forecast_capacity(mconn, row),
+            }
+        except sqlite3.OperationalError:
+            pass        # 초기화 전 레이스 — 상세 없이 공통만
+        finally:
+            pconn.close()
+        return data
+
     def _current_settings(self) -> dict:
         if self.controller is not None:
             return self.controller.settings
@@ -2547,6 +2601,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                                      "sizes": sizes, "top_files": topf})
                 finally:
                     pconn.close()
+                return
+
+            if path == "/api/ask":
+                # 자연어 질의응답(규칙 기반 + 선택적 로컬 LLM). 읽기 전용.
+                q = (qs.get("q", [""])[0] or "").strip()
+                data = self._gather_ask_data(mconn, self._query_int(qs, "scan"))
+                self._send_json(askmod.respond(q, data, self._ask_llm_cfg()))
                 return
 
             if path == "/api/forecast":

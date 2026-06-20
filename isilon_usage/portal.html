@@ -111,6 +111,16 @@
 
 <!-- 글로벌 대시보드 -->
 <div class="wrap view active" id="view-dash">
+  <div class="card" id="askCard" style="margin-bottom:14px;">
+    <h2 style="margin:0 0 8px;">💬 물어보기 <span class="sub" style="font-weight:400;">— 전사 집계를 문장으로 물어보면 답합니다 <span id="askLlmTag" class="pill" style="display:none;">LLM</span></span></h2>
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <input id="askInput" type="text" autocomplete="off"
+             placeholder="예: 전체 용량 얼마야? · 어느 노드가 제일 커? · 지금 스캔 진행 중이야?"
+             style="flex:1; min-width:280px; padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:var(--panel2); color:var(--text); font:inherit;" />
+      <button id="askBtn" class="primary">질문</button>
+    </div>
+    <div id="askOut" style="margin-top:10px; line-height:1.55; min-height:1.2em;"></div>
+  </div>
   <div class="grid cols-4" style="margin-bottom:14px;">
     <div class="card"><h2>총 사용 용량 (전 DC)</h2><div class="big" id="kUsed">—</div><div class="sub" id="kUsedSub">조사 용량 합계</div></div>
     <div class="card"><h2>스토리지(루트)</h2><div class="big" id="kStorages">—</div><div class="sub">전 노드 합계</div></div>
@@ -587,6 +597,21 @@
     </div>
     <div class="sub" id="bkStatus" style="margin-top:7px;"></div>
   </div>
+  <div class="card" id="cardAskLlm" style="margin-bottom:14px;">
+    <h2>💬 질의응답(자연어) — 로컬 LLM</h2>
+    <div class="sub" style="margin-bottom:8px;">‘물어보기’의 숫자는 항상 규칙 엔진이 계산합니다. 로컬 LLM을 켜면 사내 GPU에서 도는 OpenAI 호환 서버(Ollama·vLLM·llama.cpp 등)로 <b>문장만</b> 자연스럽게 다듬습니다. 데이터는 외부로 나가지 않습니다(끄면 규칙 기반만).</div>
+    <label style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+      <input id="setAskLlm" type="checkbox" /> 로컬 LLM 사용
+    </label>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <input id="setAskLlmEp" class="inp mono" placeholder="엔드포인트: http://127.0.0.1:11434/v1" style="flex:1; min-width:240px;" />
+      <input id="setAskLlmModel" class="inp mono" placeholder="모델: qwen2.5:7b" style="width:180px;" />
+      <input id="setAskLlmTimeout" class="inp" type="number" min="1" max="600" placeholder="초" style="width:72px;" title="응답 대기(초)" />
+      <input id="setAskLlmKey" class="inp" type="password" placeholder="토큰(선택)" autocomplete="new-password" style="width:160px;" />
+      <button id="setAskLlmBtn" class="primary">저장</button>
+      <span class="sub" id="setAskLlmMsg"></span>
+    </div>
+  </div>
   </div>
   <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--line); text-align:center; font-size:11.5px; color:var(--muted); letter-spacing:.4px;">
     ✦ Crafted with care by <b style="color:#cfe6ff; font-weight:800; letter-spacing:.6px; text-shadow:0 0 10px rgba(124,196,255,.45);">JunHo&nbsp;Park</b> ✦ <span style="opacity:.6;">© 2026</span>
@@ -861,7 +886,7 @@ document.querySelectorAll("#view-nodes .stab").forEach(b=>b.addEventListener("cl
 
 // 설정 카드를 종류별 탭으로 재배치(노드 관리 / 계정·보안 / 모니터링·백업 / 일반).
 (function(){
-  const moves={ "np-nodes":["cardProvision"], "np-account":["cardLoginSec","cardNodePw","cardEnroll"], "np-monitor":["cardBackup"] };
+  const moves={ "np-nodes":["cardProvision"], "np-account":["cardLoginSec","cardNodePw","cardEnroll"], "np-monitor":["cardBackup","cardAskLlm"] };
   Object.keys(moves).forEach(pane=>{ const p=document.getElementById(pane); if(!p) return;
     moves[pane].forEach(id=>{ const el=document.getElementById(id); if(el) p.appendChild(el); }); });
   const g=document.getElementById("np-general"), t=document.getElementById("cardTitle");
@@ -1371,6 +1396,52 @@ if($("setExportTokenBtn")) $("setExportTokenBtn").addEventListener("click",async
   }catch(e){ msg.textContent=" 오류: "+e; }
 });
 loadExportApi();
+
+// ── 💬 자연어 질의응답 ──
+function mdLite(s){
+  const esc=String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  return esc.replace(/\*\*(.+?)\*\*/g,"<b>$1</b>").replace(/\n/g,"<br>");
+}
+async function doAsk(){
+  const q=($("askInput").value||"").trim(); const out=$("askOut");
+  if(!q){ out.textContent=""; return; }
+  out.innerHTML='<span class="sub">분석 중…</span>';
+  try{
+    const j=await (await fetch("/api/portal/ask?q="+encodeURIComponent(q),{cache:"no-store"})).json();
+    if(!j||!j.ok){ out.textContent="답을 만들지 못했습니다."; return; }
+    const llm=(j.source==="rules+llm")?' <span class="sub">· 🧠 LLM 다듬음</span>':"";
+    out.innerHTML=mdLite(j.answer)+llm;
+  }catch(e){ out.textContent="오류: "+e; }
+}
+if($("askBtn")) $("askBtn").addEventListener("click",doAsk);
+if($("askInput")) $("askInput").addEventListener("keydown",(e)=>{ if(e.key==="Enter") doAsk(); });
+
+// 로컬 LLM 설정 로드/저장(설정은 /api/portal/settings)
+function loadAskLlm(){
+  fetch("/api/portal/settings",{cache:"no-store"}).then(r=>r.json()).then(j=>{
+    if($("setAskLlm")) $("setAskLlm").checked=!!j.ask_llm_enabled;
+    if($("setAskLlmEp")) $("setAskLlmEp").value=j.ask_llm_endpoint||"";
+    if($("setAskLlmModel")) $("setAskLlmModel").value=j.ask_llm_model||"";
+    if($("setAskLlmTimeout")) $("setAskLlmTimeout").value=j.ask_llm_timeout||20;
+    if($("setAskLlmKey")) $("setAskLlmKey").placeholder=j.ask_llm_key_set?"(설정됨 — 변경 시에만)":"토큰(선택)";
+    if($("askLlmTag")) $("askLlmTag").style.display=j.ask_llm_enabled?"inline-block":"none";
+  }).catch(()=>{});
+}
+if($("setAskLlmBtn")) $("setAskLlmBtn").addEventListener("click",async()=>{
+  const msg=$("setAskLlmMsg"); msg.textContent=" 저장 중…";
+  const body={ ask_llm_enabled:$("setAskLlm").checked,
+    ask_llm_endpoint:$("setAskLlmEp").value.trim(),
+    ask_llm_model:$("setAskLlmModel").value.trim(),
+    ask_llm_timeout:parseInt($("setAskLlmTimeout").value)||20 };
+  const k=$("setAskLlmKey").value; if(k) body.ask_llm_key=k;
+  try{
+    const j=await (await fetch("/api/portal/settings",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(body)})).json();
+    if(j.ok){ msg.textContent=" ✓ 저장됨"+(j.ask_llm_enabled?" (LLM 켜짐)":" (규칙 기반)"); $("setAskLlmKey").value=""; loadAskLlm(); }
+    else msg.textContent=" 실패: "+(j.reason||"로그인이 필요할 수 있습니다");
+  }catch(e){ msg.textContent=" 오류: "+e; }
+});
+loadAskLlm();
 
 // 로그인 세션 유지 시간 · 업데이트 팝업 표시 저장
 if($("setSessPrefsBtn")) $("setSessPrefsBtn").addEventListener("click",async()=>{
