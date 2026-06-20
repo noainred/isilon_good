@@ -2587,7 +2587,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     _so = ["0 (빈 파일)", "1B~1KB", "1KB~1MB", "1~10MB", "10~100MB",
                            "100MB~1GB", "1~10GB", "10GB+"]
                     sizes.sort(key=lambda r: _so.index(r["key"]) if r["key"] in _so else 99)
-                    topf = dbmod.get_top_files(pconn, rid, limit=100)
+                    topf = dbmod.get_top_files(pconn, rid, limit=200)   # 저장된 Top-N 전부(‘더 보기’용)
                     for f in topf:
                         f["owner"] = _uid_name(f.get("uid"))
                     try:

@@ -779,4 +779,13 @@
      설정키 ask_llm_enabled/endpoint/model/key/timeout(키 마스킹). 양쪽 ‘💬 물어보기’ 상자 + 엣지
      설정▸일반·포탈 노드설정▸계정보안에 LLM 구성 UI. tests/test_ask.py + 엣지/포탈 통합 테스트. v1.89.0.
 
+247. (최대 파일 TOP 에 more 버튼 달아 더 보기) loadReport 의 인라인 표를 renderRepTopFiles() 로 분리,
+     repTopShown(기본30) 상태로 ‘더 보기(+30)/접기’·순번·‘N/전체’ 표시, 폴링 재렌더에도 유지. /api/stats
+     top_files 한도 100→200(저장 전부). dashboard.html·server.py. (이어서)
+
+248. (CPU·디스크 카드에 시간당 처리용량 추가, 박스 안 넘치게 + More 팝업으로 시작~지금 1시간당 몇 GB/TB)
+     카드에 ‘시간당 처리용량’ 한 줄(render 에서 scanned_bytes/누적작업시간 평균, 유휴면 —)+More 버튼.
+     팝업(openThroughputPopup)=오버레이 모달, /api/troubleshoot/throughput?bucket=3600&max=72 재사용해
+     시간대별(1h) 막대 표 + 합계(표본 24h 보관 안내). dashboard.html. v1.90.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

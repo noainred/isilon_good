@@ -216,6 +216,7 @@
       <div class="kv"><span class="k">파일시스템 사용</span><span class="v" id="fsUsed">—</span></div>
       <div class="kv"><span class="k">파일시스템 여유</span><span class="v" id="fsFree">—</span></div>
       <div class="kv"><span class="k">스캐너 PID</span><span class="v" id="pid">—</span></div>
+      <div class="kv"><span class="k">시간당 처리용량</span><span class="v" style="display:inline-flex; align-items:center; gap:6px; white-space:nowrap;"><span id="thruPerHr">—</span><button id="thruMoreBtn" title="시작부터 지금까지 1시간 단위 처리량" style="padding:1px 7px; font-size:11px;">More</button></span></div>
     </div>
   </div>
 
@@ -2829,6 +2830,37 @@ function _statBarList(items, labelFn, maxN) {
       + '</div><div class="bar" style="height:7px; margin-top:2px;"><span style="width:' + pct + '%"></span></div></div>';
   }).join("");
 }
+// 최대 파일 TOP — ‘더 보기(+30)/접기’. 폴링 재렌더에도 펼친 상태(repTopShown) 유지.
+let repTopShown = 30;
+let _repTopFiles = [];
+function renderRepTopFiles() {
+  const el = $("repTopFiles");
+  if (!el) return;
+  const tf = _repTopFiles || [];
+  if (!tf.length) { el.innerHTML = '<span class="sub">데이터 없음(스캔이 진행/완료되면 표시됩니다).</span>'; return; }
+  const shown = Math.min(repTopShown, tf.length);
+  const body = tf.slice(0, shown).map((f, i) =>
+    '<tr><td style="padding:2px 8px; text-align:right; color:var(--muted);">' + (i + 1) + '</td>'
+    + '<td class="mono" style="padding:2px 8px; max-width:520px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + f.path + '">' + f.path + '</td>'
+    + '<td style="padding:2px 8px; text-align:right;"><b>' + fmtBytes(f.bytes) + '</b></td>'
+    + '<td style="padding:2px 8px; white-space:nowrap;">' + (f.mtime ? new Date(f.mtime * 1000).toLocaleDateString("ko-KR") : "—") + '</td>'
+    + '<td style="padding:2px 8px; white-space:nowrap;">' + (f.atime ? new Date(f.atime * 1000).toLocaleDateString("ko-KR") : "—") + '</td>'
+    + '<td style="padding:2px 8px;">' + (f.owner || ("uid " + (f.uid != null ? f.uid : "?"))) + '</td></tr>').join("");
+  const table = '<table style="border-collapse:collapse; width:100%;"><tr style="color:var(--muted)">'
+    + '<td style="padding:2px 8px; text-align:right">#</td><td style="padding:2px 8px">파일</td>'
+    + '<td style="padding:2px 8px; text-align:right">크기</td><td style="padding:2px 8px">수정</td>'
+    + '<td style="padding:2px 8px">접근</td><td style="padding:2px 8px">소유자</td></tr>' + body + '</table>';
+  let ctrl = '<div style="margin-top:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">';
+  if (shown < tf.length) ctrl += '<button id="repTopMore">더 보기 (+' + Math.min(30, tf.length - shown) + ')</button>';
+  if (shown > 30) ctrl += '<button id="repTopLess">접기</button>';
+  ctrl += '<span class="sub">' + shown + ' / ' + tf.length + '개 표시'
+    + (tf.length >= 200 ? ' · 최대 200개 저장' : '') + '</span></div>';
+  el.innerHTML = table + ctrl;
+  if ($("repTopMore")) $("repTopMore").addEventListener("click",
+    () => { repTopShown = Math.min(repTopShown + 30, tf.length); renderRepTopFiles(); });
+  if ($("repTopLess")) $("repTopLess").addEventListener("click",
+    () => { repTopShown = 30; renderRepTopFiles(); });
+}
 async function loadReport() {
   const q = (selectedScan != null ? ("?scan=" + selectedScan) : "");
   try {
@@ -2855,20 +2887,9 @@ async function loadReport() {
       i => (i.name ? (i.name + ' <span class="sub">(uid ' + i.key + ')</span>') : ("uid " + i.key)), 25);
     $("repExt").innerHTML = _statBarList(j.extensions, i => i.key, 25);
     $("repSize").innerHTML = _statBarList(j.sizes, i => i.key, 10);
-    // 최대 파일 Top — 표
-    const tf = j.top_files || [];
-    $("repTopFiles").innerHTML = !tf.length
-      ? '<span class="sub">데이터 없음(스캔이 진행/완료되면 표시됩니다).</span>'
-      : '<table style="border-collapse:collapse; width:100%;"><tr style="color:var(--muted)">'
-        + '<td style="padding:2px 8px">파일</td><td style="padding:2px 8px; text-align:right">크기</td>'
-        + '<td style="padding:2px 8px">수정</td><td style="padding:2px 8px">접근</td><td style="padding:2px 8px">소유자</td></tr>'
-        + tf.slice(0, 30).map(f =>
-          '<tr><td class="mono" style="padding:2px 8px; max-width:520px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + f.path + '">' + f.path + '</td>'
-          + '<td style="padding:2px 8px; text-align:right;"><b>' + fmtBytes(f.bytes) + '</b></td>'
-          + '<td style="padding:2px 8px; white-space:nowrap;">' + (f.mtime ? new Date(f.mtime * 1000).toLocaleDateString("ko-KR") : "—") + '</td>'
-          + '<td style="padding:2px 8px; white-space:nowrap;">' + (f.atime ? new Date(f.atime * 1000).toLocaleDateString("ko-KR") : "—") + '</td>'
-          + '<td style="padding:2px 8px;">' + (f.owner || ("uid " + (f.uid != null ? f.uid : "?"))) + '</td></tr>').join("")
-        + '</table>';
+    // 최대 파일 Top — 표 (‘더 보기’로 더 많은 행 표시)
+    _repTopFiles = j.top_files || [];
+    renderRepTopFiles();
   } catch (e) { /* 무시 */ }
   // 용량 소진 예측
   try {
@@ -3399,6 +3420,7 @@ async function poll() {
           $("fsTotal").textContent = fmtBytes(data.idle_fs.fs_total_bytes);
           $("fsUsed").textContent = fmtBytes(data.idle_fs.fs_used_bytes);
           $("fsFree").textContent = fmtBytes(data.idle_fs.fs_free_bytes);
+          if ($("thruPerHr")) $("thruPerHr").textContent = "—";
         }
         _hbRunning = false; tickHeartbeat();   // 진행 중 아님 → 하트비트 비활성
       } else {
@@ -3679,6 +3701,10 @@ function render(d) {
   $("fsUsed").textContent = fmtBytes(r.fs_used_bytes);
   $("fsFree").textContent = fmtBytes(r.fs_free_bytes);
   $("pid").textContent = (scanRunning && r.scanner_pid) ? r.scanner_pid : "—";
+  // 시간당 처리용량(시작~지금, 누적 작업시간 기준 평균)
+  const _thA = (r.elapsed_accum && r.elapsed_accum > 0) ? r.elapsed_accum : (r.elapsed || 0);
+  if ($("thruPerHr")) $("thruPerHr").textContent =
+    (_thA > 0 && r.scanned_bytes > 0) ? (fmtBytes(r.scanned_bytes / (_thA / 3600)) + "/h") : "—";
 
   // 병렬 처리(동시 스캔 스레드) — native 백엔드가 한 프로세스에서 여러 디렉터리를
   // 동시에 훑는 장점을 보여준다. 탐색 중엔 '현재 활성/설정' 을 함께 표시.
@@ -3760,6 +3786,54 @@ async function doAsk() {
 }
 if ($("askBtn")) $("askBtn").addEventListener("click", doAsk);
 if ($("askInput")) $("askInput").addEventListener("keydown", (e) => { if (e.key === "Enter") doAsk(); });
+// ── ⏱ 시간대별 처리용량 팝업(시작~지금, 1시간 단위) ──
+function renderThruPopup(buckets) {
+  const body = $("thruPopBody");
+  if (!body) return;
+  if (!buckets.length) {
+    body.innerHTML = '<span class="sub">아직 처리량 표본이 없습니다 — 스캔이 돌고 ~1분 지나면 1시간 단위로 쌓입니다.</span>';
+    return;
+  }
+  const rows = buckets.slice().reverse();   // 최신 시간대가 위로
+  const peak = Math.max(1, ...buckets.map(b => b.bytes || 0));
+  let total = 0; buckets.forEach(b => { total += b.bytes || 0; });
+  const fmtH = (t) => new Date(t * 1000).toLocaleString("ko-KR",
+    {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"});
+  const tbl = '<table style="border-collapse:collapse; width:100%; margin-top:8px;">'
+    + '<tr style="color:var(--muted)"><td style="padding:3px 8px">시간대(시작)</td>'
+    + '<td style="padding:3px 8px; text-align:right">그 1시간 처리량</td>'
+    + '<td style="padding:3px 8px; width:42%;">막대</td></tr>'
+    + rows.map(b => {
+        const v = b.bytes || 0, pct = Math.min(100, v / peak * 100);
+        return '<tr><td class="mono" style="padding:3px 8px; white-space:nowrap;">' + fmtH(b.t) + ' ~</td>'
+          + '<td style="padding:3px 8px; text-align:right;"><b>' + fmtBytes(v) + '</b></td>'
+          + '<td style="padding:3px 8px;"><div class="bar" style="height:8px;"><span style="width:' + pct + '%"></span></div></td></tr>';
+      }).join("") + '</table>';
+  body.innerHTML = '<div class="sub" style="margin-bottom:4px;">표시 구간 합계 <b>' + fmtBytes(total)
+    + '</b> · ' + rows.length + '개 시간대 <span class="sub">(처리량 표본은 최근 24시간 보관)</span></div>' + tbl;
+}
+async function openThroughputPopup() {
+  const ov = document.createElement("div");
+  ov.style.cssText = "position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:9999; display:flex; align-items:center; justify-content:center;";
+  const box = document.createElement("div");
+  box.className = "card";
+  box.style.cssText = "width:min(680px,92vw); max-height:84vh; overflow:auto;";
+  box.innerHTML = '<h2 style="margin:0 0 4px;">⏱ 시간대별 처리용량 <span class="sub" style="font-weight:400;">— 시작부터 지금까지(1시간 단위)</span></h2>'
+    + '<div id="thruPopBody" class="sub">불러오는 중…</div>';
+  const close = document.createElement("button");
+  close.textContent = "닫기"; close.style.cssText = "margin-top:12px;";
+  close.addEventListener("click", () => ov.remove());
+  box.appendChild(close); ov.appendChild(box); document.body.appendChild(ov);
+  ov.addEventListener("click", (e) => { if (e.target === ov) ov.remove(); });
+  document.addEventListener("keydown", function esc(e) {
+    if (e.key === "Escape") { ov.remove(); document.removeEventListener("keydown", esc); }
+  });
+  try {
+    const j = await (await fetch("/api/troubleshoot/throughput?bucket=3600&max=72", {cache: "no-store"})).json();
+    renderThruPopup(j.buckets || []);
+  } catch (e) { if ($("thruPopBody")) $("thruPopBody").textContent = "오류: " + e; }
+}
+if ($("thruMoreBtn")) $("thruMoreBtn").addEventListener("click", openThroughputPopup);
 $("staggerBtn").addEventListener("click", staggerSchedules);
 if ($("auditBtn")) $("auditBtn").addEventListener("click", loadAudit);
 // 잠금 배지: 잠겨 있으면 비밀번호로 해제, 해제됨이면 다시 잠금(토큰 제거)
