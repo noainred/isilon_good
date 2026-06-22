@@ -814,4 +814,11 @@
      제외). GET /api/portal/throughput. 프론트: view-dash 노드표 아래 '법인별 시간당 처리량' 카드(막대+
      since_start), 행 클릭 → 1분~1일 윈도우 펼침. 백업목록·테스트(윈도우 합산 검증) 추가. v1.92.0.
 
+250. (설정 About 메뉴에 VMware Global Monitoring Portal 화면 참고해서 소개+저작권 페이지 멋있게 — 둘 다)
+     VMware 포탈은 디자인 참고용(여기 앱 아님). 포탈 About 은 이미 v1.91.0 에 있음 → 엣지 대시보드
+     ‘설정’에 ℹ️ 소개 하위탭 신설로 ‘둘 다’ 충족. 포탈의 .about-* CSS·구조를 엣지(동일 CSS 변수)로 이식,
+     내용은 엣지(스캐너) 관점 기능 10개. setShowCat 에 about 일 때 저장행 숨김, aboutVer=앱버전 동적.
+     저작권 문구는 v1.91.1 통일본(독점·© 2026 박준호, LICENSE 의 ‘Isilon 디렉터리 사용량 스캐너’와 일치).
+     HTML DOM 균형·JS 구문·전체 테스트·ruff 통과(브라우저 렌더는 환경상 미확인). dashboard.html. v1.93.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
