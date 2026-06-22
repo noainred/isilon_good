@@ -480,6 +480,16 @@ def main() -> int:
         a3 = c.get(f"/api/ask?q={urllib.parse.quote('안녕')}")   # 미매칭 → 도움말
         assert a3["intent"] == "help" and a3.get("suggestions"), a3
 
+        # 추가 기능: 폴더 마지막 접근시각(atime) — 용량 계산과 별개의 라이브 조회
+        at = c.get(f"/api/atime?path={urllib.parse.quote(root)}")
+        assert at["ok"] and at["count"] >= 1 and "atime_info" in at, at
+        assert all("atime" in e and "owner" in e for e in at["entries"]), at["entries"][:2]
+        # atime 오래된 순 정렬 보장
+        ats = [e["atime"] for e in at["entries"]]
+        assert ats == sorted(ats), ats
+        assert not c.get("/api/atime?path=")["ok"]           # 경로 없으면 거부
+        assert not c.get(f"/api/atime?path={urllib.parse.quote(root + '/nope')}")["ok"]
+
         # 드릴다운: 루트 → 자식
         ch = c.get(f"/api/children?scan={s1}")
         assert ch["children"], ch

@@ -47,6 +47,7 @@ from . import auth as authmod
 from . import audit as auditmod
 from . import upgrade as upgrademod
 from . import ask as askmod
+from . import atimes as atimemod
 from .scanner import run_scan
 
 
@@ -2608,6 +2609,33 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 q = (qs.get("q", [""])[0] or "").strip()
                 data = self._gather_ask_data(mconn, self._query_int(qs, "scan"))
                 self._send_json(askmod.respond(q, data, self._ask_llm_cfg()))
+                return
+
+            if path == "/api/atime":
+                # 추가 기능: 특정 폴더+그 안 항목의 마지막 접근시각(atime) 라이브 조회.
+                # 용량 계산과 무관(별도 로직)이고 스캔 락을 안 잡아 스캔과 동시 실행된다.
+                p = (qs.get("path", [""])[0] or "").strip()
+                if not p:
+                    self._send_json({"ok": False, "error": "path(폴더 경로)가 필요합니다."})
+                    return
+                ctrl = self.controller
+                if ctrl is not None:
+                    ok, why = ctrl.path_allowed(p)
+                    if not ok:
+                        self._send_json({"ok": False, "error": why})
+                        return
+                rec = qs.get("recursive", ["0"])[0] in ("1", "true", "on", "yes")
+                res = atimemod.list_access_times(
+                    p, recursive=rec, limit=self._query_int(qs, "limit") or atimemod.DEFAULT_LIMIT)
+                if res.get("ok"):
+                    for e in res["entries"]:
+                        e["owner"] = _uid_name(e.get("uid"))
+                    try:
+                        from . import systune as sysmod
+                        res["atime_info"] = sysmod.atime_policy(p)
+                    except Exception:   # noqa: BLE001
+                        res["atime_info"] = {"opt": "unknown", "reliable": None}
+                self._send_json(res)
                 return
 
             if path == "/api/forecast":

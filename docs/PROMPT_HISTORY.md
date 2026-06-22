@@ -828,4 +828,11 @@
      (download/ tar.gz·zip·latest·versions.json latest=1.93.0). 자동설치 ON 이라 푸시 시 포탈+엣지 13대가
      자동 1.87.3→1.93.0 업그레이드(사용자 ‘지금 배포’ 선택). 향후 버전 올릴 때 make_release 발행 필수.
 
+252. (버전 기록을 설정 하위로 + ‘추가 기능’ 메뉴 신설 + 특정 폴더/파일 마지막 access time 표 추가 ·
+     용량 계산 로직과 별도로 · 기존 용량 스캔과 동시 실행 가능하게) 엣지 전용(파일시스템 stat 필요).
+     별도 모듈 atimes.py(라이브 stat, 집계·DB·스캔 락 없음 → ThreadingHTTPServer 위에서 스캔과 동시 실행).
+     GET /api/atime?path=&recursive=&limit= (path_allowed 검증, owner·atime_policy 포함, 오래된 atime 순).
+     dashboard: 상단 ‘버전 기록’ 탭 제거→설정 하위탭(histPane 으로 view-history 내용 이동), 상단 ‘🧩 추가
+     기능’ 뷰 신설(경로 입력·하위포함·limit·CSV, noatime 경고). test_atimes.py + 서버 통합테스트. v1.94.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
