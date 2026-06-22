@@ -34,4 +34,7 @@
 ## 운영
 - 작업 브랜치: `claude/upbeat-bell-cXX8f`. 푸시는 항상 이 브랜치로.
 - 릴리스: `python3 tools/make_release.py` → `download/`(버전별 + latest, tar.gz/zip).
+- **버전을 올리면 릴리스 발행(`make_release.py`)과 푸시(배포)를 항상 자동으로 진행한다 — 매번 묻지 않는다
+  (사용자 durable 승인, 2026-06-22).** 자동설치 ON 이라 미러 반영 후 13대 엣지에 자동 업그레이드됨을 인지하고 진행.
+  (코드만 올리고 발행을 빠뜨리면 자동 업그레이드가 옛 버전에 멈춘다 — 1.88~1.92 발행 누락 전례.)
 - 변경 시 `CHANGELOG.md`·`docs/PROMPT_HISTORY.md` 갱신, 테스트(`tests/test_*.py` 직접 실행)+ruff 통과 확인.
