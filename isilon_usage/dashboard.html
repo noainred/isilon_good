@@ -328,38 +328,18 @@
     </div>
 
     <div id="startForm">
-      <!-- 스캔 진행 중에는 숨겨지는 영역(마운트 선택 + 폴더 탐색) -->
-      <div id="browseSection">
-      <div class="sub" style="margin-bottom:6px;">마운트 빠른 선택 (네트워크 파일시스템 우선)</div>
-      <div id="mountPicks" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
-        <span class="sub">로딩 중…</span>
-      </div>
-
-      <div class="sub" style="margin-bottom:6px;">폴더 탐색 — 클릭해서 들어가고, “이 디렉터리 선택”으로 지정</div>
-      <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
-        <button id="browseUp" title="상위 폴더">⬆ 위로</button>
-        <input id="browsePath" class="mono"
-               style="flex:1; min-width:280px; background:#0d1219; color:#cfe3ff; border:1px solid var(--line); border-radius:7px; padding:7px 10px;"
-               placeholder="/mnt/isilon/ifs" />
-        <button id="browseGo">탐색</button>
-        <button id="browsePick" style="border-color:var(--accent2);">이 디렉터리 선택 ↓</button>
-      </div>
-      <div id="browseList"
-           style="max-height:220px; overflow:auto; border:1px solid var(--line); border-radius:8px; background:#0d1219; padding:6px; margin-bottom:8px;">
-        <span class="sub">상단에 경로를 입력하고 “탐색”을 누르세요.</span>
-      </div>
-      <div class="sub err" id="browseErr"></div>
-
-      <hr style="border:none; border-top:1px solid var(--line); margin:14px 0;" />
-      </div><!-- /browseSection -->
+      <!-- 디렉터리 선택은 공유 모달(dirPickerModal)로 통일 — 각 경로 입력란의 📁 버튼으로 연다. -->
 
       <div style="display:flex; gap:14px; align-items:flex-end; flex-wrap:wrap;">
         <div id="scanInputs" style="display:flex; gap:14px; align-items:flex-end; flex-wrap:wrap; flex:1;">
         <div style="flex:1; min-width:300px;">
           <div class="sub" style="margin-bottom:4px;">스캔할 디렉터리</div>
+          <span style="display:flex; gap:6px; align-items:center;">
           <input id="scanPath" class="mono"
-                 style="width:100%; background:#0d1219; color:#cfe3ff; border:1px solid var(--accent); border-radius:7px; padding:9px 11px; font-size:14px;"
-                 placeholder="여기에 경로를 입력하거나 위에서 선택" />
+                 style="flex:1; min-width:0; background:#0d1219; color:#cfe3ff; border:1px solid var(--accent); border-radius:7px; padding:9px 11px; font-size:14px;"
+                 placeholder="경로 입력 또는 📁 로 탐색" />
+          <button type="button" class="dirbtn" data-target="scanPath" title="폴더 탐색으로 선택" style="padding:9px 12px;">📁</button>
+          </span>
         </div>
         <div>
           <div class="sub" style="margin-bottom:4px;">백엔드</div>
@@ -918,6 +898,7 @@
         <div class="sub" style="margin-bottom:6px;">📂 특정 폴더 변화 이력 — 경로를 입력(또는 위 표의 행 클릭)하면 스캔별 <b>크기·파일수</b> 변화를 보여줍니다.</div>
         <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
           <input id="fhPath" class="mono" style="flex:1; min-width:240px; background:#0d1219; color:#cfe3ff; border:1px solid var(--line); border-radius:7px; padding:6px 9px;" placeholder="예: /mnt/isilon/ifs/project" />
+          <button type="button" class="dirbtn" data-target="fhPath" title="폴더 탐색으로 선택" style="padding:6px 10px;">📁</button>
           <button id="fhRun">이력 보기</button>
         </div>
         <div id="fhOut" class="sub">—</div>
@@ -1000,8 +981,11 @@
       각 폴더에 <b>K개 파일</b>(크기 S)을 생성합니다.
       <span style="color:var(--warn)">⚠ 실제로 파일을 씁니다 — 쓰기 가능한 경로를 지정하세요(읽기전용 NAS·시스템 경로 불가).</span></p>
     <label style="display:block;">대상 디렉터리
-      <input id="gtPath" type="text" class="setinput mono" style="width:100%;"
-             placeholder="/data/iutest 처럼 쓰기 가능한 경로" />
+      <span style="display:flex; gap:6px; align-items:center;">
+        <input id="gtPath" type="text" class="setinput mono" style="flex:1; min-width:0;"
+               placeholder="/data/iutest 처럼 쓰기 가능한 경로" />
+        <button type="button" class="dirbtn" data-target="gtPath" title="폴더 탐색으로 선택" style="padding:8px 12px;">📁</button>
+      </span>
     </label>
     <div class="setgrid" style="margin-top:10px;">
       <label>디렉터리 수 (N)
@@ -1048,8 +1032,11 @@
       몇 개인지 보고 <b>적절한 fold-depth</b> 를 고르는 데 씁니다.</p>
 
     <label style="display:block;">대상 경로
-      <input id="depPath" type="text" class="setinput mono" style="width:100%;"
-             placeholder="/mnt/hadoop 처럼 분석할 경로" />
+      <span style="display:flex; gap:6px; align-items:center;">
+        <input id="depPath" type="text" class="setinput mono" style="flex:1; min-width:0;"
+               placeholder="/mnt/hadoop 처럼 분석할 경로" />
+        <button type="button" class="dirbtn" data-target="depPath" title="폴더 탐색으로 선택" style="padding:8px 12px;">📁</button>
+      </span>
     </label>
 
     <!-- ★ 샘플 수집 시간(시간/분/초): 디렉터리가 너무 많아도 이 시간만 보고 멈춤 -->
@@ -1209,6 +1196,7 @@
     <div style="display:flex; gap:8px; align-items:center;">
       <input id="tunePath" type="text" class="setinput mono" style="flex:1; min-width:200px;"
              placeholder="대상 경로(선택) — NFS 마운트 식별용. 비우면 허용 경로 사용" />
+      <button type="button" class="dirbtn" data-target="tunePath" title="폴더 탐색으로 선택" style="padding:8px 12px;">📁</button>
       <button id="tuneRun" style="border-color:var(--accent2); color:#cfe; font-weight:700; padding:8px 16px;">점검 실행</button>
       <span id="tuneMsg" class="sub"></span>
     </div>
@@ -1288,6 +1276,7 @@
              style="flex:1; min-width:300px; padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:var(--panel2); color:var(--text); font:inherit;" class="mono" />
       <label class="sub" style="display:inline-flex; align-items:center; gap:5px;"><input type="checkbox" id="atRecursive" /> 하위 폴더 포함</label>
       <label class="sub">최대 <input id="atLimit" type="number" min="1" max="20000" value="2000" style="width:88px;" /> 개</label>
+      <button type="button" class="dirbtn" data-target="atPath" title="폴더 탐색으로 선택" style="padding:8px 12px;">📁 폴더</button>
       <button id="atGo" class="primary">조회</button>
       <button id="atCsv" style="display:none;">⬇ CSV</button>
     </div>
@@ -1333,6 +1322,33 @@
     <pre class="changelog" id="changelogBox">불러오는 중…</pre>
   </div>
 </div>
+  <!-- 공유 디렉터리 선택 모달 — 여러 경로 입력란(스캔/atime/분석/측정 등)이 함께 쓴다(단일 컴포넌트, 복제 없음). -->
+  <div id="dirPickerModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:99999; align-items:center; justify-content:center; padding:20px;">
+    <div class="card" style="width:min(680px,94vw); max-height:86vh; overflow:auto; box-shadow:0 12px 40px rgba(0,0,0,.5);">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+        <b style="font-size:1.05em;">📁 디렉터리 선택</b>
+        <button id="dirPickClose" type="button" title="닫기">✕ 닫기</button>
+      </div>
+      <div class="sub" style="margin-bottom:6px;">마운트 빠른 선택 (네트워크 파일시스템 우선)</div>
+      <div id="mountPicks" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+        <span class="sub">로딩 중…</span>
+      </div>
+      <div class="sub" style="margin-bottom:6px;">폴더 탐색 — 클릭해서 들어가고, “이 디렉터리 선택”으로 지정</div>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
+        <button id="browseUp" type="button" title="상위 폴더">⬆ 위로</button>
+        <input id="browsePath" class="mono"
+               style="flex:1; min-width:240px; background:#0d1219; color:#cfe3ff; border:1px solid var(--line); border-radius:7px; padding:7px 10px;"
+               placeholder="/mnt/isilon/ifs" />
+        <button id="browseGo" type="button">탐색</button>
+        <button id="browsePick" type="button" class="primary" style="border-color:var(--accent2);">이 디렉터리 선택 ↓</button>
+      </div>
+      <div id="browseList"
+           style="max-height:300px; overflow:auto; border:1px solid var(--line); border-radius:8px; background:#0d1219; padding:6px; margin-bottom:8px;">
+        <span class="sub">상단에 경로를 입력하고 “탐색”을 누르세요.</span>
+      </div>
+      <div class="sub err" id="browseErr"></div>
+    </div>
+  </div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -2424,7 +2440,7 @@ async function doBrowse(path, _confirmed) {
     list.querySelectorAll(".diritem").forEach(el => {
       const p = decodeURIComponent(el.dataset.go);
       el.addEventListener("click", () => doBrowse(p));            // 들어가기
-      el.addEventListener("dblclick", () => { $("scanPath").value = p; });
+      el.addEventListener("dblclick", () => setPickValue(p));
     });
     if (j.error) $("browseErr").textContent = "일부 접근 불가: " + j.error;
   } catch (e) {
@@ -4067,7 +4083,27 @@ $("scanSelect").addEventListener("change", () => {
 $("browseGo").addEventListener("click", () => doBrowse($("browsePath").value.trim()));
 $("browsePath").addEventListener("keydown", (e) => { if (e.key === "Enter") doBrowse($("browsePath").value.trim()); });
 $("browseUp").addEventListener("click", () => doBrowse($("browseUp").dataset.parent || "/"));
-$("browsePick").addEventListener("click", () => { $("scanPath").value = $("browsePath").value.trim(); });
+$("browsePick").addEventListener("click", () => setPickValue($("browsePath").value.trim()));
+
+// ---- 공유 디렉터리 선택 모달: 여러 경로 입력란(scan/atime/분석/측정/이력)이 같은 모달을 쓴다(단일 컴포넌트) ----
+let _pickTarget = "scanPath";
+function openDirPicker(targetId, start) {
+  _pickTarget = targetId || "scanPath";
+  $("dirPickerModal").style.display = "flex";
+  loadMounts();
+  const el = $(_pickTarget);
+  doBrowse(start || (el && el.value.trim()) || "");   // 현재 입력값에서 이어서 탐색
+}
+function closeDirPicker() { $("dirPickerModal").style.display = "none"; }
+function setPickValue(p) {                              // 선택 → 타깃 입력란에 채우고 닫기
+  const el = $(_pickTarget);
+  if (el) el.value = p;
+  closeDirPicker();
+}
+$("dirPickClose").addEventListener("click", closeDirPicker);
+$("dirPickerModal").addEventListener("click", (e) => { if (e.target === $("dirPickerModal")) closeDirPicker(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("dirPickerModal").style.display === "flex") closeDirPicker(); });
+document.querySelectorAll(".dirbtn").forEach((b) => b.addEventListener("click", () => openDirPicker(b.dataset.target)));
 $("startBtn").addEventListener("click", startScan);
 // 설정 카드
 $("saveSettingsBtn").addEventListener("click", saveSettings);

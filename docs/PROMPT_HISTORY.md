@@ -848,4 +848,11 @@
      nconnect 안내 정정(remount 불가→fstab 재마운트), tunecheck --apply-sysctls(런타임 sysctl 화이트리스트
      만·argv·CLI 옵트인·root; 웹 표면 안 만듦). 실측은 실 NFS 필요(과장 금지). v1.95.0.
 
+255. (서버에 있는 디렉터리 보면서 작업 디렉터리 특정할 수 있게, 디렉터리 브라우징 기능 추가 [+이미지:
+     추가기능 atime 화면]) 기존 ‘새 스캔’ 화면에만 인라인으로 있던 폴더 탐색기(browseSection, scanPath
+     고정)를 공유 모달 dirPickerModal 로 일반화(복제 없음, 단일 컴포넌트). 경로 입력란 6곳에 📁 버튼
+     (scanPath/atPath/depPath/gtPath/tunePath/fhPath) → openDirPicker(targetId)로 같은 모달을 열고
+     타깃만 변수화. setPickValue 로 채우고 닫기, ESC/바깥클릭 닫기. 백엔드 /api/browse 재사용
+     (browse_allowed·mount_bases 검증). DOM 균형·node --check·테스트·ruff 통과. v1.96.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
