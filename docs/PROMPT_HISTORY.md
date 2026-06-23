@@ -855,4 +855,13 @@
      타깃만 변수화. setPickValue 로 채우고 닫기, ESC/바깥클릭 닫기. 백엔드 /api/browse 재사용
      (browse_allowed·mount_bases 검증). DOM 균형·node --check·테스트·ruff 통과. v1.96.0.
 
+256. (리붓했더니 포탈 노드가 전부 오프라인 — 토큰 불일치(401) [+이미지: 노드 목록/관리 화면]) 진단:
+     엣지 api_token 은 settings.json 에 저장되고 serve 는 읽기만 함(생성 안 함). 토큰을 새로 만드는 건
+     install_edge.sh 의 fallback secrets.token_hex(16) 뿐 — 부팅 자동설치가 data-dir(settings.json)을
+     못 읽으면(마운트 레이스) 기존 토큰을 유지 못 하고 재생성 → 13대 동시 불일치. 요청대로 포탈에
+     ‘토큰 강제 맞추기’ 추가: set_node_token(ids,token)(전체/개별, 빈토큰 거부) + POST
+     /api/portal/nodes/set-token, UI 는 비밀번호관리와 같은 드롭다운(1개 적용/전체 일괄 적용), 포탈
+     로컬(portal_nodes.json)만 교정·적용 후 자동 동기화. 엣지 무접근(토큰 마스킹이라 자동조회 불가).
+     테스트·ruff 통과. v1.97.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

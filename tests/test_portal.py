@@ -155,10 +155,41 @@ def _test_csv_import() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _test_set_node_token() -> None:
+    """토큰 강제 맞추기(set_node_token): 1개/일괄 적용 + 영속 + 빈 토큰 거부."""
+    d = tempfile.mkdtemp(prefix="portal_settok_")
+    try:
+        pc = portalmod.PortalController(d)
+        pc.upsert_node({"id": "n1", "url": "http://10.0.0.1:8765", "token": "OLD1"})
+        pc.upsert_node({"id": "n2", "url": "http://10.0.0.2:8765", "token": "OLD2"})
+        # 1개 적용: n1 만 바뀌고 n2 는 그대로
+        r = pc.set_node_token(["n1"], "NEW1")
+        assert r["ok"] and r["count"] == 1 and r["applied"] == ["n1"], r
+        byid = {n["id"]: n for n in pc.nodes}
+        assert byid["n1"]["token"] == "NEW1" and byid["n2"]["token"] == "OLD2", byid
+        # 영속: 디스크에서 재로딩해도 유지
+        reloaded = {n["id"]: n for n in portalmod.load_nodes(d)}
+        assert reloaded["n1"]["token"] == "NEW1", reloaded
+        # 일괄 적용: ids 비면 전체 노드
+        r2 = pc.set_node_token([], "ALLTOK")
+        assert r2["ok"] and r2["count"] == 2, r2
+        assert all(n["token"] == "ALLTOK" for n in pc.nodes), pc.nodes
+        # 빈 토큰 거부(인증 끄기 방지)
+        r3 = pc.set_node_token([], "   ")
+        assert not r3["ok"] and "비어" in r3["reason"], r3
+        # 없는 노드만 지정 → 대상 없음
+        r4 = pc.set_node_token(["nope"], "X")
+        assert not r4["ok"], r4
+        print("[portal] set_node_token(1개/일괄/영속/빈토큰거부) OK")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     _test_save_nodes_concurrent()
     _test_ping_history()
     _test_csv_import()
+    _test_set_node_token()
     tmp = tempfile.mkdtemp(prefix="portal_")
     root = os.path.join(tmp, "tree")
     _make_tree(root)

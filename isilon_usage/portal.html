@@ -613,6 +613,18 @@
     </div>
     <div id="npResult" class="sub" style="margin-top:8px;"></div>
   </div>
+  <div class="card" id="cardNodeToken" style="margin-bottom:14px;">
+    <h2>🔧 노드 토큰 강제 맞추기 (포탈 저장값 교정)</h2>
+    <div class="sub" style="margin-bottom:8px;">재부팅 등으로 엣지 <b>api_token</b> 이 바뀌어 <b>토큰 불일치(401)</b> 로 오프라인이 됐을 때, 엣지의 <b>현재 토큰</b>을 알고 있으면 포탈 저장값을 그 값으로 강제로 맞춥니다 — 엣지는 건드리지 않고 <b>포탈 로컬만</b> 교정하므로 다음 폴링부터 인증이 통과합니다. 엣지에서 <span class="mono">cat &lt;data-dir&gt;/settings.json</span> 의 <span class="mono">api_token</span> 으로 확인하세요.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <select id="tkNode" class="inp" style="min-width:200px;" title="대상 노드(개별 선택 → 1개 적용)"><option value="">— 노드 선택 —</option></select>
+      <input id="tkToken" type="password" class="inp mono" placeholder="엣지 api_token" autocomplete="new-password" style="flex:1; min-width:220px;" />
+      <button id="tkOneBtn" class="primary" title="드롭다운에서 고른 노드 1개에 적용">1개 적용</button>
+      <button id="tkAllBtn" title="입력한 토큰을 등록된 모든 노드에 일괄 적용">전체 일괄 적용</button>
+      <span class="sub" id="tkMsg"></span>
+    </div>
+    <div id="tkResult" class="sub" style="margin-top:8px;"></div>
+  </div>
   <div class="card" id="cardEnroll" style="margin-bottom:14px;">
     <h2>🔑 엣지 자기등록 토큰 (enroll token)</h2>
     <div class="sub" style="margin-bottom:8px;">엣지 설치 시 <span class="mono">--hq http://&lt;이포탈&gt;:8800</span> 을 주면 엣지가 스스로 등록됩니다. 포탈에 <b>로그인 비밀번호가 설정된 경우</b>엔 엣지가 이 공유 토큰을 함께 보내야 등록됩니다(엣지 쪽 <span class="mono">--enroll &lt;토큰&gt;</span>). 비밀번호가 없으면(신뢰망) 토큰 없이도 등록됩니다. 비우고 저장하면 토큰 검사를 끕니다.</div>
@@ -1442,6 +1454,12 @@ async function loadNodes(){
       np.innerHTML='<option value="">전체 노드</option>'+rows.map(n=>
         `<option value="${escAttr(n.id)}">${n.id}${n.token_set===false?" (토큰없음)":""}</option>`).join("");
       np.value=cur; }
+    // 토큰 강제 맞추기 드롭다운(개별 노드 — 온라인/오프라인 표시)
+    const tk=$("tkNode");
+    if(tk){ const cur=tk.value;
+      tk.innerHTML='<option value="">— 노드 선택 —</option>'+rows.map(n=>
+        `<option value="${escAttr(n.id)}">${n.id}${n.online?"":" (오프라인)"}</option>`).join("");
+      tk.value=cur; }
   } catch(e){ /* 무시 */ }
 }
 
@@ -1466,6 +1484,32 @@ async function nodePassword(clear){
 }
 $("npSetBtn").addEventListener("click",()=>nodePassword(false));
 $("npClearBtn").addEventListener("click",()=>nodePassword(true));
+
+// 노드 토큰 강제 맞추기(포탈 저장값 교정) — 1개 적용 / 전체 일괄 적용
+async function applyNodeToken(all){
+  const tok=$("tkToken").value.trim(), id=$("tkNode").value, msg=$("tkMsg");
+  if(!tok){ msg.textContent="엣지 api_token 을 입력하세요."; return; }
+  let ids;
+  if(all){ ids=[]; }
+  else { if(!id){ msg.textContent="대상 노드를 고르거나 ‘전체 일괄 적용’을 쓰세요."; return; } ids=[id]; }
+  const tgt=all?"전체 노드":("노드 ‘"+id+"’");
+  if(!confirm(tgt+" 의 포탈 저장 토큰을 입력값으로 맞출까요?")) return;
+  msg.textContent="적용 중…"; $("tkResult").innerHTML="";
+  try{
+    const j=await (await fetch("/api/portal/nodes/set-token",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({ids, token:tok})})).json();
+    if(!j.ok){ msg.textContent="실패: "+(j.reason||"오류 — 로그인이 필요할 수 있습니다"); return; }
+    $("tkToken").value="";
+    msg.textContent=`✓ ${j.count} 개 노드 적용 — 동기화 중…`;
+    $("tkResult").innerHTML="적용: "+(j.applied||[]).map(i=>`<span class="mono">${escAttr(i)}</span>`).join(", ");
+    // 즉시 전체 폴링으로 온라인 반영
+    try{ await fetch("/api/portal/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:null})}); }catch(e){}
+    setTimeout(()=>{ loadNodes(); if(typeof loadOverview==="function") loadOverview(); }, 1500);
+  }catch(e){ msg.textContent="요청 오류: "+e; }
+}
+if($("tkOneBtn")) $("tkOneBtn").addEventListener("click",()=>applyNodeToken(false));
+if($("tkAllBtn")) $("tkAllBtn").addEventListener("click",()=>applyNodeToken(true));
 
 // 포탈 제목(브랜딩) 저장
 $("setTitleBtn").addEventListener("click",async()=>{

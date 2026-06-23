@@ -1281,6 +1281,33 @@ class PortalController:
             self._save()
         return {"ok": True, "node": _public_node(n, self._cache)}
 
+    def set_node_token(self, ids, token: str) -> dict:
+        """선택한(또는 전체) 노드의 api_token 을 포탈 저장값에 강제로 맞춘다.
+
+        재부팅 등으로 엣지 api_token 이 새로 생성돼 '토큰 불일치(401)' 로 오프라인이 된
+        노드를, 운영자가 아는 엣지의 '현재 토큰' 으로 교정한다. 엣지에는 접근하지 않고
+        포탈 로컬(portal_nodes.json)의 token 만 덮어쓴다 — 다음 폴링부터 인증이 통과한다.
+
+        ids 가 비면 전체 노드가 대상(일괄)이고, id 하나만 주면 그 노드만(1개)이다.
+        빈 토큰은 엣지 인증을 꺼버리므로(공개) 거부한다.
+        """
+        token = str(token or "").strip()
+        if not token:
+            return {"ok": False, "reason": "토큰이 비어 있습니다(빈 토큰은 인증을 끄므로 거부)."}
+        want = {str(i) for i in (ids or [])}
+        with self._lock:
+            targets = [n for n in self.nodes if (not want or n["id"] in want)]
+            if not targets:
+                return {"ok": False, "reason": "대상 노드가 없습니다(등록된 노드를 확인하세요)."}
+            for n in targets:
+                n["token"] = token
+            self._save()
+            applied = [n["id"] for n in targets]
+        auditmod.record(self.data_dir, action="node_token_set", ok=True,
+                        detail="%d node(s): %s" % (len(applied), ",".join(applied)))
+        return {"ok": True, "count": len(applied), "applied": applied,
+                "results": [{"id": i, "ok": True} for i in applied]}
+
     def enroll_node(self, raw: dict) -> dict:
         """엣지가 스스로 포탈에 등록한다(자기 enroll). 공유 enroll_token 으로 인증.
 
@@ -2585,6 +2612,10 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/portal/nodes/delete":
                 self._send_json(c.delete_node(str(body.get("id") or "")))
+                return
+            if path == "/api/portal/nodes/set-token":  # 토큰 강제 맞추기(1개/일괄) — 포탈 로컬만 교정
+                self._send_json(c.set_node_token(body.get("ids") or [],
+                                                 str(body.get("token") or "")))
                 return
             if path == "/api/portal/test":
                 self._send_json(c.test_node(body))
