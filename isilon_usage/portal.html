@@ -546,6 +546,7 @@
       <button id="csvImportBtn" class="primary">⬆ 가져오기</button>
       <button id="csvSampleDownload">⬇ 샘플 CSV 받기</button>
       <button id="csvSampleBtn">예시 채우기</button>
+      <button id="csvExportBtn" title="현재 등록된 노드를 CSV로 내려받기(토큰은 빈칸 — 채워서 가져오기)">⬇ 현재 구성 내보내기</button>
       <span id="csvMsg" class="sub" style="margin-left:4px;"></span>
     </div>
   </div>
@@ -1644,7 +1645,26 @@ $("testBtn").addEventListener("click", async ()=>{
   const j = await (await fetch("/api/portal/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(nodePayload())})).json();
   $("nodeMsg").textContent = j.ok ? `✓ 연결 OK · v${j.version||"?"} · ${fmtNum(j.storages)} 스토리지 · ${fmtBytes(j.used_bytes)}` : ("✗ "+(j.reason||"실패"));
 });
-// ---- CSV 일괄 가져오기 ----
+// ---- CSV 일괄 가져오기/내보내기 ----
+// 현재 등록 노드를 CSV 로 내보내기(가져오기 헤더와 호환 · 토큰은 보안상 빈칸 → 채워서 가져오기)
+async function exportNodesCsv(){
+  try{
+    const j=await (await fetch("/api/portal/nodes",{cache:"no-store"})).json();
+    const rows=j.nodes||[];
+    if(!rows.length){ $("csvMsg").textContent="내보낼 노드가 없습니다."; return; }
+    const esc=s=>{ s=String(s==null?"":s); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
+    const head=["id","url","region","token","alias_local","alias_logical"];
+    const lines=[head.join(",")];
+    rows.forEach(n=>lines.push([esc(n.id),esc(n.url),esc(n.region),"",
+      esc(n.alias_local),esc(n.alias_logical)].join(",")));
+    const blob=new Blob([lines.join("\r\n")],{type:"text/csv;charset=utf-8"});
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob); a.download="portal_nodes.csv"; a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+    $("csvMsg").textContent=`현재 ${rows.length}개 노드를 내보냈습니다 — token 칸을 엣지 실제 토큰으로 채워 ‘가져오기’ 하세요.`;
+  }catch(e){ $("csvMsg").textContent="내보내기 실패: "+e; }
+}
+if($("csvExportBtn")) $("csvExportBtn").addEventListener("click", exportNodesCsv);
 $("csvFile").addEventListener("change", async (e)=>{
   const f = e.target.files && e.target.files[0]; if(!f) return;
   try { $("csvText").value = await f.text();

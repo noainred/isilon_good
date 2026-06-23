@@ -868,4 +868,10 @@
      재배치(moves: np-nodes/np-account/np-monitor)하는데 새 cardNodeToken 을 매핑에 빠뜨려 어느 탭에도
      안 들어가 사라짐. np-account(계정·보안)의 cardNodePw 다음에 등록해 수정. v1.97.1.
 
+258. (지금 구성 export 메뉴 추가 + “export 했다 import 하면 살아나?”) 정직히: 그대로 라운드트립은
+     틀린 토큰을 그대로 되돌려 복구 아님 — token 칸을 엣지 실제 토큰으로 채워 가져와야 산다. CSV
+     가져오기 옆에 ‘현재 구성 내보내기’ 버튼 추가(클라이언트가 /api/portal/nodes 받아
+     id,url,region,token(빈칸),alias 헤더로 다운로드, 가져오기와 호환). 토큰은 보안상 빈칸(복구
+     템플릿). 즉시용 서버 명령(portal_nodes.json→CSV, 토큰 포함)도 안내. v1.97.2.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
