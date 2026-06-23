@@ -54,11 +54,31 @@ def run_nfs_opts() -> None:
     # noac → warn
     sec_noac = systune._nfs_section({"mount": "/m", "options": {"noac": True}})
     assert any(it["level"] == "warn" and "noac" in it["key"] for it in sec_noac["items"]), sec_noac
-    print("[nfs] OK  nconnect/noac 판정")
+    # readdirplus: nordirplus 면 warn, 아니면 tip(자동)
+    rp_off = systune._nfs_section({"mount": "/m", "options": {"nordirplus": True}})
+    assert any(it["key"] == "readdirplus" and it["level"] == "warn" for it in rp_off["items"]), rp_off
+    rp_auto = systune._nfs_section({"mount": "/m", "options": {"vers": "4.1"}})
+    assert any(it["key"] == "readdirplus" and it["level"] == "tip" for it in rp_auto["items"]), rp_auto
+    print("[nfs] OK  nconnect/noac/readdirplus 판정")
+
+
+def run_apply_sysctls() -> None:
+    # dry_run(기본)은 시스템을 바꾸지 않고 명령만 생성(ok=None) — 화이트리스트 키만.
+    res = systune.apply_sysctls(dry_run=True)
+    assert res["ok"] and res["dry_run"], res
+    keys = {a["key"] for a in res["applied"]}
+    assert "sunrpc.tcp_slot_table_entries" in keys, keys
+    assert all(a["ok"] is None for a in res["applied"]), res            # 미실행
+    assert all(a["cmd"].startswith("sysctl -w ") for a in res["applied"]), res
+    # 화이트리스트 밖 키(주입 시도)는 무시된다
+    res2 = systune.apply_sysctls({"evil; rm -rf /": "1"}, dry_run=True)
+    assert all(";" not in a["key"] for a in res2["applied"]), res2
+    print("[apply] OK  dry-run 명령 생성·화이트리스트 차단")
 
 
 if __name__ == "__main__":
     run_structure()
     run_target_pick()
     run_nfs_opts()
+    run_apply_sysctls()
     print("모든 테스트 통과 ✅")

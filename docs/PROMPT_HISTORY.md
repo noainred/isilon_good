@@ -835,4 +835,17 @@
      dashboard: 상단 ‘버전 기록’ 탭 제거→설정 하위탭(histPane 으로 view-history 내용 이동), 상단 ‘🧩 추가
      기능’ 뷰 신설(경로 입력·하위포함·limit·CSV, noatime 경고). test_atimes.py + 서버 통합테스트. v1.94.0.
 
+253. (전체 소스 보안 취약점 점검해줘) 위험패턴 전수 스캔 + 핵심 파일 정독(서버/포탈/HTML 에이전트 3 +
+     직접 검증). 코드 위생은 양호(SQL 전수 파라미터 바인딩·eval/pickle 없음·subprocess argv·PBKDF2+
+     상수시간·경로탈출/zip폭탄 방어). 핵심 위험: ①기본 무인증+0.0.0.0+경로제한 없음(전면 개방) ②provision
+     스크립트 host 셸 주입(portal.py, q() 누락) ③저장형 XSS(NAS 파일명, escHtml 누락) ④무인증 설정변경→
+     SSRF ⑤TLS 검증 기본 OFF ⑥토큰 URL 쿼리 ⑦op_password 평문 ⑧자동업그레이드 서명 없음 ⑨심링크로
+     mount_bases 우회. 심각도별 보고. ‘치명+높음부터 수정’ 합의했으나 다음 작업으로 전환돼 보류.
+
+254. (디스크 검색을 보다 빠르게 할 방법 찾아줘 → ‘스캔 워킹 속도’ 선택) pscan 정독: 이미 scandir+d_type·
+     멀티프로세스×멀티스레드×멀티노드·적응형 분할·autotune 다 적용(앱 레벨 천장 근처). 진단: 다음 병목은
+     앱이 아니라 커널 NFS 동시성(nconnect=1이면 RPC 한 연결 직렬화). systune 강화 — readdirplus 점검 신설,
+     nconnect 안내 정정(remount 불가→fstab 재마운트), tunecheck --apply-sysctls(런타임 sysctl 화이트리스트
+     만·argv·CLI 옵트인·root; 웹 표면 안 만듦). 실측은 실 NFS 필요(과장 금지). v1.95.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

@@ -13,6 +13,29 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.95.0] - 2026-06-23
+
+### 추가됨 (Added) — 튜닝 점검 강화: readdirplus 점검 + nconnect 안내 정정 + 런타임 sysctl 적용(CLI 옵트인)
+
+‘스캔 워킹 속도’의 다음 병목은 앱이 아니라 **커널 NFS 동시성**이라는 진단을 점검에 반영했다.
+앱(pscan)은 이미 멀티프로세스×멀티스레드×멀티노드로 동시 stat 을 키우지만, 커널 NFS 클라이언트가
+`nconnect=1`(기본)이면 모든 RPC 가 한 TCP 연결에 직렬화돼 거기서 막힌다.
+
+- **readdirplus 점검 신설(systune):** NFS 마운트의 readdirplus 상태를 점검한다. `nordirplus`(끔)면
+  경고 — readdir 뒤 파일마다 GETATTR 왕복이 따로 생겨 수억 stat 환경의 최대 비용. 켜져 있으면 readdir 에
+  속성이 실려와 `scandir` 기반 스캔의 `entry.stat()` 왕복이 사라진다(메타데이터 스캔의 결정적 가속).
+- **nconnect 안내 정정:** 기존 ‘`mount -o remount,nconnect=16`’ 안내는 **실제로 동작하지 않는다**(커널이
+  remount 의 nconnect 변경을 무시). fstab 에 넣고 언마운트 후 재마운트하는 정확한 절차로 고쳤다(Linux 5.3+).
+- **런타임 sysctl 적용(CLI 옵트인):** `isilon_usage tunecheck --apply-sysctls`(기본은 미리보기) →
+  `--apply`(root)로 `sunrpc.tcp_slot_table_entries`·`vm.swappiness`·`vm.vfs_cache_pressure`·
+  `net.core.rmem_max` 만 적용. **화이트리스트 키만** 다루고 `sysctl` 은 argv 리스트로 호출(셸 미사용).
+  마운트 옵션(nconnect)은 재마운트가 필요해 제외하고 점검 안내로만 둔다. **웹 엔드포인트는 만들지 않았다**
+  (무인증 변경 표면을 키우지 않기 위함 — 적용은 root 가 직접 CLI 로).
+- 실측 효과(nconnect/readdirplus)는 **실 NFS·아이실론 클러스터에서만** 확인 가능하다(과장 금지).
+  `tests/test_systune.py` 에 readdirplus 판정·`apply_sysctls` dry-run·화이트리스트 차단 검증 추가.
+
+---
+
 ## [1.94.0] - 2026-06-22
 
 ### 추가됨 (Added) — ‘추가 기능’ 메뉴 + 폴더 마지막 접근시각(atime) 표 · ‘버전 기록’을 설정 하위로

@@ -454,6 +454,17 @@ def cmd_tunecheck(args: argparse.Namespace) -> int:
             print("     권장: %s — %s" % (it["recommended"], it["note"]))
             if it.get("fix") and it["level"] in ("warn", "tip"):
                 print("     적용: %s" % it["fix"])
+    if getattr(args, "apply_sysctls", False):
+        dry = not getattr(args, "apply", False)
+        res = sysmod.apply_sysctls(dry_run=dry)
+        print("\n[런타임 sysctl — %s]" % ("적용" if not dry else "미리보기(--apply 로 실제 적용)"))
+        for a in res["applied"]:
+            mark = "·" if a["ok"] is None else ("🟢" if a["ok"] else "🔴")
+            line = "  %s %s" % (mark, a["cmd"])
+            if a.get("error"):
+                line += "   (%s)" % a["error"]
+            print(line)
+        print("  ↳ %s" % res["note"])
     return 0
 
 
@@ -816,6 +827,10 @@ def build_parser() -> argparse.ArgumentParser:
     ptc.add_argument("path", nargs="?", default=None, help="대상 경로(NFS 마운트 식별용, 선택)")
     ptc.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
     ptc.add_argument("--json", action="store_true", help="결과를 JSON 으로 출력")
+    ptc.add_argument("--apply-sysctls", action="store_true",
+                     help="런타임 sysctl 권장값 처리(기본 미리보기; 실제 적용은 --apply 와 root)")
+    ptc.add_argument("--apply", action="store_true",
+                     help="--apply-sysctls 와 함께: 실제로 sysctl 적용(root 필요)")
     ptc.set_defaults(func=cmd_tunecheck)
 
     pps = sub.add_parser("pscan", help="[PoC] 멀티프로세스 병렬 스캔"
