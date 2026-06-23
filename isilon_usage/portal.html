@@ -1001,7 +1001,7 @@ document.querySelectorAll("#view-nodes .stab").forEach(b=>b.addEventListener("cl
 
 // 설정 카드를 종류별 탭으로 재배치(노드 관리 / 계정·보안 / 모니터링·백업 / 일반).
 (function(){
-  const moves={ "np-nodes":["cardProvision"], "np-account":["cardLoginSec","cardNodePw","cardEnroll"], "np-monitor":["cardBackup","cardAskLlm"] };
+  const moves={ "np-nodes":["cardProvision"], "np-account":["cardLoginSec","cardNodePw","cardNodeToken","cardEnroll"], "np-monitor":["cardBackup","cardAskLlm"] };
   Object.keys(moves).forEach(pane=>{ const p=document.getElementById(pane); if(!p) return;
     moves[pane].forEach(id=>{ const el=document.getElementById(id); if(el) p.appendChild(el); }); });
   const g=document.getElementById("np-general"), t=document.getElementById("cardTitle");
