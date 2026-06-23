@@ -400,6 +400,32 @@ def _check_auto_restart() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _check_last_scan_remember() -> None:
+    """start_scan 이 사용 파라미터를 settings.last_scan 에 기억한다(다음 시작 폼 복원용)."""
+    import shutil
+
+    from isilon_usage import settings as setmod
+    from isilon_usage.server import ScanController
+    d = tempfile.mkdtemp(prefix="isilon_lastscan_")
+    try:
+        c = ScanController(os.path.join(d, "data"))
+        os.makedirs(c.data_dir, exist_ok=True)
+        c._launch = lambda *a, **k: None              # type: ignore[assignment]
+        c._launch_pscan = lambda *a, **k: None         # type: ignore[assignment]
+        c.scan_path_check = lambda p, confirm_outside=False: (True, None)  # type: ignore[assignment]
+        res = c.start_scan(d, backend="du", size_mode="apparent",
+                           one_file_system=True, engine="threads", auto_restart=False)
+        assert res["ok"], res
+        ls = setmod.load(c.data_dir).get("last_scan") or {}
+        assert ls.get("path") == os.path.abspath(d), ls
+        assert ls.get("backend") == "du" and ls.get("size_mode") == "apparent", ls
+        assert ls.get("one_file_system") is True and ls.get("engine") == "threads", ls
+        assert "workers" in ls and "ts" in ls, ls
+        print("[server] start_scan → settings.last_scan 기억 OK")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     _check_insecure_warning()
     _check_resume_after_upgrade()
@@ -407,6 +433,7 @@ def main() -> int:
     _check_email_notifications()
     _check_op_password()
     _check_auto_restart()
+    _check_last_scan_remember()
     tmp = tempfile.mkdtemp(prefix="isilon_srv_")
     root = os.path.join(tmp, "tree")
     _make_tree(root)

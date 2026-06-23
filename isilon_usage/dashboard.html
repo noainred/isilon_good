@@ -379,6 +379,7 @@
         </button>
       </div>
       <div id="startMsg" class="sub" style="margin-top:10px;"></div>
+      <div id="lastScanNote" class="sub" style="margin-top:4px; opacity:.85;"></div>
     </div>
   </div>
 
@@ -1662,11 +1663,26 @@ async function loadSettings() {
     renderSchedules();
     populateSchedulePaths();
 
-    // 첫 로드 시 "새 스캔 시작" 폼 기본값을 설정값으로 채움
+    // 첫 로드 시 "새 스캔 시작" 폼을 채운다 — 지난 실행(last_scan) 설정이 있으면 그걸 우선
+    // 복원하고, 없으면 기본 설정값으로 채운다(다음 실행 시 같은 파라미터로 바로 시작).
     if (!settingsLoaded) {
-      $("optBackend").value = s.default_backend;
-      $("optSize").value = s.default_size_mode;
-      $("optOFS").checked = !!s.default_one_file_system;
+      const ls = s.last_scan || null;
+      $("optBackend").value = (ls && ls.backend) || s.default_backend;
+      $("optSize").value = (ls && ls.size_mode) || s.default_size_mode;
+      $("optOFS").checked = ls ? !!ls.one_file_system : !!s.default_one_file_system;
+      if (ls) {
+        if ($("optEngine") && ls.engine) $("optEngine").value = ls.engine;
+        if ($("optAutoRestart")) $("optAutoRestart").checked = !!ls.auto_restart;
+        if ($("scanPath") && ls.path && !$("scanPath").value) $("scanPath").value = ls.path;
+      }
+      const lsNote = $("lastScanNote");
+      if (lsNote && ls) {
+        const t = ls.ts ? new Date(ls.ts * 1000).toLocaleString("ko-KR") : "";
+        lsNote.textContent = "↩ 지난 실행 설정 불러옴" + (t ? " (" + t + ")" : "")
+          + " — 엔진 " + (ls.engine || "?") + ", 백엔드 " + (ls.backend || "?")
+          + ", 용량 " + (ls.size_mode || "?") + ", 워커 " + (ls.workers || "?")
+          + (ls.fold_depth ? ", fold " + ls.fold_depth : "");
+      }
     }
     // 새로고침 주기 반영
     if (s.refresh_ms && s.refresh_ms !== refreshMs) {
@@ -2196,9 +2212,15 @@ function tpRender(j) {
   if (!bks.length) {
     $("tpSummary").innerHTML = '<span class="sub">아직 표본이 없습니다 — 스캔이 돌고 ~1분 지나면 쌓입니다(서버 샘플러 10초 간격).</span>';
   } else {
+    const _t0 = bks[0].t, _t1 = bks[bks.length - 1].t;
+    const _spanMin = Math.round(((_t1 - _t0) + _tpBucket) / 60);   // 첫 버킷 시작 ~ 마지막 버킷 끝
+    const _spanTxt = _spanMin >= 60
+      ? (Math.floor(_spanMin / 60) + "시간" + (_spanMin % 60 ? " " + (_spanMin % 60) + "분" : ""))
+      : (_spanMin + "분");
     $("tpSummary").innerHTML = '표시 구간 합계: <b>' + fmtBytes(j.total_bytes || 0) + '</b> · 파일 <b>'
       + fmtNum(Math.round(j.total_files || 0)) + '</b> · 디렉터리 <b>' + fmtNum(Math.round(j.total_dirs || 0))
-      + '</b>  <span class="sub">(' + bks.length + '개 ' + lab + ' 버킷)</span>';
+      + '</b>  <span class="sub">(' + bks.length + '개 ' + lab + ' 버킷)</span>'
+      + '<br><span class="sub">⏱ 측정 시간: <b>' + tpFmtTime(_t0) + '</b> ~ <b>' + tpFmtTime(_t1) + '</b> · ' + _spanTxt + '</span>';
   }
   _tpBuckets = bks;
   tpDrawCharts(null);

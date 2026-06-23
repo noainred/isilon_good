@@ -48,6 +48,7 @@ DEFAULTS: dict = {
     "op_ttl_minutes": 30,               # 로그인 세션 유지 시간(분) — 사용자가 지정
     "show_update_popup": False,         # 업그레이드 후 첫 접속 시 변경내용 팝업(기본 끔)
     "default_engine": "threads",        # 새 스캔 기본 엔진: threads(상세) | pscan(빠른 용량)
+    "last_scan": {},                    # 마지막 스캔 시작 파라미터+적용변수(다음 시작 폼 복원·참고)
     "upgrade_watch_dir": "",            # 자동 업그레이드 감시 폴더(빈값=끔). 새 버전 압축본 감지
     "upgrade_check_secs": 60,          # 감시 폴더/인터넷 점검 주기(초)
     "upgrade_source": "off",           # 인터넷 자동 업그레이드 소스: off / github(raw versions.json)
@@ -141,6 +142,8 @@ def sanitize(raw: dict) -> dict:
     s["show_update_popup"] = bool(s.get("show_update_popup", False))
     s["default_engine"] = (s.get("default_engine")
                            if s.get("default_engine") in ("threads", "pscan") else "threads")
+    _ls = s.get("last_scan")            # 마지막 스캔 파라미터 스냅샷(dict 만 허용; 내부는 앱이 채움)
+    s["last_scan"] = _ls if isinstance(_ls, dict) else {}
     s["upgrade_watch_dir"] = str(s.get("upgrade_watch_dir") or "").strip()
     try:
         s["upgrade_check_secs"] = max(10, int(s.get("upgrade_check_secs", 60) or 60))

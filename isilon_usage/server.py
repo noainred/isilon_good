@@ -1613,6 +1613,25 @@ class ScanController:
             self._save_auto_restart()       # 재시작·업그레이드 후에도 반복이 살아남도록 디스크에 기록
         self._log("scan #%d start: %s (engine=%s, backend=%s, size=%s, x=%s, ro=%s, loop=%s)" % (
             scan_id, path, engine, backend, size_mode, one_file_system, readonly, auto_restart))
+        # 이번 시작에 사용한 파라미터 + 적용된 변수를 기억한다(다음 시작 폼 복원·참고용).
+        try:
+            merged = dict(self.settings)
+            merged["last_scan"] = {
+                "path": path, "backend": backend, "size_mode": size_mode,
+                "one_file_system": bool(one_file_system), "engine": engine,
+                "auto_restart": bool(auto_restart),
+                "workers": int(getattr(self, "workers", None) or self.settings.get("scan_workers", 8) or 8),
+                "fold_depth": int(self.settings.get("fold_depth", 0) or 0),
+                "max_depth": int(self.settings.get("scan_max_depth", 0) or 0),
+                "db_max_gb": int(self.settings.get("db_max_gb", 0) or 0),
+                "min_free_gb": int(self.settings.get("min_free_gb", 0) or 0),
+                "hardlink_dedup": bool(self.settings.get("hardlink_dedup", True)),
+                "check_readonly": bool(self.settings.get("check_readonly", True)),
+                "ts": time.time(),
+            }
+            self.settings = setmod.save(self.data_dir, merged)
+        except Exception:  # noqa: BLE001 — 기억 실패가 스캔을 막지 않는다
+            pass
         if engine == "pscan":
             self._launch_pscan(scan_id, db_path, path, size_mode,
                                processes=processes, threads=threads)
