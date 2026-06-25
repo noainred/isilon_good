@@ -887,4 +887,10 @@
      엣지 autotune_start 에 one_file_system 추가(조합 지원). pscan 은 중지 불가라 재시작 시 사유 스킵.
      라우트 /api/portal/node-scan-all. 단위테스트·JS·ruff 통과. v1.99.0.
 
+261. (프로그램 제목을 첨부 디자인 참고해 ‘NAS Management’ 로 [+이미지: The Davinci Virtual Platform
+     로고]) 포탈·대시보드 상단 h1 을 아이콘(그라데이션 N)+제목+버전 배지(앱 버전 자동)+LIVE 배지
+     구조로 교체, 제목 ‘NAS Management’. 포탈 applyPortalTitle 이 brandTitle/brandSub 를 채우게 수정
+     (커스텀 portal_title 있으면 우선). title 태그·동적 title 갱신, 버전 배지는 기존 version 핸들러에
+     연결. DOM 균형·JS 구문·ruff 통과. v1.99.1.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
