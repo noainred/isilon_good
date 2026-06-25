@@ -1244,7 +1244,7 @@ class ScanController:
 
     # ----- 오토튜닝(최적 프로세스×스레드 자동 측정 → 본 스캔 자동 시작) -----
     def autotune_start(self, *, path=None, secs=None, then_scan=True,
-                       confirm_outside=False) -> dict:
+                       confirm_outside=False, one_file_system=None) -> dict:
         """실제 엔진(pscan)을 짧게 측정해 최적 procs×threads 를 고르고, then_scan 이면
         그 설정으로 본 스캔을 자동 시작한다. 진행은 autotune_status 로 폴링한다."""
         if not path:
@@ -1307,9 +1307,11 @@ class ScanController:
                 try:
                     if pn > 1:        # 병렬이 빠름 → pscan(빠른 용량, 1단계 드릴다운)
                         sr = self.start_scan(path, size_mode=size_mode, engine="pscan",
-                                             processes=pn, threads=tn)
+                                             processes=pn, threads=tn,
+                                             one_file_system=one_file_system)
                     else:             # 단일이 빠름(빠른 저장소) → threads(상세 트리)
-                        sr = self.start_scan(path, size_mode=size_mode, engine="threads")
+                        sr = self.start_scan(path, size_mode=size_mode, engine="threads",
+                                             one_file_system=one_file_system)
                     scan_id = sr.get("scan_id")
                 except Exception:  # noqa: BLE001
                     scan_id = None
@@ -3063,6 +3065,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     secs=body.get("secs"),
                     then_scan=body.get("then_scan", True),
                     confirm_outside=bool(body.get("confirm_outside")),
+                    one_file_system=body.get("one_file_system"),
                 )
                 self._send_json(res, status=200 if res.get("ok") else 400)
                 return

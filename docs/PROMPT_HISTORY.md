@@ -880,4 +880,11 @@
      ‘새 스캔’ 폼 복원 + 지난 실행 요약 표시(_public_settings 가 dict 복사라 노출 자동). 처리량 추이
      표시구간 합계 아래에 측정 시간 범위(첫~마지막 버킷 t)+길이 추가. 단위테스트·JS·ruff 통과. v1.98.0.
 
+260. (포탈에서 전체 노드 스캔 시작 버튼 + 시작 전 한 파일시스템·오토튜닝 적용여부 확인 + 진행 중
+     노드 멈추고 재시작/작업 안 하는 노드만 옵션) 대시보드 노드 테이블 위 ‘전체 노드 스캔 시작’ 바
+     (체크: -x·오토튜닝, 라디오: 진행중 건너뜀/재시작) → confirm 요약 → node_scan_all. node_scan 에
+     one_file_system·autotune·restart_busy 옵션 확장(_edge_post 헬퍼로 정리, autotune→autotune/start),
+     엣지 autotune_start 에 one_file_system 추가(조합 지원). pscan 은 중지 불가라 재시작 시 사유 스킵.
+     라우트 /api/portal/node-scan-all. 단위테스트·JS·ruff 통과. v1.99.0.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

@@ -2004,13 +2004,40 @@ class PortalController:
                 pass
             self._stop.wait(60)                    # 1분 주기(가장 가는 버킷)
 
+    def _edge_post(self, node, path, payload, *, timeout=20) -> dict:
+        """엣지로 POST(api_token 인증). HTTP 코드별 사유를 정리해 반환한다."""
+        url = node["url"].rstrip("/") + path
+        req = urllib.request.Request(
+            url, data=json.dumps(payload).encode("utf-8"), method="POST")
+        req.add_header("Content-Type", "application/json")
+        if node.get("token"):
+            req.add_header("X-Auth-Token", node["token"])
+        try:
+            resp = urllib.request.urlopen(req, timeout=timeout)
+            return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            reason = (
+                "엣지에 로그인 비밀번호가 설정돼 포탈에서 직접 시작할 수 없습니다 — 엣지 화면에서 시작하세요."
+                if e.code == 401 else
+                "엣지가 웹 스캔을 비활성화했거나 거부했습니다." if e.code == 403 else
+                "엣지에 해당 API 가 없습니다(구버전 엣지 — 업그레이드 필요)." if e.code == 404 else
+                "HTTP %d" % e.code)
+            return {"ok": False, "reason": reason}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "reason": str(e)}
+
     # --- 원격 스캔 시작(마지막 스캔과 동일 경로) ---
-    def node_scan(self, node_id: str) -> dict:
+    def node_scan(self, node_id: str, *, one_file_system=None,
+                  autotune=False, restart_busy=False) -> dict:
         """온라인·미스캔 노드를 '마지막 스캔과 동일한 경로'로 다시 스캔 시작한다.
 
         마지막 루트는 캐시(overall.roots)에서 scan_id 가 가장 큰(=최근) 루트의 root_path.
-        엣지가 로그인 비밀번호로 보호돼 있으면(op_required) 포탈엔 그 토큰이 없어 시작할 수 없다
-        → 사유를 돌려준다(HTTP 200, ok=False). 엔진/백엔드는 엣지 기본 설정을 따른다.
+        옵션:
+          - one_file_system: -x(한 파일시스템)
+          - autotune: 엣지가 최적 엔진을 자동 측정(autotune/start) 후 본 스캔
+          - restart_busy: 이미 스캔 중이면 멈추고 다시 시작(끄면 진행 중 노드는 건너뜀).
+            pscan(멀티프로세스)은 중간 중지가 불가하므로 그런 노드는 start 가 거부돼 사유로 남는다.
+        엣지가 로그인 비밀번호로 보호돼 있으면 포탈엔 그 토큰이 없어 시작할 수 없다(사유 반환).
         """
         with self._lock:
             node = next((dict(n) for n in self.nodes if n["id"] == node_id), None)
@@ -2021,37 +2048,53 @@ class PortalController:
             return {"ok": False, "reason": "비활성 노드입니다."}
         roots = (cache.get("overall") or {}).get("roots") or []
         if not roots:
-            return {"ok": False, "reason": "이 노드에 이전 스캔 기록이 없습니다(먼저 한 번 스캔)."}
-        if any(r.get("status") in ("discovering", "sizing") for r in roots):
-            return {"ok": False, "reason": "이미 스캔이 진행 중입니다."}
+            return {"ok": False, "reason": "이전 스캔 기록이 없습니다(먼저 한 번 스캔)."}
+        busy = [r for r in roots if r.get("status") in ("discovering", "sizing")]
+        if busy:
+            if not restart_busy:
+                return {"ok": False, "reason": "이미 스캔 진행 중(건너뜀)."}
+            # 진행 중 스캔을 멈추고 재시작 — 각 진행 스캔에 stop 푸시(베스트에포트).
+            stopped = 0
+            for r in busy:
+                sid = int(r.get("scan_id") or 0)
+                if sid and self._edge_post(
+                        node, "/api/scan/stop", {"scan_id": sid}).get("ok"):
+                    stopped += 1
+            if stopped:
+                time.sleep(1.0)   # 워커가 stop 신호를 받고 멈출 시간(그 뒤 재시작)
         last = max(roots, key=lambda r: int(r.get("scan_id") or 0))
         path = (last.get("root_path") or "").strip()
         if not path:
             return {"ok": False, "reason": "마지막 스캔 경로를 알 수 없습니다."}
-        url = node["url"].rstrip("/") + "/api/scan/start"
-        req = urllib.request.Request(
-            url, data=json.dumps({"path": path}).encode("utf-8"), method="POST")
-        req.add_header("Content-Type", "application/json")
-        if node.get("token"):
-            req.add_header("X-Auth-Token", node["token"])
-        try:
-            resp = urllib.request.urlopen(req, timeout=30)
-            j = json.loads(resp.read().decode("utf-8"))
-            if j.get("ok"):
-                return {"ok": True, "node": node_id, "path": path,
-                        "scan_id": j.get("scan_id")}
-            return {"ok": False, "path": path,
-                    "reason": j.get("reason") or "엣지가 스캔 시작을 거부했습니다."}
-        except urllib.error.HTTPError as e:
-            reason = (
-                "엣지에 로그인 비밀번호가 설정돼 있어 포탈에서 직접 시작할 수 없습니다 — 엣지 화면에서 시작하세요."
-                if e.code == 401 else
-                "엣지가 웹 스캔을 비활성화했거나 거부했습니다." if e.code == 403 else
-                "엣지에 스캔 시작 API가 없습니다(구버전 엣지)." if e.code == 404 else
-                "HTTP %d" % e.code)
-            return {"ok": False, "reason": reason, "path": path}
-        except Exception as e:  # noqa: BLE001
-            return {"ok": False, "reason": str(e), "path": path}
+        endpoint = "/api/autotune/start" if autotune else "/api/scan/start"
+        payload = {"path": path}
+        if autotune:
+            payload["then_scan"] = True
+        if one_file_system is not None:
+            payload["one_file_system"] = bool(one_file_system)
+        res = self._edge_post(node, endpoint, payload, timeout=30)
+        if res.get("ok"):
+            return {"ok": True, "node": node_id, "path": path,
+                    "scan_id": res.get("scan_id"), "autotune": bool(autotune)}
+        return {"ok": False, "path": path,
+                "reason": res.get("reason") or "엣지가 스캔 시작을 거부했습니다."}
+
+    def node_scan_all(self, *, one_file_system=None, autotune=False,
+                      restart_busy=False) -> dict:
+        """등록된(활성) 노드 전체에 '마지막 경로' 스캔을 시작하고 노드별 결과를 모은다."""
+        with self._lock:
+            ids = [n["id"] for n in self.nodes if n.get("enabled", True)]
+        results = []
+        for nid in ids:
+            r = self.node_scan(nid, one_file_system=one_file_system,
+                               autotune=autotune, restart_busy=restart_busy)
+            results.append({"id": nid, "ok": bool(r.get("ok")),
+                            "reason": r.get("reason") or ""})
+        ok = sum(1 for r in results if r["ok"])
+        auditmod.record(self.data_dir, action="node_scan_all", ok=True,
+                        detail="%d/%d (ofs=%s autotune=%s restart=%s)"
+                        % (ok, len(results), one_file_system, autotune, restart_busy))
+        return {"ok": True, "count": ok, "total": len(results), "results": results}
 
     def set_node_password(self, ids, password: str, *, clear: bool = False) -> dict:
         """선택한(또는 전체) 노드의 작업 보호 비밀번호를 설정/변경/해제한다.
@@ -2625,6 +2668,12 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/portal/node-scan":
                 self._send_json(c.node_scan(str(body.get("id") or "")))
+                return
+            if path == "/api/portal/node-scan-all":   # 전체 노드 일괄 스캔(옵션: -x·오토튜닝·진행중 재시작)
+                self._send_json(c.node_scan_all(
+                    one_file_system=body.get("one_file_system"),
+                    autotune=bool(body.get("autotune")),
+                    restart_busy=bool(body.get("restart_busy"))))
                 return
             if path == "/api/portal/node-password":   # 노드 작업 비밀번호 설정/변경/해제(포탈→엣지)
                 self._send_json(c.set_node_password(

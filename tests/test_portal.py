@@ -185,11 +185,48 @@ def _test_set_node_token() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _test_node_scan_all() -> None:
+    """node_scan_all: 옵션 전달(-x·오토튜닝) + 진행 중 노드 건너뜀(엣지 POST 모킹)."""
+    d = tempfile.mkdtemp(prefix="portal_scanall_")
+    try:
+        pc = portalmod.PortalController(d)
+        pc.upsert_node({"id": "a", "url": "http://x:8765", "token": "T"})
+        pc.upsert_node({"id": "b", "url": "http://y:8765", "token": "T"})
+        # 캐시에 마지막 경로(roots) 심기 — a=idle(done), b=진행 중(sizing)
+        pc._cache["a"] = {"online": True, "overall": {"roots": [
+            {"scan_id": 1, "root_path": "/data/a", "status": "done"}]}}
+        pc._cache["b"] = {"online": True, "overall": {"roots": [
+            {"scan_id": 2, "root_path": "/data/b", "status": "sizing"}]}}
+        calls = []
+
+        def fake_post(node, path, payload, *, timeout=20):
+            calls.append((node["id"], path, dict(payload)))
+            return {"ok": True, "scan_id": 99}
+        pc._edge_post = fake_post   # type: ignore[assignment]
+
+        # restart_busy=False → b(진행 중)는 건너뜀, a 만 시작 + one_file_system 전달
+        r = pc.node_scan_all(one_file_system=True, autotune=False, restart_busy=False)
+        assert r["ok"] and r["count"] == 1 and r["total"] == 2, r
+        a_start = [c for c in calls if c[0] == "a" and c[1] == "/api/scan/start"]
+        assert a_start and a_start[0][2].get("one_file_system") is True, calls
+        assert not any(c[0] == "b" for c in calls), ("진행 중 b 가 시작됨", calls)
+
+        # autotune=True → a 는 autotune/start + then_scan
+        calls.clear()
+        pc.node_scan_all(autotune=True, restart_busy=False)
+        a_auto = [c for c in calls if c[0] == "a" and c[1] == "/api/autotune/start"]
+        assert a_auto and a_auto[0][2].get("then_scan") is True, calls
+        print("[portal] node_scan_all(옵션 전달·진행중 건너뜀) OK")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     _test_save_nodes_concurrent()
     _test_ping_history()
     _test_csv_import()
     _test_set_node_token()
+    _test_node_scan_all()
     tmp = tempfile.mkdtemp(prefix="portal_")
     root = os.path.join(tmp, "tree")
     _make_tree(root)

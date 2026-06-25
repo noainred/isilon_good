@@ -178,6 +178,15 @@
     <h2>데이터센터별 사용량 — 행 클릭=스토리지 펼침 · 지역 카드=필터 · 머리글=정렬
       <span style="float:right; font-weight:400;"><button id="pingBtn" style="padding:3px 9px;">📡 Ping 체크</button> <span class="sub" id="updAt"></span></span></h2>
     <div class="sub" id="pingNote" style="margin:-4px 0 8px;"></div>
+    <div id="scanAllBar" style="display:flex; gap:10px 14px; align-items:center; flex-wrap:wrap; margin:0 0 10px; padding:8px 10px; background:#161c28; border:1px solid #263042; border-radius:8px;">
+      <button id="scanAllBtn" class="primary" style="padding:6px 12px;">▶ 전체 노드 스캔 시작</button>
+      <label style="display:inline-flex; align-items:center; gap:5px;"><input type="checkbox" id="scanAllOFS"> 한 파일시스템(-x)</label>
+      <label style="display:inline-flex; align-items:center; gap:5px;"><input type="checkbox" id="scanAllAuto"> 오토튜닝(최적 엔진 자동)</label>
+      <span class="sub">진행 중 노드:</span>
+      <label style="display:inline-flex; align-items:center; gap:5px;"><input type="radio" name="scanAllBusy" value="skip" checked> 안 하는 노드만</label>
+      <label style="display:inline-flex; align-items:center; gap:5px;"><input type="radio" name="scanAllBusy" value="restart"> 멈추고 다시 시작</label>
+      <span class="sub" id="scanAllMsg"></span>
+    </div>
     <table id="nodeTable">
       <thead><tr>
         <th class="sortable" data-nsort="id" data-label="노드">노드</th>
@@ -1463,6 +1472,33 @@ async function loadNodes(){
       tk.value=cur; }
   } catch(e){ /* 무시 */ }
 }
+
+// 전체 노드 일괄 스캔 시작(옵션: -x · 오토튜닝 · 진행 중 노드 멈추고 재시작) — 시작 전 확인받음
+async function scanAllNodes(){
+  const ofs=$("scanAllOFS").checked, auto=$("scanAllAuto").checked;
+  const busyEl=document.querySelector('input[name="scanAllBusy"]:checked');
+  const restart=!!(busyEl && busyEl.value==="restart");
+  const msg=$("scanAllMsg");
+  const summary="전체 노드를 ‘마지막 스캔 경로’로 다시 스캔 시작합니다.\n\n"
+    + "• 한 파일시스템(-x): "+(ofs?"적용":"미적용")+"\n"
+    + "• 오토튜닝(최적 엔진 자동): "+(auto?"적용":"미적용")+"\n"
+    + "• 진행 중 노드: "+(restart?"멈추고 다시 시작":"건너뜀(작업 안 하는 노드만)")+"\n\n"
+    + (restart?"⚠ pscan(멀티프로세스)으로 도는 노드는 중간 중지가 불가해 건너뜁니다.\n\n":"")
+    + "시작할까요?";
+  if(!confirm(summary)) return;
+  msg.textContent="시작 요청 중… (노드 수에 따라 수 초 걸릴 수 있습니다)";
+  try{
+    const j=await (await fetch("/api/portal/node-scan-all",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({one_file_system:ofs, autotune:auto, restart_busy:restart})})).json();
+    if(!j.ok){ msg.textContent="실패: "+(j.reason||"오류 — 로그인이 필요할 수 있습니다"); return; }
+    const rs=j.results||[];
+    msg.innerHTML=`✓ ${j.count}/${j.total} 노드 시작 — `
+      + rs.map(r=>`${r.ok?"✅":"⏭️"} ${escAttr(r.id)}${(!r.ok&&r.reason)?(' <span class="sub">('+escAttr(r.reason)+')</span>'):""}`).join(" · ");
+    setTimeout(()=>{ loadNodes(); if(typeof loadOverview==="function") loadOverview(); }, 1800);
+  }catch(e){ msg.textContent="요청 오류: "+e; }
+}
+if($("scanAllBtn")) $("scanAllBtn").addEventListener("click", scanAllNodes);
 
 // 노드 작업 비밀번호 설정/변경/해제(포탈→엣지 /api/op-password 푸시)
 async function nodePassword(clear){
