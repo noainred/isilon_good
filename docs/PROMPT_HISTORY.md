@@ -893,4 +893,10 @@
      (커스텀 portal_title 있으면 우선). title 태그·동적 title 갱신, 버전 배지는 기존 version 핸들러에
      연결. DOM 균형·JS 구문·ruff 통과. v1.99.1.
 
+262. (두 줄 The Davinci / NAS Management + 사진의 ‘Virtual Platform’만 NAS Management + 아이콘 V +
+     탭 제목 [The Davinci] NAS Management) brandTitle 윗줄 The Davinci 고정 + 아랫줄 NAS Management 컬럼,
+     아이콘 N→V. document.title 기본 ‘[The Davinci] NAS Management’. 탭의 ‘[The Davinci] Virtual
+     Platform’은 코드가 아니라 저장된 portal_title 설정값(grep 확인 — 코드에 없음) → 헤더 클릭으로
+     변경/비움 필요. 포탈·대시보드 헤더 동일. v1.99.2.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

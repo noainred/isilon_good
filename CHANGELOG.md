@@ -13,6 +13,18 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.99.2] - 2026-06-23
+
+### 변경됨 (Changed) — 상단 제목 2줄(The Davinci / NAS Management) + 아이콘 ‘V’ + 탭 제목
+
+- 상단 제목을 **2줄**로: 윗줄 ‘The Davinci’(고정), 아랫줄 ‘NAS Management’. 아이콘 글자는 첨부대로 ‘V’.
+- 브라우저 탭(document.title) 기본값을 **‘[The Davinci] NAS Management’** 로 맞췄다.
+- 단, 포탈에 **커스텀 제목(`portal_title`)이 저장돼 있으면 그 값을 우선** 표시한다(예전에 설정한
+  ‘[The Davinci] Virtual Platform’ 등). 헤더 제목을 클릭해 비우면 기본값으로, 새 값을 넣으면 그 값으로
+  바뀐다. (대시보드 탭은 ‘NAS Management’ 그대로.)
+
+---
+
 ## [1.99.1] - 2026-06-23
 
 ### 변경됨 (Changed) — 상단 제목 브랜딩: ‘NAS Management’ + 아이콘·버전·LIVE 배지

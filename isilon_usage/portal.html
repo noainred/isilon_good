@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>NAS Management</title>
+<title>[The Davinci] NAS Management</title>
 <style>
   :root { --bg:#0f141b; --panel:#19212c; --panel2:#1f2937; --line:#2b3543;
     --text:#e6edf3; --muted:#8b98a9; --accent:#4f9cff; --accent2:#38d39f;
@@ -124,9 +124,12 @@
 <body>
 <header>
   <h1 id="brandH1" style="display:flex;align-items:center;gap:12px;margin:0;">
-    <span style="width:46px;height:46px;border-radius:12px;background:linear-gradient(135deg,#4aa3ff,#7ad0ff);display:inline-flex;align-items:center;justify-content:center;font-size:22px;font-weight:800;color:#08203a;box-shadow:0 4px 14px rgba(74,163,255,.35);flex:none;">N</span>
+    <span style="width:46px;height:46px;border-radius:12px;background:linear-gradient(135deg,#4aa3ff,#7ad0ff);display:inline-flex;align-items:center;justify-content:center;font-size:22px;font-weight:800;color:#08203a;box-shadow:0 4px 14px rgba(74,163,255,.35);flex:none;">V</span>
     <span style="display:inline-flex;flex-direction:column;gap:4px;">
-      <span id="brandTitle" style="font-size:22px;font-weight:800;line-height:1.1;">NAS Management</span>
+      <span style="display:inline-flex;flex-direction:column;line-height:1.14;">
+        <span style="font-size:21px;font-weight:800;">The Davinci</span>
+        <span id="brandTitle" style="font-size:21px;font-weight:800;">NAS Management</span>
+      </span>
       <span style="display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;">
         <span id="brandVer" style="background:#14464a;color:#7fffd4;padding:1px 9px;border-radius:11px;font-size:12px;font-weight:700;">v—</span>
         <span style="background:#16361f;color:#5cff8f;padding:1px 9px;border-radius:11px;font-size:12px;font-weight:700;letter-spacing:.5px;">LIVE</span>
@@ -808,9 +811,9 @@ function updateLoginUI(){
 // 상단/탭 제목(브랜딩) 적용 — 옵션에서 지정한 값이 있으면 그것으로, 없으면 기본값.
 function applyPortalTitle(title, sub){
   title=(title||"").trim(); sub=(sub||"").trim();
-  const t = title || "NAS Management";   // 커스텀 제목이 없으면 기본 브랜드
+  const t = title || "NAS Management";   // 헤더 아랫줄(커스텀 제목 없으면 기본 브랜드)
   const s = title ? sub : sub;
-  document.title = t;
+  document.title = title || "[The Davinci] NAS Management";   // 탭 제목(브랜드 접두; 커스텀 제목 있으면 그대로)
   const bt=document.getElementById("brandTitle"); if(bt) bt.textContent=t;
   const bs=document.getElementById("brandSub"); if(bs) bs.textContent = s?("— "+s):"";
   const h=document.getElementById("brandH1");
