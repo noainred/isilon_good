@@ -903,4 +903,8 @@
      에서 brandH1 의 onclick=editPortalTitle / cursor / title 설정 제거 → 헤더 클릭 무반응(제목 변경은
      ‘설정’ 탭 setTitleBtn 으로 그대로 가능). v1.99.3.
 
+264. (제목 오른쪽 버전 표시가 제목 배지 버전과 중복 [+이미지: 빨간 동그라미 v1.99.1]) 포탈 헤더의
+     기존 ver span(제목 오른쪽) 제거 + version 핸들러에서 ver 참조 제거(brandVer 배지만 채움). 대시보드도
+     dashVer(제목)+verPill(우측) 중복 있으나 위치가 떨어져 있어 사용자 확인 후 처리 예정. v1.99.4.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

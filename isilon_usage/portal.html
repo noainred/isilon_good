@@ -137,7 +137,6 @@
       </span>
     </span>
   </h1>
-  <span class="sub" id="ver">—</span>
   <div class="spacer"></div>
   <nav>
     <button class="navbtn active" data-view="dash">글로벌 대시보드</button>
@@ -1324,8 +1323,7 @@ function scanProgress(r){   // 루트별 스캔 단계/진행률
 }
 function renderPortalDash(){
   const j=pOverview; if(!j) return;
-  if(j.version){ $("ver").textContent = "v"+j.version;
-    const _bv=document.getElementById("brandVer"); if(_bv) _bv.textContent="v"+j.version; }
+  if(j.version){ const _bv=document.getElementById("brandVer"); if(_bv) _bv.textContent="v"+j.version; }
   const t=j.totals||{};
   $("kUsed").textContent=fmtBytes(t.used_bytes); $("kStorages").textContent=fmtNum(t.storages);
   // '총 사용 용량' 카드에 아이실론 전체 용량/사용량(전 DC fs 합계)도 함께 표시
