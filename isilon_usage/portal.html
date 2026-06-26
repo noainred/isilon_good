@@ -816,8 +816,7 @@ function applyPortalTitle(title, sub){
   document.title = title || "[The Davinci] NAS Management";   // 탭 제목(브랜드 접두; 커스텀 제목 있으면 그대로)
   const bt=document.getElementById("brandTitle"); if(bt) bt.textContent=t;
   const bs=document.getElementById("brandSub"); if(bs) bs.textContent = s?("— "+s):"";
-  const h=document.getElementById("brandH1");
-  if(h){ h.style.cursor="pointer"; h.title="클릭하면 이름을 바꿉니다"; h.onclick=editPortalTitle; }
+  // 헤더 제목 클릭으로 이름 변경하던 동작은 제거(실수 클릭 방지) — 제목 변경은 '설정' 탭에서.
 }
 // 헤더 제목 클릭 → 이름 변경 모달(저장은 /api/portal/settings, 로그인 필요 시 먼저 로그인)
 async function editPortalTitle(){

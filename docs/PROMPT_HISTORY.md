@@ -899,4 +899,8 @@
      Platform’은 코드가 아니라 저장된 portal_title 설정값(grep 확인 — 코드에 없음) → 헤더 클릭으로
      변경/비움 필요. 포탈·대시보드 헤더 동일. v1.99.2.
 
+263. (헤더 제목 클릭하면 뜨는 이름변경 창 없애줘 [+이미지: 관제센터 이름 변경 모달]) applyPortalTitle
+     에서 brandH1 의 onclick=editPortalTitle / cursor / title 설정 제거 → 헤더 클릭 무반응(제목 변경은
+     ‘설정’ 탭 setTitleBtn 으로 그대로 가능). v1.99.3.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
