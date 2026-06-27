@@ -1585,7 +1585,7 @@ function renderCurrentDir() {
     $("currentDir").innerHTML =
       `<div class="sub" style="margin-bottom:5px;">⚡ ${wd.length}개 워커가 동시에 탐색 중` +
       `${all ? "" : ` · 상위 ${shown.length}개 표시${more > 0 ? `, 외 ${more}개` : ""}`}</div>` +
-      shown.map(p => `<div style="font-size:12px; color:#cfe3ff; word-break:break-all; padding:1px 0;">• ${p}</div>`).join("");
+      shown.map(p => `<div style="font-size:12px; color:#cfe3ff; word-break:break-all; padding:1px 0;">• ${escHtml(p)}</div>`).join("");
   } else {
     $("currentDir").textContent = (wd[0] || _lastCur) || (_lastStatus === "done" ? "✅ 스캔 완료" : "—");
   }
@@ -1717,8 +1717,8 @@ async function loadSettings() {
     // 서버 정보(읽기 전용)
     const sv = j.server || {};
     $("serverInfo").innerHTML =
-      `서버: <b>v${sv.version}</b> · 데이터 <span class="mono">${sv.data_dir}</span>` +
-      ` · 바인딩 ${sv.host}:${sv.port} · 자원수집 ${sv.have_psutil ? "psutil" : "/proc 폴백"}` +
+      `서버: <b>v${escHtml(sv.version)}</b> · 데이터 <span class="mono">${escHtml(sv.data_dir)}</span>` +
+      ` · 바인딩 ${escHtml(sv.host)}:${escHtml(sv.port)} · 자원수집 ${sv.have_psutil ? "psutil" : "/proc 폴백"}` +
       ` · 설정 ${j.locked ? "잠김" : "편집가능"}` +
       ` <span class="sub">(host·port·data-dir 는 실행 시 고정이라 읽기 전용)</span>`;
     settingsLoaded = true;
@@ -3200,9 +3200,9 @@ function renderStorageArrays() {
   const tb = $("arrBody");
   if (!storageArrays.length) { tb.innerHTML = '<tr><td colspan="5" class="sub">없음</td></tr>'; return; }
   tb.innerHTML = storageArrays.map((a, i) =>
-    `<tr><td>${a.type}</td><td>${a.name || "—"}</td>
-     <td class="mono" style="max-width:240px; overflow:hidden; text-overflow:ellipsis;" title="${a.url}">${a.url}</td>
-     <td class="mono">${a.user || ""}</td>
+    `<tr><td>${escHtml(a.type)}</td><td>${escHtml(a.name || "—")}</td>
+     <td class="mono" style="max-width:240px; overflow:hidden; text-overflow:ellipsis;" title="${escHtml(a.url)}">${escHtml(a.url)}</td>
+     <td class="mono">${escHtml(a.user || "")}</td>
      <td><button class="stopbtn" data-arrdel="${i}">✕</button></td></tr>`).join("");
   tb.querySelectorAll("button[data-arrdel]").forEach(b => b.addEventListener("click", () => {
     storageArrays.splice(parseInt(b.dataset.arrdel), 1); renderStorageArrays();
@@ -3272,10 +3272,10 @@ function renderSchedules() {
   tb.innerHTML = schedules.map((s, i) => {
     const pths = (s.paths && s.paths.length) ? s.paths : (s.path ? [s.path] : []);
     const pcell = pths.length > 1
-      ? `${pths[0]} <span class="sub">외 ${pths.length - 1}개 · 순차</span>`
-      : (pths[0] || "");
-    return `<tr><td class="mono" style="max-width:240px; overflow:hidden; text-overflow:ellipsis;" title="${pths.join('  →  ')}">${pcell}</td>
-     <td>${scheduleSummary(s)}</td><td>${s.backend}</td>
+      ? `${escHtml(pths[0])} <span class="sub">외 ${pths.length - 1}개 · 순차</span>`
+      : escHtml(pths[0] || "");
+    return `<tr><td class="mono" style="max-width:240px; overflow:hidden; text-overflow:ellipsis;" title="${escHtml(pths.join('  →  '))}">${pcell}</td>
+     <td>${scheduleSummary(s)}</td><td>${escHtml(s.backend)}</td>
      <td>${s.enabled ? "✓" : "✕"}</td>
      <td><button class="stopbtn" data-schdel="${i}">✕</button></td></tr>`;
   }).join("");
@@ -3291,7 +3291,7 @@ function populateSchedulePaths() {
   const cur = sel.value;
   const roots = Array.from(new Set(allScans.map(s => s.root_path).filter(Boolean))).sort();
   sel.innerHTML = '<option value="">스캔 이력에서 선택…</option>' +
-    roots.map(p => `<option value="${p}">${p}</option>`).join("");
+    roots.map(p => `<option value="${escHtml(p)}">${escHtml(p)}</option>`).join("");
   if (cur && roots.indexOf(cur) >= 0) sel.value = cur;   // 이전 선택 유지
 }
 
@@ -3457,7 +3457,7 @@ function selectScan(id) {
 function renderArrayHtml(a) {
   if (!a || a.configured === false) return "";
   const label = a.label || (a.type === "powerstore" ? "Dell PowerStore" : "Isilon (OneFS)");
-  if (!a.ok) return `<div style="padding:8px 0; border-bottom:1px solid #222c38;"><span class="sub">${label}</span> <span class="err">연결 실패: ${a.error || ""}</span></div>`;
+  if (!a.ok) return `<div style="padding:8px 0; border-bottom:1px solid #222c38;"><span class="sub">${escHtml(label)}</span> <span class="err">연결 실패: ${escHtml(a.error || "")}</span></div>`;
   const cap = a.capacity || {}, nd = a.nodes || {};
   const health = a.health === "ok" ? '<span class="badge done">정상</span>'
     : a.health === "critical" ? '<span class="badge" style="background:#5a1f1f; color:#ffb3b3;">위험</span>'
@@ -3489,7 +3489,7 @@ function renderArrayHtml(a) {
   }
   return `<div style="padding:8px 0; border-bottom:1px solid #222c38;">
     <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center;">
-      <div><span class="sub">${label}</span> <b style="font-size:15px;">${a.name || "?"}</b> <span class="sub">${a.version || ""}</span> ${health}</div>
+      <div><span class="sub">${escHtml(label)}</span> <b style="font-size:15px;">${escHtml(a.name || "?")}</b> <span class="sub">${escHtml(a.version || "")}</span> ${health}</div>
       <div class="sub">노드 ${onl} / ${tot}</div><div class="sub">미해결 이벤트/알림 ${ev}</div>
     </div>${capHtml}${alarmHtml}</div>`;
 }
@@ -4001,18 +4001,18 @@ function renderAtime(j) {
   const rows = j.entries || [];
   _atLastRows = rows;
   $("atCsv").style.display = rows.length ? "" : "none";
-  const head = '<div class="sub" style="margin-bottom:8px;">📂 <span class="mono">' + j.path
+  const head = '<div class="sub" style="margin-bottom:8px;">📂 <span class="mono">' + escHtml(j.path)
     + '</span> — 폴더 자체 접근 ' + _atDate(j.dir_atime) + ' · 항목 <b>' + fmtNum(j.count) + '</b>개'
     + (j.recursive ? " (하위 포함)" : "") + (j.truncated ? ' · <span class="err">최대치 도달로 잘림</span>' : "") + "</div>";
   if (!rows.length) { out.innerHTML = head + '<span class="sub">표시할 항목이 없습니다.</span>'; return; }
   const body = rows.map(e =>
     "<tr><td class=\"mono\" style=\"max-width:520px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;\" title=\""
-      + e.path + '">' + (e.is_dir ? "📁 " : "📄 ") + e.name + "</td>"
+      + escHtml(e.path) + '">' + (e.is_dir ? "📁 " : "📄 ") + escHtml(e.name) + "</td>"
     + '<td>' + (e.is_dir ? "폴더" : "파일") + "</td>"
     + '<td class="num">' + (e.is_dir ? "—" : fmtBytes(e.size)) + "</td>"
     + '<td class="num" style="white-space:nowrap;">' + _atDate(e.atime) + ' <span class="sub">' + _atAgeDays(e.atime) + "</span></td>"
     + '<td class="num" style="white-space:nowrap;">' + _atDate(e.mtime) + "</td>"
-    + '<td>' + (e.owner || ("uid " + (e.uid != null ? e.uid : "?"))) + "</td></tr>").join("");
+    + '<td>' + escHtml(e.owner || ("uid " + (e.uid != null ? e.uid : "?"))) + "</td></tr>").join("");
   out.innerHTML = head + '<div style="overflow-x:auto;"><table style="border-collapse:collapse; width:100%;">'
     + '<tr style="color:var(--muted)"><td style="padding:3px 8px">이름</td><td style="padding:3px 8px">종류</td>'
     + '<td style="padding:3px 8px; text-align:right">크기</td><td style="padding:3px 8px; text-align:right">마지막 접근(atime)</td>'

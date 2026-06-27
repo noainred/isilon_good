@@ -910,4 +910,10 @@
 265. (엣지 대시보드 헤더의 /mnt/hadoop 경로 빼줘 [+이미지: 빨간 동그라미]) 헤더 h1 아래 rootPath div
      를 display:none 으로 숨김(JS 채움 로직은 그대로 — 되돌리기 쉬움). v1.99.5.
 
+266. (전체 소스 버그·보안·백도어 꼼꼼히 점검 → 시작해) 6영역 병렬 감사(인증·포탈·스캔·외부API·프론트·
+     설치). 의도적 백도어 없음. 1단계 비파괴 일괄 수정: XSS 22곳(노드 url http/https 화이트리스트 +
+     escHtml/escAttr 일관 적용, portal escAttr/_he 작은따옴표 추가), build_provision host 셸문자 제거,
+     save_nodes chmod 0600, _read_json_body 16MB 상한(server·portal), du args '--', _maybe_update_depth
+     죽은조건(% 1) 수정. 테스트 15/15·JS·ruff 통과. 2단계(업그레이드 sha256/서명 검증)는 후속. v1.99.6.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

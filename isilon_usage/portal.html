@@ -784,7 +784,7 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-const escAttr = (s) => String(s==null?"":s).replace(/[&"<>]/g,c=>({"&":"&amp;",'"':"&quot;","<":"&lt;",">":"&gt;"}[c]));
+const escAttr = (s) => String(s==null?"":s).replace(/[&"'<>]/g,c=>({"&":"&amp;",'"':"&quot;","'":"&#39;","<":"&lt;",">":"&gt;"}[c]));
 // ---- 인증(로그인): 보기는 자유, 변경(POST)은 토큰 필요 — fetch 래퍼로 자동 처리 ----
 let _opRequired=false, _opExpiry=0, _opTimer=null;
 const _origFetch = window.fetch.bind(window);
@@ -1096,9 +1096,9 @@ function renderNetmon(nodes){
     const stat=n.online?'<span class="badge b-online">🟢 UP</span>':'<span class="badge b-offline">🔴 DOWN</span>';
     const col=n.latency_ms==null?'#9fb3c8':(n.latency_ms<150?'#7be0aa':(n.latency_ms<600?'#f0c86a':'#ff9a9a'));
     const lat=n.latency_ms!=null?('<b style="color:'+col+'">'+n.latency_ms+' ms</b>'):'<span class="sub">—</span>';
-    return '<tr><td>'+stat+'</td><td><b>'+n.id+'</b></td><td>'+(n.region||'—')+'</td><td class="mono sub">'+_nmHost(n.url)+'</td>'
+    return '<tr><td>'+stat+'</td><td><b>'+_he(n.id)+'</b></td><td>'+_he(n.region||'—')+'</td><td class="mono sub">'+_he(_nmHost(n.url))+'</td>'
       +'<td class="num">'+lat+'</td><td class="num sub">'+mn+'/'+mx+'</td><td class="num sub">'+loss+'%</td>'
-      +'<td>'+_nmSpark(h)+'</td><td class="sub" style="color:#ff9a9a">'+(n.error||'')+'</td></tr>';
+      +'<td>'+_nmSpark(h)+'</td><td class="sub" style="color:#ff9a9a">'+_he(n.error||'')+'</td></tr>';
   }).join("") : '<tr><td colspan="9" class="sub">등록된 노드가 없습니다.</td></tr>';
 }
 function netmonStart(){ if(netmonTimer) return; loadNetmon(); netmonTimer=setInterval(loadNetmon, 5000);
@@ -1108,7 +1108,7 @@ function netmonStop(){ if(netmonTimer){ clearInterval(netmonTimer); netmonTimer=
 
 // ---- 인프라 체크: 서버별 핑 이력(1년 누적) ----
 let phRange=86400, phTimer=null, phInflight=false, _phLast=null, _phRz=null;
-const _he=s=>String(s==null?"":s).replace(/[<>&"]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;"}[c]));
+const _he=s=>String(s==null?"":s).replace(/[<>&"']/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;","'":"&#39;"}[c]));
 const esc=_he;   // 여러 함수(히스토리·파일브라우저·업그레이드표)가 전역 esc 를 쓴다(예전엔 일부 함수에만 지역 정의돼 ReferenceError 발생)
 async function loadPingHistory(){
   if(phInflight) return; phInflight=true;
@@ -1374,23 +1374,25 @@ function renderPortalDash(){
         ? ` <button class="ssbtn" disabled title="로그인 후 스캔을 시작할 수 있습니다">🔒 스캔 시작</button>`
         : ` <button class="ssbtn" data-id="${escAttr(n.id)}" title="마지막 스캔과 동일한 경로로 새 스캔 시작">▶ 스캔 시작</button>`;
     // 새창(엣지 대시보드)을 열 때 포탈의 노드명(예: WA)을 넘겨, 새창 제목이 호스트네임 대신 노드명으로 뜨게 한다
-    const open = `<a class="link" href="${n.url}${n.url.includes("?")?"&":"?"}node=${encodeURIComponent(n.id)}" target="_blank" rel="noopener">열기 ↗</a>`;
+    const _ou = /^https?:\/\//i.test(n.url||"") ? (n.url||"") : "#";   // http/https 만 링크(javascript: 등 차단)
+    const open = `<a class="link" href="${escAttr(_ou)}${_ou.includes("?")?"&":"?"}node=${encodeURIComponent(n.id)}" target="_blank" rel="noopener">열기 ↗</a>`;
     // 스토리지 어레이(아이실론/PowerStore) — storage 리스트, 없으면 isilon 단일로 폴백
     const arrays = (n.storage && n.storage.length) ? n.storage
                    : ((n.isilon && n.isilon.configured !== false) ? [n.isilon] : []);
     const cfgArr = arrays.filter(a => a && a.configured !== false);
     const TCODE = {isilon:"ISI", powerstore:"PS", unity:"UNI", powermax:"PMAX", vmax:"VMAX", xtremio:"XIO", vplex:"VPLEX"};
     const arrBadges = cfgArr.map(a => {
-      const lab = TCODE[a.type] || String(a.type||"ARR").toUpperCase().slice(0,5);
+      const lab = escAttr(TCODE[a.type] || String(a.type||"ARR").toUpperCase().slice(0,5));
+      const tl = escAttr(a.label||a.type);
       return a.ok ? (a.health === "ok"
-          ? ` <span class="badge b-online" title="${a.label||a.type} 정상">${lab} ✓</span>`
-          : ` <span class="badge" style="background:#3f3516;color:#f0c86a" title="${a.label||a.type} 주의">${lab} ⚠</span>`)
-        : ` <span class="badge b-offline" title="${a.label||a.type} 연결 실패">${lab} ✕</span>`;
+          ? ` <span class="badge b-online" title="${tl} 정상">${lab} ✓</span>`
+          : ` <span class="badge" style="background:#3f3516;color:#f0c86a" title="${tl} 주의">${lab} ⚠</span>`)
+        : ` <span class="badge b-offline" title="${tl} 연결 실패">${lab} ✕</span>`;
     }).join("");
     const arrRows = cfgArr.map(a => `<tr class="rr-${idx}" style="display:none; background:#101a26;"><td></td><td colspan="8" class="sub">${
-      a.type === "isilon" ? "🟦" : "🟧"} ${a.label||a.type} ${
-      a.ok ? `<b>${a.name||"?"}</b> · ${a.version||""} · 노드 ${(a.nodes&&a.nodes.online)!=null?a.nodes.online:"?"}/${(a.nodes&&a.nodes.total)!=null?a.nodes.total:"?"} · 용량 ${(a.capacity&&a.capacity.used_pct!=null)?a.capacity.used_pct+"%":"—"} · 이벤트/알림 ${a.events_unresolved!=null?a.events_unresolved:"—"} · ${a.health==="ok"?"정상":"주의"}`
-           : `연결 실패: ${a.error||""}`}</td></tr>`).join("");
+      a.type === "isilon" ? "🟦" : "🟧"} ${_he(a.label||a.type)} ${
+      a.ok ? `<b>${_he(a.name||"?")}</b> · ${_he(a.version||"")} · 노드 ${(a.nodes&&a.nodes.online)!=null?a.nodes.online:"?"}/${(a.nodes&&a.nodes.total)!=null?a.nodes.total:"?"} · 용량 ${(a.capacity&&a.capacity.used_pct!=null)?a.capacity.used_pct+"%":"—"} · 이벤트/알림 ${a.events_unresolved!=null?a.events_unresolved:"—"} · ${a.health==="ok"?"정상":"주의"}`
+           : `연결 실패: ${_he(a.error||"")}`}</td></tr>`).join("");
     const roots = arrRows + (n.roots||[]).map(r=>{
       const act=(r.status==="discovering"||r.status==="sizing");
       const startTxt=(act&&r.started_at)?(" · 시작 "+fmtClock(r.started_at)+" · 진행 "+elapsedSpan(r.started_at, r.updated_at)):"";
@@ -1400,12 +1402,12 @@ function renderPortalDash(){
     }).join("");
     const outdated = j.version && n.version && n.version!==j.version;
     const verBadge = n.version
-      ? ` <span class="pill" title="${outdated?('구버전 — 포탈 v'+j.version):'버전'}" style="color:${outdated?'#f0c86a':'#9fb3c8'};border-color:${outdated?'#6a5a25':'var(--line)'}">v${n.version}${outdated?' ⬆':''}</span>`
+      ? ` <span class="pill" title="${outdated?('구버전 — 포탈 v'+escAttr(j.version)):'버전'}" style="color:${outdated?'#f0c86a':'#9fb3c8'};border-color:${outdated?'#6a5a25':'var(--line)'}">v${_he(n.version)}${outdated?' ⬆':''}</span>`
       : "";
     const pr=pingResults[n.id];
     const pingB = pr ? (pr.latency_ms!=null
-        ? ` <span class="pill" title="HQ→노드 왕복${pr.error?(' · '+pr.error):''}" style="color:${pr.latency_ms<150?'#7be0aa':(pr.latency_ms<600?'#f0c86a':'#ff9a9a')};border-color:${pr.latency_ms<150?'#2f6f50':(pr.latency_ms<600?'#6a5a25':'#7a3030')}">${pr.latency_ms} ms</span>`
-        : ` <span class="pill" title="${pr.error||'실패'}" style="color:#ff9a9a;border-color:#7a3030">✕</span>`) : "";
+        ? ` <span class="pill" title="HQ→노드 왕복${pr.error?(' · '+escAttr(pr.error)):''}" style="color:${pr.latency_ms<150?'#7be0aa':(pr.latency_ms<600?'#f0c86a':'#ff9a9a')};border-color:${pr.latency_ms<150?'#2f6f50':(pr.latency_ms<600?'#6a5a25':'#7a3030')}">${pr.latency_ms} ms</span>`
+        : ` <span class="pill" title="${escAttr(pr.error||'실패')}" style="color:#ff9a9a;border-color:#7a3030">✕</span>`) : "";
     const rn=n.running;
     const runLine = rn ? `<div class="sub" style="white-space:nowrap; margin-top:3px;">⏱ ${elapsedSpan(rn.started_at, rn.updated_at)} · 시작 ${fmtClock(rn.started_at)}</div>` : "";
     const loopBadge = n.auto_restart ? ` <span style="color:#ff5c5c; font-weight:700; white-space:nowrap;" title="완료되면 같은 설정으로 자동 재시작(반복) 중">🔁 반복 동작 중</span>` : "";
@@ -1416,7 +1418,7 @@ function renderPortalDash(){
       <td class="num">${fmtBytes(n.fs_total_bytes)}</td>
       <td class="sub">${ago(n.last_scan_at)}</td>
       <td>${st}${loopBadge}${scanBtn}${pingB}${runLine}</td><td>${open}</td></tr>` + roots +
-      (n.last_error ? `<tr><td colspan="9" class="sub" style="color:#ff9a9a">${n.id}: ${n.last_error}</td></tr>` : "");
+      (n.last_error ? `<tr><td colspan="9" class="sub" style="color:#ff9a9a">${escAttr(n.id)}: ${_he(n.last_error)}</td></tr>` : "");
   }).join("") : '<tr><td colspan="9" class="sub">표시할 노드가 없습니다.</td></tr>';
   $("nodeRows").querySelectorAll("tr.noderow").forEach(tr=>tr.addEventListener("click",e=>{
     if(e.target.closest("a,button")) return;
@@ -1448,10 +1450,10 @@ async function loadNodes(){
     const j = await (await fetch("/api/portal/nodes",{cache:"no-store"})).json();
     const rows=(j.nodes||[]);
     $("regRows").innerHTML = rows.length ? rows.map(n=>
-      `<tr><td class="mono">${n.id}</td><td>${n.region||"—"}</td><td class="mono">${n.url}</td>
+      `<tr><td class="mono">${_he(n.id)}</td><td>${_he(n.region||"—")}</td><td class="mono">${_he(n.url)}</td>
         <td>${nodeSummary(n)}</td><td class="sub">${ago(n.last_poll)}</td>
         <td>${!n.online?'<span class="badge b-offline">오프라인</span>':(n.active_scans>0?'<span class="badge b-scan">🔄 스캔 중 '+n.active_scans+'</span>':'<span class="badge b-online">온라인</span>')}</td>
-        <td><button data-edit="${n.id}">수정</button> <button data-sync="${n.id}">동기화</button> <button data-del="${n.id}">삭제</button></td></tr>`
+        <td><button data-edit="${escAttr(n.id)}">수정</button> <button data-sync="${escAttr(n.id)}">동기화</button> <button data-del="${escAttr(n.id)}">삭제</button></td></tr>`
     ).join("") : '<tr><td colspan="7" class="sub">등록된 노드 없음</td></tr>';
     $("regRows").querySelectorAll("button[data-del]").forEach(b=>b.addEventListener("click",async()=>{
       if(confirm("노드 "+b.dataset.del+" 삭제?")){ await fetch("/api/portal/nodes/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:b.dataset.del})}); loadNodes(); loadOverview(); }}));
@@ -1773,9 +1775,9 @@ function renderCompare(j){
   const all=(j.rows||[]); const found=all.filter(r=>r.found);
   const maxB = found.reduce((a,r)=>Math.max(a,r.total_bytes),0) || 1;
   $("cmpRows").innerHTML = all.length ? all.map(r=>{
-    if(!r.found) return `<tr><td><b>${r.id}</b></td><td>${r.region||"—"}</td><td class="num miss">없음</td><td class="num">—</td><td class="num">—</td><td><span class="badge b-offline">미스캔/누락</span></td></tr>`;
+    if(!r.found) return `<tr><td><b>${_he(r.id)}</b></td><td>${_he(r.region||"—")}</td><td class="num miss">없음</td><td class="num">—</td><td class="num">—</td><td><span class="badge b-offline">미스캔/누락</span></td></tr>`;
     const pct=r.total_bytes/maxB*100, drift=pct<85;
-    return `<tr><td><b>${r.id}</b></td><td>${r.region||"—"}</td>
+    return `<tr><td><b>${_he(r.id)}</b></td><td>${_he(r.region||"—")}</td>
       <td class="num">${fmtBytes(r.total_bytes)}</td><td class="num">${fmtNum(r.total_files)}</td>
       <td class="num">${pct.toFixed(0)}%</td>
       <td>${drift?'<span class="badge b-offline">드리프트 ⚠</span>':'<span class="badge b-online">정상</span>'}</td></tr>`;
@@ -1784,7 +1786,7 @@ function renderCompare(j){
 }
 function renderMatrix(j){
   const nodes=j.nodes||[], kids=j.children||[];
-  $("cmpMHead").innerHTML = "<tr><th>디렉터리</th>"+nodes.map(n=>`<th class="num">${n}</th>`).join("")+"</tr>";
+  $("cmpMHead").innerHTML = "<tr><th>디렉터리</th>"+nodes.map(n=>`<th class="num">${escAttr(n)}</th>`).join("")+"</tr>";
   if(!kids.length){ $("cmpMBody").innerHTML = `<tr><td colspan="${nodes.length+1}" class="sub">하위 디렉터리가 없습니다(집계 완료 복제본 필요).</td></tr>`; return; }
   $("cmpMBody").innerHTML = kids.map(k=>{
     const present=nodes.map(n=>k.vals[n]).filter(v=>v!==undefined&&v!==null).sort((a,b)=>a-b);

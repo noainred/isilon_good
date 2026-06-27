@@ -2898,7 +2898,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0))
         except (TypeError, ValueError):
             length = 0
-        if not length:
+        if not length or length > 16 * 1024 * 1024:   # 본문 16MB 상한(메모리 폭주 방지)
             return {}
         try:
             raw = self.rfile.read(length)

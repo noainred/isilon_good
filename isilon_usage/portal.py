@@ -167,6 +167,10 @@ def save_nodes(data_dir: str, nodes: list) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(payload)
         os.replace(tmp, path)
+        try:
+            os.chmod(path, 0o600)   # 노드 api_token 이 평문 저장되므로 소유자만 읽도록 제한
+        except OSError:
+            pass
     except BaseException:
         try:
             os.remove(tmp)
@@ -299,6 +303,7 @@ def build_provision_script(*, host, port, token, path, hq_base, install="systemd
     serve 를 기동한다(systemd 또는 nohup). 값은 shell 주입을 막기 위해 따옴표 처리.
     """
     q = shlex.quote
+    host = re.sub(r"[^A-Za-z0-9._:\[\]-]", "", str(host or ""))   # 표시용 host: 셸 위험문자 제거(주입 방지)
     hq = (hq_base or "http://<HQ-IP>:8800").rstrip("/")
     head = (
         "#!/usr/bin/env bash\n"
@@ -2410,7 +2415,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0))
         except (TypeError, ValueError):
             length = 0
-        if length <= 0:
+        if length <= 0 or length > 16 * 1024 * 1024:   # 본문 16MB 상한(메모리 폭주 방지)
             return {}
         try:
             return json.loads(self.rfile.read(length).decode("utf-8"))

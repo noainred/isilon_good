@@ -922,8 +922,9 @@ class Scanner:
         return cb, cf
 
     def _maybe_update_depth(self, conn, depth: int) -> None:
-        # max_depth 는 가끔만 갱신해도 충분하다.
-        if depth and depth % 1 == 0:
+        # 새 최대 깊이일 때만 DB 를 갱신한다(단일 _dlock 직렬 구간의 불필요한 쓰기 제거).
+        if depth > getattr(self, "_seen_max_depth", 0):
+            self._seen_max_depth = depth
             conn.execute(
                 "UPDATE scan_runs SET max_depth=MAX(max_depth, ?) WHERE id=?",
                 (depth, self.run_id),
@@ -1023,7 +1024,7 @@ class Scanner:
             args.append("--apparent-size")
         if self.one_file_system:
             args.append("-x")
-        args.append(path)
+        args.extend(["--", path])   # '--': '-' 로 시작하는 경로를 du 옵션으로 오인하지 않도록
         try:
             proc = subprocess.Popen(
                 args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True
