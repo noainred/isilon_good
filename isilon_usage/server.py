@@ -1114,13 +1114,16 @@ class ScanController:
 
     # ----- 경로 허용 검사 -----
     def path_allowed(self, path: str):
-        path = os.path.abspath(path)
+        # realpath 로 심볼릭 링크를 해소해 비교한다(어휘적 commonpath 만 쓰면 허용 마운트
+        # 안의 심볼릭 링크로 경계를 벗어날 수 있다 — 보안 감사 지적, 2026-06-27).
+        path = os.path.realpath(path)
         if not os.path.isdir(path):
             return False, "디렉터리가 아니거나 접근할 수 없습니다."
         if self.mount_bases:
             for base in self.mount_bases:
                 try:
-                    if os.path.commonpath([path, base]) == base:
+                    rb = os.path.realpath(base)
+                    if os.path.commonpath([path, rb]) == rb:
                         return True, None
                 except ValueError:
                     continue
@@ -1137,10 +1140,10 @@ class ScanController:
         """
         if not self.mount_bases:
             return True
-        ap = os.path.abspath(path or "/")
+        ap = os.path.realpath(path or "/")   # 심볼릭 링크 해소(path_allowed 와 같은 정책)
         for base in self.mount_bases:
             try:
-                b = os.path.abspath(base)
+                b = os.path.realpath(base)
                 if os.path.commonpath([ap, b]) == b:
                     return True
             except ValueError:
@@ -2676,6 +2679,42 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(dupsmod.find_duplicates(
                     p, min_size=self._query_int(qs, "min_size") or 4096,
                     max_files=self._query_int(qs, "max_files") or 2_000_000))
+                return
+
+            if path == "/api/coldplan":
+                # 추가 기능: 콜드데이터(오래 안 쓴 파일) 이동 '계획·스크립트' 생성(조회 전용).
+                # 도구는 파일을 절대 옮기지/지우지 않는다 — walk·stat 로 측정 후 관리자가 검토·실행할
+                # 셸 스크립트(매니페스트·롤백 포함)를 텍스트로만 만든다. 스캔 락 미사용.
+                p = (qs.get("path", [""])[0] or "").strip()
+                if not p:
+                    self._send_json({"ok": False, "error": "path(폴더 경로)가 필요합니다."})
+                    return
+                tgt = (qs.get("target", [""])[0] or "").strip()
+                ctrl = self.controller
+                if ctrl is not None:
+                    ok, why = ctrl.path_allowed(p)
+                    if not ok:
+                        self._send_json({"ok": False, "error": why})
+                        return
+                    if tgt:
+                        ok2, why2 = ctrl.path_allowed(tgt)
+                        if not ok2:
+                            self._send_json({"ok": False, "error": "타깃: " + why2})
+                            return
+                field = (qs.get("field", ["mtime"])[0] or "mtime")
+                from . import coldtier as coldmod
+                res = coldmod.plan_cold_move(
+                    p, days=self._query_int(qs, "days") or 365, field=field,
+                    target=tgt, min_size=self._query_int(qs, "min_size") or 0,
+                    max_files=self._query_int(qs, "max_files") or 2_000_000)
+                if field == "atime" and res.get("ok"):
+                    # atime 은 noatime 마운트에서 무의미 — /api/atime 과 같은 신뢰도 소스를 공유(단일 소스).
+                    try:
+                        from . import systune as sysmod
+                        res["atime_info"] = sysmod.atime_policy(p)
+                    except Exception:   # noqa: BLE001
+                        res["atime_info"] = {"opt": "unknown", "reliable": None}
+                self._send_json(res)
                 return
 
             if path == "/api/forecast":

@@ -1319,6 +1319,30 @@
   <div class="card">
     <div id="dpOut"><span class="sub">폴더 경로를 입력하고 ‘중복 찾기’를 누르세요. 회수 가능 용량이 큰 순으로 표시됩니다.</span></div>
   </div>
+  <h2 style="margin:18px 0 4px;">❄ 콜드데이터 이동 계획 (오래 안 쓴 파일 → 별도 저장소)</h2>
+  <div class="sub" style="margin-bottom:12px;">오래 접근/수정 안 한 <b>콜드 파일</b>의 용량을 측정하고, 관리자가 <b>검토 후 직접 실행</b>할
+    이동 스크립트(롤백 포함)를 만듭니다. <b>이 도구는 파일을 절대 옮기거나 지우지 않습니다(조회·생성 전용)</b> —
+    생성된 스크립트는 <b>기본 미리보기(DRY-RUN)</b>이며, <span class="mono">DRY_RUN=0</span> 일 때만 실제로 옮깁니다.
+    <span class="err">atime 은 noatime 마운트에서 무의미</span>하므로 기본은 mtime(수정시각)입니다.</div>
+  <div class="card" style="margin-bottom:14px;">
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <input id="ctRoot" type="text" autocomplete="off" placeholder="원본 루트  /mnt/hadoop/예시/폴더"
+             style="flex:1; min-width:260px; padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:var(--panel2); color:var(--text); font:inherit;" class="mono" />
+      <button type="button" class="dirbtn" data-target="ctRoot" title="폴더 탐색으로 선택" style="padding:8px 12px;">📁</button>
+      <input id="ctTarget" type="text" autocomplete="off" placeholder="이동 대상(콜드 저장소)  /mnt/cold/…"
+             style="flex:1; min-width:220px; padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:var(--panel2); color:var(--text); font:inherit;" class="mono" />
+      <button type="button" class="dirbtn" data-target="ctTarget" title="폴더 탐색으로 선택" style="padding:8px 12px;">📁</button>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px;">
+      <label class="sub">기준 <select id="ctField" style="font:inherit;"><option value="mtime">mtime(수정시각·권장)</option><option value="atime">atime(접근시각)</option></select></label>
+      <label class="sub">나이 <input id="ctDays" type="number" min="1" value="365" style="width:80px;" /> 일 초과</label>
+      <label class="sub">최소 크기 <input id="ctMin" type="number" min="0" value="0" style="width:96px;" /> B</label>
+      <button id="ctGo" class="primary">계획·스크립트 만들기</button>
+    </div>
+  </div>
+  <div class="card">
+    <div id="ctOut"><span class="sub">원본 루트(+선택: 이동 대상)를 입력하고 ‘계획·스크립트 만들기’를 누르세요. 콜드 용량을 측정하고 안전한 이동 스크립트를 생성합니다.</span></div>
+  </div>
 </div>
 
 <div class="wrap view" id="view-history" style="display:none;">
@@ -4129,6 +4153,75 @@ function renderDups(j) {
 }
 if ($("dpGo")) $("dpGo").addEventListener("click", doDups);
 if ($("dpPath")) $("dpPath").addEventListener("keydown", (e) => { if (e.key === "Enter") doDups(); });
+
+async function doCold() {
+  const p = ($("ctRoot").value || "").trim(), out = $("ctOut");
+  if (!p) { out.innerHTML = '<span class="sub">원본 루트 경로를 입력하세요.</span>'; return; }
+  out.innerHTML = '<span class="sub">콜드 용량 측정 중… (큰 폴더는 시간이 걸립니다)</span>';
+  const tgt = ($("ctTarget").value || "").trim();
+  const days = parseInt($("ctDays").value) || 365;
+  const field = $("ctField").value || "mtime";
+  const min = parseInt($("ctMin").value) || 0;
+  const u = "/api/coldplan?path=" + encodeURIComponent(p) + "&days=" + days + "&field=" + field
+    + "&min_size=" + min + (tgt ? "&target=" + encodeURIComponent(tgt) : "");
+  try {
+    const j = await (await fetch(u, {cache: "no-store"})).json();
+    renderCold(j);
+  } catch (e) { out.innerHTML = '<span class="err">오류: ' + e + "</span>"; }
+}
+function renderCold(j) {
+  const out = $("ctOut");
+  if (!j || !j.ok) { out.innerHTML = '<span class="err">' + escHtml((j && j.error) || "조회 실패") + "</span>"; return; }
+  const tops = j.top_dirs || [];
+  const head = '<div style="margin-bottom:8px;">❄ <span class="mono">' + escHtml(j.root) + "</span> · 기준 <b>"
+    + escHtml(j.field) + " > " + fmtNum(j.days) + "일</b>" + (j.min_size ? " · ≥" + fmtBytes(j.min_size) : "")
+    + ' · 콜드 <b style="color:#8fd0ff">' + fmtBytes(j.total_cold_bytes) + "</b> · 파일 "
+    + fmtNum(j.cold_file_count) + "개 · 가장 오래됨 " + fmtNum(j.oldest_age_days) + "일"
+    + (j.truncated ? ' · <span class="err">상한 도달로 잘림(스캔 ' + fmtNum(j.scanned_files) + "개)</span>" : "") + "</div>";
+  // atime 기준일 때 noatime 마운트 신뢰도 경고(/api/atime 과 같은 정책 — 단일 소스).
+  let warn = "";
+  const ai = j.atime_info || {};
+  if (j.field === "atime") {
+    if (ai.reliable === false)
+      warn = '<div class="err" style="margin-bottom:8px;">⚠ 대상 마운트가 <b>noatime</b>'
+        + (ai.mount ? (" (" + escHtml(ai.mount) + ")") : "")
+        + ' — atime이 갱신되지 않아 <b>콜드 판정이 부정확</b>할 수 있습니다. mtime(수정시각) 기준을 권장합니다.</div>';
+    else if (ai.opt === "relatime")
+      warn = '<div class="sub" style="margin-bottom:8px;">마운트가 <b>relatime</b> — atime이 하루 단위로 거칠게 갱신됩니다(‘오래 미접근’ 판별엔 쓸 만함).</div>';
+    else if (ai.reliable !== true)
+      warn = '<div class="sub" style="margin-bottom:8px;">마운트의 atime 정책을 확인하지 못했습니다(noatime이면 콜드 판정이 부정확).</div>';
+  }
+  let body = "";
+  if (tops.length) {
+    const rows = tops.map(t => '<tr><td class="mono" style="padding:2px 8px;">' + escHtml(t.dir)
+      + '</td><td class="num" style="padding:2px 8px;">' + fmtBytes(t.bytes)
+      + '</td><td class="num" style="padding:2px 8px;">' + fmtNum(t.count) + "개</td></tr>").join("");
+    body = '<div style="overflow-x:auto;"><table style="border-collapse:collapse;">'
+      + '<tr style="color:var(--muted)"><td style="padding:2px 8px;">상위 디렉터리</td><td style="padding:2px 8px;">콜드 용량</td><td style="padding:2px 8px;">파일</td></tr>'
+      + rows + "</table></div>";
+  } else {
+    body = '<span class="sub">콜드 파일이 없습니다(기준을 조정해 보세요).</span>';
+  }
+  if (j.script) {
+    body += '<div style="margin-top:12px;"><b>이동 스크립트</b> '
+      + '<span class="err">— 검토 후 직접 실행. 기본 DRY-RUN(미리보기), 실제 이동은 <span class="mono">DRY_RUN=0</span>.</span>'
+      + ' <button type="button" class="copybtn" data-copy="ctScript">📋 복사</button></div>'
+      + '<textarea id="ctScript" readonly rows="14" style="width:100%; margin-top:6px; font-family:monospace; font-size:12px; background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px;">'
+      + escHtml(j.script) + "</textarea>";
+    body += '<div style="margin-top:10px;"><b>롤백 스크립트</b> <span class="sub">(이동을 되돌릴 때)</span> '
+      + '<button type="button" class="copybtn" data-copy="ctRollback">📋 복사</button></div>'
+      + '<textarea id="ctRollback" readonly rows="8" style="width:100%; margin-top:6px; font-family:monospace; font-size:12px; background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px;">'
+      + escHtml(j.rollback) + "</textarea>";
+  } else {
+    body += '<div class="sub" style="margin-top:10px;">이동 스크립트를 받으려면 위에 <b>이동 대상</b> 경로도 입력하세요.</div>';
+  }
+  out.innerHTML = head + warn + body;
+  out.querySelectorAll(".copybtn").forEach((b) => b.addEventListener("click", () => {
+    const ta = $(b.getAttribute("data-copy"));
+    if (ta) { ta.select(); try { document.execCommand("copy"); b.textContent = "✓ 복사됨"; } catch (e) { b.textContent = "복사 실패"; } }
+  }));
+}
+if ($("ctGo")) $("ctGo").addEventListener("click", doCold);
 
 async function doAtime() {
   const p = ($("atPath").value || "").trim();

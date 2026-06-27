@@ -940,4 +940,15 @@
      오탐없음·하드링크제외 검증). 16/16 테스트·JS(node --check)·ruff 통과. 비파괴. v1.99.10.
      (콜드데이터 이동은 후속 — 파괴적이라 dry-run/승인/매니페스트/롤백 안전장치 필요.)
 
+271. (고가치 기능 3순위 — 콜드데이터 이동: 안전모델 확인 후 계획·스크립트 생성 + ultracode 적대적 감사)
+     AskUserQuestion 으로 안전모델 확인 → 사용자 선택 "계획·스크립트만 생성"(도구는 파일 미변경). 신규
+     coldtier.py: walk·stat 로 콜드 용량/개수/상위디렉터리 측정 + 검토용 셸 스크립트(매니페스트·롤백) 텍스트
+     생성. 실행시 find -xdev -atime/-mtime +N -printf %P\0 → rsync 이동. server /api/coldplan(원본·타깃
+     path_allowed 게이트), dashboard ❄ 카드(ctRoot/ctTarget/ctField/ctDays/ctMin)+doCold/renderCold.
+     ultracode Workflow(15 agent: 3렌즈 적대리뷰→검증)로 출고 전 데이터손실 차단 — 확정 10건 수정:
+     (H)--ignore-existing(대상에 있는 건 보존, 원본 유실 방지), 매니페스트 플랜별 고유경로+DRY-RUN 임시화,
+     realpath 양방향 겹침가드, 하드링크 inode 1회집계, 미리보기를 find +N(정수일 age>N) 의미와 일치,
+     -size +Nc 경계 맞춤, max_files 오프바이원, path_allowed/browse_allowed realpath 강화, atime noatime
+     경고(단일소스), 셸주입 비취약 확인. 스텁 rsync 로 dry→live→rollback 왕복 실측. 17/17·JS·ruff 통과. v1.99.11.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
