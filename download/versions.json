@@ -1,6 +1,13 @@
 {
-  "latest": "1.99.6",
+  "latest": "1.99.7",
   "versions": [
+    {
+      "version": "1.99.7",
+      "python": "Python 3.6+",
+      "tar_gz": "isilon_usage-1.99.7.tar.gz",
+      "zip": "isilon_usage-1.99.7.zip",
+      "size_bytes": 477597
+    },
     {
       "version": "1.99.6",
       "python": "Python 3.6+",

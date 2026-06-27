@@ -193,7 +193,12 @@
     <div id="scanAllBar" style="display:flex; gap:10px 14px; align-items:center; flex-wrap:wrap; margin:0 0 10px; padding:8px 10px; background:#161c28; border:1px solid #263042; border-radius:8px;">
       <button id="scanAllBtn" class="primary" style="padding:6px 12px;">▶ 전체 노드 스캔 시작</button>
       <label style="display:inline-flex; align-items:center; gap:5px;"><input type="checkbox" id="scanAllOFS"> 한 파일시스템(-x)</label>
-      <label style="display:inline-flex; align-items:center; gap:5px;"><input type="checkbox" id="scanAllAuto"> 오토튜닝(최적 엔진 자동)</label>
+      <label style="display:inline-flex; align-items:center; gap:5px;">엔진
+        <select id="scanAllEngine" class="inp" style="padding:3px 6px;">
+          <option value="auto">오토튜닝(최적 자동)</option>
+          <option value="threads">threads(스레드·상세, 중지/재개 가능)</option>
+          <option value="pscan">pscan(멀티프로세스·빠름, 중지 불가)</option>
+        </select></label>
       <span class="sub">진행 중 노드:</span>
       <label style="display:inline-flex; align-items:center; gap:5px;"><input type="radio" name="scanAllBusy" value="skip" checked> 안 하는 노드만</label>
       <label style="display:inline-flex; align-items:center; gap:5px;"><input type="radio" name="scanAllBusy" value="restart"> 멈추고 다시 시작</label>
@@ -1485,22 +1490,26 @@ async function loadNodes(){
 
 // 전체 노드 일괄 스캔 시작(옵션: -x · 오토튜닝 · 진행 중 노드 멈추고 재시작) — 시작 전 확인받음
 async function scanAllNodes(){
-  const ofs=$("scanAllOFS").checked, auto=$("scanAllAuto").checked;
+  const ofs=$("scanAllOFS").checked;
+  const engine=($("scanAllEngine")&&$("scanAllEngine").value)||"auto";
+  const auto=engine==="auto";
   const busyEl=document.querySelector('input[name="scanAllBusy"]:checked');
   const restart=!!(busyEl && busyEl.value==="restart");
   const msg=$("scanAllMsg");
+  const engLabel=auto?"오토튜닝(최적 자동)":engine;
   const summary="전체 노드를 ‘마지막 스캔 경로’로 다시 스캔 시작합니다.\n\n"
+    + "• 엔진: "+engLabel+"\n"
     + "• 한 파일시스템(-x): "+(ofs?"적용":"미적용")+"\n"
-    + "• 오토튜닝(최적 엔진 자동): "+(auto?"적용":"미적용")+"\n"
     + "• 진행 중 노드: "+(restart?"멈추고 다시 시작":"건너뜀(작업 안 하는 노드만)")+"\n\n"
-    + (restart?"⚠ pscan(멀티프로세스)으로 도는 노드는 중간 중지가 불가해 건너뜁니다.\n\n":"")
-    + "시작할까요?";
+    + ((engine==="pscan"||auto)?("⚠ pscan(멀티프로세스)은 시작 후 중간에 멈출 수 없습니다"+(auto?"(오토튜닝이 pscan 을 고를 수 있음)":"")+".\n"):"")
+    + (restart?"⚠ ‘멈추고 다시 시작’에서 pscan 으로 도는 노드는 중지 불가라 건너뜁니다.\n":"")
+    + "\n시작할까요?";
   if(!confirm(summary)) return;
   msg.textContent="시작 요청 중… (노드 수에 따라 수 초 걸릴 수 있습니다)";
   try{
     const j=await (await fetch("/api/portal/node-scan-all",{method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({one_file_system:ofs, autotune:auto, restart_busy:restart})})).json();
+      body:JSON.stringify({one_file_system:ofs, autotune:auto, engine:engine, restart_busy:restart})})).json();
     if(!j.ok){ msg.textContent="실패: "+(j.reason||"오류 — 로그인이 필요할 수 있습니다"); return; }
     const rs=j.results||[];
     msg.innerHTML=`✓ ${j.count}/${j.total} 노드 시작 — `

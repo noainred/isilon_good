@@ -13,6 +13,19 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.99.7] - 2026-06-26
+
+### 추가됨 (Added) — 전체 노드 스캔: 엔진 선택(오토튜닝 / threads / pscan)
+
+- 포탈 ‘전체 노드 스캔 시작’에 **엔진 선택 드롭다운**을 추가했다(기존 ‘오토튜닝’ 체크박스 대체):
+  **오토튜닝**(최적 자동) · **threads**(스레드·상세, 중지/재개 가능) · **pscan**(멀티프로세스·빠름, 중지 불가).
+- 백엔드 `node_scan`/`node_scan_all` 에 `engine` 추가 — 오토튜닝이 아니면 엣지 `/api/scan/start` 에
+  `engine`(threads|pscan)을 전달. 라우트 `/api/portal/node-scan-all` 에 `engine` 추가.
+- 시작 전 확인창에 선택 엔진 + pscan 중지 불가 경고를 표시한다.
+- 단위 테스트(engine 전달) + 전체 테스트 + JS 구문 + ruff 통과.
+
+---
+
 ## [1.99.6] - 2026-06-26
 
 ### 보안 (Security) — 1단계 비파괴 보안 패치 묶음 (XSS·셸주입·권한·DoS·버그)

@@ -916,4 +916,9 @@
      save_nodes chmod 0600, _read_json_body 16MB 상한(server·portal), du args '--', _maybe_update_depth
      죽은조건(% 1) 수정. 테스트 15/15·JS·ruff 통과. 2단계(업그레이드 sha256/서명 검증)는 후속. v1.99.6.
 
+267. (전체 스캔 시 엔진 선택 옵션 — pscan/threads 고르기 [+이미지: 전체 노드 스캔 바]) scanAllBar 의
+     오토튜닝 체크박스를 엔진 드롭다운(auto/threads/pscan)으로 교체. node_scan/node_scan_all 에 engine
+     추가(autotune 아니면 scan/start 에 engine 전달), 라우트 engine. confirm 에 엔진+pscan 중지불가 경고.
+     단위테스트(engine=pscan)·JS·ruff 통과. v1.99.7.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

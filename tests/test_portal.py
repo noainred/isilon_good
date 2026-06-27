@@ -216,7 +216,12 @@ def _test_node_scan_all() -> None:
         pc.node_scan_all(autotune=True, restart_busy=False)
         a_auto = [c for c in calls if c[0] == "a" and c[1] == "/api/autotune/start"]
         assert a_auto and a_auto[0][2].get("then_scan") is True, calls
-        print("[portal] node_scan_all(옵션 전달·진행중 건너뜀) OK")
+        # engine="pscan" → scan/start + engine 전달(오토튜닝 아님)
+        calls.clear()
+        pc.node_scan_all(engine="pscan", restart_busy=False)
+        a_ps = [c for c in calls if c[0] == "a" and c[1] == "/api/scan/start"]
+        assert a_ps and a_ps[0][2].get("engine") == "pscan", calls
+        print("[portal] node_scan_all(옵션·엔진 전달·진행중 건너뜀) OK")
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
