@@ -283,6 +283,12 @@
     </div>
     <div class="sub" id="pieNote" style="margin-top:8px;"></div>
   </div>
+  <div class="card" id="secTreemap" style="margin-bottom:14px;">
+    <h2>디스크 사용량 트리맵 — 면적이 곧 용량(클릭해 더 깊이)</h2>
+    <div class="sub" style="margin-bottom:8px;">위 파이·아래 상위 디렉터리 표와 <b>같은 위치·같은 데이터</b>를 공유합니다(파이의 ‘🏠 루트/브레드크럼’으로 이동). 사각형을 클릭하면 그 디렉터리로 내려갑니다.</div>
+    <canvas id="tmChart" width="760" height="400" style="width:100%; height:auto; max-width:760px; cursor:pointer; background:#0f141b; border-radius:8px;"></canvas>
+    <div class="sub" id="tmNote" style="margin-top:8px;">색상은 디렉터리 구분용입니다. (디렉터리 단위 ‘나이’ 집계가 DB에 없어, 나이별 색상은 현재 데이터로 제공하지 않습니다.)</div>
+  </div>
 
   <!-- 읽기 전용 안내(로그인 전) -->
   <div id="roBanner" class="card" style="display:none; margin-bottom:14px; border-color:var(--warn); background:#2a2410;">
@@ -2783,6 +2789,7 @@ function renderPie(j) {
     ? `${fmtNum(subCount)}개 하위 디렉터리 · 합계 ${fmtBytes(total || denom)} · 이 폴더 파일 ${fmtBytes(ownB)}`
     : "";
   drawPie($("pieChart"), slices, denom);
+  if ($("tmChart")) drawTreemap($("tmChart"), slices, denom);   // 같은 slices 로 트리맵 동기 렌더(단일 소스)
 
   const legend = $("pieLegend");
   if (!slices.length) {
@@ -2814,6 +2821,62 @@ function pieDrill(s) {
   if (!s || !s.drill) return;
   piePath.push({id: s.id, name: s.label, depth: s.depth});
   loadPie();
+}
+
+// ---- 트리맵(squarified, Canvas, 외부 라이브러리 0) — 파이와 같은 slices·piePath 공유 ----
+let tmHit = [];          // 캔버스 클릭 히트박스 [{x,y,w,h,slice}]
+function _tmWorst(row, sum, side) {   // 행의 worst 종횡비(작을수록 정사각형에 가까움)
+  if (!row.length || sum <= 0) return Infinity;
+  let mx = 0, mn = Infinity;
+  for (const n of row) { if (n.area > mx) mx = n.area; if (n.area < mn) mn = n.area; }
+  const s2 = sum * sum, side2 = side * side;
+  return Math.max(side2 * mx / s2, s2 / (side2 * mn));
+}
+function tmSquarify(items, X, Y, W, H) {   // Bruls/Huizing/van Wijk squarified treemap
+  const total = items.reduce((a, s) => a + (s.bytes || 0), 0) || 1;
+  const nodes = items.map(s => ({s: s, area: (s.bytes || 0) / total * (W * H)})).filter(n => n.area > 0);
+  const out = [];
+  let x = X, y = Y, w = W, h = H, i = 0;
+  while (i < nodes.length && w > 0.5 && h > 0.5) {
+    const side = Math.min(w, h);
+    const row = [nodes[i]]; let rowSum = nodes[i].area, j = i + 1;
+    while (j < nodes.length) {
+      const ns = rowSum + nodes[j].area;
+      if (_tmWorst(row.concat(nodes[j]), ns, side) <= _tmWorst(row, rowSum, side)) {
+        row.push(nodes[j]); rowSum = ns; j++;
+      } else break;
+    }
+    if (w >= h) {                       // 왼쪽 세로 열(폭 colW, 높이 h 채움)
+      const colW = rowSum / h; let cy = y;
+      for (const n of row) { const nh = n.area / colW; out.push({x: x, y: cy, w: colW, h: nh, s: n.s}); cy += nh; }
+      x += colW; w -= colW;
+    } else {                            // 위쪽 가로 행(높이 rowH, 폭 w 채움)
+      const rowH = rowSum / w; let cx = x;
+      for (const n of row) { const nw = n.area / rowH; out.push({x: cx, y: y, w: nw, h: rowH, s: n.s}); cx += nw; }
+      y += rowH; h -= rowH;
+    }
+    i = j;
+  }
+  return out;
+}
+function drawTreemap(canvas, slices, denom) {
+  const ctx = canvas.getContext("2d"), W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H); tmHit = [];
+  if (!slices.length) { ctx.strokeStyle = "#2a3744"; ctx.strokeRect(1, 1, W - 2, H - 2); return; }
+  tmSquarify(slices, 0, 0, W, H).forEach(rc => {
+    const s = rc.s;
+    ctx.fillStyle = s.color; ctx.fillRect(rc.x, rc.y, rc.w, rc.h);
+    ctx.strokeStyle = "#0f141b"; ctx.lineWidth = 1; ctx.strokeRect(rc.x, rc.y, rc.w, rc.h);
+    tmHit.push({x: rc.x, y: rc.y, w: rc.w, h: rc.h, slice: s});
+    if (rc.w > 50 && rc.h > 24) {       // 공간 충분할 때만 라벨(클리핑)
+      ctx.save(); ctx.beginPath(); ctx.rect(rc.x + 2, rc.y + 2, rc.w - 4, rc.h - 4); ctx.clip();
+      ctx.fillStyle = "#fff"; ctx.font = "11px system-ui,sans-serif";
+      ctx.fillText(s.label, rc.x + 5, rc.y + 15);
+      ctx.fillStyle = "rgba(255,255,255,.85)";
+      ctx.fillText(fmtBytes(s.bytes) + " · " + (s.bytes / denom * 100).toFixed(0) + "%", rc.x + 5, rc.y + 28);
+      ctx.restore();
+    }
+  });
 }
 
 // ---- 용량 상위 디렉터리(깊이 선택 · 클릭 드릴다운 · 정렬) ----
@@ -4159,6 +4222,14 @@ $("pieChart").addEventListener("click", (e) => {
   if (hit) pieDrill(hit.slice);
 });
 $("pieRootBtn").addEventListener("click", () => { piePath = []; loadPie(); });
+// 트리맵 캔버스 클릭(히트박스) → 파이와 같은 pieDrill 로 드릴다운(위치 동기화)
+if ($("tmChart")) $("tmChart").addEventListener("click", (e) => {
+  const c = $("tmChart"), rect = c.getBoundingClientRect();
+  const x = (e.clientX - rect.left) * (c.width / rect.width);
+  const y = (e.clientY - rect.top) * (c.height / rect.height);
+  const hit = tmHit.find(h => x >= h.x && x < h.x + h.w && y >= h.y && y < h.y + h.h);
+  if (hit) pieDrill(hit.slice);
+});
 // 용량 상위 디렉터리: 깊이 선택 · 루트로 · 머리글 정렬
 $("topDepth").addEventListener("change", () => { topRel = parseInt($("topDepth").value) || 0; loadTopDirs(); });
 $("topRootBtn").addEventListener("click", () => { topPath = []; topRel = 1; _topDepthSig = ""; loadTopDirs(); });
@@ -4242,7 +4313,7 @@ function setShowCat(cat) {
   //  → 스캔 선택 카드를 파이 '위'에 둔다(어느 스캔을 보는지 먼저 고르고 파이를 본다).
   const va = $("view-analysis");
   if (va) {
-    ["scanSelectCard", "pieCard", "secTopDirs", "secTree"].forEach(id => {
+    ["scanSelectCard", "pieCard", "secTreemap", "secTopDirs", "secTree"].forEach(id => {
       const el = $(id);
       if (el) va.appendChild(el);
     });

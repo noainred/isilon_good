@@ -927,4 +927,10 @@
      점진 비파괴(sha256 없으면 스킵). test_upgrade sha256 일치/불일치 테스트. v1.99.8. 이어서 고가치
      기능(treemap·중복finder·콜드데이터 이동)을 Workflow 로 설계.
 
+269. (레딧 고가치 기능 ultracode Workflow 설계 → treemap 구현) Workflow(4 agent)로 treemap·중복finder·
+     콜드데이터이동 설계+우선순위 로드맵. 1순위 treemap 구현: dashboard.html 에 secTreemap 카드 +
+     squarified(Bruls/van Wijk, Canvas, 외부라이브러리 0) tmSquarify/drawTreemap. 파이의 slices·piePath·
+     pieDrill·/api/topdirs 공유(단일 소스, 백엔드 0변경). squarify 면적보존(304000=760*400)·경계·비율·
+     에지 단위검증. 비파괴. v1.99.9. (중복finder·콜드데이터이동은 후속.)
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
