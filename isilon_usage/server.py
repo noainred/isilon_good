@@ -2659,6 +2659,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(res)
                 return
 
+            if path == "/api/dups":
+                # 추가 기능: 특정 폴더의 내용 기반 중복 파일 탐지(조회 전용·무거운 read I/O).
+                # 파일을 변경/삭제하지 않는다. 스캔 락을 안 잡아 스캔과 동시 실행 가능.
+                p = (qs.get("path", [""])[0] or "").strip()
+                if not p:
+                    self._send_json({"ok": False, "error": "path(폴더 경로)가 필요합니다."})
+                    return
+                ctrl = self.controller
+                if ctrl is not None:
+                    ok, why = ctrl.path_allowed(p)
+                    if not ok:
+                        self._send_json({"ok": False, "error": why})
+                        return
+                from . import dups as dupsmod
+                self._send_json(dupsmod.find_duplicates(
+                    p, min_size=self._query_int(qs, "min_size") or 4096,
+                    max_files=self._query_int(qs, "max_files") or 2_000_000))
+                return
+
             if path == "/api/forecast":
                 # 용량 소진 예측: 같은 루트의 완료 스캔 이력으로 선형 추세 계산
                 scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))

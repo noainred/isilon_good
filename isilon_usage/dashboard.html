@@ -1304,6 +1304,21 @@
   <div class="card">
     <div id="atOut"><span class="sub">폴더 경로를 입력하고 ‘조회’를 누르세요. 결과는 <b>오래 접근 안 한 순</b>으로 정렬됩니다(콜드 데이터가 위로).</span></div>
   </div>
+  <h2 style="margin:18px 0 4px;">🧬 중복 파일 찾기 (내용 해시 — 회수 가능 용량)</h2>
+  <div class="sub" style="margin-bottom:12px;">특정 폴더에서 <b>내용이 같은</b> 파일을 찾아 회수 가능 용량을 봅니다. 파일은 <b>건드리지 않습니다(조회 전용)</b>.
+    내용을 읽어 해시하므로 <b>무거운 작업</b>입니다(큰 폴더는 시간이 걸리고 상한에서 잘립니다). 하드링크는 중복으로 세지 않습니다.</div>
+  <div class="card" style="margin-bottom:14px;">
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <input id="dpPath" type="text" autocomplete="off" placeholder="/mnt/hadoop/예시/폴더"
+             style="flex:1; min-width:300px; padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:var(--panel2); color:var(--text); font:inherit;" class="mono" />
+      <label class="sub">최소 크기 <input id="dpMin" type="number" min="1" value="4096" style="width:96px;" /> B</label>
+      <button type="button" class="dirbtn" data-target="dpPath" title="폴더 탐색으로 선택" style="padding:8px 12px;">📁 폴더</button>
+      <button id="dpGo" class="primary">중복 찾기</button>
+    </div>
+  </div>
+  <div class="card">
+    <div id="dpOut"><span class="sub">폴더 경로를 입력하고 ‘중복 찾기’를 누르세요. 회수 가능 용량이 큰 순으로 표시됩니다.</span></div>
+  </div>
 </div>
 
 <div class="wrap view" id="view-history" style="display:none;">
@@ -4082,6 +4097,39 @@ function renderAtime(j) {
     + '<td style="padding:3px 8px; text-align:right">수정(mtime)</td><td style="padding:3px 8px">소유자</td></tr>'
     + body + "</table></div>";
 }
+// 중복 파일 찾기(내용 해시·조회 전용) — atime 과 같은 '추가 기능' 탭
+async function doDups() {
+  const p = ($("dpPath").value || "").trim(), out = $("dpOut");
+  if (!p) { out.innerHTML = '<span class="sub">폴더 경로를 입력하세요.</span>'; return; }
+  out.innerHTML = '<span class="sub">중복 찾는 중… (내용 해시 — 큰 폴더는 시간이 걸립니다)</span>';
+  const min = parseInt($("dpMin").value) || 4096;
+  try {
+    const j = await (await fetch("/api/dups?path=" + encodeURIComponent(p) + "&min_size=" + min, {cache: "no-store"})).json();
+    renderDups(j);
+  } catch (e) { out.innerHTML = '<span class="err">오류: ' + e + "</span>"; }
+}
+function renderDups(j) {
+  const out = $("dpOut");
+  if (!j || !j.ok) { out.innerHTML = '<span class="err">' + escHtml((j && j.error) || "조회 실패") + "</span>"; return; }
+  const gs = j.groups || [];
+  const head = '<div style="margin-bottom:8px;">📂 <span class="mono">' + escHtml(j.root)
+    + '</span> · 회수 가능 <b style="color:#7be0aa">' + fmtBytes(j.total_recoverable) + "</b>"
+    + " · 중복 그룹 <b>" + fmtNum(j.group_count) + "</b> · 중복 파일 " + fmtNum(j.dup_file_count)
+    + (j.truncated ? ' · <span class="err">상한 도달로 잘림(스캔 ' + fmtNum(j.scanned_files) + "개)</span>" : "") + "</div>";
+  if (!gs.length) { out.innerHTML = head + '<span class="sub">중복 파일이 없습니다.</span>'; return; }
+  const rows = gs.map(g => "<tr><td class=\"num\">" + fmtBytes(g.size) + "</td><td class=\"num\">" + g.count
+    + '개</td><td class="num" style="color:#7be0aa">' + fmtBytes(g.recoverable) + "</td>"
+    + '<td class="mono" style="font-size:12px; word-break:break-all;">'
+    + (g.paths || []).map(p => escHtml(p)).join("<br>")
+    + (g.count > (g.paths || []).length ? ('<br><span class="sub">… 외 ' + (g.count - g.paths.length) + "개</span>") : "")
+    + "</td></tr>").join("");
+  out.innerHTML = head + '<div style="overflow-x:auto;"><table style="border-collapse:collapse; width:100%;">'
+    + '<tr style="color:var(--muted)"><td style="padding:3px 8px">파일 크기</td><td style="padding:3px 8px">중복 수</td>'
+    + '<td style="padding:3px 8px">회수 가능</td><td style="padding:3px 8px">경로(최대 10)</td></tr>' + rows + "</table></div>";
+}
+if ($("dpGo")) $("dpGo").addEventListener("click", doDups);
+if ($("dpPath")) $("dpPath").addEventListener("keydown", (e) => { if (e.key === "Enter") doDups(); });
+
 async function doAtime() {
   const p = ($("atPath").value || "").trim();
   const out = $("atOut");

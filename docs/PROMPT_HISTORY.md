@@ -933,4 +933,11 @@
      pieDrill·/api/topdirs 공유(단일 소스, 백엔드 0변경). squarify 면적보존(304000=760*400)·경계·비율·
      에지 단위검증. 비파괴. v1.99.9. (중복finder·콜드데이터이동은 후속.)
 
+270. (고가치 기능 2순위 — 내용 기반 중복 파일 찾기 구현·verify·릴리스) 신규 dups.py(3단계 깔때기:
+     크기→앞4KB 부분해시→전체 blake2b, 하드링크 dev/ino 1회만, max_files 상한→truncated, 조회 전용·
+     파일 미변경). server /api/dups(path_allowed 게이트·스캔락 미사용). dashboard 추가기능에 🧬 중복
+     파일 찾기 카드(dpPath/dpMin/dpGo/dpOut)+doDups/renderDups(escHtml XSS안전). test_dups(부분해시충돌
+     오탐없음·하드링크제외 검증). 16/16 테스트·JS(node --check)·ruff 통과. 비파괴. v1.99.10.
+     (콜드데이터 이동은 후속 — 파괴적이라 dry-run/승인/매니페스트/롤백 안전장치 필요.)
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
