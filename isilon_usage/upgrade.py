@@ -303,6 +303,7 @@ def check_remote(base_url: str, current_version: str, *, token: Optional[str] = 
         if str(v.get("version")) == latest:
             out["tar_gz"] = v.get("tar_gz")
             out["size_bytes"] = v.get("size_bytes")
+            out["sha256"] = v.get("sha256")   # 무결성 검증용(있으면 download 후 대조)
             if v.get("tar_gz"):
                 out["download_url"] = _join_url(base, v["tar_gz"])
             break
@@ -310,7 +311,8 @@ def check_remote(base_url: str, current_version: str, *, token: Optional[str] = 
 
 
 def download_archive(url: str, dest_dir: str, *, token: Optional[str] = None,
-                     timeout: float = 120.0, max_bytes: int = MAX_BUNDLE_BYTES) -> dict:
+                     timeout: float = 120.0, max_bytes: int = MAX_BUNDLE_BYTES,
+                     expected_sha256: Optional[str] = None) -> dict:
     """원격 tar.gz/zip 을 dest_dir 에 내려받는다(파일명 검증·크기 상한·토큰 인증).
 
     반환 {ok, path, size} 또는 {ok:False, reason}.
@@ -327,6 +329,11 @@ def download_archive(url: str, dest_dir: str, *, token: Optional[str] = None,
         return {"ok": False, "reason": "다운로드 실패: %s" % exc}
     if len(data) > max_bytes:
         return {"ok": False, "reason": "다운로드가 너무 큼(>%d bytes)" % max_bytes}
+    if expected_sha256:   # 무결성 검증(versions.json 의 sha256 과 대조) — 변조/탈취된 미러 차단
+        import hashlib
+        got = hashlib.sha256(data).hexdigest()
+        if got.lower() != str(expected_sha256).strip().lower():
+            return {"ok": False, "reason": "무결성 검증 실패: sha256 불일치(받은 %s…)" % got[:12]}
     dest = os.path.join(dest_dir, name)
     with open(dest, "wb") as fh:
         fh.write(data)
@@ -348,7 +355,8 @@ def upgrade_from_remote(base_url: str, code_dir: str, current_version: str,
                 "check": info, "up_to_date": True}
     if not info.get("download_url"):
         return {"ok": False, "reason": "다운로드 URL 을 찾을 수 없음", "check": info}
-    dl = download_archive(info["download_url"], dest_dir, token=token, timeout=timeout)
+    dl = download_archive(info["download_url"], dest_dir, token=token, timeout=timeout,
+                          expected_sha256=info.get("sha256"))
     if not dl.get("ok"):
         return {"ok": False, "reason": dl.get("reason"), "check": info}
     res = upgrade_from_archive(dl["path"], code_dir, current_version)

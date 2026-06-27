@@ -921,4 +921,10 @@
      추가(autotune 아니면 scan/start 에 engine 전달), 라우트 engine. confirm 에 엔진+pscan 중지불가 경고.
      단위테스트(engine=pscan)·JS·ruff 통과. v1.99.7.
 
+268. (2단계 보안 — 업그레이드 sha256 검증 + 고가치 기능 ultracode 진행) make_release write_index 가
+     versions.json 에 sha256(tar/zip) 발행. upgrade.check_remote→sha256 읽기, download_archive
+     expected_sha256 대조(불일치 거부), upgrade_from_remote 전달. install_edge/portal.sh sha256sum 대조.
+     점진 비파괴(sha256 없으면 스킵). test_upgrade sha256 일치/불일치 테스트. v1.99.8. 이어서 고가치
+     기능(treemap·중복finder·콜드데이터 이동)을 Workflow 로 설계.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

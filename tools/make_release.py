@@ -202,15 +202,28 @@ def write_index(out_dir: str) -> None:
         key=_ver_key, reverse=True,
     )
     latest = max(versions, key=_ver_key) if versions else None
+    import hashlib
+
+    def _sha256(p):
+        h = hashlib.sha256()
+        with open(p, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
     entries = []
     for v in versions:
         tar = f"isilon_usage-{v}.tar.gz"
         zf = f"isilon_usage-{v}.zip"
-        size = os.path.getsize(os.path.join(out_dir, tar))
-        entries.append({
+        tar_p = os.path.join(out_dir, tar)
+        entry = {
             "version": v, "python": PY_COMPAT.get(v, DEFAULT_COMPAT),
-            "tar_gz": tar, "zip": zf, "size_bytes": size,
-        })
+            "tar_gz": tar, "zip": zf, "size_bytes": os.path.getsize(tar_p),
+            "sha256": _sha256(tar_p),   # 다운로드 무결성 검증용(엣지가 받아 대조 → 변조/탈취 차단)
+        }
+        zf_p = os.path.join(out_dir, zf)
+        if os.path.exists(zf_p):
+            entry["sha256_zip"] = _sha256(zf_p)
+        entries.append(entry)
     with open(os.path.join(out_dir, "versions.json"), "w", encoding="utf-8") as fh:
         json.dump({"latest": latest, "versions": entries}, fh,
                   ensure_ascii=False, indent=2)

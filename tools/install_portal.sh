@@ -106,6 +106,15 @@ DEST="$DL_DIR/$TARBALL"
 echo "→ 다운로드: download/$TARBALL"
 FETCH "$DEST" "download/$TARBALL" || { echo "✗ 다운로드 실패."; _hint_private; exit 1; }
 tar tzf "$DEST" >/dev/null 2>&1 || { echo "✗ 내려받은 파일이 손상되었습니다."; exit 1; }
+# 체크섬 검증: versions.json 의 sha256 과 대조(변조/탈취 미러 차단). 없으면 건너뜀(구버전 호환).
+EXPSHA="$(python3 -c "import json,sys
+d=json.load(open(sys.argv[1]))
+print(next((v.get('sha256','') for v in d.get('versions',[]) if str(v.get('version'))==sys.argv[2]), ''))" "$VJSON" "$VER" 2>/dev/null || true)"
+if [ -n "$EXPSHA" ]; then
+  GOTSHA="$(sha256sum "$DEST" 2>/dev/null | awk '{print $1}')"
+  [ "$GOTSHA" = "$EXPSHA" ] || { echo "✗ 무결성 검증 실패(sha256 불일치) — 설치 중단."; echo "   기대 ${EXPSHA} / 받음 ${GOTSHA}"; exit 1; }
+  echo "   ✓ sha256 검증 통과"
+fi
 
 # ----- 3) 임시 디렉터리에 압축 해제 + 검증(최상위 isilon_usage-<버전>/ 제거) -----
 echo "→ 임시 작업: $TMP_DIR"

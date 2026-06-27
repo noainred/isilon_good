@@ -98,10 +98,14 @@ def main() -> int:
     rcode = tempfile.mkdtemp(prefix="iu_up_code_")
     rdl = tempfile.mkdtemp(prefix="iu_up_dl_")
     try:
-        _make_archive(os.path.join(srv, "isilon_usage-9.9.9.tar.gz"), "9.9.9")
+        _arc = os.path.join(srv, "isilon_usage-9.9.9.tar.gz")
+        _make_archive(_arc, "9.9.9")
+        import hashlib as _hl
+        _sha = _hl.sha256(open(_arc, "rb").read()).hexdigest()
         with open(os.path.join(srv, "versions.json"), "w") as fh:
             _json.dump({"latest": "9.9.9", "versions": [
-                {"version": "9.9.9", "tar_gz": "isilon_usage-9.9.9.tar.gz", "size_bytes": 100}]}, fh)
+                {"version": "9.9.9", "tar_gz": "isilon_usage-9.9.9.tar.gz",
+                 "size_bytes": 100, "sha256": _sha}]}, fh)
         os.makedirs(os.path.join(rcode, "isilon_usage"))
         with open(os.path.join(rcode, "isilon_usage", "__init__.py"), "w") as fh:
             fh.write('__version__ = "1.0.0"\n')
@@ -123,8 +127,14 @@ def main() -> int:
             assert "9.9.9" in fh.read()
         # 잘못된 파일명/다운그레이드 거부
         assert not upgrade.download_archive(base + "/evil.sh", rdl)["ok"]
+        # sha256 무결성: 일치 통과, 불일치 거부(변조/탈취 미러 차단)
+        assert upgrade.download_archive(base + "/isilon_usage-9.9.9.tar.gz", rdl,
+                                        expected_sha256=_sha)["ok"]
+        _bad = upgrade.download_archive(base + "/isilon_usage-9.9.9.tar.gz", rdl,
+                                        expected_sha256="deadbeef")
+        assert not _bad["ok"] and "무결성" in _bad["reason"], _bad
         httpd.shutdown()
-        print("[remote-upgrade] OK  원격 확인·다운로드·설치(1.0.0→9.9.9)·최신판정·파일명검증")
+        print("[remote-upgrade] OK  원격 확인·다운로드·설치·최신판정·파일명·sha256 무결성")
     finally:
         for d in (srv, rcode, rdl):
             shutil.rmtree(d, ignore_errors=True)
