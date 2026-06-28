@@ -33,6 +33,33 @@ def vstr(t) -> str:
     return ".".join(str(x) for x in t)
 
 
+def auto_status_reason(*, source_mode, auto, available, busy=False,
+                       installing=False, watch_dir=""):
+    """자동 업그레이드가 지금 '자동 설치까지' 가는지, 안 가면 왜 안 가는지 한 줄로 설명한다.
+
+    엣지·포탈이 같은 판단을 쓰도록 단일 소스로 둔다(화면마다 복제 금지). 반환:
+      (blocked: bool, reason: str)
+        blocked=True  → 새 버전이 나와도 자동 설치되지 않는다(막는 이유 설명).
+        blocked=False → 자동 설치 경로가 살아 있다(상태/예정 설명).
+    """
+    if installing:
+        return False, "설치 진행 중…"
+    net_on = (str(source_mode or "off").strip() == "github")
+    watch_on = bool((watch_dir or "").strip())
+    if not net_on and not watch_on:
+        return True, ("자동 업그레이드 소스가 꺼져 있습니다(인터넷=off · 감시폴더 없음). "
+                      "수동 확인/설치만 됩니다 — 소스를 'github'로 켜세요.")
+    if busy:
+        return True, "스캔 중이라 자동 업그레이드를 보류합니다 — 스캔이 끝나면 진행합니다."
+    if net_on and not auto:
+        if watch_on:
+            return False, "감시폴더 자동 적용은 켜져 있습니다(인터넷 자동설치는 꺼짐 — 새 버전 알림만)."
+        return True, "자동설치가 꺼져 있습니다 — 새 버전이 있어도 알림만 합니다('자동설치'를 켜세요)."
+    if available:
+        return False, "새 버전이 있어 곧 자동 설치합니다."
+    return False, "자동 업그레이드 켜짐 — 새 버전이 나오면 자동 설치합니다(현재 최신)."
+
+
 def _archive_version(filename: str) -> Optional[Tuple[int, int, int]]:
     m = _ARCHIVE_RE.search(os.path.basename(filename))
     return tuple(int(x) for x in m.groups()) if m else None

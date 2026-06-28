@@ -951,4 +951,12 @@
      -size +Nc 경계 맞춤, max_files 오프바이원, path_allowed/browse_allowed realpath 강화, atime noatime
      경고(단일소스), 셸주입 비취약 확인. 스텁 rsync 로 dry→live→rollback 왕복 실측. 17/17·JS·ruff 통과. v1.99.11.
 
+272. (자동 업그레이드가 안 되고 수동 확인해야만 올라감 → 원인진단 + 사유표시 ①) 코드 정독으로 확정:
+     자동설치는 upgrade_source=="github" + upgrade_auto + not busy(스캔중) 셋 다 필요(기본 off/false).
+     수동 확인/설치는 셋을 우회해 직접 호출(check_remote/upgrade_from_remote)이라 항상 동작 → "수동만 됨"
+     증상의 원인. 지난 리붓이 포탈 settings.json 초기화로 소스/자동을 기본(off)으로 되돌린 정황. 사용자
+     선택 ①: upgrade.auto_status_reason() 단일헬퍼 추가(엣지·포탈 공유), upgrade_status 에 auto_reason/
+     auto_blocked/scan_busy 노출, dashboard renderUpgrade·portal renderNetUpg 에 "⚠ 자동설치: …" 한 줄
+     색 표시. 진단만 추가·동작 불변(비파괴). test_upgrade 에 5갈래 사유 테스트. 17/17·JS(양쪽)·ruff. v1.99.12.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

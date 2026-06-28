@@ -209,6 +209,23 @@ def main() -> int:
         for d in (srv2, rcode2, rdl2):
             shutil.rmtree(d, ignore_errors=True)
 
+    # --- 자동설치 상태 사유(왜 자동이 안 되는지 한 줄 설명) ---
+    b, r = upgrade.auto_status_reason(source_mode="off", auto=False, available=True)
+    assert b and "소스" in r, r                                  # 소스 꺼짐 → 차단
+    b, r = upgrade.auto_status_reason(source_mode="github", auto=False, available=True)
+    assert b and "자동설치" in r, r                              # 자동설치 꺼짐(알림만) → 차단
+    b, r = upgrade.auto_status_reason(source_mode="github", auto=True, available=True, busy=True)
+    assert b and "스캔" in r, r                                  # 스캔 중 → 보류
+    b, r = upgrade.auto_status_reason(source_mode="github", auto=True, available=True)
+    assert (not b) and "자동 설치" in r, r                       # 셋 다 OK → 곧 설치
+    b, r = upgrade.auto_status_reason(source_mode="github", auto=True, available=False)
+    assert not b, r                                              # 켜짐·현재 최신 → 대기(차단 아님)
+    b, r = upgrade.auto_status_reason(source_mode="off", auto=False, available=False, watch_dir="/x")
+    assert not b, r                                              # 감시폴더만으로도 자동 경로 살아있음
+    b, r = upgrade.auto_status_reason(source_mode="github", auto=True, available=True, installing=True)
+    assert (not b) and "설치" in r, r                            # 설치 중
+    print("[auto-reason] OK  자동설치 차단 사유 설명(소스off/자동off/스캔중/예정/최신)")
+
     print("모든 테스트 통과 ✅")
     return 0
 

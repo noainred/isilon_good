@@ -2001,7 +2001,9 @@ function renderNetUpg(j){
             : `<br><span class="sub">엣지에 보낼 배포 코드 <b>v${j.bundle_version}</b> (실행 버전과 일치)</span>`)
         : "")
     +(j.check_error?`<br><span style="color:var(--danger)">확인 오류: ${j.check_error}</span>`:"")
-    +`<br><span class="sub">소스: ${j.url||"—"}</span>`;
+    +`<br><span class="sub">소스: ${j.url||"—"}</span>`
+    +(j.auto_reason?`<br><span style="color:${j.auto_blocked?"var(--warn)":"var(--ok)"};font-weight:600">`
+        +`${j.auto_blocked?"⚠":"✓"} 자동설치: </span><span class="sub">${_he(j.auto_reason)}</span>`:"");
   if(document.activeElement!==$("nuSource")) $("nuSource").value=j.source_mode||"off";
   if($("nuUrl") && document.activeElement!==$("nuUrl")) $("nuUrl").value=j.url_custom||"";
   if($("nuToken") && document.activeElement!==$("nuToken"))

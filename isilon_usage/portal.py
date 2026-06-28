@@ -1169,6 +1169,12 @@ class PortalController:
         st["edges_outdated"] = len(outdated)
         st["edges_outdated_list"] = outdated[:20]
         st["edges_unknown"] = unknown
+        # 자동설치가 왜 안 되는지(소스 off/자동 off) 한 줄 설명 — 엣지와 같은 단일 소스 판단.
+        st["auto_blocked"], st["auto_reason"] = upgrademod.auto_status_reason(
+            source_mode=st["source_mode"], auto=st["auto"],
+            available=bool(st.get("available")), busy=False,
+            installing=bool(st.get("installing")),
+            watch_dir=self.settings.get("upgrade_watch_dir", ""))
         return {"ok": True, **st}
 
     def upgrade_check(self) -> dict:

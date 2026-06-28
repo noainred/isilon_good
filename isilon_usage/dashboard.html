@@ -4519,7 +4519,9 @@ function renderUpgrade(j) {
     + (j.last_check ? ` · 확인 ${new Date(j.last_check * 1000).toLocaleString("ko-KR")}`
                     : " · 아직 확인 안 함")
     + (j.check_error ? `<br><span class="err">확인 오류: ${j.check_error}</span>` : "")
-    + `<br><span class="sub">소스: ${j.url || "—"}</span>`;
+    + `<br><span class="sub">소스: ${j.url || "—"}</span>`
+    + (j.auto_reason ? `<br><span style="color:${j.auto_blocked ? "var(--warn)" : "var(--ok)"};font-weight:600">`
+        + `${j.auto_blocked ? "⚠" : "✓"} 자동설치: </span><span class="sub">${escHtml(j.auto_reason)}</span>` : "");
   if (document.activeElement !== $("upgSource")) $("upgSource").value = j.source_mode || "off";
   if ($("upgUrl") && document.activeElement !== $("upgUrl")) $("upgUrl").value = j.url_custom || "";
   if ($("upgToken") && document.activeElement !== $("upgToken"))

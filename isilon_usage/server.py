@@ -961,6 +961,7 @@ class ScanController:
     def upgrade_status(self) -> dict:
         with self._lock:
             st = dict(self._upg_state)
+            busy = bool(self._scans)   # 스캔 중이면 자동 업그레이드는 보류됨
         st["current"] = __version__
         st["source_mode"] = self.settings.get("upgrade_source", "off")
         st["auto"] = bool(self.settings.get("upgrade_auto"))
@@ -968,6 +969,12 @@ class ScanController:
         st["url_custom"] = self.settings.get("upgrade_url") or ""
         st["token_set"] = bool(self.settings.get("upgrade_token"))   # 값 비노출, 설정 여부만
         st["watch_dir"] = self.settings.get("upgrade_watch_dir", "")
+        st["scan_busy"] = busy
+        # 자동설치가 왜 안 되는지(소스 off/자동 off/스캔 중) 한 줄 설명 — 엣지·포탈 공통 판단.
+        st["auto_blocked"], st["auto_reason"] = upgrademod.auto_status_reason(
+            source_mode=st["source_mode"], auto=st["auto"],
+            available=bool(st.get("available")), busy=busy,
+            installing=bool(st.get("installing")), watch_dir=st["watch_dir"])
         return {"ok": True, **st}
 
     def upgrade_check(self) -> dict:
