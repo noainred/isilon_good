@@ -104,6 +104,14 @@ def _run_server(args, *, initial_path: Optional[str]) -> int:
     웹페이지에서 디렉터리를 지정해 추가 스캔을 시작/중지할 수 있다.
     """
     data_dir = os.path.abspath(args.data_dir)
+    # 영속화 가드: 재부팅 시 data-dir(영속 디스크)이 아직 마운트 안 됐는데 떠서 '빈 폴더'에
+    # 새 토큰·빈 노드로 초기화하는 사고를 막는다. 이전에 초기화된 폴더가 비어 있으면 시작을
+    # 중단(systemd 재시도)해 마운트를 기다린다. (노드/토큰/설정이 재부팅에 사라지던 문제 대응.)
+    _code_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _ok, _why = setmod.check_persistence(data_dir, _code_dir, ("settings.json", "manager.db"))
+    if not _ok:
+        print("✗ " + _why, file=sys.stderr)
+        return 3
     mgrmod.migrate_legacy_config(data_dir)
     mount_bases = [os.path.abspath(b) for b in (getattr(args, "mount_base", None) or [])]
 
@@ -133,6 +141,9 @@ def _run_server(args, *, initial_path: Optional[str]) -> int:
         lock_settings=getattr(args, "lock_settings", False),
     )
     cur = httpd.controller.settings
+    # 데이터가 실제로 있는(=마운트 정상) 시작에서만 '초기화됨' 표식을 코드 폴더에 갱신한다.
+    setmod.mark_initialized(data_dir, _code_dir, ("settings.json", "manager.db"),
+                            {"role": "edge", "had_token": bool(cur.get("api_token"))})
     url = _dashboard_url(args.host, args.port)
 
     print("=" * 64)
@@ -291,7 +302,15 @@ def cmd_portal(args: argparse.Namespace) -> int:
     from .portal import serve_portal
 
     data_dir = os.path.abspath(args.data_dir)
+    # 영속화 가드(엣지와 동일): 마운트 누락 시 빈 폴더에 노드 0·새 토큰으로 초기화되는 사고 방지.
+    _code_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _proxies = ("portal_nodes.json", "portal_settings.json")
+    _ok, _why = setmod.check_persistence(data_dir, _code_dir, _proxies)
+    if not _ok:
+        print("✗ " + _why, file=sys.stderr)
+        return 3
     httpd = serve_portal(data_dir, host=args.host, port=args.port)
+    setmod.mark_initialized(data_dir, _code_dir, _proxies, {"role": "portal"})
     url = _dashboard_url(args.host, args.port)
     print("=" * 64)
     print("  글로벌 통합 포탈 (HQ) — 여러 데이터센터를 한 화면에서 조망")

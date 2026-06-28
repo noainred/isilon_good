@@ -195,6 +195,46 @@ def _check_resume_real() -> None:
     print("[resume-real] OK  업그레이드 후 실제 재개(threads 이어서·pscan DB없어도 재스캔)·last_resume 노출")
 
 
+def _check_persistence_guard() -> None:
+    """영속화 가드: 재부팅 마운트 누락(빈 data-dir)으로 새 초기화하는 사고를 막는지 검증."""
+    import shutil
+
+    from isilon_usage import settings as setmod
+    d = tempfile.mkdtemp(prefix="iu_persist_")
+    try:
+        data = os.path.join(d, "data"); code = os.path.join(d, "code")
+        os.makedirs(data); os.makedirs(code)
+        proxies = ("settings.json", "manager.db")
+        # 표식 없으면(첫 설치) 통과한다.
+        ok, _ = setmod.check_persistence(data, code, proxies)
+        assert ok
+        # 데이터가 없으면 표식을 남기지 않는다(첫 실행 보호).
+        setmod.mark_initialized(data, code, proxies)
+        ok, _ = setmod.check_persistence(data, code, proxies)
+        assert ok
+        # 데이터가 생기면 표식을 남긴다 → 데이터 있는 한 통과.
+        with open(os.path.join(data, "settings.json"), "w") as fh:
+            fh.write("{}")
+        setmod.mark_initialized(data, code, proxies, {"role": "edge"})
+        ok, _ = setmod.check_persistence(data, code, proxies)
+        assert ok
+        # 마운트 누락 흉내: 표식은 있는데 data-dir 가 비었다 → 시작 차단(새 초기화 방지).
+        os.remove(os.path.join(data, "settings.json"))
+        ok, why = setmod.check_persistence(data, code, proxies)
+        assert (not ok) and "마운트" in why, (ok, why)
+        # manager.db 만 있어도 데이터 있음으로 보고 통과(오탐 방지).
+        with open(os.path.join(data, "manager.db"), "w") as fh:
+            fh.write("x")
+        ok, _ = setmod.check_persistence(data, code, proxies)
+        assert ok
+        # 표식의 data-dir 와 다른 폴더면 차단하지 않는다(설정 변경 오탐 방지).
+        ok2, _ = setmod.check_persistence(os.path.join(d, "other"), code, proxies)
+        assert ok2
+        print("[persistence-guard] OK  빈 폴더 새초기화 차단·첫설치 통과·다른폴더 오탐없음")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def _check_sequential_schedule() -> None:
     """순차 예약: 한 예약의 여러 경로를 A 끝나면 B 식으로 순서대로 실행한다."""
     import shutil
@@ -495,6 +535,7 @@ def main() -> int:
     _check_insecure_warning()
     _check_resume_after_upgrade()
     _check_resume_real()
+    _check_persistence_guard()
     _check_sequential_schedule()
     _check_email_notifications()
     _check_op_password()

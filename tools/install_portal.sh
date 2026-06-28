@@ -142,7 +142,10 @@ echo "→ 서비스 등록: $UNIT"
 cat > "$UNIT" <<EOF
 [Unit]
 Description=Isilon Portal (HQ) - 글로벌 통합 관제
-After=network.target remote-fs.target
+After=network.target remote-fs.target local-fs.target
+# 데이터 폴더가 별도 영속 디스크 마운트면, 그 마운트가 붙은 뒤에 시작한다(재부팅 시 빈 폴더에
+# 노드 0·새 토큰으로 초기화되어 노드/설정이 사라지는 사고 방지).
+RequiresMountsFor=$DATA_DIR
 
 [Service]
 Type=simple

@@ -967,4 +967,12 @@
      호출(설치스크립트·재부팅도 재개), pscan 은 DB 없어도 재스캔, 재개결과를 upgrade 패널 로그·last_resume
      에 노출, 마커는 시도 후 삭제. 모킹없는 실제 재개 E2E 테스트(threads·pscan) 추가. 17/17·ruff. v1.99.13.
 
+274. (어떤걸 결정? → 배포: 자동업그레이드 켜기 안내 / 다음작업: 영속화 점검 선택) 재부팅에 노드·토큰·
+     설정 유실 근본원인 진단: data-dir 별도 영속 마운트가 붙기 전 서비스가 떠 빈 폴더로 새 초기화(토큰
+     유실→포탈 401). 수정: settings.check_persistence/mark_initialized — 코드 폴더(영속 root fs)에 표식,
+     시작 시 표식 있는데 data-dir 비면 새초기화 않고 exit 3(systemd 재시도로 마운트 대기). cli serve/portal
+     에 가드 배선(코드 업글로 기존 엣지에도 적용). install_edge/portal.sh systemd 에 RequiresMountsFor=
+     $DATA_DIR + After local-fs.target(재설치 시 적용). 가드 단위테스트 + CLI 실측(정상 통과·표식 기록 /
+     마운트누락 흉내 exit3 차단). 17/17·ruff·shell -n. v1.99.14. (자동업그레이드 켜는 절차도 안내함.)
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

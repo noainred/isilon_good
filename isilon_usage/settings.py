@@ -419,3 +419,61 @@ def seed_if_absent(data_dir: str, initial: dict) -> dict:
     base = dict(DEFAULTS)
     base.update({k: v for k, v in (initial or {}).items() if k in DEFAULTS})
     return save(data_dir, base)
+
+
+# ----- 데이터 영속화 가드(재부팅 시 마운트 누락으로 빈 폴더에 새 식별자 만드는 사고 방지) -----
+# 증상: 재부팅하면 노드·토큰·설정이 사라진다. 원인은 보통 data-dir 가 별도 영속 디스크 마운트인데,
+# 그 마운트가 붙기 전에 서비스가 떠서 '빈 폴더'를 보고 새로 초기화(새 토큰 생성·노드 0) 해버리는 것.
+# 코드 폴더(영속 root fs, 재부팅에 보존)에 '초기화됨' 표식을 남겨, 다음 시작 때 표식은 있는데 data-dir
+# 가 비어 있으면 '마운트가 아직 안 붙음'으로 보고 새로 초기화하지 않고 대기(서비스 재시도)한다.
+_PERSIST_SENTINEL = ".iu_data_persist.json"
+
+
+def _persist_sentinel_path(code_dir: str) -> str:
+    return os.path.join(code_dir, _PERSIST_SENTINEL)
+
+
+def _data_present(data_dir: str, proxies) -> bool:
+    """data-dir 에 '실제 데이터(식별자)'가 있다고 볼 만한 파일이 하나라도 있나."""
+    return any(os.path.exists(os.path.join(data_dir, p)) for p in proxies)
+
+
+def check_persistence(data_dir: str, code_dir: str, proxies):
+    """반환 (ok, reason). ok=False 면 호출측이 시작을 중단(systemd 재시도)해 마운트를 기다려야 한다.
+
+    표식(코드 폴더)이 '같은 data-dir 로 초기화됨'을 말하는데 지금 data-dir 가 비어 있으면 차단한다.
+    표식이 없거나(첫 설치) data-dir 에 데이터가 있으면 통과한다.
+    """
+    data_dir = os.path.abspath(data_dir or "")
+    try:
+        with open(_persist_sentinel_path(code_dir), encoding="utf-8") as fh:
+            mark = json.load(fh)
+    except (OSError, ValueError):
+        mark = None
+    if (isinstance(mark, dict) and mark.get("initialized")
+            and os.path.abspath(mark.get("data_dir") or "") == data_dir
+            and not _data_present(data_dir, proxies)):
+        return False, (
+            "이전에 초기화된 데이터 폴더(%s)가 비어 있습니다 — 영속 디스크가 아직 마운트되지 "
+            "않은 것으로 보입니다. 새로 초기화하지 않고 마운트를 기다립니다(서비스가 곧 재시도). "
+            "의도적으로 초기화하려면 표식 파일 %s 을(를) 지우세요."
+            % (data_dir, _persist_sentinel_path(code_dir)))
+    return True, None
+
+
+def mark_initialized(data_dir: str, code_dir: str, proxies, detail=None) -> None:
+    """data-dir 에 실제 데이터가 있을 때만 '초기화됨' 표식을 코드 폴더(영속 root fs)에 남긴다."""
+    data_dir = os.path.abspath(data_dir or "")
+    if not _data_present(data_dir, proxies):
+        return
+    rec = {"initialized": True, "data_dir": data_dir}
+    if detail:
+        rec.update(detail)
+    try:
+        p = _persist_sentinel_path(code_dir)
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh, ensure_ascii=False)
+        os.replace(tmp, p)
+    except OSError:
+        pass
