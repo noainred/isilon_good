@@ -161,6 +161,14 @@ def _run_server(args, *, initial_path: Optional[str]) -> int:
     def handle_sigint(signum, frame):
         print("\n중지 신호 수신 — 정리 중…", file=sys.stderr)
         if httpd.controller:
+            # 재시작(systemctl restart)·재부팅·설치 스크립트 업그레이드로 SIGTERM 종료될 때,
+            # 돌던 스캔을 '재개 대상'으로 표시해 둔다 → 새 프로세스가 시작하며 자동으로 이어서
+            # 스캔한다(작업 유실 방지). 앱 내부 업그레이드는 os.execv 라 이 경로를 안 타지만,
+            # 외부 종료(설치 스크립트/재부팅)는 이 경로로만 마커가 남는다.
+            try:
+                httpd.controller._mark_running_scans_for_resume()
+            except Exception:   # noqa: BLE001 — 표시 실패해도 종료는 진행
+                pass
             httpd.controller.stop_all()
         threading.Thread(target=httpd.shutdown, daemon=True).start()
 

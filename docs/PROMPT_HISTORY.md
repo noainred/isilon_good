@@ -959,4 +959,12 @@
      auto_blocked/scan_busy 노출, dashboard renderUpgrade·portal renderNetUpg 에 "⚠ 자동설치: …" 한 줄
      색 표시. 진단만 추가·동작 불변(비파괴). test_upgrade 에 5갈래 사유 테스트. 17/17·JS(양쪽)·ruff. v1.99.12.
 
+273. (업그레이드 후 돌던 스캔이 멈추고 재개 안 됨 → 원인진단·수정) repro 로 측정: 앱 내부 업그레이드는
+     _restart_for_upgrade→_mark_running_scans_for_resume→os.execv 로 정상 재개되나, 외부 종료(SIGTERM:
+     systemctl restart·재부팅·install_edge.sh pkill)는 cli handle_sigint 가 stop_all() 로 중지만 하고
+     마커를 안 남겨 새 프로세스가 재개 못함(핵심). + resume_scan 이 pscan 도 per-run DB 존재 요구해
+     sizing 초기 업그레이드면 막힘(버그B). 수정: handle_sigint 가 중지 전에 _mark_running_scans_for_resume
+     호출(설치스크립트·재부팅도 재개), pscan 은 DB 없어도 재스캔, 재개결과를 upgrade 패널 로그·last_resume
+     에 노출, 마커는 시도 후 삭제. 모킹없는 실제 재개 E2E 테스트(threads·pscan) 추가. 17/17·ruff. v1.99.13.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

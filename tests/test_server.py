@@ -130,6 +130,71 @@ def _check_resume_after_upgrade() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _check_resume_real() -> None:
+    """업그레이드 후 '실제' 자동 재개 — 모킹 없이 새 컨트롤러(=재시작)가 스캔을 정말 잇는지 검증.
+
+    threads(부분 재개)와 pscan(per-run DB 없어도 재스캔)·재개 결과의 화면 노출(last_resume)까지 확인.
+    """
+    import shutil
+    import time as _t
+
+    from isilon_usage import db as dbmod
+    from isilon_usage import manager as mgrmod
+    from isilon_usage.server import ScanController
+
+    def _mk_tree(base):
+        os.makedirs(os.path.join(base, "sub"))
+        for i in range(12):
+            with open(os.path.join(base, "f%d.bin" % i), "wb") as fh:
+                fh.write(b"x" * 800)
+            with open(os.path.join(base, "sub", "g%d.bin" % i), "wb") as fh:
+                fh.write(b"y" * 800)
+
+    def _wait_status(data, sid, want, timeout=20):
+        for _ in range(int(timeout / 0.1)):
+            mc = dbmod.connect(mgrmod.manager_db_path(data))
+            row = mgrmod.get_scan(mc, sid); mc.close()
+            if row and row["status"] in want:
+                return row
+            _t.sleep(0.1)
+        return row
+
+    for engine, drop_db in (("threads", False), ("pscan", True)):
+        d = tempfile.mkdtemp(prefix="isilon_resume_real_")
+        try:
+            tree = os.path.join(d, "tree"); _mk_tree(tree)
+            data = os.path.join(d, "data")
+            a = ScanController(data)
+            r = a.start_scan(tree, engine=engine)
+            sid = r["scan_id"]
+            row = _wait_status(data, sid, ("done", "error"))
+            assert row["status"] == "done", (engine, row["status"])
+            # '업그레이드 직전 진행 중'을 흉내: 매니저 상태를 discovering 으로 되돌리고 마커 작성.
+            mc = dbmod.connect(mgrmod.manager_db_path(data))
+            mgrmod.update_scan(mc, sid, status="discovering", phase="discovering")
+            mc.commit(); mc.close()
+            if drop_db:                       # pscan: per-run DB 가 없어도 재개(재스캔)돼야 한다(버그B).
+                try:
+                    os.remove(row["db_path"])
+                except OSError:
+                    pass
+            with open(os.path.join(a.data_dir, ScanController._RESUME_MARK), "w") as fh:
+                json.dump({"scan_ids": [sid]}, fh)
+            # 재시작 = 같은 data-dir 새 컨트롤러 → reconcile → _resume_after_upgrade 가 실제 재개.
+            b = ScanController(data)
+            assert not os.path.exists(os.path.join(b.data_dir, ScanController._RESUME_MARK))
+            lr = b.upgrade_status().get("last_resume") or {}
+            res0 = (lr.get("results") or [{}])[0]
+            assert res0.get("ok"), (engine, "재개 실패", res0)          # 재개가 ok 여야 함
+            row2 = _wait_status(data, sid, ("done", "error"))
+            assert row2["status"] == "done", (engine, "재개 후 미완료", row2["status"])
+            if drop_db:
+                assert os.path.exists(row["db_path"]), "pscan 재개 시 per-run DB 재생성돼야"
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+    print("[resume-real] OK  업그레이드 후 실제 재개(threads 이어서·pscan DB없어도 재스캔)·last_resume 노출")
+
+
 def _check_sequential_schedule() -> None:
     """순차 예약: 한 예약의 여러 경로를 A 끝나면 B 식으로 순서대로 실행한다."""
     import shutil
@@ -429,6 +494,7 @@ def _check_last_scan_remember() -> None:
 def main() -> int:
     _check_insecure_warning()
     _check_resume_after_upgrade()
+    _check_resume_real()
     _check_sequential_schedule()
     _check_email_notifications()
     _check_op_password()

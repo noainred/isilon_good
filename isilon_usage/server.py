@@ -748,10 +748,12 @@ class ScanController:
     _RESUME_MARK = "resume_after_upgrade.json"
 
     def _mark_running_scans_for_resume(self) -> None:
-        """업그레이드로 재시작하기 직전, 지금 돌고 있는 스캔 id 를 마커 파일(data-dir)에 적어둔다.
+        """재시작 직전, 지금 돌고 있는 스캔 id 를 마커 파일(data-dir)에 적어둔다.
 
-        새 프로세스가 시작할 때 이 마커를 읽어 자동 재개한다. 돌던 스캔이 없으면 남은 마커를 지운다.
-        (data-dir 은 코드 교체와 무관하게 보존되므로 업그레이드 후에도 마커가 살아남는다.)
+        호출 시점: ① 앱 내부 업그레이드(_restart_for_upgrade→os.execv) ② 외부 종료(SIGTERM —
+        systemctl restart·재부팅·설치 스크립트 업그레이드, cli handle_sigint 가 호출). 새 프로세스가
+        시작할 때 이 마커를 읽어 자동 재개한다(돌던 스캔이 없으면 남은 마커를 지운다). data-dir 은
+        코드 교체·재부팅과 무관하게 보존되므로 마커가 살아남아 작업이 유실되지 않는다.
         """
         ids = self.running_ids()
         path = os.path.join(self.data_dir, self._RESUME_MARK)
@@ -780,10 +782,13 @@ class ScanController:
         upgrademod.restart_process()
 
     def _resume_after_upgrade(self) -> None:
-        """업그레이드 재시작 직전에 표시해 둔 스캔을 자동 재개한다(시작 시 1회). 마커는 즉시 삭제.
+        """재시작 직전에 표시해 둔(마커) 스캔을 자동 재개한다(시작 시 1회). 마커는 시도 후 삭제.
 
         _reconcile_orphans() 가 먼저 그 스캔을 'paused' 로 정리한 뒤 호출되므로, 여기서 곧바로
-        이어서 재개한다. 마커는 비업그레이드(일반) 재시작에서는 쓰이지 않으므로 자동 재개되지 않는다.
+        이어서 재개한다. 업그레이드(os.execv)뿐 아니라 SIGTERM 종료(systemctl restart·재부팅·설치
+        스크립트)도 마커를 남기므로, 그런 재시작에서도 돌던 스캔을 이어서 진행한다. 마커가 없는
+        재시작(돌던 스캔이 없었음)에서는 아무 일도 하지 않는다. 재개 결과는 업그레이드 패널 로그·
+        last_resume 에 남겨 화면에서 성공/실패를 확인할 수 있다.
         """
         path = os.path.join(self.data_dir, self._RESUME_MARK)
         try:
@@ -791,17 +796,24 @@ class ScanController:
                 data = json.load(fh)
         except (OSError, ValueError):
             return
-        try:
-            os.remove(path)     # 한 번만 — 다음(비업그레이드) 재시작에서 반복 재개 방지
-        except OSError:
-            pass
+        results = []
         for sid in (data.get("scan_ids") or []):
             try:
                 res = self.resume_scan(int(sid))
-                self._log("[upgrade] 업그레이드 후 자동 재개 scan #%s: %s"
-                          % (sid, "재개" if res.get("ok") else res.get("reason")))
+                ok = bool(res.get("ok"))
+                results.append({"scan_id": int(sid), "ok": ok, "reason": res.get("reason")})
+                # 업그레이드 패널 로그에도 남겨, 재개 성공/실패를 화면에서 바로 확인할 수 있게 한다.
+                self._upg_log("업그레이드 후 자동 재개 scan #%s: %s"
+                              % (sid, "재개됨" if ok else ("실패 — %s" % res.get("reason"))))
             except Exception as exc:   # noqa: BLE001
-                self._log("[upgrade] 자동 재개 실패 scan #%s: %s" % (sid, exc))
+                results.append({"scan_id": int(sid), "ok": False, "reason": str(exc)})
+                self._upg_log("업그레이드 후 자동 재개 실패 scan #%s: %s" % (sid, exc))
+        with self._lock:
+            self._upg_state["last_resume"] = {"ts": time.time(), "results": results}
+        try:
+            os.remove(path)   # 재개 시도를 모두 마친 뒤 삭제(도중에 죽으면 다음 부팅에 한 번 더 시도)
+        except OSError:
+            pass
 
     # ----- 반복(완료 후 자동 재시작) 상태 영속화 -----
     _AUTO_RESTART_MARK = "auto_restart.json"
@@ -1920,7 +1932,11 @@ class ScanController:
             mconn.close()
         if row is None:
             return {"ok": False, "reason": "없는 scan"}
-        if not os.path.exists(row["db_path"]):
+        is_pscan = (row["backend"] == "pscan")
+        # threads(native)는 '부분 재개'라 per-run DB 가 있어야 이어서 한다. pscan 은 부분 재개가
+        # 없어 어차피 처음부터 다시 스캔하므로 per-run DB 가 없어도 재개(재스캔)할 수 있다 —
+        # 업그레이드가 sizing 초기(per-run DB 생성 전)에 끼어든 경우에도 재개되도록 한다.
+        if not is_pscan and not os.path.exists(row["db_path"]):
             return {"ok": False, "reason": "per-run DB 가 없어 재개할 수 없습니다."}
         # 재개 즉시 매니저 상태를 '진행 중'으로 되돌린다 — 안 그러면 'paused' 로 남아
         # 화면엔 '일시정지'로 보이고 active_scans(포탈 집계)에서도 빠진다(스캐너가 곧 정확히 갱신).
@@ -1930,7 +1946,7 @@ class ScanController:
             mc.commit(); mc.close()
         except Exception:
             pass
-        if row["backend"] == "pscan":           # pscan 은 부분 재개가 없으므로 전체 재스캔
+        if is_pscan:                            # pscan 은 부분 재개가 없으므로 전체 재스캔
             try:
                 os.remove(row["db_path"])       # 깨끗한 per-run DB 로 다시 기록(혼선 방지)
             except OSError:
