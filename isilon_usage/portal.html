@@ -2361,13 +2361,14 @@ function renderThroughput(){
         <div style="width:16px; color:var(--muted);">${open?"▾":"▸"}</div></div>`;
     let detail="";
     if(open){
-      detail='<div style="padding:6px 0 12px 14px;">'+wins.map(w=>{
+      // 윈도우별(최근 1분~1일)을 박스(카드) 형태로 — '총 사용 용량' 카드와 같은 스타일.
+      detail='<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; padding:10px 0 14px;">'+wins.map(w=>{
         const k=String(w), d=(n.win||{})[k]||{};
-        return `<div style="display:flex; gap:10px; align-items:center; padding:2px 0; font-size:12.5px;">
-          <span class="sub" style="width:84px;">${_THRU_LABEL[k]||k+"s"}</span>
-          <span style="width:120px; text-align:right;"><b>${fmtBytes(d.bytes||0)}</b> <span class="sub">처리</span></span>
-          <span style="width:110px; text-align:right; color:#7fc8ff;">${_bph(d.bph)}</span>
-          <span class="sub" style="white-space:nowrap;">· ${fmtNum(Math.round(d.files||0))} 파일</span></div>`;
+        return `<div class="card" style="padding:12px 14px;">
+          <h2 style="margin:0 0 6px;">${_THRU_LABEL[k]||k+"s"}</h2>
+          <div class="big" style="font-size:20px; color:#7fc8ff;">${_bph(d.bph)}</div>
+          <div class="sub" style="margin-top:5px;"><b>${fmtBytes(d.bytes||0)}</b> 처리 · ${fmtNum(Math.round(d.files||0))} 파일</div>
+        </div>`;
       }).join("")+'</div>';
     }
     return head+detail;
