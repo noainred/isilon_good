@@ -980,4 +980,9 @@
      윈도우(1분~1일) 각 박스: 라벨 + 큰 숫자=시간당 처리량(GB/h, 파랑) + 보조줄=처리용량·파일수. 반응형
      그리드(minmax 150px). 표시 레이아웃만, 백엔드·데이터·동작 불변(비파괴). portal JS·test 통과. v1.99.15.
 
+276. (탭에 N 아이콘을 옆 탭 V 처럼 예쁘게 [이미지: NAS Management 탭이 기본 지구본]) 파비콘 추가.
+     헤더 V 마크와 같은 스타일(라운드 사각형·linear-gradient #4aa3ff→#7ad0ff·글자 #08203a)의 N(=NAS)을
+     인라인 SVG data-URI(base64)로 만들어 portal.html·dashboard.html <head> 에 <link rel="icon"> 삽입.
+     외부 파일 0(폐쇄망). 디코드 검증·JS(node --check 양쪽)·test_portal 통과. 비파괴. v1.99.16.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
