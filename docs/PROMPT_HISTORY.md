@@ -985,4 +985,14 @@
      인라인 SVG data-URI(base64)로 만들어 portal.html·dashboard.html <head> 에 <link rel="icon"> 삽입.
      외부 파일 0(폐쇄망). 디코드 검증·JS(node --check 양쪽)·test_portal 통과. 비파괴. v1.99.16.
 
+277. (전체 코드 리뷰 → 최대 투입 10라운드 보안·버그·최적화) 리뷰 워크플로(8영역 병렬 find→적대검증,
+     확정 36건: high7/med4/low21/imp4) 근거로 10라운드 수정, 릴리스 1회 통합(엣지 재시작 최소화). R1
+     notify_on_* DEFAULTS(저장버그 HIGH). R2 dups 2·3단계 max_files 상한(MED). R3 XSS 통일(escHtml/_he:
+     폴더이력·예약칩·깊이분석·마운트명·업그레이드 버전/URL/오류·renderNetUpg·loadRelease·push로그·트러블슈팅
+     표). R4 browse 무인증 게이트(엣지 confirm=1·포탈 browse, X-Op-Token). R5 스캔 stop→discovered 데이터
+     손실(claimed 유지·재개 재스캔)+회귀테스트. R6 복제 meta 병합(_merge_scan_lists, 과거 스캔 보존)+테스트.
+     R7 비-ASCII 토큰 compare 바이트화(500 방지). R8 troubleshoot limit 안전파싱. R9 재개 _seen_max_depth
+     복원(중복 UPDATE 제거·최적화). R10 전체검증(17/17·ruff·JS 양쪽)+통합릴리스. 보류: DB커넥션 close
+     클러스터(LOW·GC완화)·settings 락(MED)·_read_json_body 오버사이즈. v1.99.17.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

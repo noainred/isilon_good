@@ -1987,14 +1987,14 @@ async function loadNetUpg(){
 function renderNetUpg(j){
   if(!j||j.ok===false){ if($("nuInfo")) $("nuInfo").textContent="상태를 불러올 수 없습니다."; return; }
   const a=!!j.available;
-  $("nuInfo").innerHTML=`현재 <b>v${j.current||"?"}</b> · 최신 `+(j.latest?`<b>v${j.latest}</b>`:"—")
+  $("nuInfo").innerHTML=`현재 <b>v${_he(j.current||"?")}</b> · 최신 `+(j.latest?`<b>v${_he(j.latest)}</b>`:"—")
     +(a?' <span style="color:var(--warn);font-weight:700">⬆ 업데이트 가능</span>':(j.latest?' <span style="color:var(--ok)">✓ 최신</span>':""))
     +(j.last_check?` · 확인 ${new Date(j.last_check*1000).toLocaleString("ko-KR")}`:" · 아직 확인 안 함")
     +` · 엣지 ${j.node_count||0}대`
     +(j.edges_outdated>0
         ? ` · <span style="color:var(--warn);font-weight:700">⚠ ${j.edges_outdated}대 구버전</span>`
           +((j.edges_outdated_list&&j.edges_outdated_list.length)
-             ? ` <span class="sub">(${j.edges_outdated_list.map(e=>`${e.id} v${e.version}`).join(", ")})</span>` : "")
+             ? ` <span class="sub">(${j.edges_outdated_list.map(e=>`${_he(e.id)} v${_he(e.version)}`).join(", ")})</span>` : "")
         : ((j.node_count>0&&j.edges_unknown<j.node_count) ? ` · <span style="color:var(--ok)">엣지 모두 최신</span>` : ""))
     +((j.edges_unknown>0)?` <span class="sub">· ${j.edges_unknown}대 버전 미확인</span>`:"")
     +(j.bundle_version
@@ -2002,8 +2002,8 @@ function renderNetUpg(j){
             ? `<br><span style="color:var(--danger);font-weight:700">⚠ 엣지에 보낼 배포 코드 v${j.bundle_version} ≠ 실행 v${j.current} — 포탈 재시작 필요</span>`
             : `<br><span class="sub">엣지에 보낼 배포 코드 <b>v${j.bundle_version}</b> (실행 버전과 일치)</span>`)
         : "")
-    +(j.check_error?`<br><span style="color:var(--danger)">확인 오류: ${j.check_error}</span>`:"")
-    +`<br><span class="sub">소스: ${j.url||"—"}</span>`
+    +(j.check_error?`<br><span style="color:var(--danger)">확인 오류: ${_he(j.check_error)}</span>`:"")
+    +`<br><span class="sub">소스: ${_he(j.url||"—")}</span>`
     +(j.auto_reason?`<br><span style="color:${j.auto_blocked?"var(--warn)":"var(--ok)"};font-weight:600">`
         +`${j.auto_blocked?"⚠":"✓"} 자동설치: </span><span class="sub">${_he(j.auto_reason)}</span>`:"");
   if(document.activeElement!==$("nuSource")) $("nuSource").value=j.source_mode||"off";
@@ -2042,7 +2042,7 @@ function _upgLine(e){
   if(/✓|성공|완료|돌아옵|복귀/.test(e.msg)) cls="color:var(--ok)";
   else if(/✗|실패|오류|거부/.test(e.msg)) cls="color:var(--danger)";
   else if(/내려받|교체|전파|재시작|시작|①|②|③|④/.test(e.msg)) cls="color:var(--warn)";
-  return `<div style="${cls}"><span class="sub">${t}</span>  ${(e.msg||"").replace(/</g,"&lt;")}</div>`;
+  return `<div style="${cls}"><span class="sub">${t}</span>  ${_he(e.msg||"")}</div>`;
 }
 let _upgTimer=null;
 function closeUpgModal(){ if(_upgTimer){clearTimeout(_upgTimer);_upgTimer=null;} const m=$("upgModal"); if(m) m.style.display="none"; }
@@ -2112,8 +2112,8 @@ async function loadRelease(){
     if(!j.ok) return;
     if($("relDir")) $("relDir").value=j.release_dir||"";
     if($("relFile")){
-      const fn=(""+(j.release_file||"")).replace(/</g,"&lt;");
-      const rs=(""+(j.release_reason||"")).replace(/</g,"&lt;");
+      const fn=_he(j.release_file||"");
+      const rs=_he(j.release_reason||"");
       if(!j.release_available){
         $("relFile").innerHTML=`<span style="color:var(--warn)">(없음)</span> <span class="sub">${rs||"폴더에 isilon_usage-*.tar.gz 를 두세요"}</span>`;
       } else if(j.release_version_mismatch){
@@ -2126,10 +2126,10 @@ async function loadRelease(){
       }
     }
     if($("relSeen")){
-      const host=j.release_host?` · 포탈 서버 <b>${(""+j.release_host).replace(/</g,"&lt;")}</b>`:"";
+      const host=j.release_host?` · 포탈 서버 <b>${_he(j.release_host)}</b>`:"";
       const seen=(j.release_seen||[]);
       $("relSeen").innerHTML = seen.length
-        ? `이 폴더에서 보이는 패키지: <span class="mono">${seen.join(", ").replace(/</g,"&lt;")}</span>${host}`
+        ? `이 폴더에서 보이는 패키지: <span class="mono">${_he(seen.join(", "))}</span>${host}`
         : `이 폴더에서 isilon_usage-* 패키지가 안 보입니다${host}. (파일을 <b>이 포탈 서버</b>의 위 경로에 두었는지 확인)`;
     }
     if($("relCmd")) $("relCmd").textContent=
@@ -2188,7 +2188,7 @@ function fbClose(){ const m=$("fbModal"); if(m) m.style.display="none"; }
 async function fbBrowse(p){
   const errEl=$("fbErr"); if(errEl) errEl.textContent="";
   try{
-    const j=await (await fetch("/api/portal/browse?path="+encodeURIComponent(p||"/"),{cache:"no-store"})).json();
+    const j=await (await fetch("/api/portal/browse?path="+encodeURIComponent(p||"/"),{cache:"no-store",headers:{"X-Op-Token":_opToken()}})).json();
     if(!j.ok){ if(errEl) errEl.textContent="탐색 실패: "+(j.reason||j.error||""); return; }
     _fbCur=j.path; $("fbPath").value=j.path; $("fbCurLbl").textContent=j.path;
     $("fbUp").dataset.parent=j.parent||"/";

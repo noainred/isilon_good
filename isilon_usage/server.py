@@ -2288,7 +2288,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if not tok:
             return True
         given = self.headers.get("X-Auth-Token") or (qs.get("token", [""])[0] or "")
-        return hmac.compare_digest(str(given), tok)
+        # 바이트로 상수시간 비교 — 비-ASCII 토큰이 와도 compare_digest 가 TypeError(→500) 나지 않게.
+        return hmac.compare_digest(str(given).encode("utf-8", "ignore"),
+                                   str(tok).encode("utf-8", "ignore"))
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -2400,7 +2402,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             if path == "/api/troubleshoot/history":
                 self._send_json(self.controller.troubleshoot_history(
-                    limit=int(qs.get("limit", ["200"])[0] or 200))
+                    limit=self._query_int(qs, "limit") or 200)   # 잘못된 limit 값에도 500 안 나게 안전 파싱
                     if self.controller else {"ok": True, "events": []})
                 return
 
@@ -2481,6 +2483,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 ctrl = self.controller
                 if not qpath and ctrl and ctrl.mount_bases:
                     qpath = ctrl.mount_bases[0]
+                # confirm=1 로 지정 경로(mount_bases) 밖을 여는 것은 '스캔 outside' 급 권한이다 —
+                # op 비밀번호가 설정돼 있으면 인증을 요구한다(무인증 GET 으로 마운트 밖 전체 FS 열거 방지).
+                if (confirm and ctrl and ctrl.mount_bases
+                        and not ctrl.browse_allowed(qpath or "/")
+                        and ctrl.op_required()
+                        and not ctrl.op_token_valid(self.headers.get("X-Op-Token"))):
+                    self._send_json({"ok": False, "need_op": True,
+                                     "reason": "작업 비밀번호가 필요합니다(지정 경로 밖 탐색)."}, status=401)
+                    return
                 # 지정 경로(mount_bases) 밖이면 하드 차단 대신 '컨펌 가능' 신호를 준다.
                 # 사용자가 컨펌하면 클라이언트가 confirm=1 로 다시 호출 → 자유 탐색 허용.
                 if (ctrl and ctrl.mount_bases and not confirm

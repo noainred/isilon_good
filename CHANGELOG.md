@@ -13,6 +13,40 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.99.17] - 2026-07-01
+
+### 보안·버그·최적화 10라운드 일괄(전체 코드 리뷰 확정 36건 근거)
+
+전체 코드 리뷰(영역별 병렬 + 적대적 검증, 확정 36건)를 바탕으로 10라운드 개선. 프로덕션 재시작 churn을
+줄이려 수정은 라운드별로 하되 릴리스는 1회 통합. 각 수정은 테스트/ruff/JS 검증 통과.
+
+- **R1 (HIGH·버그) 알림 저장:** `notify_on_done/error/stopped/stalled`·`notify_stall_minutes`를 DEFAULTS에
+  등록 — 그동안 DEFAULTS/EDITABLE_KEYS에 없어 설정 변경이 저장·복원되지 않던 문제 수정.
+- **R2 (MEDIUM·성능) dups 상한:** 중복 finder의 2·3단계 해시 I/O에도 `max_files` 상한 적용(1단계만 걸려
+  6PB·수백만 후보에서 read I/O가 무제한 폭주하던 것 방지, `truncated` 표기).
+- **R3 (HIGH×3·MED·LOW) XSS 이스케이프 통일:** 경로(폴더이력·예약칩·깊이분석·마운트명), 원격 보고 버전/
+  URL/오류(대시보드 업그레이드·포탈 renderNetUpg·loadRelease·push 로그), 트러블슈팅 표를 `escHtml/_he`로
+  이스케이프. NAS 폴더명·침해된 엣지의 version 문자열을 통한 저장형 XSS 차단.
+- **R4 (HIGH+MED·보안) 무인증 browse 차단:** 엣지 `/api/browse?confirm=1`(마운트 화이트리스트 우회)·포탈
+  `/api/portal/browse`(HQ 임의 디렉터리 열람)에 작업 비밀번호 인증 게이트 추가(설정 시). UI는 `X-Op-Token`
+  헤더 전송.
+- **R5 (HIGH·데이터손실) 스캔 일시정지 재개:** 탐색 중 stop되면 그 디렉터리를 완료(`discovered`)로 확정하지
+  않고 `claimed`로 남겨 재개 시 처음부터 다시 훑게 함(kill-9 안전성과 동일) — 멈춘 디렉터리의 미방문 파일/
+  서브트리가 영구 누락되던 문제 수정. **회귀 테스트 추가**(중단→재개 후 총량 불변).
+- **R6 (HIGH·데이터정확성) 복제 meta 병합:** 포탈 증분 복제가 `meta.json`을 부분 목록으로 덮어써 과거 스캔이
+  비교 화면에서 사라지던 문제 수정 — 기존 목록과 `db_filename` 기준 병합(`_merge_scan_lists`). **테스트 추가.**
+- **R7 (robust) 인증 500:** 비-ASCII `X-Auth-Token`이 와도 `hmac.compare_digest`가 TypeError(→500) 나지
+  않게 바이트 상수시간 비교로 변경.
+- **R8 (robust) 트러블슈팅 limit:** `/api/troubleshoot/history`의 `limit` 파싱을 안전화(잘못된 값에 500 방지).
+- **R9 (최적화) 재개 중복쓰기 제거:** 재개 시 `_seen_max_depth`(=scan_runs.max_depth) 복원 — 재개 직후 얕은
+  깊이마다 `UPDATE scan_runs SET max_depth`가 단일 `_dlock` 직렬 구간에서 반복되던 낭비 제거.
+- **R10 검증·통합:** 17/17 테스트(신규 3건 포함)·ruff·JS(node --check 양쪽) 통과 후 통합 릴리스.
+
+후속(리스크·저위험이라 이번엔 보류): server.py DB 커넥션 예외경로 close 클러스터(GC로 완화·LOW),
+`self.settings` 갱신 락(MEDIUM 동시성), `_read_json_body` 오버사이즈 처리.
+
+---
+
 ## [1.99.16] - 2026-06-30
 
 ### 추가됨 (Added) — 브라우저 탭 아이콘(파비콘) N

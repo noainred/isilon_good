@@ -64,6 +64,12 @@ DEFAULTS: dict = {
     "powerstore_password": "",          # PowerStore 비밀번호
     "powerstore_verify_ssl": False,     # 자체 서명 인증서면 False(검증 생략)
     "storage_arrays": [],               # 추가 스토리지 어레이(Unity/PowerMax/VMAX/XtremIO/VPLEX 등)
+    # 메일 알림 이벤트 토글(EDITABLE_KEYS 에 포함돼야 저장/복원된다 — 누락 시 UI 변경이 무시됨).
+    "notify_on_done": True,             # 작업 완료 시 알림
+    "notify_on_error": True,            # 장애(오류) 발생 시 알림
+    "notify_on_stopped": False,         # 작업 중단 시 알림
+    "notify_on_stalled": False,         # 중단 후 N분간 재시작 없을 때 알림
+    "notify_stall_minutes": 10,         # 위 stall 판정 분
     "ask_llm_enabled": False,           # 자연어 질의응답에 로컬 LLM 사용(끄면 규칙 기반만)
     "ask_llm_endpoint": "",             # 로컬 LLM(OpenAI 호환) 주소(예: http://127.0.0.1:11434/v1)
     "ask_llm_model": "",                # 모델 이름(예: qwen2.5:7b)

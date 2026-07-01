@@ -469,8 +469,11 @@ class Scanner:
         self._error_dirs = int(row["e"])
         # 이전 세션들의 누적 활성 시간 복원(이번 세션은 그 위에 더해진다)
         r2 = conn.execute(
-            "SELECT elapsed_accum FROM scan_runs WHERE id=?", (self.run_id,)).fetchone()
+            "SELECT elapsed_accum, max_depth FROM scan_runs WHERE id=?", (self.run_id,)).fetchone()
         self._elapsed_accum = float(r2["elapsed_accum"] or 0) if r2 else 0.0
+        # 이미 기록된 최대 깊이를 복원 — 안 하면 재개 직후 얕은 깊이마다 불필요한
+        # 'UPDATE scan_runs SET max_depth' 가 단일 _dlock 직렬 구간에서 반복된다(최적화).
+        self._seen_max_depth = int((r2["max_depth"] or 0)) if r2 else 0
         self._load_stats(conn)   # 나이/소유자/확장자 집계도 복원
 
     # ----- 집계 리포트(나이/소유자/확장자) -----
@@ -818,6 +821,12 @@ class Scanner:
         dir_bytes = _entry_bytes(dstat, self.size_mode) if dstat is not None else 0
 
         with self._dlock:
+            # 중단(stop_event)됐으면 이 디렉터리를 완료('discovered')로 확정하지 않는다.
+            # scandir 루프가 중간에 break 됐을 수 있어(아직 못 본 파일/하위 존재) 부분값으로 완료
+            # 처리하면 재개 시 이 디렉터리를 다시 안 훑어 그 파일/서브트리가 영구 누락된다.
+            # 'claimed' 상태로 남기면 재개 시 pending 으로 복원돼 처음부터 다시 훑는다(kill -9 안전성과 동일).
+            if self._stopped():
+                return
             own_bytes += dir_bytes
             self._scanned_bytes += dir_bytes
             if children:

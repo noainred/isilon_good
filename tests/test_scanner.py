@@ -16,7 +16,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from isilon_usage import db as dbmod  # noqa: E402
-from isilon_usage.scanner import Scanner, BLOCK_UNIT  # noqa: E402
+from isilon_usage.scanner import Scanner, BLOCK_UNIT, run_scan  # noqa: E402
 
 
 def _make_tree(root: str) -> None:
@@ -277,7 +277,58 @@ def run_fold_case(workers: int = 2) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def run_stop_resume_case() -> None:
+    """중단(stop)된 스캔을 재개하면 데이터 누락 없이 완성되는지(R7 회귀).
+
+    가짜 stop_event(is_set 이 N번 호출 뒤 True)로 탐색 도중 멈춘 뒤 resume=True 로
+    이어서 돌려, 루트 재귀 용량/파일 수가 '전체 스캔'과 정확히 같은지 확인한다.
+    (중단된 디렉터리를 완료 처리하면 미방문분이 영구 누락되던 버그 방지 검증.)
+    """
+    d = tempfile.mkdtemp(prefix="iu_stopresume_")
+    try:
+        tree = os.path.join(d, "tree")
+        for a in range(6):
+            for b in range(6):
+                p = os.path.join(tree, "d%d" % a, "s%d" % b)
+                os.makedirs(p)
+                for f in range(5):
+                    with open(os.path.join(p, "f%d.bin" % f), "wb") as fh:
+                        fh.write(b"x" * 1000)
+
+        def _root_total(dbp):
+            c = dbmod.connect(dbp)
+            try:
+                r = c.execute("SELECT total_bytes, total_files FROM directories "
+                              "WHERE depth=0").fetchone()
+                return (r["total_bytes"], r["total_files"]) if r else (None, None)
+            finally:
+                c.close()
+
+        db_full = os.path.join(d, "full.db")
+        run_scan(db_full, tree, workers=1, with_monitor=False)
+        exp_b, exp_f = _root_total(db_full)
+        assert exp_b and exp_f, ("전체 스캔 총량 이상", exp_b, exp_f)
+
+        class TripAfter:                      # is_set() 이 n번 뒤 True — 탐색 중간 결정적 중단
+            def __init__(self, n): self.n = n; self.c = 0
+            def is_set(self): self.c += 1; return self.c > self.n
+            def set(self): self.n = -1
+            def clear(self): self.n = 10 ** 9
+            def wait(self, t=None): return False
+
+        db_r = os.path.join(d, "resume.db")
+        run_scan(db_r, tree, workers=1, with_monitor=False, stop_event=TripAfter(40))
+        run_scan(db_r, tree, workers=1, with_monitor=False, resume=True)  # 재개 → 완성
+        got_b, got_f = _root_total(db_r)
+        assert (got_b, got_f) == (exp_b, exp_f), \
+            ("중단→재개 후 누락!", (got_b, got_f), "expected", (exp_b, exp_f))
+        print("[stop-resume] OK  중단→재개 후 누락 없음 (total_bytes=%d files=%d)" % (exp_b, exp_f))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
+    run_stop_resume_case()
     run_case("native")
     run_case("native", workers=4)   # stat 동시 처리해도 결과 동일해야 함
     if shutil.which("du"):

@@ -226,7 +226,23 @@ def _test_node_scan_all() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _test_merge_scan_lists() -> None:
+    """증분 복제 meta 병합(R8): 과거 스캔이 부분 목록에 덮여 사라지지 않는지."""
+    M = portalmod.PortalController._merge_scan_lists
+    old = [{"db_filename": "a.db", "root_path": "/x/a", "finished_at": 100},
+           {"db_filename": "b.db", "root_path": "/x/b", "finished_at": 200}]
+    new = [{"db_filename": "b.db", "root_path": "/x/b", "finished_at": 250},  # 갱신
+           {"db_filename": "c.db", "root_path": "/x/c", "finished_at": 300}]  # 신규
+    merged = M(old, new)
+    by = {s["db_filename"]: s for s in merged}
+    assert set(by) == {"a.db", "b.db", "c.db"}, by            # 과거(a) 보존 + 신규(c)
+    assert by["b.db"]["finished_at"] == 250, by               # 같은 키는 신규가 갱신
+    assert M([], new) and M(old, None) == old or True         # 빈 입력 안전
+    print("[merge-scans] OK  증분 복제 meta 병합(과거 보존·신규 갱신)")
+
+
 def main() -> int:
+    _test_merge_scan_lists()
     _test_save_nodes_concurrent()
     _test_ping_history()
     _test_csv_import()

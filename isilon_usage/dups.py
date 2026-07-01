@@ -89,10 +89,14 @@ def find_duplicates(root: str, *, min_size: int = 4096, partial_bytes: int = 409
     cand = {s for s, c in size_count.items() if c > 1}
 
     # 2단계: 후보 크기 파일만 부분 해시 → (size, 부분해시) 그룹.
+    # 해시 I/O(open+read)도 max_files 로 상한을 둔다 — 1단계만 제한하면 6PB·수백만 후보에서
+    # 2·3단계 read I/O 가 무제한 폭주(디스크·시간)한다. 상한 도달 시 truncated 로 정직히 표기.
     by_partial: dict = {}
     seen2: set = set()
+    hashed = 0
+    cap2 = False
     for dp, dirs, files in os.walk(root):
-        if _stopped():
+        if _stopped() or cap2:
             break
         dirs.sort()
         for nm in sorted(files):
@@ -107,7 +111,12 @@ def find_duplicates(root: str, *, min_size: int = 4096, partial_bytes: int = 409
             if key in seen2:
                 continue
             seen2.add(key)
+            if hashed >= max_files:      # 해시한 후보 수 상한(2·3단계 I/O 폭주 방지)
+                cap2 = True
+                truncated = True
+                break
             ph = _hash_partial(fp, partial_bytes)
+            hashed += 1
             if ph is None:
                 continue
             by_partial.setdefault((st.st_size, ph), []).append(fp)

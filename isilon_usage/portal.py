@@ -1554,6 +1554,19 @@ class PortalController:
             with self._lock:
                 self._inflight.discard(nid)
 
+    @staticmethod
+    def _merge_scan_lists(old_scans, new_scans):
+        """증분 복제 meta 병합: 과거+신규 스캔 목록을 db_filename(없으면 id) 기준 합침.
+
+        같은 키는 신규가 갱신한다. 증분 응답의 부분 목록으로 과거 스캔이 사라지는 것을 막는다.
+        """
+        merged = {}
+        for s in list(old_scans or []) + list(new_scans or []):
+            k = s.get("db_filename") or s.get("id")
+            if k is not None:
+                merged[k] = s
+        return list(merged.values())
+
     def _replicate(self, n: dict) -> float:
         """완료 DB(증분) + meta.json 을 replicas/<id>/ 로 안전하게 내려받는다."""
         since = int(float(n.get("last_sync", 0) or 0))
@@ -1566,6 +1579,7 @@ class PortalController:
                 resp = _http_get(url, n.get("token"), timeout=300.0)
                 shutil.copyfileobj(resp, f)
             newest = float(n.get("last_sync", 0) or 0)
+            new_meta = None
             tf = tarfile.open(tmp, "r:gz")
             try:
                 for m in tf:
@@ -1573,7 +1587,14 @@ class PortalController:
                         continue
                     name = m.name.lstrip("/")
                     if name == "meta.json":
-                        outp = os.path.join(dest, "meta.json")
+                        # 바로 덮어쓰지 않고 메모리에 읽어둔다(아래에서 기존 meta 와 병합).
+                        src = tf.extractfile(m)
+                        if src is not None:
+                            try:
+                                new_meta = json.loads(src.read().decode("utf-8"))
+                            except (ValueError, OSError):
+                                new_meta = None
+                        continue
                     elif (name.startswith("scans/") and name.endswith(".db")
                           and "/" not in name[6:] and ".." not in name):
                         outp = os.path.join(dest, "scans", os.path.basename(name))
@@ -1586,6 +1607,21 @@ class PortalController:
                         shutil.copyfileobj(src, w)
             finally:
                 tf.close()
+            # 증분 복제: 엣지가 보내는 meta.json 의 scans 는 'since 이후 완료분'만 담겨온다.
+            # 통째로 덮어쓰면 과거 스캔이 목록에서 사라져 비교 화면이 조용히 깨진다(디스크엔 .db 남음).
+            # → 기존 meta 의 scans 와 db_filename 기준으로 '병합'해 과거 목록을 보존한다.
+            if new_meta is not None:
+                old_scans = []
+                try:
+                    with open(os.path.join(dest, "meta.json"), encoding="utf-8") as fh:
+                        old_scans = (json.load(fh).get("scans") or [])
+                except (OSError, ValueError):
+                    old_scans = []
+                new_meta["scans"] = self._merge_scan_lists(old_scans, new_meta.get("scans"))
+                tmp_meta = os.path.join(dest, "meta.json.tmp")
+                with open(tmp_meta, "w", encoding="utf-8") as w:
+                    json.dump(new_meta, w, ensure_ascii=False)
+                os.replace(tmp_meta, os.path.join(dest, "meta.json"))
         finally:
             try:
                 os.remove(tmp)
@@ -2478,7 +2514,13 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self._send_json(c.ping_history(rng))
                 return
             if path == "/api/portal/browse":
-                # HQ(포탈) 서버의 로컬 디렉터리 탐색 — 감시 폴더 등 경로 선택용.
+                # HQ(포탈) 서버의 로컬 디렉터리 탐색 — 감시 폴더 등 경로 선택용. HQ 파일시스템을
+                # 마운트 제한 없이 열거하므로, 작업 비밀번호가 설정돼 있으면 인증을 요구한다
+                # (무인증 GET 으로 HQ 서버 임의 디렉터리 열람 방지).
+                if c.auth_required() and not c.token_valid(self.headers.get("X-Op-Token")):
+                    self._send_json({"ok": False, "reason": "locked", "op_required": True},
+                                    status=401)
+                    return
                 qp = parse_qs(urlparse(self.path).query).get("path", [""])[0]
                 self._send_json(browse_dir(qp or "/"))
                 return
