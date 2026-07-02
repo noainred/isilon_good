@@ -228,6 +228,35 @@ td.num,th.num{ font-family:ui-monospace,Menlo,"JetBrains Mono",monospace; }
 ::-webkit-scrollbar{ width:11px; height:11px; }
 ::-webkit-scrollbar-thumb{ background:rgba(255,255,255,.1); border-radius:6px; border:3px solid var(--bg); }
 ::-webkit-scrollbar-thumb:hover{ background:rgba(255,255,255,.18); }
+
+/* ============================================================================
+   Refined polish v2 (dataviz-informed) — 더 깔끔하고 세련되게. 마크업/JS 무변경.
+   ============================================================================ */
+:root{ --elev:0 1px 2px rgba(0,0,0,.45), 0 10px 30px rgba(0,0,0,.20); }
+body{ letter-spacing:.1px; }
+.card{ box-shadow:var(--elev); border-color:rgba(255,255,255,.06);
+  background:linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.008)); }
+.card h2{ font-size:11px; letter-spacing:.9px; text-transform:uppercase; color:var(--muted); font-weight:600; margin:0 0 16px; }
+.big{ font-variant-numeric:tabular-nums; letter-spacing:-.5px; }
+.sub{ letter-spacing:.15px; }
+.navbtn{ font-weight:600; letter-spacing:.2px; }
+.navbtn.active{ box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent); }
+button{ background:rgba(255,255,255,.045); border-color:rgba(255,255,255,.10); font-weight:600; }
+button:hover{ background:rgba(255,255,255,.09); border-color:rgba(255,255,255,.22); filter:none; }
+button.primary{ background:var(--accent2); border-color:transparent; box-shadow:0 2px 12px rgba(53,217,154,.22); }
+button.primary:hover{ background:var(--accent2); box-shadow:0 3px 16px rgba(53,217,154,.34); }
+th{ font-size:11px; letter-spacing:.5px; font-weight:600; }
+th,td{ border-color:rgba(255,255,255,.05); padding:12px 11px; }
+tbody tr{ transition:background .12s; }
+.capbar{ background:rgba(255,255,255,.05); }
+.capbar > i{ box-shadow:none !important; border-radius:6px; }
+.badge{ font-size:11px; letter-spacing:.2px; padding:3px 10px; }
+.pill{ letter-spacing:.2px; }
+.grid{ gap:14px; }
+#askOut:not(:empty){ background:rgba(53,217,154,.06); border-color:rgba(53,217,154,.16); }
+#iuLangBtn{ background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.12); color:var(--muted);
+  border-radius:8px; padding:6px 11px; font-weight:600; font-size:12px; }
+#iuLangBtn:hover{ color:var(--text); border-color:rgba(255,255,255,.28); }
 </style>
 <script src="/i18n.js"></script>
 </head>
