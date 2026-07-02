@@ -230,7 +230,7 @@ def agent_bundle_bytes() -> bytes:
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tf:
         for name in sorted(os.listdir(HERE)):
-            if name.endswith(".py") or name.endswith(".html"):
+            if name.endswith((".py", ".html", ".js")):   # .js: i18n_en.js(영어 토글) 포함
                 tf.add(os.path.join(HERE, name), arcname="isilon_usage/" + name)
     return buf.getvalue()
 
@@ -2470,6 +2470,19 @@ class PortalHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path in ("/", "/index.html"):
             self._send_html(PORTAL_HTML)
+            return
+        if path == "/i18n.js":     # 영어 토글 런타임+사전(단일 소스, 대시보드·포탈 공유)
+            try:
+                with open(os.path.join(HERE, "i18n_en.js"), "rb") as fh:
+                    body = fh.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/javascript; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except OSError:
+                self.send_error(404, "i18n.js not found")
             return
         c = self.controller
         try:

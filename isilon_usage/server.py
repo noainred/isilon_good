@@ -2301,6 +2301,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_html(DASHBOARD_HTML)
             return
 
+        if path == "/i18n.js":     # 영어 토글 런타임+사전(단일 소스, 대시보드·포탈 공유)
+            try:
+                with open(os.path.join(HERE, "i18n_en.js"), "rb") as fh:
+                    body = fh.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/javascript; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except OSError:
+                self.send_error(404, "i18n.js not found")
+            return
+
         if path == "/metrics":
             self._send_metrics()
             return

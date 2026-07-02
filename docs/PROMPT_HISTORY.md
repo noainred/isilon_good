@@ -1009,4 +1009,11 @@
      추가. XSS 안전. 헤드리스 Chromium 렌더 확인(도넛54%·스택·미니바·진행률 정상). portal JS·17/17·ruff·
      CSS 균형. 포탈 전용. v1.99.19.
 
+280. (모든 메시지 영문 버전 — UI 언어 토글 ko/en 선택) 정적 UI 문자열 측정(483 완결 라벨). 드롭인 단일
+     소스 i18n_en.js(런타임+한↔영 사전) 신규 → 엣지·포탈이 /i18n.js 서빙, 두 HTML 이 <script src> 공유
+     (복제 없음). 런타임: DOM 텍스트노드·title/placeholder 완결 라벨만 정확매칭 치환(없으면 한글 폴백),
+     MutationObserver 재렌더 처리, 헤더에 EN↔한국어 토글 주입, localStorage 저장. 사전 ~200+ 크롬 라벨
+     번역(내비·탭·카드제목·버튼·placeholder·소개). 동적 숫자문장·날짜는 v1 제외(폴백). 패키징: agent_bundle
+     +.js. 헤드리스 Chromium 영문 렌더 확인·JS·17/17·ruff. v1.99.20.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
