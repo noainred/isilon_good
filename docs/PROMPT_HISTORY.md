@@ -995,4 +995,11 @@
      복원(중복 UPDATE 제거·최적화). R10 전체검증(17/17·ruff·JS 양쪽)+통합릴리스. 보류: DB커넥션 close
      클러스터(LOW·GC완화)·settings 락(MED)·_read_json_body 오버사이즈. v1.99.17.
 
+278. (Claude Design 테마 적용 — APPLY.md·portaltheme.css·preview.html 첨부) 드롭인 테마 CSS 를
+     portal.html·dashboard.html <style> 맨 끝(</style> 직전)에 그대로 추가(마크업·JS·DOM id 무변경,
+     소스 순서로 덮어씀). 팔레트/카드/KPI/버튼/표/배지/용량바 트랙/지역카드/스크롤바 정제, 색상 임계
+     capColor·데이터·동작 유지. <style> 1개·CSS 중괄호 균형(155/155·158/158)·JS(node --check 양쪽)·
+     17/17 테스트·ruff 확인. color-mix 등 최신 CSS(현대 Chrome). 구조적 업그레이드(도넛/스택바 등)는
+     목업 파일 미첨부라 CSS 드롭인만 적용. v1.99.18.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
