@@ -246,7 +246,13 @@ td.num,th.num{ font-family:ui-monospace,Menlo,"JetBrains Mono",monospace; }
 
   <div class="card" style="margin-bottom:14px;">
     <h2>전체 스토리지 용량 (전 DC) <span class="sub" id="capLabel" style="float:right; font-weight:400;"></span></h2>
-    <div class="capbar" style="height:24px; border-radius:10px;"><i id="capFill" style="width:0"></i><b id="capPct">—</b></div>
+    <div style="display:flex; gap:22px; align-items:center; flex-wrap:wrap;">
+      <div id="capDonut" style="flex:none;"></div>
+      <div style="flex:1; min-width:240px;">
+        <div class="capbar" style="height:24px; border-radius:10px;"><i id="capFill" style="width:0"></i><b id="capPct">—</b></div>
+        <div id="capStack" style="margin-top:12px;"></div>
+      </div>
+    </div>
   </div>
 
   <div class="card" style="margin-bottom:14px;">
@@ -1067,6 +1073,29 @@ function fmtClock(ts){ if(!ts) return "—"; const d=new Date(ts*1000);
 function freshClass(ts){ if(!ts) return ""; const s=Date.now()/1000-ts;
   return s<120?"fresh-ok":(s<900?"fresh-warn":"fresh-old"); }
 function capColor(p){ return p>=85?"#ff5c5c":(p>=80?"#f5a623":(p>=70?"#f5d142":"#38d39f")); }  // 70노랑/80주황/85빨강
+// 원형 게이지(SVG, 외부 라이브러리 0) — 전체 사용률 표시용
+function donutGauge(pct, color, size){
+  size = size || 104; pct = Math.max(0, Math.min(100, pct||0));
+  const sw = 12, r = (size - sw) / 2, cx = size / 2, cy = size / 2, C = 2 * Math.PI * r;
+  const off = (C * (1 - pct / 100)).toFixed(1);
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="display:block">
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="${sw}"/>
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round"
+      stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${off}" transform="rotate(-90 ${cx} ${cy})"
+      style="transition:stroke-dashoffset .6s ease"/>
+    <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" fill="#fff"
+      style="font:700 ${Math.round(size*0.23)}px ui-monospace,Menlo,monospace">${pct.toFixed(0)}%</text></svg>`;
+}
+// 지역 스택 바/범례 색(카테고리) — 브랜드 계열 위주로 구분되게
+const REGION_PAL = ["#4f9cff","#35d99a","#f0b429","#a78bfa","#f26d6d","#22d3ee","#fb923c","#94a3b8","#e879f9","#4ade80"];
+// 진행 중 스캔의 '집계(sizing)' 단계 진행률(%). 없으면(탐색 단계 등) null.
+function nodeScanPct(n){
+  for(const r of ((n && n.roots) || [])){
+    if(r.phase === "sizing" && (r.total_dirs || 0) > 0)
+      return Math.min(100, Math.round((r.processed_dirs || 0) / r.total_dirs * 100));
+  }
+  return null;
+}
 function capCell(used,total){
   if(!total) return '<span class="sub" title="엣지가 fs 전체 용량(statvfs)을 보고하지 않음 — 엣지 마운트/버전 확인">—</span>';
   const p=Math.min(100, used/total*100), c=capColor(p);
@@ -1412,10 +1441,25 @@ function renderPortalDash(){
   if($("capFill")){ $("capFill").style.width=fp.toFixed(1)+"%"; $("capFill").style.background=capColor(fp); }
   if($("capPct")) $("capPct").textContent = ft? (fp.toFixed(1)+"%") : "용량 정보 없음";
   if($("capLabel")) $("capLabel").textContent = ft? ("사용 "+fmtBytes(fu)+" / 전체 "+fmtBytes(ft)+" · 여유 "+fmtBytes(ft-fu)) : "(엣지에서 fs 용량 미수집)";
+  // 원형 게이지(전체 사용률)
+  if($("capDonut")) $("capDonut").innerHTML = ft ? donutGauge(fp, capColor(fp), 104) : "";
+  // 지역 구성 스택 바(사용량 비율) + 범례 — 기존 j.regions 재사용(새 상태 복제 없음)
+  if($("capStack")){
+    const regs=(j.regions||[]).filter(r=>(r.fs_used_bytes||0)>0);
+    const tot=regs.reduce((s,r)=>s+(r.fs_used_bytes||0),0);
+    $("capStack").innerHTML = (regs.length && tot) ? (
+      '<div style="display:flex; height:12px; border-radius:6px; overflow:hidden; background:rgba(255,255,255,.05);">'
+      + regs.map((r,i)=>`<div title="${escAttr(r.region)}: ${fmtBytes(r.fs_used_bytes)}" style="width:${(r.fs_used_bytes/tot*100).toFixed(2)}%; background:${REGION_PAL[i%REGION_PAL.length]}"></div>`).join("")
+      + '</div><div style="display:flex; gap:14px; flex-wrap:wrap; margin-top:9px;">'
+      + regs.map((r,i)=>`<span class="sub" style="display:inline-flex; align-items:center; gap:6px;"><span style="width:9px; height:9px; border-radius:2px; background:${REGION_PAL[i%REGION_PAL.length]};"></span>${escAttr(r.region)} <b style="color:var(--text)">${fmtBytes(r.fs_used_bytes)}</b> ${(r.fs_used_bytes/tot*100).toFixed(0)}%</span>`).join("")
+      + '</div>'
+    ) : "";
+  }
   // 지역 카드(클릭 = 필터 토글)
   $("regions").innerHTML = (j.regions||[]).map(r=>
     `<div class="regcard${regionFilter===r.region?' active':''}" data-region="${escAttr(r.region)}">
        <div class="big" style="font-size:20px">${fmtBytes(r.fs_used_bytes)} <span class="sub" style="font-size:13px; font-weight:400;">/ ${fmtBytes(r.fs_total_bytes)}</span></div>
+       ${r.fs_total_bytes?`<div class="capbar" style="height:6px; min-width:0; margin:9px 0 7px; border-radius:4px;"><i style="width:${Math.min(100,r.fs_used_bytes/r.fs_total_bytes*100).toFixed(1)}%; background:${capColor(r.fs_used_bytes/r.fs_total_bytes*100)}; box-shadow:none;"></i></div>`:""}
        <div class="sub">${escAttr(r.region)} · ${fmtNum(r.storages)} 스토리지${r.fs_total_bytes?` · 사용률 ${(r.fs_used_bytes/r.fs_total_bytes*100).toFixed(1)}%`:""}</div></div>`
   ).join("") || '<div class="sub">등록된 노드가 없습니다.</div>';
   $("regions").querySelectorAll(".regcard").forEach(c=>c.addEventListener("click",()=>{
@@ -1484,13 +1528,16 @@ function renderPortalDash(){
     const rn=n.running;
     const runLine = rn ? `<div class="sub" style="white-space:nowrap; margin-top:3px;">⏱ ${elapsedSpan(rn.started_at, rn.updated_at)} · 시작 ${fmtClock(rn.started_at)}</div>` : "";
     const loopBadge = n.auto_restart ? ` <span style="color:#ff5c5c; font-weight:700; white-space:nowrap;" title="완료되면 같은 설정으로 자동 재시작(반복) 중">🔁 반복 동작 중</span>` : "";
+    // 스캔 진행 바(집계 단계 % 가 있을 때만 — 정직하게)
+    const _spct = (n.online && n.active_scans>0) ? nodeScanPct(n) : null;
+    const scanBar = (_spct!=null) ? `<div class="capbar" style="height:5px; min-width:0; max-width:170px; margin-top:5px; border-radius:3px;"><i style="width:${_spct}%; background:var(--accent); box-shadow:none;"></i></div><div class="sub" style="margin-top:2px;">집계 진행률 ${_spct}%</div>` : "";
     return `<tr class="noderow" data-idx="${idx}" style="cursor:pointer;" title="클릭하면 스토리지/어레이 펼침">
       <td><b>${escAttr(n.id)}</b>${verBadge}${arrBadges}<div class="sub mono">${escAttr(n.hostname||"")}</div></td><td>${escAttr(n.region||"—")}</td>
       <td class="num">▸ ${fmtNum(n.storages)}</td><td class="num">${fmtBytes(n.used_bytes)}</td>
-      <td class="num">${fmtBytes(n.fs_used_bytes)}${n.fs_total_bytes?` <span class="sub">${n.fs_used_pct}%</span>`:""}</td>
+      <td class="num">${fmtBytes(n.fs_used_bytes)}${n.fs_total_bytes?` <span class="sub">${n.fs_used_pct}%</span>`:""}${n.fs_total_bytes?`<div class="capbar" style="height:4px; min-width:0; margin-top:5px; border-radius:3px;"><i style="width:${Math.min(100,n.fs_used_pct||0)}%; background:${capColor(n.fs_used_pct||0)}; box-shadow:none;"></i></div>`:""}</td>
       <td class="num">${fmtBytes(n.fs_total_bytes)}</td>
       <td class="sub">${ago(n.last_scan_at)}</td>
-      <td>${st}${loopBadge}${scanBtn}${pingB}${runLine}</td><td>${open}</td></tr>` + roots +
+      <td>${st}${loopBadge}${scanBtn}${pingB}${runLine}${scanBar}</td><td>${open}</td></tr>` + roots +
       (n.last_error ? `<tr><td colspan="9" class="sub" style="color:#ff9a9a">${escAttr(n.id)}: ${_he(n.last_error)}</td></tr>` : "");
   }).join("") : '<tr><td colspan="9" class="sub">표시할 노드가 없습니다.</td></tr>';
   $("nodeRows").querySelectorAll("tr.noderow").forEach(tr=>tr.addEventListener("click",e=>{

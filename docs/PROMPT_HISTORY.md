@@ -1002,4 +1002,11 @@
      17/17 테스트·ruff 확인. color-mix 등 최신 CSS(현대 Chrome). 구조적 업그레이드(도넛/스택바 등)는
      목업 파일 미첨부라 CSS 드롭인만 적용. v1.99.18.
 
+279. (지금 기준으로 만들어줘 — 목업 없이 현재 데이터로 구조 업그레이드) APPLY.md §38~42 5종을 현재
+     포탈 데이터(j.totals·regions·nodes) 재사용해 구현(백엔드·상태 무변경). ①도넛 게이지(SVG,capColor)
+     '전체 스토리지' 카드, ②지역 스택 바+범례(REGION_PAL), ③regcard 미니 바, ④노드 행 사용량 미니 바(4px
+     임계색), ⑤스캔 진행 바(sizing 단계 %만 — nodeScanPct, 탐색단계 미표시). 헬퍼 donutGauge/nodeScanPct
+     추가. XSS 안전. 헤드리스 Chromium 렌더 확인(도넛54%·스택·미니바·진행률 정상). portal JS·17/17·ruff·
+     CSS 균형. 포탈 전용. v1.99.19.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
