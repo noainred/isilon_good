@@ -6,1241 +6,17 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.99.17.tar.gz",
       "zip": "isilon_usage-1.99.17.zip",
-      "size_bytes": 505237,
-      "sha256": "1ed8b24f7cf6638e37d3d1ea5fbe176a5b79224d37006e843b4c9bb15877e9a3",
-      "sha256_zip": "0572053784b8d370b27b6c65be062a482f4ee62ebb62509c40ef1b5d92556f96"
-    },
-    {
-      "version": "1.99.16",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.99.16.tar.gz",
-      "zip": "isilon_usage-1.99.16.zip",
-      "size_bytes": 501793,
-      "sha256": "37dada6a7a73edff9ef18322dbd9a4d75d30f672e65371a17d0b6020ab70d8eb",
-      "sha256_zip": "ced0c300bd4e24c624bfc70f603a983e0ae265dafa2226f7e9ec075aa90b22ac"
-    },
-    {
-      "version": "1.99.15",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.99.15.tar.gz",
-      "zip": "isilon_usage-1.99.15.zip",
-      "size_bytes": 500091,
-      "sha256": "623e1d38d15466a54432a7ccf3b032a557a1ede29f7c506ff78a5b66f2dc56bb",
-      "sha256_zip": "1d52e31ec6b8ba90e14984fd8fbe8fddf9502bd2425f3e7c588941b975752ad5"
-    },
-    {
-      "version": "1.99.14",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.99.14.tar.gz",
-      "zip": "isilon_usage-1.99.14.zip",
-      "size_bytes": 499514,
-      "sha256": "c0a4b2816eceb966470e2324a0e87ce9c47851bef35ff31a18e14953410ccb13",
-      "sha256_zip": "49e1e45b7fa70dbf829ad92628a36d274e8cef50e717128c888ef716b0313601"
-    },
-    {
-      "version": "1.99.13",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.99.13.tar.gz",
-      "zip": "isilon_usage-1.99.13.zip",
-      "size_bytes": 497026,
-      "sha256": "c32abab5a399840d54a622de9780d6a0d20bd926be0e6ca78ef65a8f498aeb5d",
-      "sha256_zip": "aa487a57829caf42e915e13fff44e8ec3049008cdff36a3f4fa770e60c1dbf91"
-    },
-    {
-      "version": "1.99.12",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.99.12.tar.gz",
-      "zip": "isilon_usage-1.99.12.zip",
-      "size_bytes": 495294,
-      "sha256": "7eb2f72db4c9ee7e439757542a0f803b7651eff53e83a7ad663cc3d29446a866",
-      "sha256_zip": "2280c31e1a47ae8f57beab27614c03289ca21e18d5ec02f967542f4b1e318506"
-    },
-    {
-      "version": "1.99.11",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.99.11.tar.gz",
-      "zip": "isilon_usage-1.99.11.zip",
-      "size_bytes": 493307,
-      "sha256": "c65e5e17505402e35ac643adf41eed8d51b57ad942a2e704ff3232063e94fe09",
-      "sha256_zip": "390745999d5a4bb82891c57303af992f9aee7e7b171de0793b6ab24d8bf786b3"
-    },
-    {
-      "version": "1.99.10",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.99.10.tar.gz",
-      "zip": "isilon_usage-1.99.10.zip",
-      "size_bytes": 484795,
-      "sha256": "40e2ce3daaa28019fa8c1c58a5a3dbf69472fb7ea54dbe5174002826bcb449e5",
-      "sha256_zip": "f5266101bbd66af5cb5ed09bb289c98f82a705f1adaea8ff9d5e2f7b122b7c27"
-    },
-    {
-      "version": "1.99.9",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.99.9.tar.gz",
-      "zip": "isilon_usage-1.99.9.zip",
-      "size_bytes": 480998,
-      "sha256": "9ff5ab0d4578cb6d7ba504ae103c3c9df846dd9555fd4733c456f3aaa81a10c8",
-      "sha256_zip": "3f6697e1f29d57b324df774386816136388711b75da0b8e62a996eec4e24034d"
-    },
-    {
-      "version": "1.99.8",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.99.8.tar.gz",
-      "zip": "isilon_usage-1.99.8.zip",
-      "size_bytes": 478814,
-      "sha256": "a5cb4a76d0092c9fbd517e377416e22ad53acf6b3e50411d89361769c8754833",
-      "sha256_zip": "f3c71e594062d317f810fe610d547cd202c1f88d55c75b3649d2ab0e23d05efd"
-    },
-    {
-      "version": "1.99.7",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.99.7.tar.gz",
-      "zip": "isilon_usage-1.99.7.zip",
-      "size_bytes": 477597,
-      "sha256": "6187d4a47cfa3a8efecb2dda20aab869228b617d73ae55805975079078f1211b",
-      "sha256_zip": "61acaba2c42300f7e03a54fc0e138d43cd20cda871a9dbdeacbef9dc1c4c08fa"
-    },
-    {
-      "version": "1.99.6",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.99.6.tar.gz",
-      "zip": "isilon_usage-1.99.6.zip",
-      "size_bytes": 476978,
-      "sha256": "cfae2201c5d01ac807f316963778df4ed3e6fadfbfe17386bf279c96e9b53eea",
-      "sha256_zip": "4caefdf52788c88944dd527852bfaa9a8b2f887c6312dab3af778711df91228a"
-    },
-    {
-      "version": "1.99.5",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.99.5.tar.gz",
-      "zip": "isilon_usage-1.99.5.zip",
-      "size_bytes": 475700,
-      "sha256": "5fa6b59316d239c33239436bd345f403ef9e7da53e53404a0dc9176707b723b4",
-      "sha256_zip": "34fb5bb6cc0f237ddffc3c92ba0b85c018c4c949de5880c48665b645ef50b21b"
-    },
-    {
-      "version": "1.99.4",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.99.4.tar.gz",
-      "zip": "isilon_usage-1.99.4.zip",
-      "size_bytes": 475523,
-      "sha256": "cb43170605c25df1c96980e51735df4abfa68b93ccbe131a3779975ffde6fe29",
-      "sha256_zip": "7d229aff673e802fa0ee55795b1fbe6cf75669e99fe69d387f99f886c30d8882"
-    },
-    {
-      "version": "1.99.3",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.99.3.tar.gz",
-      "zip": "isilon_usage-1.99.3.zip",
-      "size_bytes": 475230,
-      "sha256": "8f50855b894056744d29d6e4e616995f7408d529933c60f63b00f59fe7f5e38a",
-      "sha256_zip": "fe1bc5b831610cb31d6a10a98447102a9f3ce2bd35d3eac7c7a54398f1b29ff5"
-    },
-    {
-      "version": "1.99.2",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.99.2.tar.gz",
-      "zip": "isilon_usage-1.99.2.zip",
-      "size_bytes": 475011,
-      "sha256": "52a3b77cd385c416f21faa249050d1329acd3bbb3ece9e3d52f27913379c5ed9",
-      "sha256_zip": "cd47838b9d91076ee438747a025c64c716f0177e440964b259ca32921eee718e"
-    },
-    {
-      "version": "1.99.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.99.1.tar.gz",
-      "zip": "isilon_usage-1.99.1.zip",
-      "size_bytes": 474442,
-      "sha256": "71ee12acfdcf9fce632351921943b0a78e2b8dafe1828aeea3e3b4f6f5997c04",
-      "sha256_zip": "da8b48d17b871ee40728e4b8eb5bb7aff0c4793412a7af1ae5baab9469782036"
-    },
-    {
-      "version": "1.99.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.99.0.tar.gz",
-      "zip": "isilon_usage-1.99.0.zip",
-      "size_bytes": 473699,
-      "sha256": "227ac7a21fe9614da2fb315cb521b1cb80f29629163910e6acac97a1f239b264",
-      "sha256_zip": "2728db22ea8a35aaf82eaeb9fa0fa1d34c6b1435ae091974a39175938ea88c89"
-    },
-    {
-      "version": "1.98.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.98.0.tar.gz",
-      "zip": "isilon_usage-1.98.0.zip",
-      "size_bytes": 471420,
-      "sha256": "1b0926222d7a476c5ab292f47917dc8173e96fb9a5fe8dedf791d6a1043544bc",
-      "sha256_zip": "8860371b9707e37ba126e11a97fab84049db00e7b1962b948e3a3ed053a8e61a"
-    },
-    {
-      "version": "1.97.2",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.97.2.tar.gz",
-      "zip": "isilon_usage-1.97.2.zip",
-      "size_bytes": 469924,
-      "sha256": "ea9ac4d781e835c4c518cbbed86a03334ace54766429d45722f63d35cf03900c",
-      "sha256_zip": "f354f51e02fe8d2bbe875fb6a60db99dd37221b4eecd5a6f45f8fe566340ca64"
-    },
-    {
-      "version": "1.97.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.97.1.tar.gz",
-      "zip": "isilon_usage-1.97.1.zip",
-      "size_bytes": 469035,
-      "sha256": "9180a0f39a2c382f79dbf289d8896e2c8b1ddfc65352ffe78796297e9e38bee0",
-      "sha256_zip": "7e12a6c9ef15ceaa9bf648fb8bb45104e86e53527ffc509e7ce42b9d021d7a47"
-    },
-    {
-      "version": "1.97.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.97.0.tar.gz",
-      "zip": "isilon_usage-1.97.0.zip",
-      "size_bytes": 468662,
-      "sha256": "220563b3899e2bf96f8c77cfda8ffc6758a65fd7ebf02e5c9d5f50d3c288f649",
-      "sha256_zip": "1784d91a71df36a2a82d8a6744513720539fe7e87597a9e008b94f3b269579ce"
-    },
-    {
-      "version": "1.96.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.96.0.tar.gz",
-      "zip": "isilon_usage-1.96.0.zip",
-      "size_bytes": 466393,
-      "sha256": "fe296ba8ca99d79edcab74cb63b09ba3b174ce76945a3b86ec401ebba9d33cf0",
-      "sha256_zip": "2c0c57c90a9610d5f9af725aa1714b66d705d58b8846000562a9698c9f61796b"
-    },
-    {
-      "version": "1.95.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.95.0.tar.gz",
-      "zip": "isilon_usage-1.95.0.zip",
-      "size_bytes": 464803,
-      "sha256": "5261847171830dde099b327878a99cd629ef6517b945ab1eecc5c67a92bed005",
-      "sha256_zip": "1588bc3a6ded0414f9ed37ac26fb78f0c3e202ec9fe267b5306025813f656d01"
-    },
-    {
-      "version": "1.94.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.94.0.tar.gz",
-      "zip": "isilon_usage-1.94.0.zip",
-      "size_bytes": 461610,
-      "sha256": "f7bba1d51f9b81927cf87b5914778cf3003ab4bce2b3810907198bac9351197d",
-      "sha256_zip": "e693eb0fcc5690dc140445422f1690269f77bac0eb05e42e1b997c9ec996c588"
-    },
-    {
-      "version": "1.93.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.93.0.tar.gz",
-      "zip": "isilon_usage-1.93.0.zip",
-      "size_bytes": 456999,
-      "sha256": "98d17e29fef508e9f91318e7f2069ec771aaaad4ef179d1d26d84fb74814bd99",
-      "sha256_zip": "94bde8e7b786d30f04b03a0344624e18c053e6f01e9c9f95c93576ab65e916ab"
-    },
-    {
-      "version": "1.87.3",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.87.3.tar.gz",
-      "zip": "isilon_usage-1.87.3.zip",
-      "size_bytes": 428957,
-      "sha256": "af14cc248e116b09db56467bf849b8fa6a15eead24ef604828e6d4b2bd5e94d8",
-      "sha256_zip": "81d133b1eda741ffbf42255efcedc03b15d4c3f75bc6a7a5ac3b9c7562a4fddd"
-    },
-    {
-      "version": "1.87.2",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.87.2.tar.gz",
-      "zip": "isilon_usage-1.87.2.zip",
-      "size_bytes": 428100,
-      "sha256": "327e52e41a23b32813308df1ccd36ae241771c494998d0dfbe89a7d753a93fa0",
-      "sha256_zip": "4ea1aeee3d4e4fb29a7cdb5158459f96b6bc7760ccc5a35768a13731b93217a7"
-    },
-    {
-      "version": "1.87.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.87.1.tar.gz",
-      "zip": "isilon_usage-1.87.1.zip",
-      "size_bytes": 426639,
-      "sha256": "fda9988acaa7876146b3e099c2e0c996434b9dbab1cf50285b4e9be38a208b0a",
-      "sha256_zip": "8473f253ee199f9930a4e76eef7e9372e736d7f8e873ff462d15f8629c317580"
-    },
-    {
-      "version": "1.87.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.87.0.tar.gz",
-      "zip": "isilon_usage-1.87.0.zip",
-      "size_bytes": 425246,
-      "sha256": "d680bb0a464a3dfbc8238cdf1b1be6a6994b3ef0702aafb84e69da6a54112329",
-      "sha256_zip": "cd62c9b8fcf7f061e06b337a273382b0e7289f172d46566c6ff2f58bb156f361"
-    },
-    {
-      "version": "1.86.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.86.1.tar.gz",
-      "zip": "isilon_usage-1.86.1.zip",
-      "size_bytes": 422434,
-      "sha256": "cff2abe83518822627ecb76102750e73c4541f6dc0888288bcad1ba6a3935ebd",
-      "sha256_zip": "5899d10040cd44c107ed1fbd45474317705b906e050c97713ccf105adc429e72"
-    },
-    {
-      "version": "1.86.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.86.0.tar.gz",
-      "zip": "isilon_usage-1.86.0.zip",
-      "size_bytes": 422130,
-      "sha256": "7d810da680d6d0d9b7031d2117f9c7d0766ad4f002c148f36d1d98f2ac2d63d0",
-      "sha256_zip": "08967f19c202dde6e9cc97eedd58b2d4c8e285f1578b661789e73dddce8a1d4c"
-    },
-    {
-      "version": "1.85.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.85.0.tar.gz",
-      "zip": "isilon_usage-1.85.0.zip",
-      "size_bytes": 420865,
-      "sha256": "3d7b5d6b6cce17ae6f8efa703e074b8d8ef921751ff143508facc3d070408764",
-      "sha256_zip": "a80107b764013c405db715a2fb36981dd542ee73f6d8bca85d20a791347b02f4"
-    },
-    {
-      "version": "1.84.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.84.1.tar.gz",
-      "zip": "isilon_usage-1.84.1.zip",
-      "size_bytes": 420279,
-      "sha256": "137403c14d54806df9a89731a08fcae50cbceb314f28f1decfac9e7334072972",
-      "sha256_zip": "856127aa756eec78fa567764b516ad81f07df716133df0e19ee36760bb9c7ba1"
-    },
-    {
-      "version": "1.84.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.84.0.tar.gz",
-      "zip": "isilon_usage-1.84.0.zip",
-      "size_bytes": 419371,
-      "sha256": "686b89d2ae7787235f7b1bac672eaf9cfe383e6362e518a7e3195d5824d24ac5",
-      "sha256_zip": "2c4f6d6318d6f9e78f1d15fa382defc00d86e90c9d6707a19b1d46004a68f7a7"
-    },
-    {
-      "version": "1.83.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.83.0.tar.gz",
-      "zip": "isilon_usage-1.83.0.zip",
-      "size_bytes": 417350,
-      "sha256": "10bc44a7540f0b5313c8948d1deaa59964f52a71bac3ad918fd69ab1b13b8c58",
-      "sha256_zip": "f3b3442f84fbecc8298b973e5ae513fabca37b75b0b2b9fe508ff5cb2573bd94"
-    },
-    {
-      "version": "1.82.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.82.0.tar.gz",
-      "zip": "isilon_usage-1.82.0.zip",
-      "size_bytes": 414839,
-      "sha256": "93c19f5a98b5d021fb137800ebbaaf91c2f2fafc97143a6ae77b1ae8eb4ab5c5",
-      "sha256_zip": "65cbb146c89d96e3be7ffec740234cac059a24d5357df5ed7e976188a3cf2457"
-    },
-    {
-      "version": "1.81.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.81.0.tar.gz",
-      "zip": "isilon_usage-1.81.0.zip",
-      "size_bytes": 413445,
-      "sha256": "700dca4f5486b7c4c57c8546753b11b65eee1cb0a10f354b6c3990c96ac24898",
-      "sha256_zip": "9a3be2b2c7b9ea93f551037dabda3471fb82f75c9f007dc73dc946079e2b74bd"
-    },
-    {
-      "version": "1.80.2",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.80.2.tar.gz",
-      "zip": "isilon_usage-1.80.2.zip",
-      "size_bytes": 411419,
-      "sha256": "8756f1c61f01dab6858a6d97e73cedd1ecc0cc32ac470ffbc8fc0b8c3e39528b",
-      "sha256_zip": "dede259e9a74b8b4aaf9c30ba385ec4d61a3686e91d1d457e5c682e9d5923d5e"
-    },
-    {
-      "version": "1.80.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.80.1.tar.gz",
-      "zip": "isilon_usage-1.80.1.zip",
-      "size_bytes": 410450,
-      "sha256": "bae8e0e6068c5969f14cba8680de3fa1facee976605f7fb5db8d9204860b47cd",
-      "sha256_zip": "b6ead4072bbc882d93a077d4bf27efda52e806b165d3b51cb9251f8092c5b810"
-    },
-    {
-      "version": "1.80.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.80.0.tar.gz",
-      "zip": "isilon_usage-1.80.0.zip",
-      "size_bytes": 409539,
-      "sha256": "f30420cbb0e848667522358cb7bb30faee9c480a654fcd9fa86edab2aee3f6c0",
-      "sha256_zip": "d5bed7f68e6a94dea31276a6b5843697d0cf98646141a01d7abbdcc556ffe7b1"
-    },
-    {
-      "version": "1.79.7",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.79.7.tar.gz",
-      "zip": "isilon_usage-1.79.7.zip",
-      "size_bytes": 408356,
-      "sha256": "1f588700349af07511751961e1cbff90e515524844f40174cffbb9a4c0c0a13c",
-      "sha256_zip": "45ed7de228f7fa9484ba990da06d868932257efcf18b3cd7799fb8a53d111c85"
-    },
-    {
-      "version": "1.79.6",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.79.6.tar.gz",
-      "zip": "isilon_usage-1.79.6.zip",
-      "size_bytes": 407572,
-      "sha256": "3d4eda9c7539f3a86f872f3f1f7e00a9b1e4a84c5c93d610ee78e526f4275ac4",
-      "sha256_zip": "a9b32d477b3de33d19c285aa6f1964c56dd2ad91b408f415a9bea6cdd206d79d"
-    },
-    {
-      "version": "1.79.5",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.79.5.tar.gz",
-      "zip": "isilon_usage-1.79.5.zip",
-      "size_bytes": 407299,
-      "sha256": "59cd3ffb8aa6dbf5576c10ae08305d64d48434863fd26c8523625a6bfba21e97",
-      "sha256_zip": "7651530efd5e34d52f4b29dfd0cbf68fae6794a44e106d352b7f5d66126c56da"
-    },
-    {
-      "version": "1.79.4",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.79.4.tar.gz",
-      "zip": "isilon_usage-1.79.4.zip",
-      "size_bytes": 406657,
-      "sha256": "392e899756187063b7f6c8bcd781cb9f24ac165e64bca2fe0996336d779c9aeb",
-      "sha256_zip": "08fa81167bce980096a0bd635c5ed3a77377b3197d5a77932045a537a85b21a4"
-    },
-    {
-      "version": "1.79.3",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.79.3.tar.gz",
-      "zip": "isilon_usage-1.79.3.zip",
-      "size_bytes": 404849,
-      "sha256": "935c2f60133db89212559e227cf4d1bb6a82cb6f2c1ce22a992a4b495b17155d",
-      "sha256_zip": "f24165106690164d026a50e122bf6c4214a5065a25efeaae7e6b60515186d183"
-    },
-    {
-      "version": "1.79.2",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.79.2.tar.gz",
-      "zip": "isilon_usage-1.79.2.zip",
-      "size_bytes": 404395,
-      "sha256": "abd0e401772f0a0d97a7d721ab8a7433fb7c28f48b8f0e9a1a9024246cfad0db",
-      "sha256_zip": "e93a77111865d70fdc8da7bf993b910ee7252986cb7ecd29a97a50144947e6f5"
-    },
-    {
-      "version": "1.79.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.79.1.tar.gz",
-      "zip": "isilon_usage-1.79.1.zip",
-      "size_bytes": 400489,
-      "sha256": "d049f13c5cf4b978be0c1c386b05bf602e9a077d086179cde57c0a974795e391",
-      "sha256_zip": "380c9f17fb060172f667c83c9d68c3ff69e1601a5fc61cb908400938e9a8cc26"
-    },
-    {
-      "version": "1.79.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.79.0.tar.gz",
-      "zip": "isilon_usage-1.79.0.zip",
-      "size_bytes": 399349,
-      "sha256": "d547516c2ff033b9bd6b513ca49c7b664662c01d2a3628f40e7ecd4b179236c3",
-      "sha256_zip": "854be7aea00014ceb2919c0cc2a1cc0275bef85d53476e2db049700a2bd5363e"
-    },
-    {
-      "version": "1.78.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.78.0.tar.gz",
-      "zip": "isilon_usage-1.78.0.zip",
-      "size_bytes": 396862,
-      "sha256": "bcb1920061e185e937385a75a896b6160da13b2334dbd2c3792a0daadc59f503",
-      "sha256_zip": "ae388520a6fd3f2844a0b32a214877a5fc8ffebfe0f18dfb672dfdbd36b2e80e"
-    },
-    {
-      "version": "1.77.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.77.0.tar.gz",
-      "zip": "isilon_usage-1.77.0.zip",
-      "size_bytes": 394684,
-      "sha256": "3dc7082e9868eb31e73b3089d4897509de742b8c9929e3a03f4a8f81feb7ab2c",
-      "sha256_zip": "78ef5ba82a5d9e62ab2d5c10f5c95b22214b6ec696a12c9f4dde5eacfbb186c8"
-    },
-    {
-      "version": "1.76.8",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.76.8.tar.gz",
-      "zip": "isilon_usage-1.76.8.zip",
-      "size_bytes": 392219,
-      "sha256": "9c95937424503c8a60899f827278aac8949b04fb5571f47c37c69f9e0592cf26",
-      "sha256_zip": "0ff4a21a7afac56ef94f23ac7431a2fa48ebaeb4fa42d9680a18de00e275ece7"
-    },
-    {
-      "version": "1.76.7",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.76.7.tar.gz",
-      "zip": "isilon_usage-1.76.7.zip",
-      "size_bytes": 391442,
-      "sha256": "7d2e7e462a0f922084d9ead05394b700ce7161996cffce6c6893a999bf761ee1",
-      "sha256_zip": "377f97da34ab1e5aae9ea247fbf5f9abd5124b10d7cf4dc323d6681186be9f7a"
-    },
-    {
-      "version": "1.76.6",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.76.6.tar.gz",
-      "zip": "isilon_usage-1.76.6.zip",
-      "size_bytes": 390563,
-      "sha256": "d6a7d2e9208d7a459c3001d886969127dc7844f30b7709c98ebc826add59b4c6",
-      "sha256_zip": "af6640c2a6472227213734e7200760169efa498354813b08e0cb4d8351c0c954"
-    },
-    {
-      "version": "1.76.5",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.76.5.tar.gz",
-      "zip": "isilon_usage-1.76.5.zip",
-      "size_bytes": 390139,
-      "sha256": "ed0cbe811808132b877be66b5ba52817b06a5fbe1530f8da3f044bc319125926",
-      "sha256_zip": "2ba04e4d0787080927cd53ed1d125599333275c71fa55b96f0cf10776fe9289a"
-    },
-    {
-      "version": "1.76.4",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.76.4.tar.gz",
-      "zip": "isilon_usage-1.76.4.zip",
-      "size_bytes": 389875,
-      "sha256": "d2bc3e4b6bb738f89cd010d5e3227b970614ffda2f98e2366c5dba882766c7d0",
-      "sha256_zip": "fdc370c359682a9ae7de131d48bd819e6ef7df6f611f80e06900719399273aa9"
-    },
-    {
-      "version": "1.76.3",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.76.3.tar.gz",
-      "zip": "isilon_usage-1.76.3.zip",
-      "size_bytes": 388872,
-      "sha256": "3e2e46b0137c57ddcc8ec35d1cfdc435202f5bd192b7f731252e6fba79389c8e",
-      "sha256_zip": "cf05a77c9f6b93c1b98cffe07493e7aefea2ad189f7ac26b829d98bc2a255315"
-    },
-    {
-      "version": "1.76.2",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.76.2.tar.gz",
-      "zip": "isilon_usage-1.76.2.zip",
-      "size_bytes": 388454,
-      "sha256": "bf2b93f02cd02d3f6a332f41ea4dda231e78b7c4e8c7b89cb03c3daac4d44941",
-      "sha256_zip": "c19610a14f01276e29c757ef997bb5045049352aee91cf11a3362a6a922b20ab"
-    },
-    {
-      "version": "1.76.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.76.1.tar.gz",
-      "zip": "isilon_usage-1.76.1.zip",
-      "size_bytes": 387904,
-      "sha256": "e10f16c908fcdc588e5e0d0c5d5bbb0dcf66b67915158f98416eb7c9ed4f2f04",
-      "sha256_zip": "e01fe5ffab79e639b1f3429538dc75cbad3ac20e6fb4e4bdcbdc6873d3540a00"
-    },
-    {
-      "version": "1.76.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.76.0.tar.gz",
-      "zip": "isilon_usage-1.76.0.zip",
-      "size_bytes": 387739,
-      "sha256": "df608623030e047cf35b57e177a4dd46610f0c185029574624d090a79cd315d2",
-      "sha256_zip": "71adac76e36f5aec2f961fbdca790a586cb1c1080f5e326a3713807926094a73"
-    },
-    {
-      "version": "1.75.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.75.1.tar.gz",
-      "zip": "isilon_usage-1.75.1.zip",
-      "size_bytes": 385288,
-      "sha256": "9c46a44141ba117348fcebb6f0e1afcadc2ccaabeabf2f3922d1982f94696da7",
-      "sha256_zip": "2e69b8da9af4182a2f459e2e2abd9bccef13b10d11762c5a9c1c54915224315f"
-    },
-    {
-      "version": "1.75.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.75.0.tar.gz",
-      "zip": "isilon_usage-1.75.0.zip",
-      "size_bytes": 385130,
-      "sha256": "9c0ee6d6737373e2d71414ca7df887c0d1473776a2a04a88863420e35e074ed5",
-      "sha256_zip": "13a1daa26c3d61cc8648ded1021f821cc9a883527847a36f28f602e02c369a4c"
-    },
-    {
-      "version": "1.74.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.74.1.tar.gz",
-      "zip": "isilon_usage-1.74.1.zip",
-      "size_bytes": 383059,
-      "sha256": "3e7402e70a4c5fa19a18bdce64a50d03edf29cfafc65d55ab55ac0d3f039e35a",
-      "sha256_zip": "ef41594fa227cf0229db5e41e9ff4b9f6a5d352aa8f783d431270a7e72035702"
-    },
-    {
-      "version": "1.74.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.74.0.tar.gz",
-      "zip": "isilon_usage-1.74.0.zip",
-      "size_bytes": 382405,
-      "sha256": "575b5b88de2d5205f2110338a3e1d00fc08adab5551a81580e80250b529f6f13",
-      "sha256_zip": "1d020a2000dca583b52ce217e910d2c448634e4bd7c256f7f2b8eab506bee3aa"
-    },
-    {
-      "version": "1.73.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.73.1.tar.gz",
-      "zip": "isilon_usage-1.73.1.zip",
-      "size_bytes": 380603,
-      "sha256": "97b5d393cfe5f7f3621ec61f4b52511b5e270e2ff2de10a64b1e3a3b3ec49d53",
-      "sha256_zip": "837cb461c2fb46de827ec2b206128987145b0cf1995c84e469dc4d8a76dcd347"
-    },
-    {
-      "version": "1.73.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.73.0.tar.gz",
-      "zip": "isilon_usage-1.73.0.zip",
-      "size_bytes": 380167,
-      "sha256": "c9fc31f5167e2c85d759a74f25308819823e2ce87a83151cb5087d7da8174102",
-      "sha256_zip": "16b97a1e0ac467c2fd3e894a4766096496f3cdc535adc8b3330f8993ded0da3f"
-    },
-    {
-      "version": "1.72.3",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.72.3.tar.gz",
-      "zip": "isilon_usage-1.72.3.zip",
-      "size_bytes": 377150,
-      "sha256": "cd0cad8ff8aee9fe057f858ec36777e55613c57e9110c8d5f3624116f3459afd",
-      "sha256_zip": "0c441600ee24a4190459fdfd5144ff1bf8c8f64b8294e321329fcf5dd99c9487"
-    },
-    {
-      "version": "1.72.2",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.72.2.tar.gz",
-      "zip": "isilon_usage-1.72.2.zip",
-      "size_bytes": 376679,
-      "sha256": "a33ac838ad9850409c01f0294f4c6994ca165633e5d20b37c4765e9726e7deab",
-      "sha256_zip": "56e6e66b2d3b3c251ed0771fec8cde382745dbe738acd866ecdd1d33c83e17f8"
-    },
-    {
-      "version": "1.72.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.72.1.tar.gz",
-      "zip": "isilon_usage-1.72.1.zip",
-      "size_bytes": 376362,
-      "sha256": "61f9afc6bd888383730bb088a15ead7f6fc107a6c68467bbb72e8e1de550e73f",
-      "sha256_zip": "7b73ce7f72d1be14e856ea773a43dd1d927e7d75cbad040812b2fdb90bf21cbb"
-    },
-    {
-      "version": "1.72.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.72.0.tar.gz",
-      "zip": "isilon_usage-1.72.0.zip",
-      "size_bytes": 375509,
-      "sha256": "feb394c55a3b88be4fc00c65875e97054280a8c3ac49be058b514e407ac6f425",
-      "sha256_zip": "d6748eafb8b5bec6765db48bd50f19cc6d230f8026b005282782a24ca927c6ed"
-    },
-    {
-      "version": "1.71.3",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.71.3.tar.gz",
-      "zip": "isilon_usage-1.71.3.zip",
-      "size_bytes": 374140,
-      "sha256": "14d48a1fa9fc0d546222a8dbf4598cbe65cdd8495794781da9ab469a770333de",
-      "sha256_zip": "4f7fe05f1b43c1e837d612ced39baad02cd7c006cc696dd97094fc5318eaea24"
-    },
-    {
-      "version": "1.71.2",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.71.2.tar.gz",
-      "zip": "isilon_usage-1.71.2.zip",
-      "size_bytes": 372940,
-      "sha256": "17b7d7db427c00fa84a26749ca6894a380fb41fa0cc76559c94b8bc6864bc557",
-      "sha256_zip": "0a89774eabaef544517015637dd68b994d50c39441ae792eb6fb6bbd7fa4924a"
-    },
-    {
-      "version": "1.71.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.71.1.tar.gz",
-      "zip": "isilon_usage-1.71.1.zip",
-      "size_bytes": 372432,
-      "sha256": "21885e90f98dad7a1558efb701960e665d41efcccea1aaeb2a65d91fd14cbac0",
-      "sha256_zip": "e0bcfaee7e7ba37e9236208d4f8aaa58558ce1a7712fb282d4781e80dd1b0635"
-    },
-    {
-      "version": "1.71.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.71.0.tar.gz",
-      "zip": "isilon_usage-1.71.0.zip",
-      "size_bytes": 370750,
-      "sha256": "4167158642dcbbf15cf0f7d9cc0140dbe49cdfa6462a38fb28eef2274ff2b138",
-      "sha256_zip": "2ed5bfcbac5e2f2931eeb57ee9285539059b1679ca56ea8d5a44d5191c403b10"
-    },
-    {
-      "version": "1.70.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.70.1.tar.gz",
-      "zip": "isilon_usage-1.70.1.zip",
-      "size_bytes": 367502,
-      "sha256": "7c960d386a3af36b8c12c1a81fa0502604440c0a67bd57c1e6c19f384277f62d",
-      "sha256_zip": "a89ebdda869cd1df439cedde21fc60fcea386325ef3930de470ebc2265037917"
-    },
-    {
-      "version": "1.70.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.70.0.tar.gz",
-      "zip": "isilon_usage-1.70.0.zip",
-      "size_bytes": 367723,
-      "sha256": "180f0793b125168807377d309f5e9ad2049e6db50f338606865e39a6a6986c57",
-      "sha256_zip": "6e6702722e546ebcfc798eef81653e2fecc1e57781fc169a73e04c7c31877e50"
-    },
-    {
-      "version": "1.69.8",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.69.8.tar.gz",
-      "zip": "isilon_usage-1.69.8.zip",
-      "size_bytes": 363499,
-      "sha256": "8f2748f85d1ad46ae7fc1c0cdbb80958005c5ad8cdb8192e5a301713a19c42f2",
-      "sha256_zip": "5412ebb65a47d76a07d5312055f075de20660d0d08e6b046a1358316d68525b3"
-    },
-    {
-      "version": "1.69.7",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.69.7.tar.gz",
-      "zip": "isilon_usage-1.69.7.zip",
-      "size_bytes": 361057,
-      "sha256": "7842943998f537c86c0fc009b89157673f31ab161b366111c375b7e7d6060ea1",
-      "sha256_zip": "2350de06618eb3a7e0b725869ec16593693b297bd45c4559e384584d7d7ed729"
-    },
-    {
-      "version": "1.69.6",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.69.6.tar.gz",
-      "zip": "isilon_usage-1.69.6.zip",
-      "size_bytes": 358617,
-      "sha256": "6a0901289b70815dd14fc0968a7f1b81bb7648082f759bb94342a505415e9fc3",
-      "sha256_zip": "0ff8e3ceffb45571c361f2fb8a80300ae8e0588a9561f46c8c961a8235a6d26b"
-    },
-    {
-      "version": "1.69.5",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.69.5.tar.gz",
-      "zip": "isilon_usage-1.69.5.zip",
-      "size_bytes": 358020,
-      "sha256": "48ad0de2f5a0c159979e846e77da2895c3b8e8ccaae2570ae8ffd12b5a016f63",
-      "sha256_zip": "2d434f929b4abdf3b7b93e76eba677e0b1dcb34b66de215df46d95c1a06a0921"
-    },
-    {
-      "version": "1.69.4",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.69.4.tar.gz",
-      "zip": "isilon_usage-1.69.4.zip",
-      "size_bytes": 356993,
-      "sha256": "f4cef881fba88480127ae818485c77c042d02b421db54dcbbc866c9d7a73cee6",
-      "sha256_zip": "6589d9697856c0569467ca63f0293fa3e566a196515e20af284b45b0f2c7dc69"
-    },
-    {
-      "version": "1.69.3",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.69.3.tar.gz",
-      "zip": "isilon_usage-1.69.3.zip",
-      "size_bytes": 355668,
-      "sha256": "4a6f58de55ee4569a7d9452d2d6c0e9634aadf30422100ef7e2b78a19db6dbb1",
-      "sha256_zip": "3ee6d69bd50d4307276142d0dac211eeeb97e7858de90796e4c7612128f1d2d8"
-    },
-    {
-      "version": "1.69.2",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.69.2.tar.gz",
-      "zip": "isilon_usage-1.69.2.zip",
-      "size_bytes": 355076,
-      "sha256": "7039ad02c5e60e56e9c16b4ce72490dbf6a4b9839c6baccb6bfa7f88c921f07b",
-      "sha256_zip": "872fb1f0a4e4b30baf8cfdea3fcbfd1a24f2818b997a4bc3d8d7fe63c28fc9f7"
-    },
-    {
-      "version": "1.69.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.69.1.tar.gz",
-      "zip": "isilon_usage-1.69.1.zip",
-      "size_bytes": 354167,
-      "sha256": "d9ee4acaa1225b77ba31f2ea346a99c9fa7fe103a48da5561a5165d6991eecb2",
-      "sha256_zip": "b3b6cfc6b596cd7ed6e5db8d5ec508f13a51877cd1753facb66f3cad66026b32"
-    },
-    {
-      "version": "1.69.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.69.0.tar.gz",
-      "zip": "isilon_usage-1.69.0.zip",
-      "size_bytes": 353485,
-      "sha256": "f7430b376eafd66042d6176b965d2ec4ba95ca0694119f883296bf7583caebcc",
-      "sha256_zip": "bd54cad2b6b08ecfefecc65878b08155488c7ab0ea522980e5ffb5954a54669d"
-    },
-    {
-      "version": "1.68.2",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.68.2.tar.gz",
-      "zip": "isilon_usage-1.68.2.zip",
-      "size_bytes": 352297,
-      "sha256": "0e56065907d354eb9d62574e92805a4216dfc993807623357dddc5ce227c7652",
-      "sha256_zip": "0bf5813dd4279b5745601007637a7d97374be4d7302714eadef2408cad328d11"
-    },
-    {
-      "version": "1.68.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.68.1.tar.gz",
-      "zip": "isilon_usage-1.68.1.zip",
-      "size_bytes": 351204,
-      "sha256": "5f1128259292348a91a5b4662a588668520065454b1248e9da6dd931a38f1f09",
-      "sha256_zip": "870f7a602c8590269055b3614c313ee58b1db3678a7d91b10104fd5aad84db20"
-    },
-    {
-      "version": "1.68.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.68.0.tar.gz",
-      "zip": "isilon_usage-1.68.0.zip",
-      "size_bytes": 348502,
-      "sha256": "c4757a3c55bb829084dce6ac503a6a1cf08dab5466b4a6cda9daf6f46118e523",
-      "sha256_zip": "395fed4fc16bdba521cb8213d6e607a3f8beea9690d95e7a850f5858db52d0bb"
-    },
-    {
-      "version": "1.67.2",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.67.2.tar.gz",
-      "zip": "isilon_usage-1.67.2.zip",
-      "size_bytes": 346252,
-      "sha256": "024ac234ad4abd3c5cc47c01437474f86a923f95025fc04f8d500f84887c4762",
-      "sha256_zip": "b3d439f666c08a329425b3e5c8bc92f5ab9896c3c1d2b517554dbc10a76eb78a"
-    },
-    {
-      "version": "1.67.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.67.1.tar.gz",
-      "zip": "isilon_usage-1.67.1.zip",
-      "size_bytes": 345097,
-      "sha256": "43f0f2bd1570cb3a73205dd9c9071e51eb48ddd2db9bc424e627b60c856b0f25",
-      "sha256_zip": "95638727acd477a3676465c52b4a585bc6936b9701f508625123f338feb4631a"
-    },
-    {
-      "version": "1.67.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.67.0.tar.gz",
-      "zip": "isilon_usage-1.67.0.zip",
-      "size_bytes": 344288,
-      "sha256": "244b0f95e69803be71c70ea8c249e5c419e5b5e7914f75d1522ef800940ccbc3",
-      "sha256_zip": "faab4f83a1fd17bda472b250abc9533b256d61b8ac750855653ddcc6c575c869"
-    },
-    {
-      "version": "1.66.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.66.0.tar.gz",
-      "zip": "isilon_usage-1.66.0.zip",
-      "size_bytes": 342071,
-      "sha256": "60f19b262427c1b8a6f2a324fb1afc3c945e3a7eb4d6250a40e5fe344c447eb0",
-      "sha256_zip": "5e3a1893fac3249ddfa3129d13e118e98da755c67513b75fb96f73312ebb0eb2"
-    },
-    {
-      "version": "1.65.2",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.65.2.tar.gz",
-      "zip": "isilon_usage-1.65.2.zip",
-      "size_bytes": 338642,
-      "sha256": "70b801698dd12fe7a264b19a89239b8aabd86c4c93a209d4beb341bcf8a597ba",
-      "sha256_zip": "d68d20eae17da487e040bf874773744b043994d9ff9330d8e7aadfaa9c47059b"
-    },
-    {
-      "version": "1.65.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.65.1.tar.gz",
-      "zip": "isilon_usage-1.65.1.zip",
-      "size_bytes": 337588,
-      "sha256": "b7b2c0c1a184557f3c5da598898d827b9a5b837f9ca360ae0be169107154da8d",
-      "sha256_zip": "3eb880f853975c757520049cf3f727842931602f1a1effbde694d6617a23e292"
-    },
-    {
-      "version": "1.65.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.65.0.tar.gz",
-      "zip": "isilon_usage-1.65.0.zip",
-      "size_bytes": 335997,
-      "sha256": "b6b9cd0039f1e27dbf33945c9da1a6d14c04c406d27a006196b55b42e8c325ec",
-      "sha256_zip": "918bbeb19c3db4a92afbc2bf892400c77a540c49aa22d532147e327a18a7886d"
-    },
-    {
-      "version": "1.64.3",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.64.3.tar.gz",
-      "zip": "isilon_usage-1.64.3.zip",
-      "size_bytes": 331588,
-      "sha256": "7652dca5692e673fb6c0ce8db0c516f27484e4cd8e7337e817646f01019e8a61",
-      "sha256_zip": "4a71ed7dbdca66ead5bef808802e956f0779ac4201a4e9054cd6df3da2514b16"
-    },
-    {
-      "version": "1.64.2",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.64.2.tar.gz",
-      "zip": "isilon_usage-1.64.2.zip",
-      "size_bytes": 330931,
-      "sha256": "bbc8e9352d3c0cc249aa226ec65d1e8c9cf1685ef5f1a3b799aa9057b33bd709",
-      "sha256_zip": "eb72a4d3e212b944a18cc3aef5e9cae357053d120217b8721ad35b172a4549c0"
-    },
-    {
-      "version": "1.64.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.64.1.tar.gz",
-      "zip": "isilon_usage-1.64.1.zip",
-      "size_bytes": 330546,
-      "sha256": "e222edad731336b7325f9678928e4e7226ae40f9ee96b986126d8a114418ec46",
-      "sha256_zip": "909f6179417ea3e16b93077464c2f3cedc398257cb1583f7b83465dc570e53d8"
-    },
-    {
-      "version": "1.64.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.64.0.tar.gz",
-      "zip": "isilon_usage-1.64.0.zip",
-      "size_bytes": 328291,
-      "sha256": "c585b8475a4f6a582fcb29b783fc0d370c9ad515329aba668b3ebfc560a8a8a0",
-      "sha256_zip": "acf165d596d4eca41b2541bb23e9f93e316fe9802fdceb2d59f9a4d850fe3e10"
-    },
-    {
-      "version": "1.63.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.63.0.tar.gz",
-      "zip": "isilon_usage-1.63.0.zip",
-      "size_bytes": 325876,
-      "sha256": "797512357dc75c735b9f3a197098f15f950c985123b13260f84f2045296e2c38",
-      "sha256_zip": "d90dbbd516bd3f3ed3acf36470a959c981e2d43a2441caf21eeb29e3a4e2caba"
-    },
-    {
-      "version": "1.62.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.62.0.tar.gz",
-      "zip": "isilon_usage-1.62.0.zip",
-      "size_bytes": 324698,
-      "sha256": "89229fe7eec109dd20e95eccf34c07b75ab4bc9f8381c9132ee6e280bad6d73a",
-      "sha256_zip": "c69d19386c749420137faae444c6f4f3301bda38c4685c52e0302900863ce43d"
-    },
-    {
-      "version": "1.61.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.61.0.tar.gz",
-      "zip": "isilon_usage-1.61.0.zip",
-      "size_bytes": 321445,
-      "sha256": "87fa5dcf9606552ba43ddcdfcfa10df0c0db35deceb72ae0e69d410132e644e8",
-      "sha256_zip": "066d2a8b949e06237fa0b80ecd94f83c846389dde07fb95fa2046f08a8a60c13"
-    },
-    {
-      "version": "1.60.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.60.0.tar.gz",
-      "zip": "isilon_usage-1.60.0.zip",
-      "size_bytes": 319838,
-      "sha256": "4824c541936ec8942e6e09400f3803b12b0ab1ee93c8276fab5d394eff3415de",
-      "sha256_zip": "d2e07ddd01e7331e3d455b10bde5d6e9db815efd411bf77c5b1a772e3742b930"
-    },
-    {
-      "version": "1.59.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.59.0.tar.gz",
-      "zip": "isilon_usage-1.59.0.zip",
-      "size_bytes": 318097,
-      "sha256": "42a12bf34f3a77960ff477baf6ef4ab0c9721c00f940c2915e72df4211add174",
-      "sha256_zip": "385df2d40aee432fe1cad28e51e4cdaa458b8da369903ea8c0a97cf9e1ae279f"
-    },
-    {
-      "version": "1.58.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.58.1.tar.gz",
-      "zip": "isilon_usage-1.58.1.zip",
-      "size_bytes": 316252,
-      "sha256": "35459460ca6b909c8515dcf1129c9a3dedeb00ce7372ef3736170eb267c74a0f",
-      "sha256_zip": "2ede390183635890d23270d0eaad92f6de9fec0ee9e3614d93662c4ffde6e77c"
-    },
-    {
-      "version": "1.58.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.58.0.tar.gz",
-      "zip": "isilon_usage-1.58.0.zip",
-      "size_bytes": 315814,
-      "sha256": "229d14e3407c8b59ac7abd97a96e0d8b93524fb2a9743e8881d20de82fa91ca7",
-      "sha256_zip": "db5fc8ee8db932ba1d55d11c32efdeff5fe077aa63427299a9eb6074ed412fd4"
-    },
-    {
-      "version": "1.57.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.57.1.tar.gz",
-      "zip": "isilon_usage-1.57.1.zip",
-      "size_bytes": 312957,
-      "sha256": "08984fba19d5d9812ab0da820b58f8f52d74370ce7aa2fd8127924ee2c16c874",
-      "sha256_zip": "3f91d0fa67ac4c77371d7f60a75ae2273ad3c1c0226a7cd66e3b917372ac6c6a"
-    },
-    {
-      "version": "1.57.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.57.0.tar.gz",
-      "zip": "isilon_usage-1.57.0.zip",
-      "size_bytes": 311670,
-      "sha256": "aeb95d7af8cc7a20746691862a9558e8a179e939b3000ccd87a64eabcce482f2",
-      "sha256_zip": "b30ba5e4f36ea04ea758bef97daa7effa85e7ab980d9f497722a25a294bcd9f9"
-    },
-    {
-      "version": "1.56.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.56.0.tar.gz",
-      "zip": "isilon_usage-1.56.0.zip",
-      "size_bytes": 304087,
-      "sha256": "4d960dc08b4baaf54f3878441b42437646f400a2028aa74f5b5007834a69715e",
-      "sha256_zip": "7932805f8c069ed9ab848297984a902090f04375973064d42648616ae0e36eef"
-    },
-    {
-      "version": "1.55.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.55.0.tar.gz",
-      "zip": "isilon_usage-1.55.0.zip",
-      "size_bytes": 299434,
-      "sha256": "cb331440865367546511dc7733b520be906edc1a3258d86f92d81ca85b1ecc20",
-      "sha256_zip": "d7f2a17d5500b9cbe9c9ace69ce3be3628a4596551f656cec031a21d4f26e5c0"
-    },
-    {
-      "version": "1.54.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.54.0.tar.gz",
-      "zip": "isilon_usage-1.54.0.zip",
-      "size_bytes": 297698,
-      "sha256": "f4fc40da9bdbe68fd2dfb130c99c3893bb29d460e594067f22f783182f9b6fbd",
-      "sha256_zip": "3d7940e5c3202c22c204bbe9eced7b390e354b548687ce4c573828a463b8b986"
-    },
-    {
-      "version": "1.53.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.53.0.tar.gz",
-      "zip": "isilon_usage-1.53.0.zip",
-      "size_bytes": 295957,
-      "sha256": "a0aeca543f41a645515951d152ca275dc90f91e50126b345ac04247ca1789330",
-      "sha256_zip": "625425a6231c62f0a88a4349083cf7bdd37b3b35929915d28db9c58adf1ac500"
-    },
-    {
-      "version": "1.52.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.52.0.tar.gz",
-      "zip": "isilon_usage-1.52.0.zip",
-      "size_bytes": 292849,
-      "sha256": "2a961ade1fb39b9f2e0035e58bc512c557d33f4b9cad1e3917ebbd0558f3ed67",
-      "sha256_zip": "d81801eec0285781b157c3618df84dfaa8b5746d6df5fc77db1e41d34938d6eb"
-    },
-    {
-      "version": "1.51.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.51.0.tar.gz",
-      "zip": "isilon_usage-1.51.0.zip",
-      "size_bytes": 291278,
-      "sha256": "c4f28e6b43a326e10460a86860f5b0d481f742bb1a07a56ba1ae48e60f32c5cf",
-      "sha256_zip": "8c0efe6231e355d993f6ed0688227ce506ee029db530de5b062eccb87b58c487"
-    },
-    {
-      "version": "1.50.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.50.0.tar.gz",
-      "zip": "isilon_usage-1.50.0.zip",
-      "size_bytes": 290808,
-      "sha256": "7510c38e50113eddee75abd9c527e4e2ca5b52b90a1100db7e9406f23944e9dd",
-      "sha256_zip": "11db83c96a0cd3360245f820d8f32382db7d6c0bf48d822df2394a7e0bf3dc6a"
-    },
-    {
-      "version": "1.49.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.49.0.tar.gz",
-      "zip": "isilon_usage-1.49.0.zip",
-      "size_bytes": 290026,
-      "sha256": "8db1f878aee4207060827948a959f4a77b8e95dc7b1492fb1ee4eca4252aa55c",
-      "sha256_zip": "f021273c235c9db8a7c9b013abd3ee1fc04a2d4791a6643aaeb16bd7e4f5bce7"
-    },
-    {
-      "version": "1.48.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.48.0.tar.gz",
-      "zip": "isilon_usage-1.48.0.zip",
-      "size_bytes": 288401,
-      "sha256": "7ebcf5ee9b84c91eb0b8b37764958ef235601978f10b21461bf433f9b8c98ca3",
-      "sha256_zip": "95930a60d43c4c99ddaf26e2e3a739ab82b5c30e8f49a67126bc1405b907bb1a"
-    },
-    {
-      "version": "1.47.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.47.0.tar.gz",
-      "zip": "isilon_usage-1.47.0.zip",
-      "size_bytes": 287180,
-      "sha256": "8943d2f3d0b1fbfefaf86adb94a57952e36c6df50d5dca040c93b030fd8efa83",
-      "sha256_zip": "a68a48ee7f9a8d49709d140c022ebc9f2f9b66a184ea3abdade6dbeb12b6bc44"
-    },
-    {
-      "version": "1.46.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.46.0.tar.gz",
-      "zip": "isilon_usage-1.46.0.zip",
-      "size_bytes": 285181,
-      "sha256": "78e840b273444087347867d20e2a1bb3919c384babf0c7b41a2418cb0061e959",
-      "sha256_zip": "ba7becc89fc5273ca7db4f7bce22e04c27b55837361873318962d190e7e6e076"
-    },
-    {
-      "version": "1.45.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.45.0.tar.gz",
-      "zip": "isilon_usage-1.45.0.zip",
-      "size_bytes": 280707,
-      "sha256": "c82afee91a83116fc4ba40707cdf77601f76cb0d490eb3e968a9025098569c5f",
-      "sha256_zip": "c3a902230026b4a4568681644ebfcb26078d2643f15fb7ffbd173d9143c045ed"
-    },
-    {
-      "version": "1.44.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.44.0.tar.gz",
-      "zip": "isilon_usage-1.44.0.zip",
-      "size_bytes": 273690,
-      "sha256": "5df42d83d33fc0ebc829048127cba7217a062c4972d0bf0e6d79712f454c92fc",
-      "sha256_zip": "6f272b562ed9d1b6a04c51f8ded9530db36e4a0e508d7748e1f4454b55f62da3"
-    },
-    {
-      "version": "1.43.2",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.43.2.tar.gz",
-      "zip": "isilon_usage-1.43.2.zip",
-      "size_bytes": 272002,
-      "sha256": "2425449fa7e4c9b2a1d9a1d49acaf0eed8e619427f5498cb0c0d4be23a6ceff4",
-      "sha256_zip": "82b969939edff680f67e385f8e25590f188d06d0e385e0a772065644898bb7ce"
-    },
-    {
-      "version": "1.43.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.43.1.tar.gz",
-      "zip": "isilon_usage-1.43.1.zip",
-      "size_bytes": 271408,
-      "sha256": "9a9962e7b05bcfb9ff9fc6339941c4ff89acbfe1d98abc8cff07df43fd29b23c",
-      "sha256_zip": "7a4c3e460e6c4d624b23fab38553ff7bac1aed2c2adae127b9e303eaedd46331"
-    },
-    {
-      "version": "1.43.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.43.0.tar.gz",
-      "zip": "isilon_usage-1.43.0.zip",
-      "size_bytes": 271052,
-      "sha256": "fb02beebae9d81af2757e7869d23e7e653f5cef098611ae4a66372f10f4ee970",
-      "sha256_zip": "0919e4947aa6dccbef5cf35fa27f2a76a1c8736f38d29ebdaecd6c3f2631b8bb"
-    },
-    {
-      "version": "1.42.2",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.42.2.tar.gz",
-      "zip": "isilon_usage-1.42.2.zip",
-      "size_bytes": 269798,
-      "sha256": "3e7943c23d908da807539616e1f2178f6e918752fe46b302af72327955d328ef",
-      "sha256_zip": "656323aab042b8a9dcb08696628b5703288e4b2dbeef069118b309c9cf780f87"
-    },
-    {
-      "version": "1.42.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.42.1.tar.gz",
-      "zip": "isilon_usage-1.42.1.zip",
-      "size_bytes": 269092,
-      "sha256": "424096a9d8a8285c335a8fd1fb04280308e3dbbd7800ffe0dc39199aed829081",
-      "sha256_zip": "e8cdbd016f2d4bdff2212b0d84ad1531148a5292465a36bac67921173aa30f3f"
-    },
-    {
-      "version": "1.42.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.42.0.tar.gz",
-      "zip": "isilon_usage-1.42.0.zip",
-      "size_bytes": 268613,
-      "sha256": "12a15b75a30b0c903ed9f7ed49357ab033678f7415f690d5b20650d50aea4e1a",
-      "sha256_zip": "580f1069fa69019e6aac5b36f00c0725432ca3028394ce9eec2e7887ceb0439f"
-    },
-    {
-      "version": "1.41.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.41.1.tar.gz",
-      "zip": "isilon_usage-1.41.1.zip",
-      "size_bytes": 266963,
-      "sha256": "653d7c0703b4a39aefa2c4b710a4ab4895cc103efa4a2ffd3c3a9b0acb9145d8",
-      "sha256_zip": "45bec7fb40b7b8fba814c9cbfe9e75ec17b93ae0962a24df1ab881b9a431798e"
-    },
-    {
-      "version": "1.41.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.41.0.tar.gz",
-      "zip": "isilon_usage-1.41.0.zip",
-      "size_bytes": 265160,
-      "sha256": "10ad750984b4a83a8bb7636c7fb2eea93c1babe2c846e6d2ce6a382043bfac01",
-      "sha256_zip": "2eda46eeabcf453ed4e193a10f88f41feea5376902fdc3bad8a3cddae4ff2092"
-    },
-    {
-      "version": "1.40.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.40.0.tar.gz",
-      "zip": "isilon_usage-1.40.0.zip",
-      "size_bytes": 259623,
-      "sha256": "31204ce69ac989f46a9594987453e21ffb4e1af3d09708bbf65be4f66af574ef",
-      "sha256_zip": "06461423a415f5e14b85f72f857dd9ba9e2cb272b013e6214f9152550c06788d"
-    },
-    {
-      "version": "1.39.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.39.0.tar.gz",
-      "zip": "isilon_usage-1.39.0.zip",
-      "size_bytes": 257227,
-      "sha256": "1a3535c3b8c8d281596eaea839b3286bb7bb4febbd59f9320295d8d38d17adc8",
-      "sha256_zip": "e76cff039ab4f940328a35ff6c5a9686c020ac9fbc64f9dae4bbf5676c50274e"
-    },
-    {
-      "version": "1.38.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.38.0.tar.gz",
-      "zip": "isilon_usage-1.38.0.zip",
-      "size_bytes": 254190,
-      "sha256": "537ca334dc3f9f54265122d749505be869825b5dc148e968fb955bf3ac1b5f75",
-      "sha256_zip": "7d4d37b0a5b197adf5199a2e4b77dcd093622bb3b995312ad435081823231df7"
-    },
-    {
-      "version": "1.37.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.37.0.tar.gz",
-      "zip": "isilon_usage-1.37.0.zip",
-      "size_bytes": 251899,
-      "sha256": "a9596c11f52b67d7a523c18cebebb1292f1ca42570155f7e890c6b340087f202",
-      "sha256_zip": "472660fc627717ef854881016ac44bccd80201547daac35dc7d5079fbbf5ecc7"
-    },
-    {
-      "version": "1.36.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.36.0.tar.gz",
-      "zip": "isilon_usage-1.36.0.zip",
-      "size_bytes": 246044,
-      "sha256": "67b7b9b1d288eb151503b0cfb4cf302d443a706adfedd8342d9ebbf65c5c9f78",
-      "sha256_zip": "aebeec3c183aab4c267489db8db586d9f837ec0705f51b8cef717fdc3e472c5b"
-    },
-    {
-      "version": "1.35.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.35.0.tar.gz",
-      "zip": "isilon_usage-1.35.0.zip",
-      "size_bytes": 242758,
-      "sha256": "9c2778e1af2f8c4b2a11b83f0e1230cbbf943e8fa1d071c4632966141098bb09",
-      "sha256_zip": "bfebfae90512f4a9947fca377ecbcc7a3230fc9473bd9a707f9944c1d0841670"
-    },
-    {
-      "version": "1.34.1",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.34.1.tar.gz",
-      "zip": "isilon_usage-1.34.1.zip",
-      "size_bytes": 241239,
-      "sha256": "ed482c8cc65c328bc13bb8abf8b5a301c72f4d80cd104f4ecb80c81d88c9f27f",
-      "sha256_zip": "a8c9eaf6ba7c13352d657f15a7a6ec09fe506b9385a06f34e87c9b5a67fff24c"
-    },
-    {
-      "version": "1.34.0",
-      "python": "Python 3.6+",
-      "tar_gz": "isilon_usage-1.34.0.tar.gz",
-      "zip": "isilon_usage-1.34.0.zip",
-      "size_bytes": 240540,
-      "sha256": "35c9c6eb786f83dbbece125511c47b1e4a6a89dfbddb9f2adc2297af3e6de3f3",
-      "sha256_zip": "a8a887f17e3462815d6ab617fdb9308e4dd26d7cb781f746e226fbff50cb1b00"
+      "size_bytes": 505352,
+      "sha256": "497ef48398e2890c5e034efb217ceedac2a402812e028145ded76d75dee8fe2e",
+      "sha256_zip": "206dd94342c7ac064090a2a35f5b73cc2fef3f9da501b748813fdb9c4cb9f4ff"
     },
     {
       "version": "1.33.0",
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.33.0.tar.gz",
       "zip": "isilon_usage-1.33.0.zip",
-      "size_bytes": 235557,
-      "sha256": "b424a7328352d595a06579f0333f3a60f9f0d464b8b73a505c75c123ca67634c",
+      "size_bytes": 235562,
+      "sha256": "3a461f17c8e285fd3d9e8442a6e723756bc3b59c66aae07785d7d7edc8332d8a",
       "sha256_zip": "a1f842a91d2df1775e1769a4617d486ea1ae1a6f0e975c455f2443816405db7a"
     },
     {
@@ -1248,8 +24,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.32.1.tar.gz",
       "zip": "isilon_usage-1.32.1.zip",
-      "size_bytes": 231929,
-      "sha256": "beb5b5a9e711103c342060aaf2644b836d05327f39be5e8e33b9dc32d86af558",
+      "size_bytes": 231930,
+      "sha256": "366cafcf789d58daebc17d599604292341b6025c7010e8a93d6a7136d6d579b9",
       "sha256_zip": "a5c94f7dbc4d8e69064de3fd925ef97e7b6f6fc099bce0befb2623e8fc9d30a5"
     },
     {
@@ -1257,8 +33,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.32.0.tar.gz",
       "zip": "isilon_usage-1.32.0.zip",
-      "size_bytes": 231342,
-      "sha256": "d26b4706df0802633e0efe22ce6e1afc1f5def10e75d3bfaaccb9af4fda0434a",
+      "size_bytes": 231345,
+      "sha256": "4fde8dd17f1db805e944b43a2e9fc94f57aea8487e16524862874550d8e2c55c",
       "sha256_zip": "cafc53e46dbee5ad29866fc539e268918986844e37b130bbbadb9047df386e20"
     },
     {
@@ -1266,8 +42,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.31.5.tar.gz",
       "zip": "isilon_usage-1.31.5.zip",
-      "size_bytes": 229455,
-      "sha256": "582ee3039d05dd1207e842679673d56fb6b46fcbfa76ff9a40603ea80399b69f",
+      "size_bytes": 229448,
+      "sha256": "50af15cd57277141a087b86f88fa8ff0935f7d2d752ac1d235731fee2c70619c",
       "sha256_zip": "cf999bc8ed26b8fa325d45c2e924274d6d1200321170391995bcb85b1f296fb6"
     },
     {
@@ -1275,8 +51,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.31.4.tar.gz",
       "zip": "isilon_usage-1.31.4.zip",
-      "size_bytes": 227699,
-      "sha256": "7894f27242c1f1e6b69c70ad7b6dc4b9203649ef1ab59d173f929056a459ba24",
+      "size_bytes": 227701,
+      "sha256": "f7524c52c6c2c94080f5cb47e9bd7227b3ebe27942f5e0372e6d2ea3d6d87b57",
       "sha256_zip": "f2da5fb0b2dac271117d73042be374fd80348811ec8b2fcafe2397d9c065bc21"
     },
     {
@@ -1284,8 +60,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.31.3.tar.gz",
       "zip": "isilon_usage-1.31.3.zip",
-      "size_bytes": 226293,
-      "sha256": "6d9fd8eb3523a3b42f138b9395ea2b1a49a2cf7da3fedd772c57c093817a9c56",
+      "size_bytes": 226291,
+      "sha256": "717641f175a62216f9ffa3a244ba08a0ba9528dfd2d4c8ade43800c9a121a83d",
       "sha256_zip": "386f3b278b25ee22305413b890b49ed8f0061ed3a88a92c9aab97ebf10008e48"
     },
     {
@@ -1293,8 +69,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.31.2.tar.gz",
       "zip": "isilon_usage-1.31.2.zip",
-      "size_bytes": 225677,
-      "sha256": "b89a2d4717f9195323adfb42828ff00a5ed1e94d4668e8ee5ae1c3ea8af88ed9",
+      "size_bytes": 225680,
+      "sha256": "fcc5a799ea28b07d098c121126f88d9930c454e5f3564a69f59cec370cd19673",
       "sha256_zip": "ee015f62aa99e4a407c7a8cc4c8cb481c8e8b4dd3e7e3eded51dd16a67c6739f"
     },
     {
@@ -1302,8 +78,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.31.1.tar.gz",
       "zip": "isilon_usage-1.31.1.zip",
-      "size_bytes": 225324,
-      "sha256": "b156bf6d5652800be77fef11b756246543aecaedc9e9583520cdb6a3d7a09b19",
+      "size_bytes": 225330,
+      "sha256": "69c1e4250895ebbda0890ed02a766381993eaf5b553c455e2262a3f5d32ca26b",
       "sha256_zip": "b9bda7049c1c039e57c4b8c523443151e99e5e218f33f7172e8e2717300b7172"
     },
     {
@@ -1311,8 +87,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.31.0.tar.gz",
       "zip": "isilon_usage-1.31.0.zip",
-      "size_bytes": 224135,
-      "sha256": "34017b469748c94b4706d1e923afba05de12bd487fd5bb6db9199f00291f97dd",
+      "size_bytes": 224134,
+      "sha256": "e788b0929bf711adea0458dcfc97a8fe1e29d264bd13bf7c2a23aaf775d69408",
       "sha256_zip": "a883e0d766b6783e532fece5ab66ec961fd3c7a42d0dc4fc5121b7dd3c13847a"
     },
     {
@@ -1320,8 +96,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.30.4.tar.gz",
       "zip": "isilon_usage-1.30.4.zip",
-      "size_bytes": 220985,
-      "sha256": "8815d373823b82a370607c1420d483c097b096a1a9954dd6d044809ca320fc40",
+      "size_bytes": 220988,
+      "sha256": "58f82ad7b29c573a9aa2c3716d1d792db37de4972b678ea9c46e0fd8128f5581",
       "sha256_zip": "215c209abe278a72e772bb0eb929cdd04b17d768b755a712f8ce62ea311f3ea4"
     },
     {
@@ -1329,8 +105,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.30.3.tar.gz",
       "zip": "isilon_usage-1.30.3.zip",
-      "size_bytes": 220472,
-      "sha256": "9ed762572b844f2a16489a9324891fe189261dbcab1085aa591c6324d3b1f240",
+      "size_bytes": 220475,
+      "sha256": "ebdfd7a4b9d3e3824970f689fd62db9ef135692607865a826251992b93ced60a",
       "sha256_zip": "faeef82cb3dc146397e3fb4e955f39181d04598b47abdaa856f7f4e179fbb854"
     },
     {
@@ -1338,8 +114,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.30.2.tar.gz",
       "zip": "isilon_usage-1.30.2.zip",
-      "size_bytes": 220061,
-      "sha256": "21520abcada6b7f5b7f245bf3dd2c001232c509ff432f5de3bd420cc8cef746a",
+      "size_bytes": 220067,
+      "sha256": "4bd09baeb32f712e0a546ceceb0fbca1a42bab47489a14a9a9dd00342259824a",
       "sha256_zip": "7a0a50a44320967b74193010359d9e2a890d8c42b416dbaea1224618cb832fbb"
     },
     {
@@ -1347,8 +123,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.30.1.tar.gz",
       "zip": "isilon_usage-1.30.1.zip",
-      "size_bytes": 218965,
-      "sha256": "6f9fd417597031ca9b1a372dc18d56e6f74a0ffb2440485bb273180558e2af04",
+      "size_bytes": 218964,
+      "sha256": "94f6802d0467882545f5c061b13b1f9eba4da0df800453c1a99b9e148250c6a2",
       "sha256_zip": "790f2b5ed6e8f7117cc32d20821bb399e8812559a63296af87a128954eae8ede"
     },
     {
@@ -1357,7 +133,7 @@
       "tar_gz": "isilon_usage-1.30.0.tar.gz",
       "zip": "isilon_usage-1.30.0.zip",
       "size_bytes": 218508,
-      "sha256": "bb5de9c01386b5bfd6ef9d7119375de4efdb9381b70cc3476fab6594a336ee05",
+      "sha256": "58a927e5f9fcda69ba410289f2ff66acd83e40eab45e112fd4aca44658c9f369",
       "sha256_zip": "cb6ae1dfc91dd3878e5bfbe20e3245e65339901f334d36f581f18d832234e8dd"
     },
     {
@@ -1365,8 +141,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.29.1.tar.gz",
       "zip": "isilon_usage-1.29.1.zip",
-      "size_bytes": 215874,
-      "sha256": "cead8426084de0c25beba29789d6ea83c029de632e32274c4f9f4c654f17db44",
+      "size_bytes": 215873,
+      "sha256": "f8c6af999ce921c8a003a633398ef6d0d04ca83f1cb4b921806fdda32452bad1",
       "sha256_zip": "699b07e229c3c280e24f223e641985ee887b0615466e94dbb513ab9c0edbfa61"
     },
     {
@@ -1374,8 +150,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.29.0.tar.gz",
       "zip": "isilon_usage-1.29.0.zip",
-      "size_bytes": 215032,
-      "sha256": "6eb4e4f07164712af11b63b2788fca86d904a843357631cedee5aa1dc6853794",
+      "size_bytes": 215039,
+      "sha256": "91441de94646a43f7e1a349d954cf5ccf854fb0ee8159b92f5fcbf1971cc7748",
       "sha256_zip": "10131bfe54c4b3f68971ac100c4eb797a77b8d079f945f673e6d9190eecdd239"
     },
     {
@@ -1383,8 +159,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.28.0.tar.gz",
       "zip": "isilon_usage-1.28.0.zip",
-      "size_bytes": 208183,
-      "sha256": "8b210cb62dc4a1b19c2d307186de862bbcf060406603ab9929279ff077073922",
+      "size_bytes": 208185,
+      "sha256": "18a45b6680762b8107d77235bbd1f58a44f0ddc5be47470c095ad0a4c13d5d7c",
       "sha256_zip": "8015597c0a43e738ddb9c8d1ca2d7d97620edf775983cd24fff73f22bab74a53"
     },
     {
@@ -1392,8 +168,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.27.1.tar.gz",
       "zip": "isilon_usage-1.27.1.zip",
-      "size_bytes": 205864,
-      "sha256": "d2f2539720cb8b7f501cdebd3cb251b474a57d76af5e0343e607f2fb31e88cdb",
+      "size_bytes": 205867,
+      "sha256": "373764d85cc418a816278d0ded5adfefbe90bf12399c40ae93889a05d6368eaa",
       "sha256_zip": "9dfb44b81f540cf98e651aa51705704b1ac381465e497f1d269922b88fa59e26"
     },
     {
@@ -1401,8 +177,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.27.0.tar.gz",
       "zip": "isilon_usage-1.27.0.zip",
-      "size_bytes": 204882,
-      "sha256": "6533bf6961e02160c00e05c1ea1c79d75ffb93c8c51ed6b7561ee73a0aa4613e",
+      "size_bytes": 204880,
+      "sha256": "80b4c1a9abb85e61a5a2485e5fe8b93506bb35478a9da09d210ea71fadb942f2",
       "sha256_zip": "f0a6dd987cc36b23292b55ab20c961d960dc1b19e32f155f1a14a6fe4cb8fdf2"
     },
     {
@@ -1410,8 +186,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.26.0.tar.gz",
       "zip": "isilon_usage-1.26.0.zip",
-      "size_bytes": 201833,
-      "sha256": "7add2872ef585d5f1885feb0e848daf8048b4806db239ea2a8f10311fa454b1f",
+      "size_bytes": 201842,
+      "sha256": "5eba4f3c91cc3f8fd17f4da7293c1d404e9d8788b7e4fc59445e0cf0546b4425",
       "sha256_zip": "f464917912e0de6e22665eb7550d43c8a60799efdb1738ddbc37679ba5a30333"
     },
     {
@@ -1419,8 +195,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.25.0.tar.gz",
       "zip": "isilon_usage-1.25.0.zip",
-      "size_bytes": 196027,
-      "sha256": "8e3839eb2ed0cb0366f5e852aeef2610152755fe72dc5abe64918e707cfedd13",
+      "size_bytes": 196026,
+      "sha256": "7c3524100f03db54c8a25f05096e4bf9bca80c95e94c3955d060cf9478508d3e",
       "sha256_zip": "96fd689f41188c1470dd7b12c85cc7bb82bc34f0428c9ee83088b3206f6f556a"
     },
     {
@@ -1428,8 +204,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.24.0.tar.gz",
       "zip": "isilon_usage-1.24.0.zip",
-      "size_bytes": 187269,
-      "sha256": "300eebbc15b70b241ef77369982cc5b3c8a54eecca6cc2b258165d4ea6aabf39",
+      "size_bytes": 187268,
+      "sha256": "a24e93049c2ce2353004859f6a4295273cd2baf3100ef310007793d93bdd4e52",
       "sha256_zip": "265758c9ecb12e33f692dab9e9049bc7f531cd48eeb6eb8b8b6611246984850a"
     },
     {
@@ -1437,8 +213,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.23.2.tar.gz",
       "zip": "isilon_usage-1.23.2.zip",
-      "size_bytes": 180323,
-      "sha256": "8d725afb6b5a96944c749f87d18014c1b919ae867df4c5bf4a9bfbd1851a76f4",
+      "size_bytes": 180320,
+      "sha256": "914bb5eed9463680c8b11c17e7e1854c7b861670e1f1ce5773e06d1f2a8cf136",
       "sha256_zip": "64a824b9cb39a82e982d54517670b609a6161c2642591728f58bb0f431294ad2"
     },
     {
@@ -1446,8 +222,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.23.1.tar.gz",
       "zip": "isilon_usage-1.23.1.zip",
-      "size_bytes": 177839,
-      "sha256": "520909084586452cb89e2c64ed633b89aee0c269e1125951b5d0610039721674",
+      "size_bytes": 177843,
+      "sha256": "65ad307ff401757e53c6f4f039162633b17c97cf41073c204d3864488ead9adb",
       "sha256_zip": "fef7dd241868e873ae8093c9b3f84d6dbd7688dfff2f4e3b5fceaedfb07c37bd"
     },
     {
@@ -1455,8 +231,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.23.0.tar.gz",
       "zip": "isilon_usage-1.23.0.zip",
-      "size_bytes": 177345,
-      "sha256": "6838113d6c1d50938ae79be85a0ee081eca1c5c0566c2d07dead1c4f88f00c82",
+      "size_bytes": 177352,
+      "sha256": "358753751b9d078de5b23713035ec88e68d47c343206dcecce55c48281005b31",
       "sha256_zip": "ceab05c0e9273ae366af0823b659a718572ad7a5c19d521675533f8ddb830200"
     },
     {
@@ -1464,8 +240,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.22.0.tar.gz",
       "zip": "isilon_usage-1.22.0.zip",
-      "size_bytes": 170391,
-      "sha256": "55b78c3c1ecb9b7f837dda4c60581420965f01c3a369c3a73cb0153aa65e7ee5",
+      "size_bytes": 170389,
+      "sha256": "6972f753d63f191a1f6bd70f91536f448e6fc024a2fb6a7376a60f9c7caa0952",
       "sha256_zip": "ab0168716b72cf76a80947d0e0f19bb4d1ab516302525e097b3a2b6cecc1cfea"
     },
     {
@@ -1473,8 +249,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.21.1.tar.gz",
       "zip": "isilon_usage-1.21.1.zip",
-      "size_bytes": 166148,
-      "sha256": "adb7454e75a814adb0ab5a54bb969a452a117f3866bc90ed7f797b9f6bef7391",
+      "size_bytes": 166144,
+      "sha256": "f7d4ee5ee8da965e955c6c5e8583f47db1bb1b8ac74675fe46b7341b0bb2e70f",
       "sha256_zip": "15d98ecb7eb1d15b4e0f758ba8fef11863ea55b28e8ba2ffe40835b62e41a37c"
     },
     {
@@ -1482,8 +258,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.21.0.tar.gz",
       "zip": "isilon_usage-1.21.0.zip",
-      "size_bytes": 165231,
-      "sha256": "117c0e740f486e8c53e5e7623c2a520248ff49d88e41a43d7542af9e2abf1970",
+      "size_bytes": 165233,
+      "sha256": "e0e0edd47dc13bdfe92c8751c76a3db13097600e71e0fe87650176c20bdf1c5f",
       "sha256_zip": "56cce475c3f37d6286d37c35c07752e2b83352b82b840b6a8895f86efd788235"
     },
     {
@@ -1491,8 +267,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.20.0.tar.gz",
       "zip": "isilon_usage-1.20.0.zip",
-      "size_bytes": 161687,
-      "sha256": "3a4dd80b7986a2199b6a28c8cdff363c3ffcf5010ea191809560a1fa2b923000",
+      "size_bytes": 161688,
+      "sha256": "320f72bf6f40a1870ac6f4199bf4035140eb12ef61a6e8ba9f5b7e0b2cc696c5",
       "sha256_zip": "f68f83b9714f0ac744e79376b02750ef1f270fe7f52648a04fbaf0c142176abd"
     },
     {
@@ -1500,8 +276,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.19.2.tar.gz",
       "zip": "isilon_usage-1.19.2.zip",
-      "size_bytes": 156445,
-      "sha256": "085a43cf082df2a9bcf5d84f9bb2dee36e3aae75beb77cd984f46637e9158781",
+      "size_bytes": 156441,
+      "sha256": "f4b7ae6665e9511ab688de3780ce5a9724c5e965fc0d10cfe4f00649b9040500",
       "sha256_zip": "b29a6b34e0c3159082fda71149cc0257a135299d35e9b8b26516bc4d98231d24"
     },
     {
@@ -1509,8 +285,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.19.1.tar.gz",
       "zip": "isilon_usage-1.19.1.zip",
-      "size_bytes": 155824,
-      "sha256": "43895a38129fbb47dd5729082f5c81a4b25079ddd6d9efc2cf4d1722fd3f0636",
+      "size_bytes": 155825,
+      "sha256": "ed9c92b380562b2cdde9ae19bfa20ee0a601a72e42d6b394ff5b756aeef0f66b",
       "sha256_zip": "5883deea0b81566bdabfdfdd83c6707ce9d9b7039e032019dd6f6a2fc014e55b"
     },
     {
@@ -1518,8 +294,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.19.0.tar.gz",
       "zip": "isilon_usage-1.19.0.zip",
-      "size_bytes": 155397,
-      "sha256": "ad0aa005f6f4f79e2a65ab782b8c613d47a008ed6eceebe2b9cf26c0fb1635b3",
+      "size_bytes": 155401,
+      "sha256": "4c473b42683758383446fecef796477922358678a36c12066ec1c043b60e9948",
       "sha256_zip": "ca3f7086b90366da4a0d20dcfee8e505733cc2e0151d7d3baac2f6c89354853f"
     },
     {
@@ -1527,8 +303,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.18.1.tar.gz",
       "zip": "isilon_usage-1.18.1.zip",
-      "size_bytes": 152760,
-      "sha256": "74a79a75fa04944ab66de0fe5738bf6953a45be63b2e7cc63ce9c7d40449f3d9",
+      "size_bytes": 152766,
+      "sha256": "9f9b9bad32a115f7a34bd2476c719a595c4d7811605fa2937ef12527d5573590",
       "sha256_zip": "93379f5e1b3e853caa0c128606441d39cf6e8334c5b5b1bc7283550d8befc66a"
     },
     {
@@ -1536,8 +312,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.18.0.tar.gz",
       "zip": "isilon_usage-1.18.0.zip",
-      "size_bytes": 151834,
-      "sha256": "6b2b749955580a433be1cc88f42906670f6eb7589635807eea8a74c0e9e11151",
+      "size_bytes": 151832,
+      "sha256": "52e93d6d4b751d0e134ffc921f3b3344d804fd1641f75eb672e6f0d597fe2887",
       "sha256_zip": "88a9393d0d26ba6491d18d50ed5f161d746ca349b247712b9f9f7603f527992b"
     },
     {
@@ -1545,8 +321,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.17.0.tar.gz",
       "zip": "isilon_usage-1.17.0.zip",
-      "size_bytes": 146715,
-      "sha256": "b2e463bbef41e00c1d13af96c8a42582496b847591ad3ee5a207fabdc3ee5304",
+      "size_bytes": 146722,
+      "sha256": "981f87a9f0a69947df36af7bcbacdd24dbede2bab9ff983d4911f11025d3c38a",
       "sha256_zip": "8a29f263a2b16192ed02f8a72d90e8e0ffff5e1473993750003c52c2b0623cb1"
     },
     {
@@ -1554,8 +330,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.16.1.tar.gz",
       "zip": "isilon_usage-1.16.1.zip",
-      "size_bytes": 142738,
-      "sha256": "a6a55a3274bfa2c262b6dae0ff085952cb954494d82fec58313cb827d36727c8",
+      "size_bytes": 142744,
+      "sha256": "07058c339fdafb9518eccec9061f475fa4210260b9a764b809a700e238d7f604",
       "sha256_zip": "bb1dbe2b7fc227c3590ac7f34b8241ad17960c96d8bc23e6ab9f50c5c4461da5"
     },
     {
@@ -1563,8 +339,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.16.0.tar.gz",
       "zip": "isilon_usage-1.16.0.zip",
-      "size_bytes": 140924,
-      "sha256": "2369280aeb402dc29856d7742fc9fa674b6e7cd69e60cde051dc462995ca6fee",
+      "size_bytes": 140928,
+      "sha256": "cccb9fb58a9799cf23a2ec4bee0a05f7b7d856db40d2d5917071b9304b912879",
       "sha256_zip": "0d4f48c1df485bed434bd2f634c6eaee0d57dd90c58a0ce20d64af6f6de8d4c9"
     },
     {
@@ -1572,8 +348,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.15.0.tar.gz",
       "zip": "isilon_usage-1.15.0.zip",
-      "size_bytes": 137056,
-      "sha256": "591e91b82f390e5dee08915196ce05c3ec0c37c6a8f490472a197eb8a6582cc0",
+      "size_bytes": 137055,
+      "sha256": "5c83eccd019af8d882175a235c7cb3e108452c1d9f8704beb510cfc74d740fbf",
       "sha256_zip": "5123b0bdb5750d4c038aadcf6ef5d513abc730b843df868c3a7f625e4ae93a04"
     },
     {
@@ -1582,7 +358,7 @@
       "tar_gz": "isilon_usage-1.14.0.tar.gz",
       "zip": "isilon_usage-1.14.0.zip",
       "size_bytes": 134520,
-      "sha256": "b395122a266796ec984185eefd9c839519aa08d2b87bd4682abf410f619716a5",
+      "sha256": "ec50ba526a1f4d6f266219d5f4224bbbe470f68adf6f4b36725ade2ba0b09ffa",
       "sha256_zip": "23f9ddd3006199ee4e8b7ac1b1b12f479509328ff7352203b7a22d7c8b047e8e"
     },
     {
@@ -1590,17 +366,17 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.13.0.tar.gz",
       "zip": "isilon_usage-1.13.0.zip",
-      "size_bytes": 130137,
-      "sha256": "368eba04da665cb570dfc4209e19bc7ce15601f256abaa335578d32b34a507d0",
-      "sha256_zip": "640e72d5b1ac1373fa5eeca9bfcd84dbbb51fcb442f457d8b0f12f13d535e559"
+      "size_bytes": 127880,
+      "sha256": "8cf9d43e50cef805b8d47190dfc9fea6947944e2971f23dee8af116cb3b6ee1b",
+      "sha256_zip": "5885e12e6d4c24af4082e7803e59ae20f123d264666112889cef3da619005844"
     },
     {
       "version": "1.12.0",
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.12.0.tar.gz",
       "zip": "isilon_usage-1.12.0.zip",
-      "size_bytes": 126871,
-      "sha256": "4c2c6e237dc30ae903d1a7de8623f77f169096a5841450498c0d2147f4794a05",
+      "size_bytes": 126873,
+      "sha256": "728ac69662a69b88554cd8014d77ba61c88e283b48d84f4c15f8f3737859f762",
       "sha256_zip": "32b5968c3b3c410ad70a771401fa172f2e2f7d7dc9b0b63106319592164f5c97"
     },
     {
@@ -1608,8 +384,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.11.0.tar.gz",
       "zip": "isilon_usage-1.11.0.zip",
-      "size_bytes": 122447,
-      "sha256": "df8a55f65f411776086a1bd36a99718d24fae6fbddb588b2c8f7a78083490983",
+      "size_bytes": 122446,
+      "sha256": "1c4689a86c47b28eaffe7b874fa003736919a7a758866b85207a2f80c7795096",
       "sha256_zip": "578c157759e264861371ad9ed6f760e17996ba1bfd2b6c5695f9d872f781ec4b"
     },
     {
@@ -1618,7 +394,7 @@
       "tar_gz": "isilon_usage-1.10.0.tar.gz",
       "zip": "isilon_usage-1.10.0.zip",
       "size_bytes": 119300,
-      "sha256": "bc4ba5155d00765e574b609a698a9362a68880ec4b36a2e32c7a3ab981fef0f5",
+      "sha256": "df84e2fb17501449cdc179aa839d8522436ec377ea2ea96f103538cc4d31da90",
       "sha256_zip": "f1f410319baee562f364cb50115d1561e5d4dc92e4a400df77ebee5213ce9436"
     },
     {
@@ -1626,8 +402,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.9.0.tar.gz",
       "zip": "isilon_usage-1.9.0.zip",
-      "size_bytes": 115434,
-      "sha256": "6e89ab1565f0bc269a153fcf13381c66ee382ec7c49ba26ff8b9b25b77d1819a",
+      "size_bytes": 115436,
+      "sha256": "0e26d6c8af60d55685a4d651f6f1afd30dc790a5579636ee1c9ae87d908352f0",
       "sha256_zip": "134d7f9da01dfd22b77233c7eaccdce299ccac553dc7e4d914eaf098911aa698"
     },
     {
@@ -1635,8 +411,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.8.1.tar.gz",
       "zip": "isilon_usage-1.8.1.zip",
-      "size_bytes": 114608,
-      "sha256": "198303dd9f7174e9cbfdd98d2ea7a8b2ef273a9a73d3f69ef36e2efcfc1f2ed4",
+      "size_bytes": 114610,
+      "sha256": "d26a6c1142dff24ccdc537b698ce2e5287f773239fab08bd779a8409fe5cd38a",
       "sha256_zip": "b27e3e6359544b7debf769317029c84947e10f50138c835b77c022c5f32acb6c"
     },
     {
@@ -1644,8 +420,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.8.0.tar.gz",
       "zip": "isilon_usage-1.8.0.zip",
-      "size_bytes": 114117,
-      "sha256": "b7b6dc163b16864de5b830bbec3dc4d9ba96cb7bf90c2d3a42d41c17df034b6a",
+      "size_bytes": 114121,
+      "sha256": "2bd3dbc778da568f09d2008dce8b7ff4a3b12c8401a1719baf82fd48dbdb00c9",
       "sha256_zip": "cea2126f4c9c7045826173390632d005d736c6bd23273cf66626b9ae5b08c385"
     },
     {
@@ -1653,8 +429,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.7.1.tar.gz",
       "zip": "isilon_usage-1.7.1.zip",
-      "size_bytes": 111291,
-      "sha256": "90593c6efabf0f1c8315e7cf2d5032c3fabc482be78a975cba878c56f46d8f96",
+      "size_bytes": 111294,
+      "sha256": "c01766e27bd45fbd63e11c5164dbed50fca1d21ac738f2c6cf13dd9c16731ae4",
       "sha256_zip": "50afc8d417c94e2a0944de8097538365b06507b915ff2dedbe5d0d3d5f80109e"
     },
     {
@@ -1662,8 +438,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.7.0.tar.gz",
       "zip": "isilon_usage-1.7.0.zip",
-      "size_bytes": 110705,
-      "sha256": "5531724b57dcf9fff6514fb822d0c3e4033897917be47d6993945bdbcd9e1cfa",
+      "size_bytes": 110707,
+      "sha256": "cc4269b3a10472d7def526f16b91a679abfddce7d2fc77208d6d00b1cdf0b77d",
       "sha256_zip": "7894d656142b4f51396feab849074034369a966c66fbec9e15024ab6b0bd3497"
     },
     {
@@ -1671,8 +447,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.6.0.tar.gz",
       "zip": "isilon_usage-1.6.0.zip",
-      "size_bytes": 107629,
-      "sha256": "e6b79de3423f68bb804f6e4346add3f37beaa812d691a231c6665103e6dd9498",
+      "size_bytes": 107634,
+      "sha256": "9347691e8e6defdd6517d838f47d8b79c6ee7debf381f012eff069ab41a275ef",
       "sha256_zip": "8027e6f7e25da2cc1ee2b0ddcb60c549a405f143798cd508bbed578eb6cab1a9"
     },
     {
@@ -1680,8 +456,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.5.0.tar.gz",
       "zip": "isilon_usage-1.5.0.zip",
-      "size_bytes": 105713,
-      "sha256": "7ef43bee76732d6f18be413550e2f42fa845e7b6b0348951753135beb36fe4d4",
+      "size_bytes": 105717,
+      "sha256": "a0e0a3aa3aa6dea58c038d4ba5dfe215c5cb7d406487c65882a1ff4ae92b1fd2",
       "sha256_zip": "114d8344aec2a7a71b0b05b867b33b533a01ca409d490982219439e107ee89ee"
     },
     {
@@ -1689,8 +465,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.4.2.tar.gz",
       "zip": "isilon_usage-1.4.2.zip",
-      "size_bytes": 104937,
-      "sha256": "aa67139951df89253d83f0feaa854027d8ee4545a91fa2d1e0e2fdd6b41db274",
+      "size_bytes": 104942,
+      "sha256": "757ec81fa620db26721d07eb855da2fc00160313543c62eed8ef542bfeb47d5f",
       "sha256_zip": "d7b2d58e715aa20c2def62fdd6412e7ac416887b0db80fb9ee3a562e2d074019"
     },
     {
@@ -1698,8 +474,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.4.1.tar.gz",
       "zip": "isilon_usage-1.4.1.zip",
-      "size_bytes": 104548,
-      "sha256": "78d882aa90ffc8e686cec1d74e5cb04f5aab3ec60c5e8efc0ceb15ceedfeaf9e",
+      "size_bytes": 104550,
+      "sha256": "45f0448a89084526dafda3918a0bc084c84534fbf72c4ff35d8c62ee5e22b681",
       "sha256_zip": "90161608fd2f7b578dbfbad06810117253175582ae1c605f10744c339bf496c6"
     },
     {
@@ -1707,8 +483,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.4.0.tar.gz",
       "zip": "isilon_usage-1.4.0.zip",
-      "size_bytes": 104155,
-      "sha256": "dfc766f858206a253bd8b047ccfe1411292c29c23c0624f75ffafc09a1c47cd8",
+      "size_bytes": 104157,
+      "sha256": "02b027352ad73e074bd70c13ade276d825a0cd15ec51f0cdcb81817c7f7cc91c",
       "sha256_zip": "8b02dd92309b36c3dc71733d240e52c20deffd4a2850338e4e36626371bd49cd"
     },
     {
@@ -1716,8 +492,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.3.1.tar.gz",
       "zip": "isilon_usage-1.3.1.zip",
-      "size_bytes": 101461,
-      "sha256": "b0e6fafeb620b0dcaafa65c875b4e8ca35b338a10acece230b9ccef0a2ca3b87",
+      "size_bytes": 101465,
+      "sha256": "96b4e607fea57df729de6eff3a6c7f5f269e0102ebf979e64d36adab78c593ac",
       "sha256_zip": "d6af4f4cd8b8b0e9475bf3200763b2b97373b029f3dd0bacb7b53c69609c9279"
     },
     {
@@ -1725,8 +501,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.3.0.tar.gz",
       "zip": "isilon_usage-1.3.0.zip",
-      "size_bytes": 98542,
-      "sha256": "36df7d66684a7a3bd7bb86a30914c14edf749474b99d4421728d4617ca89f8af",
+      "size_bytes": 98541,
+      "sha256": "ada62f5a719a53c6920b485a62b233bac8e38054db3be4032d6197107d9fb3b6",
       "sha256_zip": "5adfd9fe91c0e1ced0d2efe1d65883df23e6c467e56ee6222df91c099af53a87"
     },
     {
@@ -1735,7 +511,7 @@
       "tar_gz": "isilon_usage-1.2.0.tar.gz",
       "zip": "isilon_usage-1.2.0.zip",
       "size_bytes": 87828,
-      "sha256": "bd66c1ad3283790ce857e9a47a07cac59b94d999d5a2af5caf5e76d93b74d231",
+      "sha256": "50a71106c3c07f9eabdfd6279c78250c7b8a250edc9bfa0a5719cba87d16c1b9",
       "sha256_zip": "04db4e55b8d5c6dfa4f3425f2e76062b2f7b9dcc70bc6e5f8ef53cf4f0df631d"
     },
     {
@@ -1743,8 +519,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.1.9.tar.gz",
       "zip": "isilon_usage-1.1.9.zip",
-      "size_bytes": 77828,
-      "sha256": "606aaa1b9c5a011bbe2585d6a90f0fe9878a04c3822ae1ce75e6722d21d29050",
+      "size_bytes": 77830,
+      "sha256": "b74c7b6187a8f2b2b546faf32e0c5fbe1445842f50ca1bd273e0c8daa1089d3e",
       "sha256_zip": "a5d32d262b1a4318cdba61a0f3d7d9a664505251fad9b5347ad8bf252328e166"
     },
     {
@@ -1752,8 +528,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.1.8.tar.gz",
       "zip": "isilon_usage-1.1.8.zip",
-      "size_bytes": 77569,
-      "sha256": "842dff6d74a7ee81304ca9ddbf9e35a6f30c50f2e2e1516b9447c1b451de7357",
+      "size_bytes": 77571,
+      "sha256": "a3ad0a244e4179a68f5dbb256f25ffee6b465f2b811dd03aa134e3b96b2117e1",
       "sha256_zip": "16bc71729773985ccfde5440a64f07ff7bc4056a524bffa0b5f514e11ec1e8c7"
     },
     {
@@ -1761,8 +537,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.1.7.tar.gz",
       "zip": "isilon_usage-1.1.7.zip",
-      "size_bytes": 75228,
-      "sha256": "be728a12e8281125f46a50f6892c622061becebda4c8e2250d8779ee3e8695a7",
+      "size_bytes": 75229,
+      "sha256": "39707f206edda6d89a6deb7e1a4c0423c34f8c73b350d2114c8cc9852b2f711a",
       "sha256_zip": "ab63f6f68805a9ba633142b309df17b7a32ac59d9e8361a1be56854ebb7a06db"
     },
     {
@@ -1770,8 +546,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.1.6.tar.gz",
       "zip": "isilon_usage-1.1.6.zip",
-      "size_bytes": 71153,
-      "sha256": "d69eed0d833b33aff0a3ca2051bdf85a4a448ea3548ea720d3262762eb5f704b",
+      "size_bytes": 71156,
+      "sha256": "2220276d0b7f02a099a4bd8b7ebf9810f240d4312760442b5555494f21ac01ef",
       "sha256_zip": "a1663b3f0785fdf353306d0e4e668b1564d053b4493a2cabadec0ab2ce3b1f47"
     },
     {
@@ -1779,8 +555,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.1.5.tar.gz",
       "zip": "isilon_usage-1.1.5.zip",
-      "size_bytes": 69986,
-      "sha256": "0f5bd7458fa35c261366cf4a7bbba2e977014d0cbdd94afc63090e5d68c15251",
+      "size_bytes": 69988,
+      "sha256": "59aba0ca60e55cf9f8aa0524e511d293b783ce42aa7f89b217b5d98c7ababb8a",
       "sha256_zip": "34b6452e1bec16893d0226f592b17411ca6fce4b03b1f71e4acefaa56b3e8aa7"
     },
     {
@@ -1789,7 +565,7 @@
       "tar_gz": "isilon_usage-1.1.4.tar.gz",
       "zip": "isilon_usage-1.1.4.zip",
       "size_bytes": 66408,
-      "sha256": "941b55cfb6b79cf3b8a34624c1370e477ed6f49c7bc665e1032892a4620d8f0b",
+      "sha256": "e5e307fd66993c49d9b09a6776588bcd43149ec3c971b08d138ebeacc5256820",
       "sha256_zip": "5d2d0dd7ec74196dbef4c48f0de8f3bb22ddedc5aa166c1b138a9743cefedb44"
     },
     {
@@ -1797,8 +573,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.1.3.tar.gz",
       "zip": "isilon_usage-1.1.3.zip",
-      "size_bytes": 65075,
-      "sha256": "8436fd8556427e8b735332b3e15037e01bda2f6bfc2e4a2c9a972924fcab5d27",
+      "size_bytes": 65076,
+      "sha256": "25c12ef6b7e182e70b27f856d703110b00a42f44f7bf1ca7b3ee853dfa2efdf7",
       "sha256_zip": "8093745c81d8a5da3be84c9d6bd4f49602eb6236b24e712d6078a52c753261e9"
     },
     {
@@ -1806,8 +582,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.1.2.tar.gz",
       "zip": "isilon_usage-1.1.2.zip",
-      "size_bytes": 64987,
-      "sha256": "fcc592a37c0f9a36bb27163ec8be220c8b117db6fa5be888555f0a6ffa7d1019",
+      "size_bytes": 64988,
+      "sha256": "40db7a7d8defac0f37abb262d8856563091118c69422f2619de136ec7aa064e6",
       "sha256_zip": "20c37a2e94246ea60b71de4ad82492e3f4ccc119fd708746857cfacee40dbdd7"
     },
     {
@@ -1815,8 +591,8 @@
       "python": "Python 3.6+",
       "tar_gz": "isilon_usage-1.1.1.tar.gz",
       "zip": "isilon_usage-1.1.1.zip",
-      "size_bytes": 64037,
-      "sha256": "4620a26ad0ce9d6dad4066a3b168e7c3345f0a9af66a976b8a2116bd11f40751",
+      "size_bytes": 64038,
+      "sha256": "88340b5fa5ffc28429c83dff63ea3a02ca78e7a202a28e9ad45f889e2847f5a2",
       "sha256_zip": "c0772836d9afdf19d23f8cb8d99507de27c7420416b256e4fa313d67a9cf712d"
     },
     {

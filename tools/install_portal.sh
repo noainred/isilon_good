@@ -9,8 +9,8 @@
 # 사용:  sudo bash install_portal.sh [--port 8800] [--branch <git브랜치>]
 #                                    [--data-dir DIR] [--install-dir DIR] [--tmp-dir DIR]
 #                                    [--base-url <미러베이스>]
-#   기본 다운로드 소스는 사내(폐쇄망) 미러다. 다른 미러면 --base-url 로 베이스를 준다. 예:
-#     http://repository.dvc.lgensol.com:8081/repository/manager-upgrade/isilon_good/raw/<branch>
+#   기본 다운로드 소스는 사내(폐쇄망) 미러다(환경변수 IU_MIRROR_ROOT). 다른 미러면 --base-url 로 준다. 예:
+#     http://<사내-미러-호스트>/repository/manager-upgrade/isilon_good/raw/<branch>
 # =============================================================================
 set -euo pipefail
 
@@ -24,7 +24,7 @@ PORT="8800"                                # 포탈 포트
 SERVICE="isilon-portal"                    # systemd 서비스 이름
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"           # (선택) GitHub 비공개 저장소 토큰 — 미러를 쓰면 불필요
 REPO="noainred/isilon_good"                # 저장소 이름(미러 경로/토큰 모드에 사용)
-MIRROR_ROOT="http://repository.dvc.lgensol.com:8081/repository/manager-upgrade/isilon_good/raw"  # 폐쇄망 미러 루트
+MIRROR_ROOT="${IU_MIRROR_ROOT:-}"          # 사내 폐쇄망 미러 루트(회사 비공개 — 소스에 박지 않음). 환경변수 IU_MIRROR_ROOT 또는 --base-url 로 지정
 BASE_URL=""                                # 다운로드 베이스 직접 지정(비우면 미러: MIRROR_ROOT/BRANCH)
 
 # ===== 인자로 덮어쓰기 =====
@@ -42,7 +42,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-RAW_BASE="${BASE_URL:-$MIRROR_ROOT/$BRANCH}"   # 다운로드 베이스(기본=폐쇄망 미러)
+RAW_BASE="${BASE_URL:-$MIRROR_ROOT/$BRANCH}"   # 다운로드 베이스(--base-url 또는 환경변수 IU_MIRROR_ROOT/BRANCH)
+case "$RAW_BASE" in
+  http://*|https://*) ;;
+  *) echo "다운로드 베이스가 없습니다 — 환경변수 IU_MIRROR_ROOT 를 사내 미러 루트로 설정하거나 --base-url <URL> 을 주세요." >&2; exit 1;;
+esac
 
 echo "============================================================"
 echo " isilon_portal(HQ) 설치/업그레이드"

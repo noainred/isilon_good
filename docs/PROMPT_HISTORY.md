@@ -422,7 +422,7 @@
      (자동 재동기화=enroll-on-startup 은 별도 제안.)
 
 175. (폐쇄망 setup.sh가 1.36.0+isilon_usage.service 옛버전 깔림) + 폐쇄망 미러 주소 제시
-     (repository.dvc.lgensol.com:8081/repository/manager-upgrade/isilon_good/raw/<branch>/...) → 이 기준으로
+     (<사내-미러-호스트>/repository/manager-upgrade/isilon_good/raw/<branch>/...) → 이 기준으로
      install 스크립트 만들어줘 + 포탈 스크립트로 적절히 → install_edge.sh·install_portal.sh 기본
      다운로드 베이스를 사내 미러로(MIRROR_ROOT/BRANCH), --base-url 옵션, github.com+토큰일 때만
      API 경로(폴백), 배너 '소스' 표시, 실패 안내 미러 기준. bash -n + URL 구성 검증. v1.69.3.
