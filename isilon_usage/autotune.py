@@ -26,6 +26,11 @@ def _label(p: int, t: int) -> str:
     return "%d프로세스 × %d스레드" % (p, t)
 
 
+# 서버 온디맨드 오토튜닝이 측정하는 고정 단계(사용자 지정):
+#   단일 → 8프로세스 → 8프로세스×8스레드 → 16프로세스 → 16프로세스×8스레드 → 32프로세스.
+DEFAULT_LADDER: List[Tuple[int, int]] = [(1, 1), (8, 1), (8, 8), (16, 1), (16, 8), (32, 1)]
+
+
 def default_candidates(max_procs: int = 8, max_threads: int = 8) -> List[Tuple[int, int]]:
     """측정할 (프로세스, 스레드) 조합 — 단일 기준선 + 프로세스만 + 2단 병렬."""
     p = max(1, int(max_procs))

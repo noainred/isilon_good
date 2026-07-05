@@ -1293,10 +1293,6 @@ class ScanController:
                               "then_scan": bool(then_scan), "secs": secs,
                               "started_at": time.time()}
         stop_event = self._autotune_stop
-        maxp = max(1, int(self.settings.get("scan_workers", 8) or 8))
-        maxt = max(1, int(self.settings.get("pscan_threads", 8) or 8))
-        if maxt < 2:
-            maxt = 8     # 측정에선 2단 병렬도 시험(설정이 1이어도)
         size_mode = self.settings.get("default_size_mode", "disk")
 
         def _prog(p):
@@ -1317,8 +1313,9 @@ class ScanController:
             scan_id = None
             try:
                 from . import autotune as atmod
+                # 측정 단계는 고정 사다리(단일·8p·8p×8t·16p·16p×8t·32p)를 쓴다.
                 r = atmod.autotune(path, secs=secs, size_mode=size_mode,
-                                   max_procs=maxp, max_threads=maxt,
+                                   candidates=atmod.DEFAULT_LADDER,
                                    stop_event=stop_event, on_progress=_prog)
             except Exception as exc:  # noqa: BLE001
                 r = {"ok": False, "error": "오토튜닝 오류: %s" % exc}
