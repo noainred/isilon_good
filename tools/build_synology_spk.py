@@ -5,8 +5,8 @@
 실제 DSM 장비 없이 만들 수 있으나, 아래 두 가지는 실기기에서 확인 필요(스크립트가 견고하게 처리하지만):
   1) python3 위치 — DSM 7.2 는 시스템 python3 가 없을 수 있어, Package Center 의 'Python 3.9'
      패키지가 필요할 수 있다(start-stop-status 가 여러 경로를 탐색하고 없으면 안내 로그를 남긴다).
-  2) 공유폴더(/volumeX) 읽기 — 스캐너가 NAS 를 걸으려면 읽기 권한이 필요해 run-as root 로 둔다
-     (본인 소유 NAS 의 사내/개인 용도 전제. 미서명 패키지라 수동 설치 시 DSM 이 신뢰 확인을 요구).
+  2) 공유폴더(/volumeX) 읽기 — DSM7 이 써드파티 root 실행을 막으므로 샌드박스 사용자(run-as package)로
+     돈다. 스캔할 공유폴더는 그 사용자(sc-isilon_usage)에게 읽기 권한을 줘야 한다(docs/SYNOLOGY.md).
 
 출력: download/synology/isilon_usage-<version>.spk
 
@@ -150,7 +150,10 @@ case "$1" in
 esac
 """.replace("__PORT__", str(PORT))
 
-PRIVILEGE = '{\n  "defaults": { "run-as": "root" }\n}\n'
+# DSM 7 은 써드파티(수동설치) 패키지의 run-as root 를 차단한다("루트 권한으로 실행 중이므로 설치할 수
+# 없습니다"). 그래서 샌드박스 사용자(sc-isilon_usage)로 실행한다. 공유폴더 스캔은 그 사용자에게 읽기
+# 권한을 줘야 한다(docs/SYNOLOGY.md 참고). 포트 8765(>1024)·데이터 폴더 쓰기는 이 권한으로 충분하다.
+PRIVILEGE = '{\n  "defaults": { "run-as": "package" }\n}\n'
 
 LICENSE = ("Copyright (c) 2026 Park Junho. All rights reserved. "
            "Proprietary — unauthorized reproduction or distribution is prohibited.\n")
