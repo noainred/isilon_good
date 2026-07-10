@@ -146,6 +146,9 @@ sudo systemctl restart isilon-portal                          # 포탈만 재시
 
 ## systemd 가 없는 환경
 
+> 컨테이너/어플라이언스라면 **Docker([docs/DOCKER.md](DOCKER.md))** 또는 **Synology .spk([docs/SYNOLOGY.md](SYNOLOGY.md))**
+> 로 상시 운영하는 편이 더 간단합니다. 아래는 systemd 도 컨테이너도 없을 때의 방법입니다.
+
 ```bash
 # nohup (가장 간단) — 세션 끊겨도 유지
 cd /opt/isilon_edge

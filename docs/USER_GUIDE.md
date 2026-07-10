@@ -1,14 +1,17 @@
-# Isilon 디렉터리 사용량 스캐너 — 사용 설명서
+# The Davinci NAS Management — 사용 설명서
 
-버전 1.55.0 기준(DB 스키마 9). 이 문서는 설치부터 운영까지 전체 사용법을 다룹니다.
+버전 **1.99.23** 기준(DB 스키마 9). 정식 명칭은 *Isilon 디렉터리 사용량 스캐너*이며, 화면(대시보드·포탈)에는
+**The Davinci NAS Management** 로 표시됩니다. 이 문서는 설치부터 운영까지 전체 사용법을 다룹니다.
 **처음이라면 → [처음 시작하기(초보자 가이드)](GETTING_STARTED.md)** 부터 보세요.
-간단 요약은 [README](../README.md), 변경 이력은 [CHANGELOG](../CHANGELOG.md) 참고.
+간단 요약은 [README](../README.md), 변경 이력은 [CHANGELOG](../CHANGELOG.md), 컨테이너/시놀로지는
+[Docker](DOCKER.md)·[Synology](SYNOLOGY.md) 참고.
 
-> **최근 주요 추가:** 🔬 **오토튜닝**(새 스캔 시 최적 프로세스×스레드를 실측해 자동 시작 —
-> 4.5장), **2단 병렬 엔진**(pscan: 프로세스×스레드로 GIL 우회·NFS 왕복 지연 은닉, 적응형 깊이
-> 분할 — 4.4장), **bench_walk**(실 NAS 동시성 측정 도구), 스캔 회차별 소요 시간·결과 이력,
-> 글로벌 통합 포탈·네트워크/인프라 모니터링. 이전: 화면 분리, 예약 스캔(반복주기), 안전장치
-> (깊이 접기·DB 가드), 분석 리포트(나이/소유자/확장자/최대 파일/예측/변화).
+> **최근 주요 추가(요약):** 🔬 **오토튜닝**(고정 6단 사다리 — 단일·8p·8p×8t·16p·16p×8t·32p 를 실측해
+> 최적 자동 시작 — 4.5장), **2단 병렬 엔진**(pscan — 4.4장), **💬 자연어 질의응답**(규칙 엔진+선택적 로컬 LLM),
+> **🔧 트러블슈팅**(스캔 구간 프로파일)·**📈 처리량 추이**, **🧩 추가 기능**(🧬 중복 파일 찾기·❄ 콜드데이터 이동
+> 계획·폴더 atime 조회), **튜닝 점검(tunecheck)**·**대상 분석(analyze)**, **🌐 한/영 UI 토글**, 스토리지 어레이
+> 7종(Isilon/PowerStore/Unity/PowerMax/VMAX/XtremIO/VPLEX), **Docker·Synology(.spk) 배포**,
+> 글로벌 통합 포탈·네트워크/인프라 모니터링. (자세한 신기능 목록은 13장.)
 
 ## 목차
 1. [소개](#1-소개)
@@ -23,7 +26,7 @@
 10. [문제 해결(FAQ)](#10-문제-해결faq)
 11. [용어집](#11-용어집)
 12. [글로벌 통합 포탈 (HQ)](#12-글로벌-통합-포탈-hq)
-13. [최근 추가 기능 요약 (1.1~1.7)](#13-최근-추가-기능-요약-1117)
+13. [화면 구성 · 주요 기능 요약](#13-화면-구성--주요-기능-요약)
 
 ---
 
@@ -91,7 +94,7 @@ python3 -m pip install -r requirements.txt      # 온라인
 
 ### 2.4 설치 확인
 ```bash
-python3 -m isilon_usage --version       # isilon_usage 1.0.0 (schema 1)
+python3 -m isilon_usage --version       # isilon_usage 1.99.23 (schema 9)
 python3 -m isilon_usage version         # 상세 환경 정보
 python3 tests/test_scanner.py           # "모든 테스트 통과 ✅"
 python3 tests/test_manager.py
@@ -475,7 +478,7 @@ python3 -m isilon_usage --version
 ## 7. 데이터·파일 구조
 
 ```
-<data-dir>/                  (기본 ./isilon_data, --data-dir 로 변경)
+<data-dir>/                  (기본 /data/isilon_usage, --data-dir 로 변경)
 ├── manager.db              관리 DB — 모든 스캔 요약 + 전체 용량 집계
 ├── settings.json           웹에서 편집하는 런타임 설정(재시작에도 유지)
 └── scans/
@@ -495,8 +498,8 @@ tools/make_tree.py   tests/   docs/USER_GUIDE.md   README.md   CHANGELOG.md
 
 ## 8. 버전 관리
 
-- **앱 버전**: `isilon_usage/__init__.py` 의 `__version__` (현재 `1.55.0`).
-  `--version`/`version` 으로 확인, 대시보드 헤더에 `v1.55.0` 으로 표시.
+- **앱 버전**: `isilon_usage/__init__.py` 의 `__version__` (현재 `1.99.23`).
+  `--version`/`version` 으로 확인, 대시보드 헤더에 `v1.99.23` 으로 표시.
 - **데이터 버전**: 각 스캔에 그 스캔을 만든 앱 버전(`app_version`)이 DB 에 기록됩니다.
 - **스키마 버전**: 각 DB 의 `PRAGMA user_version` 에 기록(현재 `9`). 구버전 DB 는
   열 때 누락 컬럼을 자동 보강합니다.
@@ -520,15 +523,16 @@ tools/make_tree.py   tests/   docs/USER_GUIDE.md   README.md   CHANGELOG.md
 `/etc/systemd/system/isilon-edge.service`:
 ```ini
 [Unit]
-Description=Isilon 디렉터리 사용량 대시보드
-After=network.target remote-fs.target
+Description=Isilon 디렉터리 사용량 스캐너 대시보드
+After=network.target remote-fs.target local-fs.target
+RequiresMountsFor=/data/isilon_usage
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/isilon_good
+WorkingDirectory=/opt/isilon_edge
 ExecStart=/usr/bin/python3 -m isilon_usage serve \
-          --data-dir /var/lib/isilon_usage --mount-base /mnt/isilon \
+          --data-dir /data/isilon_usage --mount-base /mnt/isilon \
           --host 0.0.0.0 --port 8765
 Restart=on-failure
 RestartSec=5
@@ -537,7 +541,7 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 ```bash
-mkdir -p /var/lib/isilon_usage
+mkdir -p /data/isilon_usage /opt/isilon_edge
 systemctl daemon-reload
 systemctl enable --now isilon-edge
 journalctl -u isilon-edge -f
@@ -738,20 +742,30 @@ HQ 주소는 포탈 접속 주소로 자동 채워지며, 코드 디렉터리/�
 
 ## 13. 화면 구성 · 주요 기능 요약
 
-- **상단 탭**: **Summary / 디렉터리 / 추세·비교 / 📊 분석 리포트 / ⚙ 설정 /
-  🧪 테스트 데이터 / 📖 버전 기록**.
-  - Summary: 자원(메모리·측정 프로세스·CPU/디스크) + 전체 용량 관리 개요 + 진행 + 요약
-    (DB 생존 지표·하트비트·로그/DB 디스크 여유·재개 누적/세션 시간 포함)
-  - 디렉터리: 디스크 사용량 **파이**(클릭 드릴다운) + **용량 상위 디렉터리**(깊이 선택·정렬·드릴) + 드릴다운 트리
-  - 추세·비교: 용량 추세 + 스캔 비교(diff) + 오류 디렉터리
-  - 📊 분석 리포트: 파일 나이(콜드)·소유자·확장자·**최대 파일 Top**·**용량 소진 예측**·**변화 Top**
+- **상단 탭(11개)**: **🏠 Summary / 🧭 대상 분석 / 🔧 트러블슈팅 / 📈 처리량 추이 / 📉 추세·비교 /
+  📊 분석 리포트 / 📁 디렉터리 분석 / 📋 스캔 이력 / ⚙ 설정 / 🧩 추가 기능 / 🧪 테스트 데이터**.
+  (**📖 버전 기록·자동 업그레이드**는 ⚙ 설정 안의 서브탭으로 이동.)
+  - 🏠 Summary: 자원(메모리·측정 프로세스·CPU/디스크) + 전체 용량 관리 개요 + 진행 + 요약
+    (DB 생존 지표·하트비트·로그/DB 디스크 여유·재개 누적/세션 시간 포함) + 스캔 시작(🔬 오토튜닝 토글)
+  - 🧭 대상 분석(analyze): 풀스캔 전 깊이 구조만 빠르게 측정 → fold-depth 사전 결정
+  - 🔧 트러블슈팅: 실행 중 스캔이 지금 어느 구간(readdir/stat/합산/DB쓰기/유휴)에 있는지 프로파일 + 병목 처방 + 하트비트
+  - 📈 처리량 추이: 버킷별 처리 용량/파일/디렉터리(files/s 추이)
+  - 📉 추세·비교: 용량 추세 + 스캔 비교(diff) + 오류 디렉터리
+  - 📊 분석 리포트: 파일 나이(**mtime·atime**)·소유자·확장자·**크기별 분포**·**최대 파일 Top**·**용량 소진 예측**·**변화 Top**
+  - 📁 디렉터리 분석: 디스크 사용량 **파이/트리맵**(클릭 드릴다운) + **용량 상위 디렉터리**(깊이 선택·정렬·드릴) + 검색
+  - 📋 스캔 이력: 회차(#)별 소요 시간·결과
+  - 🧩 추가 기능: 폴더 **atime 라이브 조회** · **🧬 중복 파일 찾기**(내용 해시·회수 가능 용량) · **❄ 콜드데이터 이동 계획**(스크립트·롤백 생성, 조회 전용) · **💬 자연어 질의응답**
   - 🧪 테스트 데이터: 샘플 디렉터리/파일 생성기(진행 막대)
 - **예약 스캔 반복주기**: "시작 + 반복주기" 모델 — 분/시간/일/주(시작 요일)/개월(x월 x일부터).
 - **초대용량 안전장치**: 깊이 접기·최대 깊이·DB 크기 가드·디스크 여유 자동 일시정지·WAL 체크포인트.
 - **병렬/튜닝**: `⚡ Multi Scan N Thread` + 워커별 현재 디렉터리, 권장 스레드(사양+실측 보정).
-- **통합/모니터링**: 글로벌 통합 포탈(HQ)·스토리지 어레이 상태(Isilon/PowerStore 등, **아이실론 활성 알람**)·Prometheus `/metrics`.
-- **보안**: 작업 보호 비밀번호(보기는 자유, 작업은 비밀번호 — 10초 자동입력), 설정 잠금.
+- **통합/모니터링**: 글로벌 통합 포탈(HQ) + **네트워크/인프라 모니터링**(HQ→노드 Ping·1년 이력)·스토리지 어레이
+  상태(**Isilon/PowerStore/Unity/PowerMax/VMAX/XtremIO/VPLEX**, **아이실론 활성 알람**)·Prometheus `/metrics`.
+- **진단/튜닝**: 🔧 트러블슈팅(구간 프로파일)·📈 처리량 추이·튜닝 점검(tunecheck — NFS nconnect/sysctl)·대상 분석(analyze).
+- **국제화**: 🌐 한↔영 UI 토글(`/i18n.js`, 엣지·포탈 공유).
+- **배포**: systemd(install_edge/portal.sh, `IU_MIRROR_ROOT`/`--base-url`) · **Docker**([DOCKER.md](DOCKER.md)) · **Synology .spk**([SYNOLOGY.md](SYNOLOGY.md)).
+- **보안**: 작업 보호 비밀번호(PBKDF2, 보기는 자유·작업은 비밀번호), 감사 로그(audit), 설정 잠금, 자동 업그레이드 SHA-256 무결성 검증.
 - **고아 스캔 정리**: 서버 재시작 시 죽은 스캔(상태가 '탐색중'으로 남은 것)을 자동 '일시정지'.
 
-> 버전별 상세 변경점은 **[CHANGELOG.md](../CHANGELOG.md)** 를 보세요(현재 v1.55.0, 스키마 9).
+> 버전별 상세 변경점은 **[CHANGELOG.md](../CHANGELOG.md)** 를 보세요(현재 v1.99.23, 스키마 9).
 - **진행 중 안내**: 탐색 단계에서는 집계 전이라 재귀 용량 등이 임시값임을 배너로 안내.

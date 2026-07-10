@@ -1028,4 +1028,14 @@
      6행 자동. 라이브러리 default_candidates·테스트 불변. 측정시간 3→6단(~2배), 32p 는 오버서브면 느리게
      실측(튜너 자동 선택). ruff·17/17. v1.99.23. 테스트 릴리스 v1.99.22(기능無)는 직전.
 
+283. (전체 소스 분석 → 문서 전체 업데이트) 병렬 에이전트 3개(소스 인벤토리 + 문서감사 2조)로 1.99.23
+     대비 stale 진단 후 8개 문서 갱신. 확정: 스키마는 여전히 9(버전 문자열만 갱신). README: data-dir 기본
+     ./isilon_data→/data/isilon_usage(자기모순 버그), CLI에 analyze·tunecheck 추가, 아키텍처 트리 14개
+     모듈 보강, 탭 11개로 교체, 기능 한눈에 신기능(ask/dups/coldtier/atime/트러블슈팅/처리량/i18n/audit)
+     추가, Docker/Synology 링크·미러(IU_MIRROR_ROOT) 안내. USER_GUIDE: 헤더 1.55.0→1.99.23·탭·리포트
+     (atime/크기분포)·스토리지 7종·systemd 예시 정정. PERFORMANCE: 오토튜닝 6단 사다리 표+버전. SECURITY:
+     SHA-256 무결성 검증(감시폴더 vs URL/미러 구분)·XSS 강점 추가·라인번호. TROUBLESHOOTING: 인앱 🔧 탭
+     우선 안내+pscan 중지불가. GETTING_STARTED/INSTALL/SERVICE: 탭표·버전기록 경로·Docker/Synology·systemd
+     경로 정정. 브랜딩 "The Davinci NAS Management"로 통일(정식명 병기). 링크 무결·버그패턴 0 검증. 문서 전용(버전 범프 없음).
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

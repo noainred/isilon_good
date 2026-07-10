@@ -96,7 +96,7 @@ python3 -m pip install --no-index --find-links wheels psutil
 
 ---
 
-## 4. 설치 방법 C — 패키지 설치 / Docker
+## 4. 설치 방법 C — 패키지 / Docker / Synology
 
 ### pip 패키지(콘솔 명령 `isilon-usage`)
 ```bash
@@ -104,7 +104,7 @@ pip install .            # 또는  pip install .[monitor]  (psutil 포함)
 isilon-usage --version
 ```
 
-### Docker
+### Docker (표준 라이브러리라 pip 불필요 · 폐쇄망/오프라인 빌드 가능)
 ```bash
 docker build -t isilon-usage .
 docker run -d -p 8765:8765 \
@@ -112,13 +112,25 @@ docker run -d -p 8765:8765 \
     isilon-usage serve --data-dir /data --mount-base /mnt/isilon \
     --host 0.0.0.0 --port 8765
 ```
+자세히(compose · 오프라인 `save`/`load` · 사내 베이스): **[docs/DOCKER.md](DOCKER.md)**.
+
+### Synology (DSM 7.x · .spk)
+```bash
+python3 tools/build_synology_spk.py      # → download/synology/isilon_usage-<버전>.spk
+```
+Package Center → **수동 설치**로 올리면 포트 8765에서 뜹니다(noarch, run-as package 샌드박스).
+공유폴더 읽기 권한 부여 등 자세히: **[docs/SYNOLOGY.md](SYNOLOGY.md)**.
+
+> **폐쇄망 자동 설치(엣지/포탈)**: `tools/install_edge.sh`·`install_portal.sh` 의 다운로드 소스는
+> 사내 미러가 기본입니다 — `IU_MIRROR_ROOT=<미러> sudo -E bash install_edge.sh …` 또는
+> `--base-url <미러>`(토큰 불필요). 공개 GitHub 경로를 쓸 때만 PAT 이 필요합니다.
 
 ---
 
 ## 5. 설치 확인
 
 ```bash
-python3 -m isilon_usage --version        # isilon_usage 1.x.x (schema 9)
+python3 -m isilon_usage --version        # isilon_usage 1.99.23 (schema 9)
 python3 -m isilon_usage version          # 상세 환경(파이썬·psutil 유무 등)
 python3 tests/test_scanner.py            # "모든 테스트 통과 ✅"
 python3 tests/test_autotune.py           # 오토튜닝 측정 코어 확인
@@ -194,18 +206,20 @@ python3 -m isilon_usage portal --data-dir /var/lib/isilon_portal --port 8800
 
 ## 8. 서비스로 상시 운영 (systemd)
 
-`/etc/systemd/system/isilon-edge.service`:
+실제 배포 유닛은 저장소의 **`packaging/isilon-edge.service`**(설치 스크립트가 그대로 사용)를 기준으로 하세요.
+아래는 그와 같은 값의 개념 예시입니다 — `/etc/systemd/system/isilon-edge.service`:
 ```ini
 [Unit]
-Description=Isilon 디렉터리 사용량 대시보드
-After=network.target remote-fs.target
+Description=Isilon 디렉터리 사용량 스캐너 대시보드
+After=network.target remote-fs.target local-fs.target
+RequiresMountsFor=/data/isilon_usage
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/isilon_good
+WorkingDirectory=/opt/isilon_edge
 ExecStart=/usr/bin/python3 -m isilon_usage serve \
-          --data-dir /var/lib/isilon_usage --mount-base /mnt/isilon \
+          --data-dir /data/isilon_usage --mount-base /mnt/isilon \
           --host 0.0.0.0 --port 8765
 Restart=on-failure
 RestartSec=5
