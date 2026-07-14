@@ -26,6 +26,29 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.99.24] - 2026-07-14
+
+### 바뀜 (Changed) — 깊이 접기(fold) 기본값 4 · 포탈 전체노드 스캔에 깊이 선택 추가
+
+- **깊이 접기(fold_depth) 기본값 0 → 4.** 사용자가 깊이를 지정하지 않으면 깊이 4까지만 디렉터리 상세를
+  저장하고 그 아래는 용량만 합산한다(합계는 정확, DB 행 수 축소). 전체 상세가 필요하면 0으로 두면 된다.
+  웹 설정(`settings.fold_depth`)·CLI `--fold-depth` 모두 기본 4. **기존에 0을 명시 저장한 노드는 그대로 0 유지**
+  (미지정/신규만 4). — `settings.py`, `cli.py`.
+- **포탈 ‘전체 노드 스캔 시작’ 툴바에 ‘깊이(fold)’ 입력 추가.** 비우면 각 노드 설정값, 숫자를 주면 이번 일괄
+  스캔만 그 깊이로 오버라이드(0=전체 상세). ‘오토튜닝’ 선택 시에는 노드 설정값을 쓴다(안내 표시). — `portal.html`.
+- **엣지 `start_scan`/`_launch`에 per-scan `fold_depth` 오버라이드 추가**(설정을 바꾸지 않고 이번 스캔만 적용).
+  `/api/scan/start`·`/api/portal/node-scan-all`이 `fold_depth`를 받도록 배선. — `server.py`, `portal.py`.
+- 검증: fold=2 스캔이 DB 최대 depth=2 로 접히고 접힌 용량은 정확히 합산됨(28672B) 확인. 17/17 테스트·ruff·JS 통과.
+
+### 참고 — 업그레이드/재시작 시 진행 중 스캔 자동 재개(이미 구현됨, 재확인)
+
+- 업그레이드·서비스 재시작(systemctl/재부팅/설치 스크립트)·인앱 업그레이드 시 **진행 중이던 스캔을 마커
+  파일로 기억했다가 새 프로세스 시작 시 자동 재개**하는 기능은 이미 구현·배선돼 있음(startup `_resume_after_upgrade`,
+  SIGTERM `_mark_running_scans_for_resume`, 인앱 `_restart_for_upgrade`). native=부분 재개(이어서), pscan=부분
+  재개가 없어 처음부터 재스캔. 기존 회귀 테스트(`_check_resume_after_upgrade`·`_check_resume_real`) 통과로 재확인.
+
+---
+
 ## [1.99.22] - 2026-07-02
 
 ### 기타 (Chore) — 테스트/배포 검증용 릴리스

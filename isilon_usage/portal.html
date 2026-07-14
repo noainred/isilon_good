@@ -316,6 +316,8 @@ tbody tr{ transition:background .12s; }
           <option value="threads">threads(스레드·상세, 중지/재개 가능)</option>
           <option value="pscan">pscan(멀티프로세스·빠름, 중지 불가)</option>
         </select></label>
+      <label style="display:inline-flex; align-items:center; gap:5px;" title="깊이 접기(fold) — N까지만 디렉터리 상세를 저장하고 그 아래는 용량만 합산합니다(합계는 정확). 0=전체 상세. 비우면 각 노드의 설정값(기본 4)을 사용. ‘오토튜닝’ 선택 시에는 노드 설정값을 씁니다.">깊이(fold)
+        <input id="scanAllFold" class="inp" type="number" min="0" max="100" step="1" placeholder="노드설정" style="width:72px; padding:3px 6px;"></label>
       <span class="sub">진행 중 노드:</span>
       <label style="display:inline-flex; align-items:center; gap:5px;"><input type="radio" name="scanAllBusy" value="skip" checked> 안 하는 노드만</label>
       <label style="display:inline-flex; align-items:center; gap:5px;"><input type="radio" name="scanAllBusy" value="restart"> 멈추고 다시 시작</label>
@@ -1652,12 +1654,16 @@ async function scanAllNodes(){
   const ofs=$("scanAllOFS").checked;
   const engine=($("scanAllEngine")&&$("scanAllEngine").value)||"auto";
   const auto=engine==="auto";
+  const foldRaw=(($("scanAllFold")&&$("scanAllFold").value)||"").trim();
+  const fold=foldRaw===""?null:Math.max(0,Math.min(100000,parseInt(foldRaw,10)||0));
   const busyEl=document.querySelector('input[name="scanAllBusy"]:checked');
   const restart=!!(busyEl && busyEl.value==="restart");
   const msg=$("scanAllMsg");
   const engLabel=auto?"오토튜닝(최적 자동)":engine;
+  const foldLabel=fold===null?"노드 설정값":(fold===0?"전체 상세":("깊이 "+fold+"까지"));
   const summary="전체 노드를 ‘마지막 스캔 경로’로 다시 스캔 시작합니다.\n\n"
     + "• 엔진: "+engLabel+"\n"
+    + "• 깊이(fold): "+foldLabel+(auto&&fold!==null?" (오토튜닝은 노드 설정값 사용)":"")+"\n"
     + "• 한 파일시스템(-x): "+(ofs?"적용":"미적용")+"\n"
     + "• 진행 중 노드: "+(restart?"멈추고 다시 시작":"건너뜀(작업 안 하는 노드만)")+"\n\n"
     + ((engine==="pscan"||auto)?("⚠ pscan(멀티프로세스)은 시작 후 중간에 멈출 수 없습니다"+(auto?"(오토튜닝이 pscan 을 고를 수 있음)":"")+".\n"):"")
@@ -1668,7 +1674,7 @@ async function scanAllNodes(){
   try{
     const j=await (await fetch("/api/portal/node-scan-all",{method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({one_file_system:ofs, autotune:auto, engine:engine, restart_busy:restart})})).json();
+      body:JSON.stringify({one_file_system:ofs, autotune:auto, engine:engine, restart_busy:restart, fold_depth:fold})})).json();
     if(!j.ok){ msg.textContent="실패: "+(j.reason||"오류 — 로그인이 필요할 수 있습니다"); return; }
     const rs=j.results||[];
     msg.innerHTML=`✓ ${j.count}/${j.total} 노드 시작 — `

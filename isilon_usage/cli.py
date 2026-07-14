@@ -52,9 +52,9 @@ def _add_scan_opts(p: argparse.ArgumentParser) -> None:
                    help="동시 스캔 스레드 수(디렉터리 병렬, NFS 가속, 기본: %(default)s)")
     p.add_argument("--max-depth", type=int, default=0,
                    help="탐색 최대 깊이(0=무제한, 빠른 컷). 그 아래 용량은 합계에서 빠짐")
-    p.add_argument("--fold-depth", type=int, default=0,
-                   help="깊이 접기(0=끔). 깊이 N까지만 행 저장, 그 아래는 용량만 N에 "
-                        "합산 → DB 크기 묶임 + 합계 정확(N 아래 디렉터리별 상세는 없음)")
+    p.add_argument("--fold-depth", type=int, default=4,
+                   help="깊이 접기(기본 4, 0=끔). 깊이 N까지만 행 저장, 그 아래는 용량만 N에 "
+                        "합산 → DB 크기 묶임 + 합계 정확(N 아래 디렉터리별 상세는 없음). 전체 상세는 --fold-depth 0")
     p.add_argument("--db-max-gb", type=int, default=0,
                    help="per-run DB(.db+-wal)가 이 GB 초과하면 자동 일시정지(0=끔)")
     p.add_argument("--min-free-gb", type=int, default=0,

@@ -1596,11 +1596,17 @@ class ScanController:
     def start_scan(self, path: str, *, backend=None, size_mode=None,
                    one_file_system=None, engine=None,
                    processes=None, threads=None, confirm_outside=False,
-                   auto_restart=False) -> dict:
+                   auto_restart=False, fold_depth=None) -> dict:
         path = os.path.abspath(path)
         ok, err = self.scan_path_check(path, confirm_outside)
         if not ok:
             return err
+        # fold_depth: None 이면 설정 기본값(fold_depth)을 쓰고, 주면 이번 스캔만 그 값으로 오버라이드
+        if fold_depth is not None:
+            try:
+                fold_depth = max(0, min(100000, int(fold_depth)))
+            except (TypeError, ValueError):
+                fold_depth = None
         # 지정하지 않은 옵션은 설정의 기본값을 사용
         if backend is None:
             backend = self.settings.get("default_backend", "native")
@@ -1642,7 +1648,7 @@ class ScanController:
                 "one_file_system": bool(one_file_system), "engine": engine,
                 "auto_restart": bool(auto_restart),
                 "workers": int(getattr(self, "workers", None) or self.settings.get("scan_workers", 8) or 8),
-                "fold_depth": int(self.settings.get("fold_depth", 0) or 0),
+                "fold_depth": int(fold_depth if fold_depth is not None else (self.settings.get("fold_depth", 4) or 0)),
                 "max_depth": int(self.settings.get("scan_max_depth", 0) or 0),
                 "db_max_gb": int(self.settings.get("db_max_gb", 0) or 0),
                 "min_free_gb": int(self.settings.get("min_free_gb", 0) or 0),
@@ -1658,16 +1664,20 @@ class ScanController:
                                processes=processes, threads=threads)
         else:
             self._launch(scan_id, db_path, path, backend, size_mode,
-                         one_file_system, resume=False)
+                         one_file_system, resume=False, fold_depth=fold_depth)
         return {"ok": True, "scan_id": scan_id, "db_path": db_path,
                 "root_path": path, "backend": backend, "size_mode": size_mode,
                 "engine": engine, "processes": processes, "threads": threads,
                 "mount_readonly": readonly}
 
     def _launch(self, scan_id, db_path, path, backend, size_mode,
-                one_file_system, *, resume: bool) -> None:
-        """워커 스레드에서 스캔을 실행하고, 끝나면 알림/보존 정리를 수행한다."""
+                one_file_system, *, resume: bool, fold_depth=None) -> None:
+        """워커 스레드에서 스캔을 실행하고, 끝나면 알림/보존 정리를 수행한다.
+
+        fold_depth: None 이면 설정값(fold_depth)을, 값이 주어지면 이번 스캔만 그 값으로 오버라이드.
+        """
         stop = threading.Event()
+        eff_fold = int(self.settings.get("fold_depth", 4) or 0) if fold_depth is None else int(fold_depth)
 
         def worker():
             try:
@@ -1678,7 +1688,7 @@ class ScanController:
                     batch_size=self.batch_size, workers=self.workers,
                     check_readonly=bool(self.settings.get("check_readonly", True)),
                     max_depth=int(self.settings.get("scan_max_depth", 0) or 0),
-                    fold_depth=int(self.settings.get("fold_depth", 0) or 0),
+                    fold_depth=eff_fold,
                     db_max_bytes=int(self.settings.get("db_max_gb", 0) or 0) * (1024 ** 3),
                     hardlink_dedup=bool(self.settings.get("hardlink_dedup", True)),
                     min_free_bytes=int(self.settings.get("min_free_gb", 0) or 0) * (1024 ** 3),
@@ -3119,6 +3129,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     engine=body.get("engine"),
                     confirm_outside=bool(body.get("confirm_outside")),
                     auto_restart=bool(body.get("auto_restart")),
+                    fold_depth=body.get("fold_depth"),   # None 이면 노드 설정값 사용
                 )
                 self._send_json(result, status=200 if result.get("ok") else 400)
                 return

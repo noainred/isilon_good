@@ -1038,4 +1038,12 @@
      우선 안내+pscan 중지불가. GETTING_STARTED/INSTALL/SERVICE: 탭표·버전기록 경로·Docker/Synology·systemd
      경로 정정. 브랜딩 "The Davinci NAS Management"로 통일(정식명 병기). 링크 무결·버그패턴 0 검증. 문서 전용(버전 범프 없음).
 
+284. (업그레이드/재시작 시 진행중 스캔 자동재개 + depth 기본4 + 포탈 depth 메뉴) A: 자동재개는 이미 완전
+     구현·배선(_resume_after_upgrade startup / _mark_running_scans_for_resume SIGTERM / _restart_for_upgrade
+     인앱; native 부분재개·pscan 재스캔)이고 테스트도 존재 → 회귀 통과로 재확인. B: fold_depth 기본 0→4
+     (settings.py DEFAULTS+sanitize, cli.py --fold-depth; 명시 0 저장 노드는 유지). C: 포탈 전체노드 스캔
+     툴바에 깊이(fold) 입력 추가 → node-scan-all→node_scan payload.fold_depth→엣지 /api/scan/start→
+     start_scan/_launch per-scan 오버라이드(설정 불변). 오토튜닝 경로는 노드 설정값. 검증: fold=2 스캔이 DB
+     max depth=2 로 접히고 접힌 용량 정확 합산, 17/17·ruff·JS. D(설명): du 관련 답변은 채팅으로. v1.99.24.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

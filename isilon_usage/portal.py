@@ -2075,7 +2075,8 @@ class PortalController:
 
     # --- 원격 스캔 시작(마지막 스캔과 동일 경로) ---
     def node_scan(self, node_id: str, *, one_file_system=None,
-                  autotune=False, restart_busy=False, engine=None) -> dict:
+                  autotune=False, restart_busy=False, engine=None,
+                  fold_depth=None) -> dict:
         """온라인·미스캔 노드를 '마지막 스캔과 동일한 경로'로 다시 스캔 시작한다.
 
         마지막 루트는 캐시(overall.roots)에서 scan_id 가 가장 큰(=최근) 루트의 root_path.
@@ -2121,6 +2122,11 @@ class PortalController:
             payload["engine"] = engine
         if one_file_system is not None:
             payload["one_file_system"] = bool(one_file_system)
+        if fold_depth is not None and not autotune:   # 깊이 접기 오버라이드(직접 스캔 경로에만; 오토튜닝 스캔은 노드 설정값)
+            try:
+                payload["fold_depth"] = max(0, min(100000, int(fold_depth)))
+            except (TypeError, ValueError):
+                pass
         res = self._edge_post(node, endpoint, payload, timeout=30)
         if res.get("ok"):
             return {"ok": True, "node": node_id, "path": path,
@@ -2129,14 +2135,15 @@ class PortalController:
                 "reason": res.get("reason") or "엣지가 스캔 시작을 거부했습니다."}
 
     def node_scan_all(self, *, one_file_system=None, autotune=False,
-                      restart_busy=False, engine=None) -> dict:
+                      restart_busy=False, engine=None, fold_depth=None) -> dict:
         """등록된(활성) 노드 전체에 '마지막 경로' 스캔을 시작하고 노드별 결과를 모은다."""
         with self._lock:
             ids = [n["id"] for n in self.nodes if n.get("enabled", True)]
         results = []
         for nid in ids:
             r = self.node_scan(nid, one_file_system=one_file_system,
-                               autotune=autotune, restart_busy=restart_busy, engine=engine)
+                               autotune=autotune, restart_busy=restart_busy, engine=engine,
+                               fold_depth=fold_depth)
             results.append({"id": nid, "ok": bool(r.get("ok")),
                             "reason": r.get("reason") or ""})
         ok = sum(1 for r in results if r["ok"])
@@ -2742,7 +2749,8 @@ class PortalHandler(BaseHTTPRequestHandler):
                     one_file_system=body.get("one_file_system"),
                     autotune=bool(body.get("autotune")),
                     engine=body.get("engine"),
-                    restart_busy=bool(body.get("restart_busy"))))
+                    restart_busy=bool(body.get("restart_busy")),
+                    fold_depth=body.get("fold_depth")))
                 return
             if path == "/api/portal/node-password":   # 노드 작업 비밀번호 설정/변경/해제(포탈→엣지)
                 self._send_json(c.set_node_password(
