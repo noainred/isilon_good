@@ -1492,16 +1492,20 @@ class ScanController:
                 now = time.time()
                 if prog and prog["status"] in ("discovering", "sizing", "running"):
                     prev = self._rate_prev
+                    # 집계(sizing) 단계엔 discovered 가 멈춘다 — 집계 완료 수의
+                    # 델타를 디렉터리/초로 기록해 24시간 차트가 끊기지 않게 한다.
+                    dirs_now = (prog.get("processed") or 0) \
+                        if prog.get("phase") == "sizing" else prog["discovered"]
                     if prev and prev[0] == prog["scan_id"]:
                         dt = now - prev[1]
                         if dt >= 1:
-                            rd = max(0, prog["discovered"] - prev[2]) / dt
+                            rd = max(0, dirs_now - prev[2]) / dt
                             rf = max(0, prog["files"] - prev[3]) / dt
                             rb = max(0, prog["bytes"] - prev[4]) / dt   # 처리 용량(B/s)
                             with self._rate_lock:
                                 troubmod.append_rate_sample(
                                     self.data_dir, now, rd, rf, rb, prog["scan_id"])
-                    self._rate_prev = (prog["scan_id"], now, prog["discovered"],
+                    self._rate_prev = (prog["scan_id"], now, dirs_now,
                                        prog["files"], prog["bytes"])
                 else:
                     self._rate_prev = None
@@ -2115,6 +2119,34 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # noqa: D401
         pass
 
+    # 느린 요청만 기록 — 어떤 폴링/조회가 스캔(집계)과 DB·GIL 을 다투는지 실측용.
+    # 임계 0.3초: 정상 폴링은 수십 ms, 그 이상은 개선 후보(무거운 쿼리)다.
+    SLOW_REQ_SEC = 0.3
+
+    def _log_slow(self, method: str, t0: float) -> None:
+        elapsed = time.time() - t0
+        if elapsed >= self.SLOW_REQ_SEC:
+            try:
+                sys.stderr.write("[http] 느린 요청 %.0fms %s %s\n"
+                                 % (elapsed * 1000, method, self.path))
+                sys.stderr.flush()
+            except Exception:
+                pass
+
+    def do_GET(self) -> None:  # noqa: N802
+        t0 = time.time()
+        try:
+            self._do_GET()
+        finally:
+            self._log_slow("GET", t0)
+
+    def do_POST(self) -> None:  # noqa: N802
+        t0 = time.time()
+        try:
+            self._do_POST()
+        finally:
+            self._log_slow("POST", t0)
+
     def _send_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
         try:
@@ -2299,7 +2331,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         return hmac.compare_digest(str(given).encode("utf-8", "ignore"),
                                    str(tok).encode("utf-8", "ignore"))
 
-    def do_GET(self) -> None:  # noqa: N802
+    def _do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
         qs = parse_qs(parsed.query)
@@ -3077,7 +3109,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._audit("op_password_push", bool(res.get("ok")), res.get("reason") or "")
         self._send_json(res, status=200 if res.get("ok") else 400)
 
-    def do_POST(self) -> None:  # noqa: N802
+    def _do_POST(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
         if self.controller is None:
@@ -3297,6 +3329,16 @@ def serve(data_dir: str, host: str = "0.0.0.0", port: int = 8765, *,
     lock_settings=True 이면 웹에서 설정 편집을 막는다.
     httpd.controller 로 컨트롤러에 접근한다.
     """
+    # 정체 시 현장 진단용: kill -USR1 <pid> 로 전체 스레드의 파이썬 스택을
+    # stderr(journalctl)에 덤프한다 — py-spy 없이 "지금 어느 줄에서 도는지" 확인.
+    try:
+        import faulthandler
+        import signal as _signal
+        if hasattr(_signal, "SIGUSR1"):
+            faulthandler.register(_signal.SIGUSR1, all_threads=True)  # novermin
+    except Exception:
+        pass
+
     mgrmod.init_manager(data_dir)
     if initial_settings:
         setmod.seed_if_absent(data_dir, initial_settings)

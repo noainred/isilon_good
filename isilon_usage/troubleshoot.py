@@ -78,10 +78,9 @@ def worker_snapshot():
 
 
 def _row(conn):
-    cur = conn.execute(
-        "SELECT root_path, status, phase, discovered_dirs, total_dirs, processed_dirs, "
-        "total_files, error_dirs, updated_at, active_workers, workers, current_dir, "
-        "worker_dirs FROM scan_runs ORDER BY id LIMIT 1")
+    # SELECT * — 구버전 per-run DB 에 없는 컬럼(agg_rate 등)이 있어도 깨지지 않게
+    # 있는 것만 dict 로 받는다(없으면 .get() 이 None).
+    cur = conn.execute("SELECT * FROM scan_runs ORDER BY id LIMIT 1")
     r = cur.fetchone()
     return dict(r) if r is not None else None
 
@@ -375,6 +374,12 @@ def diagnose(controller, *, sample_sec: float = 1.2) -> dict:
     agg_total = (r2.get("total_dirs") or 0) or discovered
     agg_pct = (agg_done / agg_total * 100.0) if agg_total else 0.0
     rate_agg = max(0, agg_done - (r1.get("processed_dirs") or 0)) / sample
+    # 스캐너 자체 측정(scan_runs.agg_rate)이 있으면 우선한다 — 1.2초 표본이 일괄
+    # UPDATE 윈도우 커밋 사이에 걸리면 진행 중인데도 0/초(정체 오인)로 보인다.
+    try:
+        rate_agg = max(rate_agg, float(r2.get("agg_rate") or 0.0))
+    except (TypeError, ValueError):
+        pass
 
     db_bytes = _size(db_path)
     wal_bytes = _size(db_path + "-wal")
@@ -575,6 +580,7 @@ def latest_progress(data_dir):
         return None
     return {"scan_id": sid, "discovered": row["discovered_dirs"] or 0,
             "files": row["total_files"] or 0, "bytes": row["scanned_bytes"] or 0,
+            "processed": row["processed_dirs"] or 0, "phase": row["phase"],
             "status": row["status"]}
 
 

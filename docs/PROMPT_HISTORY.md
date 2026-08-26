@@ -1046,4 +1046,17 @@
      start_scan/_launch per-scan 오버라이드(설정 불변). 오토튜닝 경로는 노드 설정값. 검증: fold=2 스캔이 DB
      max depth=2 로 접히고 접힌 용량 정확 합산, 17/17·ruff·JS. D(설명): du 관련 답변은 채팅으로. v1.99.24.
 
+285. (정체구간 찾아줘 [+이미지: 집계 44%·0/초·CPU BAD·WAL 622MB] + 개선방안 + 어떤 로그를 기록하면
+     개선 포인트를 찾을 수 있는지) 진단: 정체구간은 scanner._aggregate 의 행 단위 파이썬 루프(디렉터리
+     43만 개 × SELECT SUM+UPDATE, 단일 스레드·GIL)이고, 레벨 전체를 여는 read_conn 커서가 30초 주기
+     wal_checkpoint(TRUNCATE) 를 막아 WAL 622MB(DB 131MB) — 43만 행 재현 벤치로 동일 시그니처 재현
+     (85MB DB→WAL 435MB). 개선(측정으로 확정): 레벨별 상관 서브쿼리 일괄 UPDATE + id 윈도우 5만 커밋
+     + cache 64MB + wal_autocheckpoint 25000(기본 1000 이면 커밋마다 백필 — 되레 느려짐 23.7k행/초)
+     = 27.9k→158.4k 행/초(5.7배)·WAL 86MB, 결과 3방식 완전 일치. du 백엔드는 키셋 페이지네이션으로
+     커서만 제거. 로그 설계: scan_log 테이블+stderr(집계 시작/depth별 행수·행/초·WAL/종료, ckpt busy
+     범인 특정), scan_runs.agg_rate(EMA — 1.2초 표본이 윈도우 사이면 0/초 오인 해소, 차트·24h 표본도
+     sizing 중 집계 델타), HTTP 0.3s+ 슬로우 로그, kill -USR1 faulthandler 스택덤프. 스키마 v10.
+     회귀 테스트 run_sizing_window_case(윈도우 경계·집계 중단→재개·os.walk 참조 대조) 추가.
+     12/17 테스트(5건은 Windows 박스 기존 statvfs/resource 비호환 — 기준선 동일 확인)·ruff. v1.99.25.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

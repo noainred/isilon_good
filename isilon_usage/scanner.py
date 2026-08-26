@@ -38,6 +38,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 
@@ -63,6 +64,16 @@ STAT_KEY_CAP = 5000
 
 # 최대 파일 Top-N(힙으로 유지) — 메모리 약 N×(경로 길이) 수준
 TOP_FILES_N = 200
+
+# --- 집계(2단계) 일괄 UPDATE 튜닝 — 43만 행 재현 벤치로 확정(행 루프 27.9k → 158.4k 행/초) ---
+# id 윈도우 폭: 윈도우마다 커밋해 하트비트·일시정지·재개(status='done')가 유지된다.
+AGG_WINDOW = 50000
+# 집계 중 페이지 캐시(KB): 기본 2MB 는 수십만 행의 자식 합 조회에 너무 작다(측정 1.4배 차).
+AGG_CACHE_KB = 64 * 1024
+# WAL 자동 체크포인트 간격(페이지): 기본 1000 이면 윈도우 커밋마다 백필이 돌아
+# 되레 행 루프보다 느려진다(측정 23.7k 행/초 → 상향 시 158.4k). 30초 주기의
+# wal_checkpoint(TRUNCATE) 가 별도로 WAL 크기를 계속 눌러 준다.
+AGG_AUTOCKPT_PAGES = 25000
 
 
 def _age_bucket(ref: float, mtime: float) -> str:
@@ -217,10 +228,37 @@ class Scanner:
         self._scanned_bytes = 0
         self._total_files = 0
         self._error_dirs = 0
+        # 집계(sizing) 행/초 자체 측정 — (마지막 flush 시각, 그때의 완료 수) + EMA
+        self._agg_mark: Optional[Tuple[float, int]] = None
+        self._agg_rate = 0.0
 
     # ------------------------------------------------------------------ utils
     def _stopped(self) -> bool:
         return self.stop_event.is_set()
+
+    def _wal_mb(self) -> float:
+        """per-run DB 의 현재 WAL 파일 크기(MB). 없으면 0."""
+        try:
+            return os.path.getsize(self.db_path + "-wal") / 1e6
+        except OSError:
+            return 0.0
+
+    def _log(self, msg: str, conn=None) -> None:
+        """진단 로그 한 줄 — stderr(journalctl)와 per-run DB(scan_log) 양쪽에 남긴다.
+
+        병목을 추측이 아니라 실측으로 찾기 위한 기록. 실패해도 스캔에 영향 없어야 한다.
+        conn 을 주면 scan_log 에도 저장(커밋은 스캔의 주기 커밋에 얹혀 간다).
+        """
+        try:
+            sys.stderr.write("[scan#%s %s] %s\n" % (self.run_id, self._phase, msg))
+            sys.stderr.flush()
+        except Exception:
+            pass
+        if conn is not None:
+            try:
+                dbmod.add_scan_log(conn, self.run_id, self._phase, msg)
+            except Exception:
+                pass
 
     def _statvfs(self) -> Tuple[int, int, int]:
         """대상 경로가 속한 파일시스템의 (total, used, free) 바이트."""
@@ -288,6 +326,17 @@ class Scanner:
         if status is not None:
             fields["status"] = status
             self._status = status
+        if self._phase == "sizing":
+            # 집계 행/초를 스캐너가 직접 측정해 기록 — 진단 API 의 1.2초 표본이
+            # 윈도우 커밋 사이에 걸리면 0/초로 보이는 문제를 보완(EMA 로 완만하게).
+            if self._agg_mark is not None:
+                dt = now - self._agg_mark[0]
+                if dt > 0:
+                    inst = max(0.0, (self._processed - self._agg_mark[1]) / dt)
+                    self._agg_rate = (
+                        0.6 * self._agg_rate + 0.4 * inst) if self._agg_rate else inst
+            self._agg_mark = (now, self._processed)
+            fields["agg_rate"] = round(self._agg_rate, 1)
         dbmod.update_run(conn, self.run_id, **fields)
         conn.commit()
         # 집계 리포트(나이/소유자/확장자)를 주기적으로 저장(재개 안전).
@@ -299,7 +348,14 @@ class Scanner:
         if (now - self._last_wal_ckpt) > 30.0:
             self._last_wal_ckpt = now
             try:
-                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                r = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                # 반환 (busy, WAL 프레임, 백필 프레임). busy=1 이 반복되면 긴 읽기
+                # 스냅샷(대시보드 조회/열린 커서)이 WAL 잘라내기를 막고 있는 것 —
+                # 622MB WAL 사태의 범인을 로그로 특정할 수 있게 남긴다.
+                if r is not None and int(r[0]):
+                    self._log("wal_checkpoint busy: %d/%d 프레임만 백필 — 긴 읽기가 "
+                              "WAL 잘라내기를 막음 (WAL %.1fMB)"
+                              % (int(r[2]), int(r[1]), self._wal_mb()), conn)
             except Exception:
                 pass
             # 디스크 여유 가드: 데이터 디스크가 부족하면 깨지기 전에 자동 일시정지(체크포인트 직후 확인)
@@ -618,6 +674,14 @@ class Scanner:
         dbmod.update_run(conn, self.run_id, **fields)
         conn.commit()
         self._write_stats(conn)   # 집계 리포트 최종 저장
+        self._log("종료: status=%s, 처리 %s개, 오류 %s개, 활성 %.0f초, WAL %.1fMB"
+                  % (status, f"{self._processed:,}", f"{self._error_dirs:,}",
+                     self._elapsed_accum, self._wal_mb()), conn)
+        try:
+            dbmod.prune_scan_log(conn, self.run_id)
+            conn.commit()
+        except Exception:
+            pass
         self._update_manager(force=True, finished=True)
 
     # ------------------------------------------------------------- 1단계: 탐색
@@ -941,51 +1005,149 @@ class Scanner:
 
     # --------------------------------------------------------- 2단계: 상향식 집계
     def _aggregate(self, conn) -> None:
-        """가장 깊은 레벨부터 0 까지, 레벨별로 재귀 용량을 집계한다."""
+        """가장 깊은 레벨부터 0 까지, 레벨별로 재귀 용량을 집계한다.
+
+        native 백엔드는 레벨을 id 윈도우로 잘라 SQL 일괄 UPDATE 로 처리한다 —
+        디렉터리마다 파이썬에서 SELECT+UPDATE 를 돌리던 행 루프가 집계 단계의
+        병목(1코어 포화·GIL)이었다(43만 행 재현 벤치 27.9k → 158.4k 행/초).
+        SQL 실행 중엔 GIL 이 풀려 대시보드 응답도 같이 좋아진다.
+        du 백엔드만 디렉터리별 du 실행이 필요해 행 루프를 유지한다.
+
+        예전 구현이 레벨 전체를 여는 read_conn 커서를 유지해 30초 주기
+        wal_checkpoint(TRUNCATE) 를 막았고 WAL 이 DB 의 몇 배(622MB 사례)로
+        부풀었다 — 지금은 긴 읽기 스냅샷 자체가 없다.
+        """
         self._status = "sizing"; self._phase = "sizing"
         dbmod.update_run(conn, self.run_id, status="sizing", phase="sizing")
         conn.commit()
         self._update_manager(force=True)   # 매니저 DB 도 '집계 중'으로 즉시 반영(self._status 동기화)
 
         row = conn.execute(
-            "SELECT COALESCE(MAX(depth),0) AS d FROM directories WHERE run_id=?",
+            "SELECT COALESCE(MAX(depth),0) AS d, "
+            "       COALESCE(SUM(CASE WHEN status!='done' THEN 1 ELSE 0 END),0) AS remain "
+            "FROM directories WHERE run_id=?",
             (self.run_id,),
         ).fetchone()
         max_depth = int(row["d"])
 
-        read_conn = dbmod.connect(self.db_path)
         du_path = shutil.which("du") if self.backend == "du" else None
         if self.backend == "du" and not du_path:
             # du 가 없으면 native 로 폴백
             self.backend = "native"
 
+        # 집계 튜닝(이 연결에만 적용): 페이지 캐시 상향 + 자동 체크포인트 간격 상향.
+        # 기본 자동 체크포인트(1000페이지)는 윈도우 커밋마다 백필을 돌려 되레 느리다.
         try:
-            for depth in range(max_depth, -1, -1):
-                if self._stopped():
-                    break
-                cur = read_conn.execute(
-                    """SELECT id, path, own_bytes, file_count FROM directories
-                       WHERE run_id=? AND depth=? AND status!='done'
-                       ORDER BY path ASC""",
-                    (self.run_id, depth),
-                )
-                while True:
-                    if self._stopped():
-                        break
-                    chunk = cur.fetchmany(self.batch_size)
-                    if not chunk:
-                        break
-                    for r in chunk:
-                        if self._stopped():
-                            break
-                        self._aggregate_one(conn, r, depth, du_path)
-                    conn.commit()
-                    self._flush_progress(conn)
+            conn.execute("PRAGMA cache_size=-%d" % AGG_CACHE_KB)
+            conn.execute("PRAGMA wal_autocheckpoint=%d" % AGG_AUTOCKPT_PAGES)
+        except Exception:
+            pass
+
+        self._agg_mark = None
+        self._agg_rate = 0.0
+        self._log("집계 시작: 대상 %s개(최대 깊이 %d), 백엔드 %s, WAL %.1fMB"
+                  % (f"{int(row['remain']):,}", max_depth,
+                     "du" if du_path else "native", self._wal_mb()), conn)
+        try:
+            if du_path is not None:
+                self._aggregate_du(conn, max_depth, du_path)
+            else:
+                self._aggregate_native(conn, max_depth)
             self._flush_progress(conn, force=True, current_dir=None)
         finally:
-            read_conn.close()
             if self.monitor is not None:
                 self.monitor.set_du_pid(None)
+
+    def _aggregate_native(self, conn, max_depth: int) -> None:
+        """레벨(깊이)별 일괄 UPDATE — 자식 합산을 전부 SQLite C 코드에서 수행.
+
+        윈도우(id 범위)마다 커밋하므로 하트비트가 살아 있고, 일시정지·강제종료
+        후에도 status='done' 기준으로 이어서 재개된다(기존과 동일한 재개 규약).
+        """
+        # (run_id, depth, rowid) 인덱스 범위 탐색을 강제 — 플래너가 다른 인덱스를
+        # 고르면 윈도우마다 레벨 전체를 훑게 된다. 인덱스가 없는 비정상 DB 에서만
+        # 힌트 없는 동일 쿼리로 폴백한다.
+        sql = """UPDATE directories INDEXED BY idx_dir_run_depth
+                 SET total_bytes = own_bytes + COALESCE((
+                         SELECT SUM(c.total_bytes) FROM directories c
+                         WHERE c.run_id=directories.run_id
+                           AND c.parent_id=directories.id), 0),
+                     total_files = file_count + COALESCE((
+                         SELECT SUM(c.total_files) FROM directories c
+                         WHERE c.run_id=directories.run_id
+                           AND c.parent_id=directories.id), 0),
+                     status='done', scanned_at=?
+                 WHERE run_id=? AND depth=? AND status!='done'
+                   AND id>=? AND id<?"""
+        for depth in range(max_depth, -1, -1):
+            if self._stopped():
+                break
+            bound = conn.execute(
+                "SELECT MIN(id) AS lo, MAX(id) AS hi FROM directories "
+                "WHERE run_id=? AND depth=? AND status!='done'",
+                (self.run_id, depth)).fetchone()
+            if bound["lo"] is None:
+                continue   # 이 레벨은 전부 완료(재개) 또는 없음
+            lo, hi = int(bound["lo"]), int(bound["hi"])
+            t_level = time.time()
+            n_level = 0
+            w = lo
+            while w <= hi:
+                if self._stopped():
+                    break
+                try:
+                    cur = conn.execute(sql, (time.time(), self.run_id, depth,
+                                             w, w + AGG_WINDOW))
+                except Exception:
+                    sql = sql.replace(" INDEXED BY idx_dir_run_depth", "")
+                    cur = conn.execute(sql, (time.time(), self.run_id, depth,
+                                             w, w + AGG_WINDOW))
+                n_level += cur.rowcount
+                self._processed += cur.rowcount
+                w += AGG_WINDOW
+                conn.commit()   # 윈도우 단위 커밋 → 하트비트/일시정지/재개 유지
+                self._flush_progress(conn, current_depth=depth)
+            el = time.time() - t_level
+            self._log("집계 depth %d: %s행 %.1fs (%s행/초), WAL %.1fMB"
+                      % (depth, f"{n_level:,}", el,
+                         f"{int(n_level / el):,}" if el > 0 else "-",
+                         self._wal_mb()), conn)
+
+    def _aggregate_du(self, conn, max_depth: int, du_path: str) -> None:
+        """du 백엔드: 디렉터리마다 시스템 du 를 돌려야 해 행 단위 루프를 유지.
+
+        키셋(id>마지막) 페이지네이션으로 배치마다 읽기 스냅샷을 닫는다 — 레벨
+        전체를 여는 커서가 WAL 체크포인트를 막던 문제(WAL 부풀림)를 없앤다.
+        """
+        for depth in range(max_depth, -1, -1):
+            if self._stopped():
+                break
+            t_level = time.time()
+            n_level = 0
+            last_id = -1
+            while True:
+                if self._stopped():
+                    break
+                rows = conn.execute(
+                    """SELECT id, path, own_bytes, file_count FROM directories
+                       WHERE run_id=? AND depth=? AND status!='done' AND id>?
+                       ORDER BY id ASC LIMIT ?""",
+                    (self.run_id, depth, last_id, self.batch_size)).fetchall()
+                if not rows:
+                    break
+                for r in rows:
+                    if self._stopped():
+                        break
+                    self._aggregate_one(conn, r, depth, du_path)
+                last_id = int(rows[-1]["id"])
+                n_level += len(rows)
+                conn.commit()
+                self._flush_progress(conn)
+            el = time.time() - t_level
+            if n_level:
+                self._log("집계(du) depth %d: %s행 %.1fs (%.1f행/초), WAL %.1fMB"
+                          % (depth, f"{n_level:,}", el,
+                             (n_level / el) if el > 0 else 0.0, self._wal_mb()), conn)
 
     def _aggregate_one(self, conn, row, depth: int, du_path: Optional[str]) -> None:
         dir_id = row["id"]

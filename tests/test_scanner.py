@@ -327,8 +327,101 @@ def run_stop_resume_case() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def run_sizing_window_case() -> None:
+    """집계 '레벨별 일괄 UPDATE(id 윈도우)' 회귀 가드.
+
+    행 루프 → 일괄 UPDATE 교체(1.99.25) 후에도 ① 윈도우 경계와 무관하게 모든
+    디렉터리의 재귀 합이 os.walk 참조와 정확히 같고, ② 집계 도중 중단돼도
+    status='done' 규약으로 재개·완주하고, ③ scan_log 진단 로그가 남아야 한다.
+    """
+    from isilon_usage import scanner as scmod
+    d = tempfile.mkdtemp(prefix="iu_aggwin_")
+    old_window = scmod.AGG_WINDOW
+    try:
+        tree = os.path.join(d, "tree")
+        for a in range(4):                     # 3레벨 + 빈/중간 디렉터리 혼합
+            for b in range(3):
+                p = os.path.join(tree, "d%d" % a, "s%d" % b)
+                os.makedirs(p)
+                for f in range(b + 1):
+                    _write(os.path.join(p, "f%d.bin" % f), 700 * (f + 1) + a)
+            os.makedirs(os.path.join(tree, "d%d" % a, "empty"))
+        _write(os.path.join(tree, "r.bin"), 1234)
+
+        def _blocks(st):
+            # 스캐너 _entry_bytes(disk 모드)와 동일 규칙: st_blocks 미지원이면 st_size
+            b = getattr(st, "st_blocks", None)
+            return st.st_size if b is None else b * BLOCK_UNIT
+
+        def _ref_recursive(root):
+            """디렉터리별 (재귀 disk bytes, 재귀 파일 수) — 디렉터리 자체 블록 포함."""
+            ref = {}
+            for cur, dirs, files in os.walk(root):
+                b = _blocks(os.stat(cur))
+                for f in files:
+                    b += _blocks(os.lstat(os.path.join(cur, f)))
+                ref[os.path.abspath(cur)] = [b, len(files)]
+            for p in sorted(ref, key=lambda x: -x.count(os.sep)):
+                parent = os.path.dirname(p)
+                if parent != p and parent in ref:
+                    ref[parent][0] += ref[p][0]
+                    ref[parent][1] += ref[p][1]
+            return {p: tuple(v) for p, v in ref.items()}
+
+        def _check_all(dbp, ref, tag):
+            c = dbmod.connect(dbp)
+            try:
+                rid = c.execute("SELECT MAX(id) m FROM scan_runs").fetchone()["m"]
+                bad = []
+                for r in c.execute("SELECT path, status, total_bytes, total_files "
+                                   "FROM directories WHERE run_id=?", (rid,)):
+                    assert r["status"] == "done", (tag, r["path"], r["status"])
+                    got = (r["total_bytes"], r["total_files"])
+                    if got != ref[os.path.abspath(r["path"])]:
+                        bad.append((r["path"], got, ref[os.path.abspath(r["path"])]))
+                assert not bad, (tag, "불일치", bad[:5])
+                logs = [r["message"] for r in c.execute(
+                    "SELECT message FROM scan_log WHERE run_id=?", (rid,))]
+                assert any("집계 시작" in m for m in logs), (tag, logs)
+                assert any(m.startswith("집계 depth") for m in logs), (tag, logs)
+                return rid
+            finally:
+                c.close()
+
+        ref = _ref_recursive(tree)
+        scmod.AGG_WINDOW = 3   # 레벨당 여러 윈도우/커밋 경계를 강제
+        dbp = os.path.join(d, "win.db")
+        run_scan(dbp, tree, workers=2, with_monitor=False)
+        rid = _check_all(dbp, ref, "윈도우=3")
+
+        # 집계 도중 중단 흉내: 가장 깊은 레벨 절반 + 상위 전 레벨을 미완료로 되돌림
+        c = dbmod.connect(dbp)
+        maxd = c.execute("SELECT MAX(depth) m FROM directories WHERE run_id=?",
+                         (rid,)).fetchone()["m"]
+        deep = [r["id"] for r in c.execute(
+            "SELECT id FROM directories WHERE run_id=? AND depth=? ORDER BY id",
+            (rid, maxd))]
+        half = deep[: max(1, len(deep) // 2)]
+        c.execute("UPDATE directories SET status='discovered', total_bytes=0, "
+                  "total_files=0 WHERE id IN (%s)" % ",".join("?" * len(half)), half)
+        c.execute("UPDATE directories SET status='discovered', total_bytes=0, "
+                  "total_files=0 WHERE run_id=? AND depth<?", (rid, maxd))
+        c.execute("UPDATE scan_runs SET status='sizing', phase='sizing', "
+                  "finished_at=NULL WHERE id=?", (rid,))
+        c.commit()
+        c.close()
+        run_scan(dbp, tree, workers=1, with_monitor=False, resume=True)
+        _check_all(dbp, ref, "집계 중단→재개")
+        print("[sizing-window] OK  윈도우 분할·중단 재개 모두 참조값 일치 (%d 디렉터리)"
+              % len(ref))
+    finally:
+        scmod.AGG_WINDOW = old_window
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     run_stop_resume_case()
+    run_sizing_window_case()
     run_case("native")
     run_case("native", workers=4)   # stat 동시 처리해도 결과 동일해야 함
     if shutil.which("du"):

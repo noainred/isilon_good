@@ -115,6 +115,18 @@ CREATE TABLE IF NOT EXISTS top_files (
     uid     INTEGER,
     PRIMARY KEY (run_id, path)
 );
+
+-- 단계별 진단 로그(집계 레벨별 속도, WAL 체크포인트 차단 등).
+-- 개선 포인트를 실측으로 찾기 위한 기록 — journalctl(stderr)에도 같은 줄이 나간다.
+CREATE TABLE IF NOT EXISTS scan_log (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id  INTEGER NOT NULL,
+    ts      REAL    NOT NULL,
+    phase   TEXT,
+    message TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_log_run_ts ON scan_log(run_id, ts);
 """
 
 
@@ -163,6 +175,8 @@ def init_db(db_path: str) -> None:
         ensure_column(conn, "resource_samples", "scanner_cpu", "REAL NOT NULL DEFAULT 0")
         ensure_column(conn, "resource_samples", "du_cpu", "REAL NOT NULL DEFAULT 0")
         ensure_column(conn, "top_files", "atime", "REAL")
+        # 집계(sizing) 행/초 — 스캐너 자체 측정(진단 API 의 짧은 표본이 0 으로 보이는 문제 보완)
+        ensure_column(conn, "scan_runs", "agg_rate", "REAL NOT NULL DEFAULT 0")
         conn.execute(f"PRAGMA user_version={int(SCHEMA_VERSION)}")
         conn.commit()
     finally:
@@ -229,6 +243,29 @@ def prune_samples(conn: sqlite3.Connection, run_id: int, keep: int = 2000) -> No
         """,
         (run_id, run_id, keep),
     )
+
+
+def add_scan_log(conn, run_id, phase, message) -> None:
+    """진단 로그 한 줄 저장(커밋은 호출자 몫 — 스캔의 주기 커밋에 얹혀 간다)."""
+    conn.execute(
+        "INSERT INTO scan_log(run_id, ts, phase, message) VALUES (?,?,?,?)",
+        (run_id, time.time(), phase, message))
+
+
+def get_scan_log(conn, run_id, limit: int = 300):
+    """진단 로그 최근 limit 줄(시간순으로 반환)."""
+    rows = conn.execute(
+        "SELECT ts, phase, message FROM scan_log WHERE run_id=? ORDER BY id DESC LIMIT ?",
+        (run_id, int(limit))).fetchall()
+    return list(reversed(rows))
+
+
+def prune_scan_log(conn, run_id, keep: int = 2000) -> None:
+    """오래된 진단 로그 정리(DB 무한 성장 방지)."""
+    conn.execute(
+        "DELETE FROM scan_log WHERE run_id=? AND id NOT IN ("
+        "SELECT id FROM scan_log WHERE run_id=? ORDER BY id DESC LIMIT ?)",
+        (run_id, run_id, int(keep)))
 
 
 def replace_scan_stats(conn, run_id, kind, items) -> None:

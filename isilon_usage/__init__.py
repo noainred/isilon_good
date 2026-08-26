@@ -5,7 +5,7 @@
 """
 
 # 애플리케이션 버전(릴리즈노트 CHANGELOG.md 와 git 태그 v<버전>에 대응)
-__version__ = "1.99.24"
+__version__ = "1.99.25"
 
 # DB 스키마 버전. 스키마가 바뀌면 1씩 올리고 마이그레이션을 추가한다.
 # (per-run DB / manager DB 의 PRAGMA user_version 에 기록된다)
@@ -16,4 +16,5 @@ __version__ = "1.99.24"
 # 7: scan_stats 테이블 추가(파일 나이/소유자/확장자별 집계 리포트)
 # 8: top_files 테이블 추가(최대 파일 Top-N)
 # 9: top_files 에 atime 컬럼 + scan_stats 의 atime_age(접근시각 나이 분포)
-SCHEMA_VERSION = 9
+# 10: scan_log 테이블(단계별 진단 로그) + scan_runs.agg_rate(집계 행/초 자체 측정)
+SCHEMA_VERSION = 10

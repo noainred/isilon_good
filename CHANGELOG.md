@@ -9,7 +9,39 @@
 - MINOR — 호환되는 기능 추가
 - PATCH — 호환되는 버그 수정
 
-DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재 스키마 버전은 **9** 입니다.
+DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재 스키마 버전은 **10** 입니다.
+
+---
+
+## [1.99.25] - 2026-08-26
+
+### 바뀜 (Changed) — 집계(용량 합산) 단계 병목 해소: 행 루프 → 레벨별 일괄 UPDATE
+
+실환경(43만 디렉터리)에서 집계 단계가 1코어 포화 상태로 0/초 부근까지 느려지고 WAL 이
+622MB(DB 131MB)까지 부푸는 문제를 측정으로 원인 확정 후 교체. 43만 행 재현 벤치 기준
+**27.9k → 158.4k 행/초(5.7배), 최대 WAL 435MB → 86MB**.
+
+- **집계를 SQL 일괄 UPDATE 로 교체(native).** 디렉터리마다 파이썬에서 SELECT+UPDATE 하던 행 루프를
+  레벨(깊이)별 상관 서브쿼리 UPDATE 로 교체, id 윈도우(5만)로 잘라 커밋해 하트비트·일시정지·재개
+  (status='done' 규약)는 그대로 유지. SQL 실행 중 GIL 이 풀려 대시보드 응답도 개선. — `scanner.py`.
+- **WAL 부풀림(622MB 사태) 원인 제거.** 레벨 전체를 여는 read_conn 커서가 30초 주기
+  `wal_checkpoint(TRUNCATE)` 를 막고 있었음 — native 는 커서 자체가 없어졌고, du 백엔드도
+  키셋(id>마지막) 페이지네이션으로 배치마다 읽기 스냅샷을 닫음. — `scanner.py`.
+- **집계 튜닝 상수(측정으로 확정).** `AGG_WINDOW=50000`, `AGG_CACHE_KB=64MB`(기본 2MB 캐시 대비 1.4배),
+  `AGG_AUTOCKPT_PAGES=25000`(기본 1000페이지면 윈도우 커밋마다 백필이 돌아 되레 행 루프보다 느림 —
+  23.7k → 158.4k 행/초). — `scanner.py`.
+- **진단 로그(scan_log 테이블 + stderr/journalctl).** 집계 시작/레벨별(행수·행/초·WAL)/종료 요약,
+  `wal_checkpoint busy`(긴 읽기가 WAL 자름을 막을 때) 기록 — 개선 포인트를 추측이 아니라 실측으로
+  찾기 위한 기록. 종료 시 run 당 2,000줄로 정리. 스키마 v10(`scan_log` + `scan_runs.agg_rate`). — `db.py`.
+- **집계 행/초 표시 수정(0/초 오인 해소).** 진단 API 의 1.2초 표본이 윈도우 커밋 사이에 걸리면 진행
+  중인데도 0/초로 보임 — 스캐너가 자체 측정한 `agg_rate`(EMA)를 scan_runs 에 기록하고 진단이 우선
+  사용. 집계 중엔 처리량 차트·디렉터리/초도 집계 완료 속도로 표시(차트 공백 해소), 24시간 표본도
+  sizing 중엔 집계 델타로 기록. — `troubleshoot.py`, `server.py`, `dashboard.html`.
+- **느린 HTTP 요청 로그(0.3초 이상)와 `kill -USR1` 스택 덤프 훅(faulthandler).** 어떤 폴링/조회가
+  스캔과 DB·GIL 을 다투는지, 정체 시 어느 줄에서 도는지 현장에서 바로 확인. — `server.py`.
+- 검증: 43만 행 재현 벤치(A/B/C 3방식 결과 완전 일치·속도 5.7배), 신규 회귀 테스트
+  `run_sizing_window_case`(윈도우 경계·집계 중단→재개·scan_log, 전 디렉터리 os.walk 참조 대조) 추가,
+  12/17 테스트 통과(나머지 5건은 Windows 개발 박스의 기존 플랫폼 비호환 — statvfs/resource, 변경 전과 동일)·ruff 통과.
 
 ---
 

@@ -2178,12 +2178,12 @@ function tsRender(j) {
     const pct = Math.round(j.agg_pct || 0);
     aggHtml = '<div style="margin:0 0 8px; padding:8px 10px; border:1px solid var(--accent2); border-radius:6px; background:#0e1a1e;">'
       + '<b>📦 집계(용량 합산) 단계 — ' + pct + '%</b> '
-      + '<span class="sub">' + fmtNum(j.agg_done || 0) + ' / ' + fmtNum(j.agg_total || 0) + ' 디렉터리 · ' + Math.round(j.rate_agg || 0) + '/초</span>'
+      + '<span class="sub">' + fmtNum(j.agg_done || 0) + ' / ' + fmtNum(j.agg_total || 0) + ' 디렉터리 · ' + (Math.round((j.rate_agg || 0) * 10) / 10) + '/초</span>'
       + '<div class="bar" style="height:10px; margin-top:6px;"><span style="width:' + pct + '%"></span></div>'
-      + '<div class="sub" style="margin-top:4px;">탐색은 끝났습니다. 이 단계는 탐색 워커가 없어 아래 디렉터리/파일 속도가 0인 게 정상입니다.</div></div>';
+      + '<div class="sub" style="margin-top:4px;">탐색은 끝났습니다. 이 단계의 디렉터리/초와 아래 차트는 집계 완료 속도이고, 파일/초가 0인 게 정상입니다.</div></div>';
   }
   $("tsRates").innerHTML = aggHtml +
-    '디렉터리 <b>' + Math.round(j.rate_dirs || 0) + '</b>/초 · 파일 <b>' + Math.round(j.rate_files || 0) + '</b>/초<br>'
+    '디렉터리 <b>' + Math.round((j.aggregating ? j.rate_agg : j.rate_dirs) || 0) + '</b>/초 · 파일 <b>' + Math.round(j.rate_files || 0) + '</b>/초<br>'
     + '하트비트(진행 갱신) <b>' + (j.heartbeat_age || 0).toFixed(1) + 's</b> 전<br>'
     + '처리완료 <b>' + fmtNum(j.discovered || 0) + '</b> · 대기(추정) <b>' + fmtNum(j.pending_est || 0) + '</b>개'
     + (j.aggregating ? ' · 집계 <b>' + fmtNum(j.agg_done || 0) + '</b>/' + fmtNum(j.agg_total || 0) : '') + '<br>'
@@ -2222,7 +2222,9 @@ function tsWindowed() {
 let _tsServerSamples = [];     // 서버 metrics.db 에서 불러온 표본(긴 구간용)
 function tsPushRate(j) {
   if (!j || !j.running) return;
-  _tsRateHist.push({t: Date.now() / 1000, rd: Math.max(0, j.rate_dirs || 0), rf: Math.max(0, j.rate_files || 0)});
+  // 집계(sizing) 단계엔 탐색 속도가 0 — 대신 집계 완료 속도를 그린다(차트 공백/정체 오인 방지).
+  const rd = j.aggregating ? (j.rate_agg || 0) : (j.rate_dirs || 0);
+  _tsRateHist.push({t: Date.now() / 1000, rd: Math.max(0, rd), rf: Math.max(0, j.rate_files || 0)});
   const cut = Date.now() / 1000 - 600;          // 라이브 버퍼는 최대 10분치
   _tsRateHist = _tsRateHist.filter(p => p.t >= cut);
   if (_tsWindowSec <= 600) tsDrawRateChart();    // 짧은 구간은 라이브로 즉시 갱신
