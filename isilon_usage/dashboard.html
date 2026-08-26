@@ -257,6 +257,110 @@ tbody tr{ transition:background .12s; }
 #iuLangBtn{ background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.12); color:var(--muted);
   border-radius:8px; padding:6px 11px; font-weight:600; font-size:12px; }
 #iuLangBtn:hover{ color:var(--text); border-color:rgba(255,255,255,.28); }
+
+/* ============================================================================
+   Overview 시안 v3 — Claude Design 'dashboards/overview-upgrade' 디자인 언어.
+   딥네이비+듀얼 글로우 · 모노 마이크로라벨 · KPI 액센트 스트라이프+호버 리프트 ·
+   블루 액션(내비/primary) · 펄스 LIVE 도트.
+   마크업/JS/DOM id 무변경(소스 순서로 덮어씀). 차트 팔레트는 dataviz 검증 통과값.
+   ============================================================================ */
+:root{
+  --bg:#070b14; --panel:#121a2c; --panel2:#1a2338;
+  --panel-grad:linear-gradient(180deg,#141c30 0%,#101728 100%);
+  --line:#253253; --line-soft:rgba(84,110,160,.22);
+  --text:#eaf1fb; --muted:#93a3bf; --faint:#5e6d89;
+  --accent:#3b82f6; --cyan:#22d3ee; --mint:#34e0b4; --accent2:#34e0b4; --ok:#34e0b4;
+  --purple:#a855f7;
+  --mono-ui:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;
+}
+body{
+  background:
+    radial-gradient(1100px 500px at 75% -12%, rgba(59,130,246,.07), transparent 60%),
+    radial-gradient(900px 420px at 12% -8%, rgba(52,224,180,.05), transparent 55%),
+    var(--bg);
+}
+::selection{ background:rgba(59,130,246,.4); }
+
+/* 헤더 — 반투명 블러 탑바 + 브랜드 마크 시안 글로우 */
+header{ background:rgba(10,15,26,.82); backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--line-soft); }
+#brandH1 > span:first-child{
+  background:linear-gradient(135deg,#1d4ed8,#22d3ee)!important; color:#eaf6ff!important;
+  border-radius:11px!important; box-shadow:0 0 18px rgba(34,211,238,.35)!important; }
+#brandVer{ background:transparent!important; border:1px solid var(--line);
+  color:var(--muted)!important; font-size:10.5px!important; letter-spacing:.06em; }
+#brandH1 span[style*="background:#16361f"]{
+  font-family:var(--mono-ui); font-size:11px!important; letter-spacing:.08em;
+  color:var(--mint)!important; }
+#brandH1 span[style*="background:#16361f"]::before{
+  content:""; width:8px; height:8px; border-radius:50%; background:var(--mint);
+  animation:iuPulse 2.2s infinite; }
+@keyframes iuPulse{
+  0%{ box-shadow:0 0 0 0 rgba(52,224,180,.45); }
+  70%{ box-shadow:0 0 0 8px rgba(52,224,180,0); }
+  100%{ box-shadow:0 0 0 0 rgba(52,224,180,0); } }
+
+/* 내비 — 활성 탭은 확신 있는 블루 그라데이션 필 */
+.navbtn:hover{ background:rgba(59,130,246,.1); color:var(--text); }
+.navbtn.active{ color:#fff; background:linear-gradient(180deg,#2563eb,#1d4ed8);
+  border-color:transparent; box-shadow:0 4px 14px rgba(37,99,235,.35); }
+.stab.active,.chip.on{ color:#dbeafe;
+  background:rgba(59,130,246,.16); border-color:rgba(59,130,246,.45); }
+
+/* 카드 — 패널 그라데이션 + 헤어라인, 라벨은 모노 마이크로 타이포 */
+.card{ background:var(--panel-grad); border:1px solid var(--line-soft);
+  border-radius:14px;
+  box-shadow:0 1px 2px rgba(0,0,0,.45), 0 12px 32px rgba(0,0,0,.22); }
+.card h2{ font-family:var(--mono-ui); font-size:10.5px; font-weight:600;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+.card h2 .sub,.card h2 .pill,.card h2 button{ font-family:var(--sans);
+  letter-spacing:.15px; text-transform:none; }
+
+/* KPI 타일 — 좌측 액센트 스트라이프 + 호버 리프트(시안 kpi) */
+.grid.cols-3 > .card:has(.big){ position:relative; overflow:hidden;
+  transition:border-color .15s, transform .12s, box-shadow .15s; }
+.grid.cols-3 > .card:has(.big)::before{ content:""; position:absolute; left:0;
+  top:12px; bottom:12px; width:3px; border-radius:3px;
+  background:var(--kpi-accent,var(--accent)); opacity:.9; }
+.grid.cols-3 > .card:has(.big):hover{ border-color:var(--kpi-accent,var(--accent));
+  transform:translateY(-2px); box-shadow:0 10px 26px rgba(0,0,0,.45); }
+.grid.cols-3 > .card:nth-child(1){ --kpi-accent:var(--cyan); }
+.grid.cols-3 > .card:nth-child(2){ --kpi-accent:var(--accent); }
+.grid.cols-3 > .card:nth-child(3){ --kpi-accent:var(--purple); }
+.big{ font-family:var(--sans); font-size:28px; font-weight:800;
+  letter-spacing:-.01em; color:#fff; }
+
+/* 버튼 — primary = 블루 그라데이션(시안의 액션 색) */
+button.primary{ background:linear-gradient(180deg,#2563eb,#1d4ed8); color:#fff;
+  border-color:transparent; box-shadow:0 4px 14px rgba(37,99,235,.30); }
+button.primary:hover{ background:linear-gradient(180deg,#2f6cf0,#2153e0);
+  box-shadow:0 5px 18px rgba(37,99,235,.42); filter:none; }
+
+/* 표 — 모노 마이크로 헤더 + 헤어라인 */
+th{ font-family:var(--mono-ui); font-size:10.5px; letter-spacing:.09em; color:var(--muted); }
+th,td{ border-color:rgba(84,110,160,.14); }
+
+/* 칩·필·상태 배지 — 모노 캡슐(시안 chip/pill/st) */
+.chip,.pill{ font-family:var(--mono-ui); letter-spacing:.05em;
+  background:rgba(13,19,33,.6); border-color:var(--line); }
+.pill{ font-size:10.5px; } .chip{ font-size:11px; }
+.badge{ font-family:var(--mono-ui); letter-spacing:.04em; }
+
+/* 진행 바·현재 경로 — 얇고 둥근 트랙, 콘솔 톤 */
+.bar{ height:10px; background:rgba(94,109,137,.18); border:none; border-radius:6px; }
+.bar > span{ border-radius:6px; }
+.kv{ border-bottom:1px solid rgba(84,110,160,.12); }
+.current{ background:rgba(13,19,33,.75); border-color:var(--line); }
+pre.changelog{ background:rgba(13,19,33,.75); }
+
+/* 입력 포커스 — 블루 링 */
+.setinput:focus,.optsel:focus{ outline:none;
+  border-color:rgba(59,130,246,.55); box-shadow:0 0 0 3px rgba(59,130,246,.15); }
+
+/* 스크롤바 — 더 은은하게 */
+::-webkit-scrollbar-thumb{ background:rgba(84,110,160,.28); border:3px solid #070b14; }
+::-webkit-scrollbar-thumb:hover{ background:rgba(84,110,160,.45); }
 </style>
 <script src="/i18n.js"></script>
 </head>
@@ -2243,8 +2347,8 @@ function tsDrawRateChart() {
   const pts = (_tsWindowSec <= 600) ? tsWindowed()
             : _tsServerSamples.filter(p => p.t >= Date.now() / 1000 - _tsWindowSec);
   drawSeries(cv, pts, {lines: [
-    {get: p => p.rd, color: "#5cc8ff"},   // 디렉터리/초 (주)
-    {get: p => p.rf, color: "#7ad99a"},   // 파일/초 (보조)
+    {get: p => p.rd, color: "#3987e5"},   // 디렉터리/초 (주) — dataviz 검증 쌍
+    {get: p => p.rf, color: "#199e70"},   // 파일/초 (보조)
   ]});
   const last = pts[pts.length - 1] || {rd: 0, rf: 0};
   const peakD = Math.max(0, ...pts.map(p => p.rd));
@@ -2253,8 +2357,8 @@ function tsDrawRateChart() {
               : (_tsWindowSec >= 60 ? (_tsWindowSec / 60) + "분" : _tsWindowSec + "초");
   const src = _tsWindowSec > 600 ? "서버 저장(metrics.db)" : "라이브";
   if ($("tsRateLegend")) $("tsRateLegend").innerHTML =
-    '<span style="color:#5cc8ff">● 디렉터리 <b>' + Math.round(last.rd) + '</b>/s</span> (피크 ' + Math.round(peakD) + ') · '
-    + '<span style="color:#7ad99a">● 파일 <b>' + Math.round(last.rf) + '</b>/s</span> (피크 ' + Math.round(peakF) + ')'
+    '<span style="color:#3987e5">●</span> 디렉터리 <b>' + Math.round(last.rd) + '</b>/s (피크 ' + Math.round(peakD) + ') · '
+    + '<span style="color:#199e70">●</span> 파일 <b>' + Math.round(last.rf) + '</b>/s (피크 ' + Math.round(peakF) + ')'
     + ' <span class="sub">— 최근 ' + wlabel + ' · ' + pts.length + '표본 · ' + src + '</span>';
 }
 function tsSetRange(sec, pollMs) {
@@ -2311,8 +2415,8 @@ if ($("tsHistClear")) $("tsHistClear").addEventListener("click", tsHistClear);
 // ---- 처리량 추이(버킷별 처리 용량/파일/디렉터리) ----
 let _tpBucket = 60, _tpAutoTimer = null, _tpBuckets = [];
 const TP_CHARTS = [
-  {cv: "tpBytesChart", get: b => b.bytes, color: "#5cc8ff"},
-  {cv: "tpFilesChart", get: b => b.files, color: "#7ad99a"},
+  {cv: "tpBytesChart", get: b => b.bytes, color: "#3987e5"},
+  {cv: "tpFilesChart", get: b => b.files, color: "#199e70"},
   {cv: "tpDirsChart", get: b => b.dirs, color: "#f5a623"},
 ];
 function tpLabel() { return _tpBucket >= 3600 ? (_tpBucket / 3600) + "시간" : (_tpBucket / 60) + "분"; }
@@ -2348,8 +2452,8 @@ function tpHoverAt(ev, cv) {
   tpDrawCharts(i);
   const tip = $("tpTooltip"); if (!tip) return;
   tip.innerHTML = '<b>' + tpFmtTime(b.t) + '</b> <span class="sub">(' + tpLabel() + ' 버킷)</span><br>'
-    + '<span style="color:#5cc8ff">● 용량 ' + fmtBytes(b.bytes) + '</span><br>'
-    + '<span style="color:#7ad99a">● 파일 ' + fmtNum(Math.round(b.files)) + '</span><br>'
+    + '<span style="color:#3987e5">●</span> 용량 ' + fmtBytes(b.bytes) + '<br>'
+    + '<span style="color:#199e70">●</span> 파일 ' + fmtNum(Math.round(b.files)) + '<br>'
     + '<span style="color:#f5a623">● 디렉터리 ' + fmtNum(Math.round(b.dirs)) + '</span>';
   tip.style.display = "block";
   let lx = ev.clientX + 14; if (lx + 190 > window.innerWidth) lx = ev.clientX - 200;
@@ -2383,8 +2487,8 @@ function tpRender(j) {
   tpDrawCharts(null);
   const last = bks[bks.length - 1] || {bytes: 0, files: 0, dirs: 0};
   const pk = k => Math.max(0, ...bks.map(p => p[k]));
-  $("tpBytesLegend").innerHTML = '최근 ' + lab + ': <b style="color:#5cc8ff">' + fmtBytes(last.bytes) + '</b> · 최대 ' + fmtBytes(pk("bytes")) + ' / 버킷';
-  $("tpFilesLegend").innerHTML = '최근 ' + lab + ': <b style="color:#7ad99a">' + fmtNum(Math.round(last.files)) + '</b> 파일 · 최대 ' + fmtNum(Math.round(pk("files")));
+  $("tpBytesLegend").innerHTML = '<span style="color:#3987e5">●</span> 최근 ' + lab + ': <b>' + fmtBytes(last.bytes) + '</b> · 최대 ' + fmtBytes(pk("bytes")) + ' / 버킷';
+  $("tpFilesLegend").innerHTML = '<span style="color:#199e70">●</span> 최근 ' + lab + ': <b>' + fmtNum(Math.round(last.files)) + '</b> 파일 · 최대 ' + fmtNum(Math.round(pk("files")));
   $("tpDirsLegend").innerHTML = '최근 ' + lab + ': <b style="color:#f5a623">' + fmtNum(Math.round(last.dirs)) + '</b> 디렉터리 · 최대 ' + fmtNum(Math.round(pk("dirs")));
 }
 function tpSetBucket(bk) {
@@ -2851,9 +2955,10 @@ async function scanAction(action, id) {
 // ---- 디스크 사용량 파이(클릭 드릴다운) ----
 let piePath = [];        // 파이 드릴다운 스택 [{id,name,depth}] — 마지막이 현재 위치
 let pieHit = [];         // 캔버스 클릭 히트테스트용 슬라이스 각도
-const PIE_COLORS = ["#4f9cff", "#38d39f", "#f5a623", "#ff6b6b", "#a78bfa",
-                    "#22d3ee", "#f472b6", "#84cc16", "#fb923c", "#60a5fa",
-                    "#34d399", "#fbbf24"];
+// 파이/트리맵 카테고리 팔레트 — dataviz 검증 통과 8슬롯(인접쌍 CVD ΔE≥8.4, 표면 #070b14).
+// 순서가 CVD 안전장치다 — 임의로 재배열하지 말 것(재배열 시 검증기 재실행).
+const PIE_COLORS = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181",
+                    "#008300", "#9085e9", "#e66767"];
 
 async function loadPie() {
   if (selectedScan == null) return;

@@ -1059,4 +1059,15 @@
      회귀 테스트 run_sizing_window_case(윈도우 경계·집계 중단→재개·os.walk 참조 대조) 추가.
      12/17 테스트(5건은 Windows 박스 기존 statvfs/resource 비호환 — 기준선 동일 확인)·ruff. v1.99.25.
 
+286. (클로드 디자인 사용해서 페이지를 세련되고 고급스럽게 업그레이드) DesignSync 로 사용자의
+     claude.ai/design ‘Design System’ 프로젝트를 조회 — `dashboards/overview-upgrade` 시안(The Davinci
+     Overview)의 디자인 언어를 포탈·대시보드에 v3 드롭인 CSS 레이어로 적용(마크업/JS 동작 무변경,
+     외부 폰트 0). 딥네이비+듀얼 글로우, 블러 탑바+브랜드 마크 글로우, LIVE 펄스 도트, 모노
+     마이크로라벨(카드 제목·표 헤더), KPI 좌측 액센트 스트라이프+호버 리프트(:has), 블루 액션(활성
+     탭·primary·포커스 링), 스캔 바=민트 콘솔 스트립. dataviz 스킬 절차로 팔레트 검증 —
+     기존 REGION_PAL 실패(빨강 3색 인접 ΔE 7.8<15) 발견 → 기준 팔레트 검증 순서로 재정렬,
+     PIE_COLORS 12→검증 8슬롯, 처리량 라인 밴드 위반 → #3987e5/#199e70, 범례 텍스트는 기본
+     잉크(마크만 색). validate_palette 4세트 PASS · CSS 균형 222/222 · JS 구문 OK · 헤드리스
+     Chrome 렌더 양쪽 확인. v1.99.26.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
