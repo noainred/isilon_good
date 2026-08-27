@@ -241,8 +241,46 @@ def _test_merge_scan_lists() -> None:
     print("[merge-scans] OK  증분 복제 meta 병합(과거 보존·신규 갱신)")
 
 
+def _test_map_layout_and_prefs() -> None:
+    """지도 배치 저장(map_layout)·로그 팝업 위치(log_popup_pos) 검증 + 영속."""
+    d = tempfile.mkdtemp(prefix="portal_map_")
+    try:
+        pc = portalmod.PortalController(d)
+        pc.upsert_node({"id": "n1", "url": "http://10.0.0.1:8765", "token": "T"})
+        pc.upsert_node({"id": "n2", "url": "http://10.0.0.2:8765", "token": "T"})
+        # 기본: 빈 배치
+        assert pc.map_layout() == {"ok": True, "positions": {}}, pc.map_layout()
+        # 저장: 모르는 노드 버림 + 좌표 클램프(0~100) + 반올림
+        r = pc.set_map_layout({"n1": [43.6, 29.4], "n2": [150, -5], "ghost": [1, 1]})
+        assert r["ok"] and r["count"] == 2, r
+        assert r["positions"]["n1"] == [43.6, 29.4], r
+        assert r["positions"]["n2"] == [100.0, 0.0], r      # 클램프
+        assert "ghost" not in r["positions"], r
+        # 영속: 새 컨트롤러로 다시 읽어도 유지
+        pc2 = portalmod.PortalController(d)
+        assert pc2.map_layout()["positions"]["n1"] == [43.6, 29.4], pc2.map_layout()
+        # 전체 교체 방식: 키가 빠지면 미배치로 돌아감
+        r2 = pc2.set_map_layout({"n2": [10, 20]})
+        assert r2["count"] == 1 and "n1" not in r2["positions"], r2
+        # 형식 오류 거부 + 좌표 형식 틀린 항목만 건너뜀
+        assert not pc2.set_map_layout(["x"])["ok"]
+        r3 = pc2.set_map_layout({"n1": "bad", "n2": [1, 2]})
+        assert r3["ok"] and list(r3["positions"]) == ["n2"], r3
+        # 로그 팝업 위치: 유효값 저장·이상값은 center 로, auth_status 에 노출
+        p = pc2.set_session_prefs({"log_popup_pos": "br"})
+        assert p["ok"] and p["log_popup_pos"] == "br", p
+        assert pc2.auth_status()["log_popup_pos"] == "br"
+        p2 = pc2.set_session_prefs({"log_popup_pos": "evil"})
+        assert p2["log_popup_pos"] == "center", p2
+        assert portalmod.PortalController(d).auth_status()["log_popup_pos"] == "center"
+        print("[portal] map_layout(클램프·영속·전체교체)·log_popup_pos(검증·영속) OK")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     _test_merge_scan_lists()
+    _test_map_layout_and_prefs()
     _test_save_nodes_concurrent()
     _test_ping_history()
     _test_csv_import()

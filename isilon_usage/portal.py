@@ -448,6 +448,7 @@ class PortalController:
                "backup_dir": "", "backup_every_hours": 1.0, "backup_keep": 100,
                "portal_title": "", "portal_subtitle": "", "nav_hidden": [],
                "export_token": "", "op_ttl_minutes": 30, "show_update_popup": False,
+               "log_popup_pos": "center",   # 로그 팝업 위치: center/tl/tr/bl/br
                "ask_llm_enabled": False, "ask_llm_endpoint": "", "ask_llm_model": "",
                "ask_llm_key": "", "ask_llm_timeout": 20}
         try:
@@ -489,6 +490,12 @@ class PortalController:
                 except (TypeError, ValueError):
                     pass
                 out["show_update_popup"] = bool(s.get("show_update_popup", False))
+                _lp = str(s.get("log_popup_pos") or "center").strip().lower()
+                out["log_popup_pos"] = _lp if _lp in ("center", "tl", "tr", "bl", "br") else "center"
+                # 지도 배치({노드id:[x,y]}) — set_map_layout 이 검증해 저장하므로 형식만 확인
+                lay = s.get("map_layout")
+                if isinstance(lay, dict):
+                    out["map_layout"] = lay
                 out["ask_llm_enabled"] = bool(s.get("ask_llm_enabled"))
                 out["ask_llm_endpoint"] = str(s.get("ask_llm_endpoint") or "").strip()
                 out["ask_llm_model"] = str(s.get("ask_llm_model") or "").strip()
@@ -522,6 +529,7 @@ class PortalController:
                 "encrypted": bool(self.settings.get("op_password_encrypted")),
                 "version": __version__,
                 "show_update_popup": bool(self.settings.get("show_update_popup")),
+                "log_popup_pos": self.settings.get("log_popup_pos", "center"),
                 "op_ttl_minutes": int(self.settings.get("op_ttl_minutes", 30) or 30),
                 "portal_title": self.settings.get("portal_title") or "",
                 "portal_subtitle": self.settings.get("portal_subtitle") or "",
@@ -533,6 +541,38 @@ class PortalController:
         self.settings["nav_hidden"] = hidden
         self._save_settings()
         return {"ok": True, "nav_hidden": hidden}
+
+    # ----- 지도 배치(전세계 데이터센터 분포) -----
+    def map_layout(self) -> dict:
+        """지도에 배치된 노드 좌표({노드id: [x,y]}, 0~100%)를 돌려준다(읽기 전용)."""
+        lay = self.settings.get("map_layout")
+        return {"ok": True, "positions": dict(lay) if isinstance(lay, dict) else {}}
+
+    def set_map_layout(self, positions) -> dict:
+        """지도 배치를 저장한다 — 사용자가 드래그로 놓은 좌표를 영속화.
+
+        positions: {노드id: [x, y]} (x/y 는 지도 viewBox 대비 0~100%).
+        등록된 노드만 저장하고(삭제된 노드 좌표는 자연 정리), 좌표는 0~100 으로 클램프.
+        키가 빠진 노드는 '미배치'로 돌아간다(부분 저장이 아니라 전체 배치 교체).
+        """
+        if not isinstance(positions, dict):
+            return {"ok": False, "reason": "positions 는 {노드id:[x,y]} 형식이어야 합니다."}
+        with self._lock:
+            ids = {n["id"] for n in self.nodes}
+        clean = {}
+        for k, v in positions.items():
+            k = str(k)
+            if k not in ids:
+                continue
+            try:
+                x, y = float(v[0]), float(v[1])
+            except (TypeError, ValueError, IndexError, KeyError):
+                continue
+            clean[k] = [round(min(100.0, max(0.0, x)), 2),
+                        round(min(100.0, max(0.0, y)), 2)]
+        self.settings["map_layout"] = clean
+        self._save_settings()
+        return {"ok": True, "positions": clean, "count": len(clean)}
 
     def set_title(self, title: str, subtitle: str) -> dict:
         """상단/탭 제목(브랜딩)을 설정한다. 호출 측(핸들러)에서 인증을 확인한다."""
@@ -1793,7 +1833,7 @@ class PortalController:
         return {"ok": True, "export_token_set": bool(self.settings["export_token"])}
 
     def set_session_prefs(self, body) -> dict:
-        """로그인 세션 유지 시간(분)·업데이트 팝업 표시 여부를 저장한다."""
+        """로그인 세션 유지 시간(분)·업데이트 팝업 표시·로그 팝업 위치를 저장한다."""
         if "op_ttl_minutes" in body:
             try:
                 self.settings["op_ttl_minutes"] = max(1, min(10080, int(body.get("op_ttl_minutes"))))
@@ -1801,9 +1841,14 @@ class PortalController:
                 self.settings["op_ttl_minutes"] = 30
         if "show_update_popup" in body:
             self.settings["show_update_popup"] = bool(body.get("show_update_popup"))
+        if "log_popup_pos" in body:
+            # 로그 팝업(업그레이드 진행/전 노드 푸시/기록 세부) 앵커: 중앙 또는 네 코너
+            v = str(body.get("log_popup_pos") or "center").strip().lower()
+            self.settings["log_popup_pos"] = v if v in ("center", "tl", "tr", "bl", "br") else "center"
         self._save_settings()
         return {"ok": True, "op_ttl_minutes": self.settings.get("op_ttl_minutes"),
-                "show_update_popup": self.settings.get("show_update_popup")}
+                "show_update_popup": self.settings.get("show_update_popup"),
+                "log_popup_pos": self.settings.get("log_popup_pos", "center")}
 
     def export_token_ok(self, given) -> bool:
         """export_token 이 설정돼 있으면 일치해야 True(미설정이면 공개=True)."""
@@ -2547,6 +2592,9 @@ class PortalHandler(BaseHTTPRequestHandler):
             if path == "/api/portal/nodes":
                 self._send_json(c.list_nodes())
                 return
+            if path == "/api/portal/map-layout":   # 지도 배치 좌표(읽기 전용)
+                self._send_json(c.map_layout())
+                return
             if path == "/api/portal/overview":
                 self._send_json(c.overview())
                 return
@@ -2696,7 +2744,8 @@ class PortalHandler(BaseHTTPRequestHandler):
                     res.update(c.set_nav_hidden(body.get("nav_hidden") or []))
                 if "export_token" in body:
                     res.update(c.set_export_token(body.get("export_token") or ""))
-                if "op_ttl_minutes" in body or "show_update_popup" in body:
+                if any(k in body for k in ("op_ttl_minutes", "show_update_popup",
+                                           "log_popup_pos")):
                     res.update(c.set_session_prefs(body))
                 if any(k in body for k in ("ask_llm_enabled", "ask_llm_endpoint",
                                            "ask_llm_model", "ask_llm_key", "ask_llm_timeout")):
@@ -2730,6 +2779,9 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/portal/nodes/delete":
                 self._send_json(c.delete_node(str(body.get("id") or "")))
+                return
+            if path == "/api/portal/map-layout":  # 지도 배치 저장(로그인 필요 — 위 게이트 통과)
+                self._send_json(c.set_map_layout(body.get("positions")))
                 return
             if path == "/api/portal/nodes/set-token":  # 토큰 강제 맞추기(1개/일괄) — 포탈 로컬만 교정
                 self._send_json(c.set_node_token(body.get("ids") or [],
