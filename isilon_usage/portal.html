@@ -707,6 +707,21 @@ th,td{ border-color:rgba(84,110,160,.14); }
     <pre id="relCmd" class="note mono" style="white-space:pre-wrap; word-break:break-all; margin-top:4px; cursor:pointer;" title="클릭하면 복사">—</pre>
   </div>
 
+  <div class="card" id="cardDbDir" style="margin-bottom:14px;">
+    <h2>💾 중앙 DB 저장 경로 (노드 복제본)</h2>
+    <div class="sub" style="margin-bottom:8px;">엣지에서 복제해 온 노드 DB(통합 조회용)를 저장할 <b>포탈 서버의 디렉터리</b>입니다.
+      비우고 저장하면 기본 경로(<span class="mono" id="dbDirDefault">데이터 폴더/replicas</span>)로 돌아갑니다.
+      저장 시 같은 디스크면 기존 복제본을 <b>즉시 이동</b>하고(복사 없음), 이동하지 못하면(다른 디스크 등)
+      경로만 바뀌며 <b>다음 동기화가 새 경로를 자동으로 다시 채웁니다</b>(증분 복제 — 그때까지 통합 조회가 비어 보일 수 있음).</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <input id="dbDir" class="inp mono" placeholder="예: /bigdisk/isilon_replicas (비우면 기본)" style="flex:1; min-width:240px;" />
+      <button id="dbDirBrowse" type="button">📁 찾아보기</button>
+      <button id="dbDirSave" class="primary">저장</button>
+      <span class="sub" id="dbDirMsg"></span>
+    </div>
+    <div class="sub" style="margin-top:8px;">현재 적용 경로: <span class="mono" id="dbDirEff">—</span> · 노드 복제본 <b id="dbDirCount">—</b>개</div>
+  </div>
+
   <div class="card" style="margin-bottom:14px;">
     <h2>📜 업그레이드 기록 (History) <button id="histRefresh" class="sub" style="float:right; font-weight:400; padding:2px 8px;">↻ 새로고침</button></h2>
     <div class="sub" style="margin-bottom:8px;">자동(인터넷·감시 폴더)·수동·전 노드 푸시 업그레이드가 일어나면 여기에 남습니다(포탈 재시작에도 보존). <b>세부</b>를 누르면 단계 로그와 엣지별 결과를 봅니다.</div>
@@ -1320,7 +1335,7 @@ document.querySelectorAll("#view-nodes .stab").forEach(b=>b.addEventListener("cl
 
 // 설정 카드를 종류별 탭으로 재배치(노드 관리 / 계정·보안 / 모니터링·백업 / 일반).
 (function(){
-  const moves={ "np-nodes":["cardProvision"], "np-account":["cardLoginSec","cardNodePw","cardNodeToken","cardEnroll"], "np-monitor":["cardBackup","cardAskLlm"] };
+  const moves={ "np-nodes":["cardProvision"], "np-account":["cardLoginSec","cardNodePw","cardNodeToken","cardEnroll"], "np-monitor":["cardDbDir","cardBackup","cardAskLlm"] };
   Object.keys(moves).forEach(pane=>{ const p=document.getElementById(pane); if(!p) return;
     moves[pane].forEach(id=>{ const el=document.getElementById(id); if(el) p.appendChild(el); }); });
   const g=document.getElementById("np-general"), t=document.getElementById("cardTitle");
@@ -2451,9 +2466,27 @@ async function pLoadUpgradeCfg(){
   try{ const j=await (await fetch("/api/portal/settings",{cache:"no-store"})).json();
     if(j.ok && $("ugWatchDir")) $("ugWatchDir").value=j.upgrade_watch_dir||"";
     if(j.ok && $("setEnroll")) $("setEnroll").placeholder=j.enroll_token_set?"설정됨 — 바꾸려면 새 토큰 입력(비우고 저장=해제)":"enroll 공유 토큰";
+    if(j.ok){ // 중앙 DB 저장 경로(복제본) 카드
+      if($("dbDir") && document.activeElement!==$("dbDir")) $("dbDir").value=j.replica_dir||"";
+      if($("dbDirEff")) $("dbDirEff").textContent=j.replica_dir_effective||"—";
+      if($("dbDirDefault")) $("dbDirDefault").textContent=j.replica_dir_default||"데이터 폴더/replicas";
+      if($("dbDirCount")) $("dbDirCount").textContent=(j.replica_count==null?"—":j.replica_count);
+    }
     if(j.ok) renderBackup(j); }catch(e){}
   loadNetUpg();
 }
+// 중앙 DB 저장 경로 저장 — 이동 결과(즉시 이동/재동기화 안내)를 그대로 보여준다
+if($("dbDirSave")) $("dbDirSave").addEventListener("click", async()=>{
+  const msg=$("dbDirMsg"); msg.textContent=" 저장 중…";
+  try{ const j=await (await fetch("/api/portal/settings",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({replica_dir:$("dbDir").value.trim()})})).json();
+    if(j.ok){ msg.textContent=" ✓ 저장됨"+(j.replica_moved?" — 기존 복제본 이동 완료":"")
+        +(j.replica_note?" — "+j.replica_note:"");
+      if($("dbDirEff")) $("dbDirEff").textContent=j.replica_dir_effective||"—"; }
+    else msg.textContent=" ✗ "+(j.reason||"실패(로그인이 필요할 수 있습니다)");
+  }catch(e){ msg.textContent=" ✗ "+e; }
+});
 function renderBackup(j){
   if($("bkDir") && document.activeElement!==$("bkDir")) $("bkDir").value=j.backup_dir||"";
   if($("bkEvery") && document.activeElement!==$("bkEvery")) $("bkEvery").value=j.backup_every_hours||1;
@@ -2662,7 +2695,7 @@ function fbOpen(){
       +'<div id="fbList" style="max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:4px;"></div>'
       +'<div class="sub" id="fbErr" style="color:#ff8a8a;margin-top:6px;"></div>'
       +'<div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
-      +'<span class="sub">이 폴더를 감시 폴더로:</span>'
+      +'<span class="sub" id="fbUseLbl">이 폴더를 감시 폴더로:</span>'
       +'<b id="fbCurLbl" class="mono" style="flex:1;min-width:160px;word-break:break-all;"></b>'
       +'<button id="fbPick" class="primary">이 디렉터리 선택</button></div></div>';
     $("fbClose").addEventListener("click", fbClose);
@@ -2671,12 +2704,15 @@ function fbOpen(){
     $("fbUp").addEventListener("click", ()=>fbBrowse($("fbUp").dataset.parent||"/"));
     $("fbGo").addEventListener("click", ()=>fbBrowse($("fbPath").value.trim()||"/"));
     $("fbPath").addEventListener("keydown", e=>{ if(e.key==="Enter") fbBrowse($("fbPath").value.trim()||"/"); });
-    $("fbPick").addEventListener("click", ()=>{ $("ugWatchDir").value=_fbCur; fbClose();
-      $("ugWatchMsg").textContent=" (선택됨 — '감시 폴더 저장'을 누르세요)"; });
+    $("fbPick").addEventListener("click", ()=>{ const t=$(_fbTarget.input); if(t) t.value=_fbCur; fbClose();
+      const ms=$(_fbTarget.msg); if(ms) ms.textContent=" (선택됨 — '저장'을 누르세요)"; });
   }
+  if($("fbUseLbl")) $("fbUseLbl").textContent="이 폴더를 "+(_fbTarget.label||"대상")+"(으)로:";
   m.style.display="flex";
-  fbBrowse($("ugWatchDir").value.trim()||"/");
+  fbBrowse((($(_fbTarget.input)||{}).value||"").trim()||"/");
 }
+// 찾아보기 대상(감시 폴더/중앙 DB 경로 등) — 버튼이 대상을 지정하고 같은 모달을 재사용
+let _fbTarget={input:"ugWatchDir", msg:"ugWatchMsg", label:"감시 폴더"};
 function fbClose(){ const m=$("fbModal"); if(m) m.style.display="none"; }
 async function fbBrowse(p){
   const errEl=$("fbErr"); if(errEl) errEl.textContent="";
@@ -2696,7 +2732,10 @@ async function fbBrowse(p){
     if(j.error && errEl) errEl.textContent="일부 접근 불가: "+j.error;
   }catch(e){ if(errEl) errEl.textContent="오류: "+e; }
 }
-if($("ugWatchBrowse")) $("ugWatchBrowse").addEventListener("click", fbOpen);
+if($("ugWatchBrowse")) $("ugWatchBrowse").addEventListener("click", ()=>{
+  _fbTarget={input:"ugWatchDir", msg:"ugWatchMsg", label:"감시 폴더"}; fbOpen(); });
+if($("dbDirBrowse")) $("dbDirBrowse").addEventListener("click", ()=>{
+  _fbTarget={input:"dbDir", msg:"dbDirMsg", label:"중앙 DB 저장 경로"}; fbOpen(); });
 // 전 노드 업그레이드 진행 팝업 — /upgrade/status 의 push 를 폴링해 노드별 라이브 표시
 let _pushTimer=null;
 function closePushModal(){ if(_pushTimer){clearTimeout(_pushTimer);_pushTimer=null;} const m=$("pushModal"); if(m) m.style.display="none"; }

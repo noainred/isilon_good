@@ -278,9 +278,43 @@ def _test_map_layout_and_prefs() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _test_replica_dir() -> None:
+    """중앙 DB 저장 경로(replica_dir): 이동·영속·검증(상대경로 거부·빈값 복귀)."""
+    d = tempfile.mkdtemp(prefix="portal_repdir_")
+    try:
+        pc = portalmod.PortalController(d)
+        default_dir = os.path.join(os.path.abspath(d), "replicas")
+        assert os.path.abspath(pc.replicas_dir) == default_dir, pc.replicas_dir
+        # 기존 복제본 흉내
+        os.makedirs(os.path.join(pc.replicas_dir, "n1"), exist_ok=True)
+        with open(os.path.join(pc.replicas_dir, "n1", "a.db"), "w") as fh:
+            fh.write("x")
+        # 새 경로로 변경 → 같은 파일시스템이라 즉시 이동
+        new = os.path.join(d, "bigdisk", "reps")
+        r = pc.set_replica_dir(new)
+        assert r["ok"] and r["replica_moved"] is True, r
+        assert os.path.isfile(os.path.join(new, "n1", "a.db")), "복제본 미이동"
+        assert pc.replicas_dir == new, pc.replicas_dir
+        # 영속: 새 컨트롤러도 새 경로 사용 + 설정 GET 노출
+        pc2 = portalmod.PortalController(d)
+        assert pc2.replicas_dir == new, pc2.replicas_dir
+        cfg = pc2.upgrade_config()
+        assert cfg["replica_dir_effective"] == new and cfg["replica_count"] == 1, cfg
+        # 상대 경로 거부
+        assert not pc2.set_replica_dir("relative/path")["ok"]
+        # 빈값 → 기본 경로 복귀(비어 있으므로 다시 이동)
+        r2 = pc2.set_replica_dir("")
+        assert r2["ok"] and os.path.abspath(r2["replica_dir_effective"]) == default_dir, r2
+        assert os.path.isfile(os.path.join(default_dir, "n1", "a.db")), "복귀 이동 실패"
+        print("[portal] replica_dir(이동·영속·검증·복귀) OK")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     _test_merge_scan_lists()
     _test_map_layout_and_prefs()
+    _test_replica_dir()
     _test_save_nodes_concurrent()
     _test_ping_history()
     _test_csv_import()

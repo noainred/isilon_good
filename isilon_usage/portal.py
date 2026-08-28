@@ -417,10 +417,12 @@ def build_upgrade_script(*, hq_base, edge_dir="/opt/isilon_edge",
 class PortalController:
     def __init__(self, data_dir: str) -> None:
         self.data_dir = os.path.abspath(data_dir)
-        self.replicas_dir = os.path.join(self.data_dir, "replicas")
-        os.makedirs(self.replicas_dir, exist_ok=True)
         self.nodes = load_nodes(self.data_dir)
         self.settings = self._load_settings()
+        # 중앙 복제 DB 저장 경로 — 설정(replica_dir)이 있으면 그곳, 없으면 data_dir/replicas
+        self.replicas_dir = (str(self.settings.get("replica_dir") or "").strip()
+                             or os.path.join(self.data_dir, "replicas"))
+        os.makedirs(self.replicas_dir, exist_ok=True)
         self._auth = authmod.AuthGuard(
             lambda: self.settings.get("op_password"),
             ttl=lambda: float(self.settings.get("op_ttl_minutes", 30) or 30) * 60)
@@ -447,6 +449,7 @@ class PortalController:
                "enroll_token": "", "release_dir": "/opt/isilon_release",
                "backup_dir": "", "backup_every_hours": 1.0, "backup_keep": 100,
                "portal_title": "", "portal_subtitle": "", "nav_hidden": [],
+               "replica_dir": "",   # 중앙 복제 DB 저장 경로(빈값=기본 data_dir/replicas)
                "export_token": "", "op_ttl_minutes": 30, "show_update_popup": False,
                "log_popup_pos": "center",   # 로그 팝업 위치: center/tl/tr/bl/br
                "ask_llm_enabled": False, "ask_llm_endpoint": "", "ask_llm_model": "",
@@ -492,6 +495,8 @@ class PortalController:
                 out["show_update_popup"] = bool(s.get("show_update_popup", False))
                 _lp = str(s.get("log_popup_pos") or "center").strip().lower()
                 out["log_popup_pos"] = _lp if _lp in ("center", "tl", "tr", "bl", "br") else "center"
+                _rd = str(s.get("replica_dir") or "").strip()
+                out["replica_dir"] = _rd if os.path.isabs(_rd) else ""
                 # 지도 배치({노드id:[x,y]}) — set_map_layout 이 검증해 저장하므로 형식만 확인
                 lay = s.get("map_layout")
                 if isinstance(lay, dict):
@@ -603,6 +608,48 @@ class PortalController:
         self.settings["enroll_token"] = str(token or "").strip()
         self._save_settings()
         return {"ok": True, "enroll_token_set": bool(self.settings["enroll_token"])}
+
+    def set_replica_dir(self, path: str) -> dict:
+        """중앙 복제 DB 저장 경로를 설정한다(빈값=기본 data_dir/replicas). 즉시 적용.
+
+        같은 파일시스템이고 새 경로가 비어 있으면 기존 복제본을 통째로 이동(rename,
+        즉시·데이터 무복사)한다. 이동하지 못하면(다른 디스크·대상에 파일 있음 등)
+        경로만 바꾸고 다음 동기화가 새 경로를 다시 채운다 — 증분 복제라 자동 복구되며,
+        그때까지 통합 조회가 비어 보일 수 있음을 note 로 알린다.
+        """
+        p = str(path or "").strip()
+        if p and not os.path.isabs(p):
+            return {"ok": False, "reason": "절대 경로로 입력하세요(예: /bigdisk/isilon_replicas)."}
+        old = self.replicas_dir
+        new = p or os.path.join(self.data_dir, "replicas")
+        moved = False
+        note = ""
+        if os.path.abspath(new) != os.path.abspath(old):
+            try:   # 새 경로 생성 + 쓰기 확인(권한/읽기전용 마운트를 저장 시점에 걸러냄)
+                os.makedirs(new, exist_ok=True)
+                probe = os.path.join(new, ".iu_write_test")
+                with open(probe, "w") as fh:
+                    fh.write("x")
+                os.remove(probe)
+            except OSError as exc:
+                return {"ok": False, "reason": "새 경로에 쓸 수 없습니다: %s" % exc}
+            try:   # 기존 복제본 이동(대상이 비어 있을 때만 — 있는 데이터는 덮지 않음)
+                if os.path.isdir(old) and os.listdir(old) and not os.listdir(new):
+                    os.rmdir(new)
+                    os.rename(old, new)
+                    moved = True
+            except OSError:
+                note = ("기존 복제본을 이동하지 못했습니다(다른 디스크/사용 중/대상에 파일 있음) — "
+                        "다음 동기화가 새 경로를 다시 채웁니다.")
+        self.settings["replica_dir"] = p
+        self._save_settings()
+        self.replicas_dir = new
+        try:
+            os.makedirs(new, exist_ok=True)
+        except OSError:
+            pass
+        return {"ok": True, "replica_dir": p, "replica_dir_effective": new,
+                "replica_moved": moved, "replica_note": note}
 
     def set_release_dir(self, release_dir: str) -> dict:
         """엣지가 받아갈 릴리스 패키지 폴더를 설정(비우면 기본 /opt/isilon_release)."""
@@ -806,7 +853,16 @@ class PortalController:
 
     def upgrade_config(self) -> dict:
         bver = agent_bundle_version()
+        try:   # 복제본 현황(노드 폴더 수) — 가벼운 목록 조회만(용량 합산은 느려서 안 함)
+            replica_count = len([d for d in os.listdir(self.replicas_dir)
+                                 if os.path.isdir(os.path.join(self.replicas_dir, d))])
+        except OSError:
+            replica_count = 0
         return dict({"ok": True, "upgrade_watch_dir": self.settings.get("upgrade_watch_dir", ""),
+                     "replica_dir": self.settings.get("replica_dir") or "",
+                     "replica_dir_effective": self.replicas_dir,
+                     "replica_dir_default": os.path.join(self.data_dir, "replicas"),
+                     "replica_count": replica_count,
                      "upgrade_check_secs": self.settings.get("upgrade_check_secs", 60),
                      "enroll_token_set": bool(self.settings.get("enroll_token")),
                      "hq_version": __version__, "bundle_version": bver,
@@ -2737,6 +2793,8 @@ class PortalHandler(BaseHTTPRequestHandler):
                     res.update(c.set_enroll_token(body.get("enroll_token") or ""))
                 if "release_dir" in body:
                     res.update(c.set_release_dir(body.get("release_dir") or ""))
+                if "replica_dir" in body:   # 중앙 복제 DB 저장 경로
+                    res.update(c.set_replica_dir(body.get("replica_dir") or ""))
                 if "portal_title" in body or "portal_subtitle" in body:
                     res.update(c.set_title(body.get("portal_title") or "",
                                            body.get("portal_subtitle") or ""))
