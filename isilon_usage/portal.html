@@ -1,0 +1,2749 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>[The Davinci] NAS Management</title>
+<!-- 탭 파비콘: 헤더 V 마크와 같은 스타일(라운드 사각형·파란 그라데이션)의 N(=NAS). 외부 파일 없이 인라인 SVG. -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjNGFhM2ZmIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjN2FkMGZmIi8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3QgeD0iMyIgeT0iMyIgd2lkdGg9IjU4IiBoZWlnaHQ9IjU4IiByeD0iMTQiIGZpbGw9InVybCgjZykiLz48dGV4dCB4PSIzMiIgeT0iMzQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZiIgZm9udC1zaXplPSI0MiIgZm9udC13ZWlnaHQ9IjgwMCIgZmlsbD0iIzA4MjAzYSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZG9taW5hbnQtYmFzZWxpbmU9ImNlbnRyYWwiPk48L3RleHQ+PC9zdmc+" />
+<style>
+  :root { --bg:#0f141b; --panel:#19212c; --panel2:#1f2937; --line:#2b3543;
+    --text:#e6edf3; --muted:#8b98a9; --accent:#4f9cff; --accent2:#38d39f;
+    --warn:#f5a623; --danger:#ff5c5c; --ok:#38d39f; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-size:14px;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif; }
+  header { padding:16px 22px; border-bottom:1px solid var(--line); display:flex;
+    align-items:center; gap:16px; flex-wrap:wrap; background:linear-gradient(180deg,#1a232f,#141a23); }
+  header h1 { font-size:17px; margin:0; font-weight:650; }
+  .spacer { flex:1; }
+  nav { display:flex; gap:6px; }
+  .navbtn { background:transparent; color:var(--muted); border:1px solid transparent;
+    border-radius:7px; padding:6px 12px; cursor:pointer; font-size:13px; font-weight:600; }
+  .navbtn:hover { color:var(--text); } .navbtn.active { background:var(--panel2); color:var(--text); border-color:var(--line); }
+  .wrap { padding:18px 22px; max-width:1320px; margin:0 auto; }
+  .grid { display:grid; gap:14px; } .cols-4 { grid-template-columns:repeat(4,1fr); }
+  @media (max-width:980px){ .cols-4 { grid-template-columns:1fr 1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 18px; }
+  .card h2 { font-size:12.5px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); margin:0 0 12px; font-weight:700; }
+  .big { font-size:28px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .sub { color:var(--muted); font-size:12px; margin-top:2px; }
+  .mono { font-family:ui-monospace,Menlo,monospace; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:8px 9px; border-bottom:1px solid #222c38; }
+  th { color:var(--muted); font-weight:600; font-size:12px; }
+  td.num,th.num { text-align:right; font-variant-numeric:tabular-nums; font-family:ui-monospace,Menlo,monospace; }
+  .badge { padding:2px 9px; border-radius:999px; font-size:11.5px; font-weight:600; border:1px solid var(--line); white-space:nowrap; }
+  .b-online { background:#173a2a; color:#52e0a0; } .b-offline { background:#43201f; color:#ff8b8b; }
+  .b-scan { background:#16344f; color:#7cc4ff; }
+  .ssbtn { padding:1px 9px; font-size:11px; border-radius:999px; border-color:#2f6f50;
+    color:#9fe6c0; background:#12241a; vertical-align:middle; white-space:nowrap; }
+  .ssbtn:hover:not(:disabled) { border-color:var(--accent2); } .ssbtn:disabled { opacity:.6; cursor:default; }
+  button { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:6px 11px; cursor:pointer; font-size:12.5px; }
+  button:hover { border-color:var(--accent); } button.primary { border-color:var(--accent2); color:#cfe; font-weight:700; }
+  a.link { color:#9fd0ff; text-decoration:none; } a.link:hover { text-decoration:underline; }
+  .setgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; }
+  label.fld { display:flex; flex-direction:column; gap:5px; font-size:12.5px; color:var(--muted); }
+  .inp { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:8px 10px; font-size:13px; }
+  .note { background:#0d1219; border:1px solid var(--line); border-radius:8px; padding:10px 12px; color:#bcd; font-size:12.5px; }
+  .view { display:none; } .view.active { display:block; }
+  .chip { background:var(--panel2); border:1px solid var(--line); border-radius:999px;
+    padding:4px 9px; cursor:pointer; font-size:12px; user-select:none; }
+  .chip.on { background:#16344f; border-color:#2f6fb0; color:#cfe6ff; font-weight:700; }
+  td.miss { color:#ff8b8b; font-weight:600; } td.warn { color:#ffcf8b; font-weight:600; }
+  th.sortable { cursor:pointer; user-select:none; white-space:nowrap; }
+  th.sortable:hover { color:var(--text); }
+  .regcard { cursor:pointer; border:1px solid transparent; border-radius:9px; padding:6px 8px; }
+  .regcard:hover { border-color:var(--line); }
+  .regcard.active { border-color:var(--accent); background:#13202e; }
+  .capbar { position:relative; height:15px; background:#0d1219; border:1px solid var(--line);
+    border-radius:8px; overflow:hidden; min-width:84px; }
+  .capbar > i { position:absolute; top:0; bottom:0; left:0; border-radius:8px 0 0 8px; transition:width .4s ease; }
+  .capbar > b { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    font-size:10.5px; font-weight:700; color:#eaf2fb; text-shadow:0 1px 2px #000a; }
+  .pill { display:inline-block; padding:1px 7px; border-radius:999px; font-size:10.5px;
+    font-weight:700; border:1px solid var(--line); white-space:nowrap; }
+  .fresh-ok { color:#52e0a0; } .fresh-warn { color:#f5c150; } .fresh-old { color:#ff8b8b; }
+  #clock { color:#9fc2e8; letter-spacing:.3px; }
+  /* 인프라 체크: 서버별 핑 이력 차트 */
+  .rbtns { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .rbtn { background:var(--panel2); color:var(--muted); border:none; border-left:1px solid var(--line);
+    border-radius:0; padding:6px 13px; font-weight:600; font-size:12.5px; }
+  .rbtn:first-child { border-left:none; } .rbtn:hover { color:var(--text); }
+  .rbtn.active { background:#16344f; color:#cfe6ff; }
+  .reglabel { font-size:12px; font-weight:700; color:#9fc2e8; letter-spacing:.4px;
+    margin:16px 0 9px; text-transform:uppercase; border-left:3px solid var(--accent); padding-left:9px; }
+  .phgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:12px; }
+  .phcard { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .phcard .phhead { display:flex; align-items:baseline; gap:8px; margin-bottom:4px; }
+  .phcard canvas { width:100%; height:120px; display:block; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; vertical-align:middle; }
+  /* 설정 하위 탭 */
+  .subtabs { display:flex; gap:7px; flex-wrap:wrap; margin-bottom:16px;
+    border-bottom:1px solid var(--line); padding-bottom:12px; }
+  .stab { background:var(--panel2); color:var(--muted); border:1px solid var(--line);
+    border-radius:9px; padding:9px 16px; cursor:pointer; font-weight:650; font-size:13px; }
+  .stab:hover { color:var(--text); } .stab.active { background:#16344f; color:#cfe6ff; border-color:#2f6fb0; }
+  .subpane { display:none; } .subpane.active { display:block; }
+  /* ── About / 소개 페이지 ── */
+  .about-hero { border-radius:18px; padding:24px 26px; margin-bottom:16px; position:relative; overflow:hidden;
+    background:linear-gradient(135deg,#1b2740 0%, #131a27 52%, #1d1733 100%);
+    border:1px solid #2c3a57; box-shadow:0 14px 48px rgba(40,80,170,.18); }
+  .about-hero-row { display:flex; align-items:center; gap:18px; }
+  .about-icon { width:66px; height:66px; flex:0 0 66px; border-radius:17px; font-size:34px;
+    display:flex; align-items:center; justify-content:center;
+    background:linear-gradient(135deg,#4f9cff,#38d39f); box-shadow:0 8px 24px rgba(79,156,255,.45); }
+  .about-title { font-size:30px; font-weight:800; letter-spacing:.4px; line-height:1.15;
+    background:linear-gradient(90deg,#dbe7ff,#9fb6e8 70%,#b9a8ff); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .about-tagline { color:var(--muted); font-size:14px; margin-top:4px; }
+  .about-slogan { margin:18px 0 15px; font-size:15px; color:#e3ebf6; }
+  .about-slogan i { color:#86a8ff; font-style:italic; }
+  .about-badges { display:flex; gap:10px; flex-wrap:wrap; }
+  .about-badge { padding:6px 15px; border-radius:10px; font-size:13px; font-weight:700; border:1px solid; }
+  .about-badge.ver { color:#c9b6ff; border-color:#5b4b8a; background:#241d3a; }
+  .about-badge.stack { color:#7fe3d0; border-color:#2f6a5e; background:#143029; }
+  .about-badge.edition { color:#7ee0a8; border-color:#2f6a48; background:#15301f; }
+  .about-2col { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; }
+  .about-label { color:var(--muted); font-size:12px; font-weight:700; letter-spacing:.7px; text-transform:uppercase; margin-bottom:14px; }
+  .about-author-row { display:flex; align-items:center; gap:14px; }
+  .about-avatar { width:50px; height:50px; flex:0 0 50px; border-radius:50%; color:#fff; font-weight:700; font-size:19px;
+    display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#4f9cff,#6f7bff); }
+  .about-author-name { font-size:17px; font-weight:700; }
+  .about-mail { color:var(--accent); text-decoration:none; font-size:14px; }
+  .about-mail:hover { text-decoration:underline; }
+  .about-copy { font-size:27px; font-weight:800; margin-bottom:3px; }
+  .about-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px 30px; }
+  .about-feat { display:flex; gap:12px; align-items:flex-start; }
+  .about-feat .fi { font-size:20px; line-height:1.25; flex:0 0 24px; }
+  .about-feat b { display:block; font-size:14.5px; margin-bottom:3px; color:var(--text); }
+  .about-feat .sub { display:block; line-height:1.5; margin-top:0; }
+  .about-notice { margin-top:4px; border:1px solid #3a3f63; border-left:3px solid var(--accent); border-radius:12px;
+    padding:16px 18px; background:#161a28; color:#c8d2e0; line-height:1.65; }
+  .about-foot { text-align:center; color:var(--muted); font-size:12px; margin:18px 0 4px; letter-spacing:.3px; }
+  @media (max-width:760px){ .about-2col, .about-grid { grid-template-columns:1fr; } .about-title { font-size:24px; } }
+
+/* ============================================================================
+   The Davinci NAS Management — Refined Theme (drop-in, Claude Design)
+   마크업/JS/DOM id 변경 없음. 클래스·토큰만 재정의(소스 순서로 덮어씀).
+   데이터·동작·색상 임계(capColor 등)는 그대로 유지.
+   ============================================================================ */
+:root{
+  --bg:#0a0e13; --panel:#121a24; --panel2:#182029; --line:#242f3d;
+  --text:#e7edf3; --muted:#8b98a9; --accent:#4f9cff; --accent2:#35d99a;
+  --warn:#f0b429; --danger:#f26d6d; --ok:#35d99a;
+}
+body{
+  background:
+    radial-gradient(1100px 520px at 80% -8%, rgba(53,217,154,.06), transparent 60%),
+    radial-gradient(900px 480px at 10% 2%, rgba(79,156,255,.05), transparent 55%),
+    var(--bg);
+  -webkit-font-smoothing:antialiased;
+}
+header{ padding:18px 24px; background:linear-gradient(180deg,#141c26,#0f151d); border-bottom:1px solid rgba(255,255,255,.06); }
+#brandVer{ background:rgba(255,255,255,.06)!important; color:#8b98a9!important; font-family:ui-monospace,Menlo,monospace; }
+#brandH1 span[style*="background:#16361f"]{ background:transparent!important; color:var(--accent2)!important; padding:0!important; display:inline-flex; align-items:center; gap:6px; }
+#clock{ color:#cdd6df; }
+.navbtn{ border-radius:9px; padding:7px 13px; transition:background .15s,color .15s,border-color .15s; }
+.navbtn.active{ background:color-mix(in srgb, var(--accent) 16%, transparent); color:#dbe9ff; border-color:color-mix(in srgb, var(--accent) 40%, transparent); }
+.wrap{ max-width:1400px; padding:22px 24px 80px; }
+.grid{ gap:16px; }
+.card{ background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.012)); border:1px solid rgba(255,255,255,.07); border-radius:16px; padding:20px 22px; }
+.card h2{ font-size:12px; letter-spacing:.7px; color:var(--muted); font-weight:700; margin:0 0 14px; }
+.big{ font-size:32px; font-weight:700; letter-spacing:-.4px; color:#fff; font-family:ui-monospace,Menlo,"JetBrains Mono",monospace; }
+.sub{ color:var(--muted); font-size:12px; }
+#askCard{ background:linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.015)); border-radius:18px; }
+#askInput{ border-radius:11px!important; padding:13px 16px!important; transition:border-color .15s, box-shadow .15s; }
+#askInput:focus{ outline:none; border-color:color-mix(in srgb, var(--accent2) 55%, transparent)!important; box-shadow:0 0 0 3px rgba(53,217,154,.14); }
+#askOut:not(:empty){ margin-top:14px; padding:14px 16px; border-radius:12px; background:rgba(53,217,154,.07); border:1px solid rgba(53,217,154,.18); color:#d6e6df; line-height:1.6; }
+button{ border-radius:9px; padding:7px 12px; transition:border-color .13s, background .13s, filter .13s; }
+button:hover{ border-color:var(--accent); }
+button.primary{ background:var(--accent2); color:#06231a; border-color:transparent; font-weight:700; }
+button.primary:hover{ filter:brightness(1.08); border-color:transparent; }
+.ssbtn{ border-radius:999px; }
+.chip{ border-radius:999px; padding:5px 11px; }
+.chip.on{ background:color-mix(in srgb, var(--accent) 18%, transparent); border-color:color-mix(in srgb, var(--accent) 45%, transparent); color:#dbe9ff; }
+.inp{ border-radius:9px; }
+.rbtn.active,.stab.active{ background:color-mix(in srgb, var(--accent) 16%, transparent); color:#dbe9ff; border-color:color-mix(in srgb, var(--accent) 40%, transparent); }
+table{ font-size:13px; }
+th,td{ padding:11px 10px; border-bottom:1px solid rgba(255,255,255,.05); }
+th{ font-size:11.5px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); }
+tbody tr{ transition:background .12s; }
+#nodeTable tbody tr:hover,
+#netmonTable tbody tr:hover{ background:rgba(255,255,255,.028); }
+td.num,th.num{ font-family:ui-monospace,Menlo,"JetBrains Mono",monospace; }
+.badge{ display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px; border:1px solid transparent; font-weight:600; }
+.b-online{ background:rgba(53,217,154,.12); color:#6ee7b7; }
+.b-offline{ background:rgba(242,109,109,.12); color:#f9a8a8; }
+.b-scan{ background:rgba(79,156,255,.14); color:#9cc9ff; }
+.capbar{ background:rgba(255,255,255,.06); border:none; border-radius:8px; }
+.capbar > i{ border-radius:8px; box-shadow:0 0 14px rgba(53,217,154,.35); }
+.capbar > b{ font-size:11px; }
+.regcard{ background:rgba(255,255,255,.025); border:1px solid rgba(255,255,255,.07); border-radius:13px; padding:14px 15px; transition:transform .12s, border-color .15s, background .15s; }
+.regcard:hover{ transform:translateY(-2px); border-color:rgba(255,255,255,.16); }
+.regcard.active{ border-color:var(--accent); background:color-mix(in srgb, var(--accent) 10%, rgba(255,255,255,.02)); }
+.regcard .big{ font-size:22px!important; }
+.pill{ border-radius:999px; }
+.reglabel{ color:#9fc2e8; }
+::-webkit-scrollbar{ width:11px; height:11px; }
+::-webkit-scrollbar-thumb{ background:rgba(255,255,255,.1); border-radius:6px; border:3px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover{ background:rgba(255,255,255,.18); }
+
+/* ============================================================================
+   Refined polish v2 (dataviz-informed) — 더 깔끔하고 세련되게. 마크업/JS 무변경.
+   깊이(부드러운 그림자)·타이포 위계·차분한 표면·미터 정제(글로우 제거·얇은 트랙).
+   ============================================================================ */
+:root{ --elev:0 1px 2px rgba(0,0,0,.45), 0 10px 30px rgba(0,0,0,.20); }
+body{ letter-spacing:.1px; }
+.card{ box-shadow:var(--elev); border-color:rgba(255,255,255,.06);
+  background:linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.008)); }
+.card h2{ font-size:11px; letter-spacing:.9px; text-transform:uppercase; color:var(--muted); font-weight:600; margin:0 0 16px; }
+.big{ font-variant-numeric:tabular-nums; letter-spacing:-.5px; }
+.sub{ letter-spacing:.15px; }
+/* 내비 — 정제된 pill */
+.navbtn{ font-weight:600; letter-spacing:.2px; }
+.navbtn.active{ box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent); }
+/* 버튼 — 차분한 보조 + 확신 있는 primary */
+button{ background:rgba(255,255,255,.045); border-color:rgba(255,255,255,.10); font-weight:600; }
+button:hover{ background:rgba(255,255,255,.09); border-color:rgba(255,255,255,.22); filter:none; }
+button.primary{ background:var(--accent2); border-color:transparent; box-shadow:0 2px 12px rgba(53,217,154,.22); }
+button.primary:hover{ background:var(--accent2); box-shadow:0 3px 16px rgba(53,217,154,.34); }
+/* 표 — 여백·헤어라인·hover */
+th{ font-size:11px; letter-spacing:.5px; font-weight:600; }
+th,td{ border-color:rgba(255,255,255,.05); padding:12px 11px; }
+tbody tr{ transition:background .12s; }
+#nodeTable tbody tr:hover,#netmonTable tbody tr:hover{ background:rgba(255,255,255,.024); }
+/* 미터 — 얇고 차분한 트랙, 글로우 제거(노이즈↓), 둥근 데이터-엔드 */
+.capbar{ background:rgba(255,255,255,.05); }
+.capbar > i{ box-shadow:none !important; border-radius:6px; }
+/* 배지 — 크리스프 */
+.badge{ font-size:11px; letter-spacing:.2px; padding:3px 10px; }
+.pill{ letter-spacing:.2px; }
+/* 지역 카드 — 차분 */
+.regcard{ background:rgba(255,255,255,.02); box-shadow:0 1px 2px rgba(0,0,0,.25); }
+.regcard:hover{ background:rgba(255,255,255,.035); }
+/* 그리드 리듬 */
+.grid{ gap:14px; }
+/* 물어보기 답변 버블 — 차분 */
+#askOut:not(:empty){ background:rgba(53,217,154,.06); border-color:rgba(53,217,154,.16); }
+/* 언어 토글 버튼 — 헤더에 녹아들게 */
+#iuLangBtn{ background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.12); color:var(--muted);
+  border-radius:8px; padding:6px 11px; font-weight:600; font-size:12px; }
+#iuLangBtn:hover{ color:var(--text); border-color:rgba(255,255,255,.28); }
+
+/* ============================================================================
+   Overview 시안 v3 — Claude Design 'dashboards/overview-upgrade' 디자인 언어.
+   딥네이비+듀얼 글로우 · 모노 마이크로라벨 · KPI 액센트 스트라이프+호버 리프트 ·
+   블루 액션(내비/primary) · 펄스 LIVE 도트 · 민트 콘솔 스트립.
+   마크업/JS/DOM id 무변경(소스 순서로 덮어씀). 차트 팔레트는 dataviz 검증 통과값.
+   ============================================================================ */
+:root{
+  --bg:#070b14; --panel:#121a2c; --panel2:#1a2338;
+  --panel-grad:linear-gradient(180deg,#141c30 0%,#101728 100%);
+  --line:#253253; --line-soft:rgba(84,110,160,.22);
+  --text:#eaf1fb; --muted:#93a3bf; --faint:#5e6d89;
+  --accent:#3b82f6; --cyan:#22d3ee; --mint:#34e0b4; --accent2:#34e0b4; --ok:#34e0b4;
+  --purple:#a855f7;
+  --mono-ui:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;
+}
+body{
+  background:
+    radial-gradient(1100px 500px at 75% -12%, rgba(59,130,246,.07), transparent 60%),
+    radial-gradient(900px 420px at 12% -8%, rgba(52,224,180,.05), transparent 55%),
+    var(--bg);
+}
+::selection{ background:rgba(59,130,246,.4); }
+
+/* 헤더 — 반투명 블러 탑바 + 브랜드 마크 시안 글로우 */
+header{ background:rgba(10,15,26,.82); backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--line-soft); }
+#brandH1 > span:first-child{
+  background:linear-gradient(135deg,#1d4ed8,#22d3ee)!important; color:#eaf6ff!important;
+  border-radius:11px!important; box-shadow:0 0 18px rgba(34,211,238,.35)!important; }
+#brandVer{ background:transparent!important; border:1px solid var(--line);
+  color:var(--muted)!important; font-size:10.5px!important; letter-spacing:.06em; }
+#brandH1 span[style*="background:#16361f"]{
+  font-family:var(--mono-ui); font-size:11px!important; letter-spacing:.08em;
+  color:var(--mint)!important; }
+#brandH1 span[style*="background:#16361f"]::before{
+  content:""; width:8px; height:8px; border-radius:50%; background:var(--mint);
+  animation:iuPulse 2.2s infinite; }
+@keyframes iuPulse{
+  0%{ box-shadow:0 0 0 0 rgba(52,224,180,.45); }
+  70%{ box-shadow:0 0 0 8px rgba(52,224,180,0); }
+  100%{ box-shadow:0 0 0 0 rgba(52,224,180,0); } }
+#clock{ font-family:var(--mono-ui); font-size:12px; color:var(--muted);
+  border:1px solid var(--line); border-radius:10px; padding:7px 12px;
+  background:rgba(18,26,44,.7); }
+
+/* 내비 — 활성 탭은 확신 있는 블루 그라데이션 필 */
+.navbtn:hover{ background:rgba(59,130,246,.1); color:var(--text); }
+.navbtn.active{ color:#fff; background:linear-gradient(180deg,#2563eb,#1d4ed8);
+  border-color:transparent; box-shadow:0 4px 14px rgba(37,99,235,.35); }
+.stab.active,.rbtn.active,.chip.on{ color:#dbeafe;
+  background:rgba(59,130,246,.16); border-color:rgba(59,130,246,.45); }
+
+/* 카드 — 패널 그라데이션 + 헤어라인, 라벨은 모노 마이크로 타이포 */
+.card{ background:var(--panel-grad); border:1px solid var(--line-soft);
+  border-radius:14px;
+  box-shadow:0 1px 2px rgba(0,0,0,.45), 0 12px 32px rgba(0,0,0,.22); }
+.card h2{ font-family:var(--mono-ui); font-size:10.5px; font-weight:600;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+.card h2 .sub,.card h2 .pill,.card h2 button{ font-family:var(--sans);
+  letter-spacing:.15px; text-transform:none; }
+
+/* KPI 타일 — 좌측 액센트 스트라이프 + 호버 리프트(시안 kpi) */
+.grid.cols-4 > .card:has(.big){ position:relative; overflow:hidden;
+  transition:border-color .15s, transform .12s, box-shadow .15s; }
+.grid.cols-4 > .card:has(.big)::before{ content:""; position:absolute; left:0;
+  top:12px; bottom:12px; width:3px; border-radius:3px;
+  background:var(--kpi-accent,var(--accent)); opacity:.9; }
+.grid.cols-4 > .card:has(.big):hover{ border-color:var(--kpi-accent,var(--accent));
+  transform:translateY(-2px); box-shadow:0 10px 26px rgba(0,0,0,.45); }
+.grid.cols-4 > .card:nth-child(1){ --kpi-accent:var(--cyan); }
+.grid.cols-4 > .card:nth-child(2){ --kpi-accent:var(--accent); }
+.grid.cols-4 > .card:nth-child(3){ --kpi-accent:var(--mint); }
+.grid.cols-4 > .card:nth-child(4){ --kpi-accent:var(--purple); }
+.big{ font-family:var(--sans); font-size:30px; font-weight:800;
+  letter-spacing:-.01em; color:#fff; }
+
+/* 버튼 — primary = 블루 그라데이션(시안의 액션 색) */
+button.primary{ background:linear-gradient(180deg,#2563eb,#1d4ed8); color:#fff;
+  border-color:transparent; box-shadow:0 4px 14px rgba(37,99,235,.30); }
+button.primary:hover{ background:linear-gradient(180deg,#2f6cf0,#2153e0);
+  box-shadow:0 5px 18px rgba(37,99,235,.42); filter:none; }
+
+/* 표 — 모노 마이크로 헤더 + 헤어라인 */
+th{ font-family:var(--mono-ui); font-size:10.5px; letter-spacing:.09em; color:var(--muted); }
+th,td{ border-color:rgba(84,110,160,.14); }
+
+/* 칩·필 — 모노 캡슐(시안 chip/pill) */
+.chip,.pill{ font-family:var(--mono-ui); letter-spacing:.05em;
+  background:rgba(13,19,33,.6); border-color:var(--line); }
+.pill{ font-size:10.5px; } .chip{ font-size:11px; }
+.chip.on{ font-family:var(--mono-ui); }
+
+/* 입력 포커스 — 블루 링(물어보기 입력은 기존 민트 링 유지) */
+.inp:focus,.setinput:focus,.optsel:focus{ outline:none;
+  border-color:rgba(59,130,246,.55); box-shadow:0 0 0 3px rgba(59,130,246,.15); }
+
+/* 미터 트랙 — 차분한 톤 */
+.capbar{ background:rgba(94,109,137,.18); }
+
+/* 전체 노드 스캔 바 — 시안 콘솔 스트립(민트 헤어라인 스캔라인) */
+#scanAllBar{ position:relative; overflow:hidden;
+  border:1px solid rgba(52,224,180,.35)!important; border-radius:12px!important;
+  background:linear-gradient(90deg, rgba(52,224,180,.07) 0%, transparent 30%), rgba(13,19,33,.75)!important; }
+#scanAllBar::after{ content:""; position:absolute; top:0; left:0; right:0; height:1px;
+  background:linear-gradient(90deg, var(--mint), transparent 55%); opacity:.7; pointer-events:none; }
+
+/* 스크롤바 — 더 은은하게 */
+::-webkit-scrollbar-thumb{ background:rgba(84,110,160,.28); border:3px solid #070b14; }
+::-webkit-scrollbar-thumb:hover{ background:rgba(84,110,160,.45); }
+</style>
+<script src="/i18n.js"></script>
+</head>
+<body>
+<header>
+  <h1 id="brandH1" style="display:flex;align-items:center;gap:12px;margin:0;">
+    <span style="width:46px;height:46px;border-radius:12px;background:linear-gradient(135deg,#4aa3ff,#7ad0ff);display:inline-flex;align-items:center;justify-content:center;font-size:22px;font-weight:800;color:#08203a;box-shadow:0 4px 14px rgba(74,163,255,.35);flex:none;">V</span>
+    <span style="display:inline-flex;flex-direction:column;gap:4px;">
+      <span style="display:inline-flex;flex-direction:column;line-height:1.14;">
+        <span style="font-size:21px;font-weight:800;">The Davinci</span>
+        <span id="brandTitle" style="font-size:21px;font-weight:800;">NAS Management</span>
+      </span>
+      <span style="display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;">
+        <span id="brandVer" style="background:#14464a;color:#7fffd4;padding:1px 9px;border-radius:11px;font-size:12px;font-weight:700;">v—</span>
+        <span style="background:#16361f;color:#5cff8f;padding:1px 9px;border-radius:11px;font-size:12px;font-weight:700;letter-spacing:.5px;">LIVE</span>
+        <span id="brandSub" class="sub" style="font-weight:400;font-size:12px;"></span>
+      </span>
+    </span>
+  </h1>
+  <div class="spacer"></div>
+  <nav>
+    <button class="navbtn active" data-view="dash">글로벌 대시보드</button>
+    <button class="navbtn" data-view="netmon">네트워크 모니터링</button>
+    <button class="navbtn" data-view="compare">경로 비교</button>
+    <button class="navbtn" data-view="nodes">설정</button>
+  </nav>
+  <span class="sub mono" id="clock" style="min-width:152px; text-align:right;"></span>
+  <button id="loginBtn" title="로그인/로그아웃" style="display:none;">🔑 로그인</button>
+  <button id="refreshBtn" title="새로고침">↻</button>
+</header>
+
+<div id="roBanner" class="wrap" style="display:none;">
+  <div class="card" style="border-color:#f5a623; background:#2a2410;">
+    <b>🔒 읽기 전용 모드</b> — 조회만 가능합니다. 노드 등록·원격 구성·동기화 등 변경 작업은
+    <b>로그인</b> 후 사용할 수 있습니다.
+    <button id="roLoginBtn" style="margin-left:8px;">🔑 로그인</button>
+  </div>
+</div>
+
+<!-- 글로벌 대시보드 -->
+<div class="wrap view active" id="view-dash">
+  <div class="card" id="askCard" style="margin-bottom:14px;">
+    <h2 style="margin:0 0 8px;">💬 물어보기 <span class="sub" style="font-weight:400;">— 전사 집계를 문장으로 물어보면 답합니다 <span id="askLlmTag" class="pill" style="display:none;">LLM</span></span></h2>
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <input id="askInput" type="text" autocomplete="off"
+             placeholder="예: 전체 용량 얼마야? · 어느 노드가 제일 커? · 지금 스캔 진행 중이야?"
+             style="flex:1; min-width:280px; padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:var(--panel2); color:var(--text); font:inherit;" />
+      <button id="askBtn" class="primary">질문</button>
+    </div>
+    <div id="askOut" style="margin-top:10px; line-height:1.55; min-height:1.2em;"></div>
+  </div>
+  <div class="grid cols-4" style="margin-bottom:14px;">
+    <div class="card"><h2>총 사용 용량 (전 DC)</h2><div class="big" id="kUsed">—</div><div class="sub" id="kUsedSub">조사 용량 합계</div></div>
+    <div class="card"><h2>스토리지(루트)</h2><div class="big" id="kStorages">—</div><div class="sub">전 노드 합계</div></div>
+    <div class="card"><h2>노드 온라인</h2><div class="big" id="kNodes">—</div><div class="sub">최근 동기화 기준</div></div>
+    <div class="card"><h2>진행 중 스캔</h2><div class="big" id="kActive">—</div><div class="sub">전 노드 합계</div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px;">
+    <h2>전체 스토리지 용량 (전 DC) <span class="sub" id="capLabel" style="float:right; font-weight:400;"></span></h2>
+    <div style="display:flex; gap:22px; align-items:center; flex-wrap:wrap;">
+      <div id="capDonut" style="flex:none;"></div>
+      <div style="flex:1; min-width:240px;">
+        <div class="capbar" style="height:24px; border-radius:10px;"><i id="capFill" style="width:0"></i><b id="capPct">—</b></div>
+        <div id="capStack" style="margin-top:12px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px;">
+    <h2>지역별 스토리지 현황</h2>
+    <div class="grid cols-4" id="regions"><div class="sub">—</div></div>
+  </div>
+
+  <div class="card">
+    <h2>데이터센터별 사용량 — 행 클릭=스토리지 펼침 · 지역 카드=필터 · 머리글=정렬
+      <span style="float:right; font-weight:400;"><button id="pingBtn" style="padding:3px 9px;">📡 Ping 체크</button> <span class="sub" id="updAt"></span></span></h2>
+    <div class="sub" id="pingNote" style="margin:-4px 0 8px;"></div>
+    <div id="scanAllBar" style="display:flex; gap:10px 14px; align-items:center; flex-wrap:wrap; margin:0 0 10px; padding:8px 10px; background:#161c28; border:1px solid #263042; border-radius:8px;">
+      <button id="scanAllBtn" class="primary" style="padding:6px 12px;">▶ 전체 노드 스캔 시작</button>
+      <button id="stopAllBtn" style="padding:6px 12px; background:#2a1616; border:1px solid #5a2a2a; color:#ff9b9b;"
+              title="전체 노드의 진행 중 스캔을 모두 중단합니다(threads 는 이어하기 가능, pscan 은 중지 불가)">⏹ 전체 중단</button>
+      <label style="display:inline-flex; align-items:center; gap:5px;"><input type="checkbox" id="scanAllOFS"> 한 파일시스템(-x)</label>
+      <label style="display:inline-flex; align-items:center; gap:5px;">엔진
+        <select id="scanAllEngine" class="inp" style="padding:3px 6px;">
+          <option value="auto">오토튜닝(최적 자동)</option>
+          <option value="threads">threads(스레드·상세, 중지/재개 가능)</option>
+          <option value="pscan">pscan(멀티프로세스·빠름, 중지 불가)</option>
+        </select></label>
+      <label style="display:inline-flex; align-items:center; gap:5px;" title="깊이 접기(fold) — N까지만 디렉터리 상세를 저장하고 그 아래는 용량만 합산합니다(합계는 정확). 0=전체 상세. 비우면 각 노드의 설정값(기본 4)을 사용. ‘오토튜닝’ 선택 시에는 노드 설정값을 씁니다.">깊이(fold)
+        <input id="scanAllFold" class="inp" type="number" min="0" max="100" step="1" placeholder="노드설정" style="width:72px; padding:3px 6px;"></label>
+      <span class="sub">진행 중 노드:</span>
+      <label style="display:inline-flex; align-items:center; gap:5px;"><input type="radio" name="scanAllBusy" value="skip" checked> 안 하는 노드만</label>
+      <label style="display:inline-flex; align-items:center; gap:5px;"><input type="radio" name="scanAllBusy" value="restart"> 멈추고 다시 시작</label>
+      <span class="sub" id="scanAllMsg"></span>
+    </div>
+    <table id="nodeTable">
+      <thead><tr>
+        <th class="sortable" data-nsort="id" data-label="노드">노드</th>
+        <th class="sortable" data-nsort="region" data-label="지역">지역</th>
+        <th class="num sortable" data-nsort="storages" data-label="스토리지">스토리지</th>
+        <th class="num sortable" data-nsort="used_bytes" data-label="조사 용량">조사 용량</th>
+        <th class="num sortable" data-nsort="fs_used_bytes" data-label="사용량">사용량</th>
+        <th class="num sortable" data-nsort="fs_total_bytes" data-label="전체 용량">전체 용량</th>
+        <th>마지막 스캔</th>
+        <th class="sortable" data-nsort="status" data-label="상태" title="클릭: 스캔 경과시간(오래 스캔한 순)으로 정렬">상태</th><th></th></tr></thead>
+      <tbody id="nodeRows"><tr><td colspan="9" class="sub">불러오는 중…</td></tr></tbody>
+    </table>
+    <div class="sub" id="dashNote" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="card" id="thruCard" style="margin-top:14px;">
+    <h2>📊 법인별 시간당 처리량 <span class="sub" style="float:right; font-weight:400;">행 클릭 = 최근 1분·10분·30분·1시간·10시간·1일 처리량</span></h2>
+    <div class="sub" style="margin:-4px 0 8px;">막대·수치는 <b>조사 용량</b> 기준 시간당 처리량(시작~지금 평균). 윈도우별 값은 포탈에 <b>영구 저장</b>되는 처리량 기록에서 계산합니다(배포 직후엔 짧은 윈도우부터 채워짐).</div>
+    <div id="thruRows"><div class="sub">불러오는 중…</div></div>
+  </div>
+</div>
+
+<!-- 네트워크 모니터링 -->
+<div class="wrap view" id="view-netmon">
+  <div class="grid cols-4" style="margin-bottom:14px;">
+    <div class="card"><h2>🟢 UP</h2><div class="big" id="nmUp">—</div><div class="sub">도달 가능 노드</div></div>
+    <div class="card"><h2>🔴 DOWN</h2><div class="big" id="nmDown">—</div><div class="sub">무응답 노드</div></div>
+    <div class="card"><h2>평균 지연</h2><div class="big" id="nmAvg">—</div><div class="sub">HQ→노드 왕복</div></div>
+    <div class="card"><h2>측정</h2><div class="big" style="font-size:20px;">🔄 5초 자동</div><div class="sub" id="nmAt">—</div></div>
+  </div>
+  <!-- 인프라 체크: 서버별 핑 이력 (1년 누적) -->
+  <div class="card" style="margin-bottom:14px;">
+    <h2>🩺 인프라 체크 (서버 Ping)</h2>
+    <div class="sub" style="margin-bottom:10px;">매니저(HQ)에서 각 서버로의 TCP 연결 지연(ms)을 주기적으로 측정해 1년간 누적합니다.
+      평소(중앙값) 대비 <b style="color:var(--warn)">+20% 노랑</b>, <b style="color:var(--danger)">+50% 빨강</b>으로 표시됩니다.</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
+      <div class="rbtns" id="phRange">
+        <button class="rbtn active" data-r="86400">1일</button>
+        <button class="rbtn" data-r="604800">7일</button>
+        <button class="rbtn" data-r="2592000">30일</button>
+        <button class="rbtn" data-r="7776000">90일</button>
+        <button class="rbtn" data-r="31536000">365일</button>
+      </div>
+      <button id="phRefresh">🔄 새로고침</button>
+      <span class="sub" style="margin-left:auto;">
+        <span class="dot" style="background:#4aa3ff"></span> 정상
+        <span class="dot" style="background:var(--warn);margin-left:12px;"></span> +20% 이상
+        <span class="dot" style="background:var(--danger);margin-left:12px;"></span> +50% 이상
+        <span style="display:inline-block;width:18px;border-top:1px dashed #8aa0b8;vertical-align:middle;margin-left:12px;"></span> 중앙값
+      </span>
+    </div>
+    <div id="phGroups"><div class="sub" style="padding:14px 2px;">불러오는 중…</div></div>
+  </div>
+
+  <!-- 실시간 핑 표 -->
+  <div class="card">
+    <h2>실시간 핑 — HQ→노드 (5초)</h2>
+    <div class="sub" style="margin-bottom:8px;">각 노드로의 왕복 지연·도달 여부를 5초마다 측정합니다. ‘추이’는 최근 측정 이력(스파크라인), ‘손실’은 이 세션 중 무응답 비율입니다.</div>
+    <table id="netmonTable">
+      <thead><tr><th>상태</th><th>노드</th><th>지역</th><th>호스트</th><th class="num">지연</th><th class="num">최소/최대</th><th class="num">손실</th><th>추이</th><th>비고</th></tr></thead>
+      <tbody id="nmBody"><tr><td colspan="9" class="sub">측정 대기…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 설정 -->
+<div class="wrap view" id="view-nodes">
+  <div class="subtabs">
+    <button class="stab active" data-pane="np-nodes">📋 노드 관리</button>
+    <button class="stab" data-pane="np-account">🔑 계정 · 보안</button>
+    <button class="stab" data-pane="np-upgrade">⬆ 자동 업그레이드</button>
+    <button class="stab" data-pane="np-monitor">📈 모니터링 · 백업</button>
+    <button class="stab" data-pane="np-general">⚙ 일반</button>
+    <button class="stab" data-pane="np-about">ℹ️ About</button>
+  </div>
+
+  <!-- 새 카테고리 패널 — 카드는 아래 JS(카드 재배치)가 종류별로 옮겨 담는다 -->
+  <div class="subpane" id="np-account"></div>
+  <div class="subpane" id="np-monitor"></div>
+  <div class="subpane" id="np-general">
+    <div class="card" style="margin-bottom:14px;">
+      <h2>🧭 상단 메뉴 표시</h2>
+      <div class="sub" style="margin-bottom:8px;">상단 네비게이션에 보여줄 메뉴를 고릅니다. 체크 해제하면 숨겨집니다(‘설정’은 항상 표시).</div>
+      <div id="navMenuBox" style="display:flex; gap:18px; flex-wrap:wrap; align-items:center;"></div>
+      <span class="sub" id="navMenuMsg" style="display:block; margin-top:6px;"></span>
+    </div>
+    <div class="card" style="margin-bottom:14px;">
+      <h2>🔌 외부 사용량 API (집계 데이터 제공)</h2>
+      <div class="sub" style="margin-bottom:8px;">다른 서버가 전사 집계(총용량·노드·루트)를 <b>JSON</b> 으로 가져갈 수 있는 <b>읽기 전용 API</b> 입니다. 토큰을 설정하면 <span class="mono">X-Auth-Token</span> 헤더(또는 <span class="mono">?token=</span>)가 일치해야 응답합니다(비우면 공개).</div>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <input id="setExportToken" type="password" class="inp mono" placeholder="API 토큰(비우면 공개)" style="flex:1; min-width:220px;" autocomplete="new-password" />
+        <button id="setExportTokenBtn" class="primary">토큰 저장</button>
+        <span class="sub" id="setExportMsg"></span>
+      </div>
+      <div class="sub mono" id="exportEndpoint" style="margin-top:8px; word-break:break-all;"></div>
+    </div>
+  </div>
+
+  <!-- ① 설치 · 구성 (원격 자동 구성) → JS 가 '노드 관리'로 옮김 -->
+  <div class="subpane" id="np-install">
+  <div class="card" id="cardProvision" style="margin-bottom:14px;">
+    <h2>🚀 원격 자동 구성 — IP만 넣으면 엣지 설치 명령 생성 + 노드 자동 등록</h2>
+    <div class="setgrid">
+      <label class="fld">원격 IP/주소<input id="pvHost" class="inp mono" placeholder="192.168.40.221" /></label>
+      <label class="fld">포트<input id="pvPort" class="inp mono" type="number" value="8765" /></label>
+      <label class="fld">API 토큰(빈칸=자동생성)<input id="pvToken" class="inp mono" placeholder="(자동 생성)" /></label>
+      <label class="fld">스캔 경로(mount-base)<input id="pvPath" class="inp mono" placeholder="/mnt/hadoop" /></label>
+      <label class="fld">노드 이름(빈칸=IP기반)<input id="pvName" class="inp mono" placeholder="(IP 기반)" /></label>
+      <label class="fld">지역(표시용)<input id="pvRegion" class="inp" placeholder="Poland" /></label>
+      <label class="fld">설치 방식<select id="pvInstall" class="inp"><option value="systemd">systemd(권장)</option><option value="nohup">nohup(간단)</option></select></label>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center;">
+      <label class="sub" style="display:flex; align-items:center; gap:6px;" title="같은 이름 또는 같은 서버(IP:포트)가 이미 등록돼 있으면 전체 갱신합니다"><input id="pvOverwrite" type="checkbox" checked /> 기존 노드 덮어쓰기</label>
+      <button id="pvGenBtn" class="primary">① 설치 명령 생성 + 노드 등록</button>
+      <span class="sub" id="pvMsg"></span>
+    </div>
+    <div id="pvScriptWrap" style="display:none; margin-top:10px;">
+      <div class="sub" style="margin-bottom:4px;">아래를 <b>원격 엣지 서버에서 1회 복붙 실행</b>하세요(또는 <span class="mono">setup.sh</span> 저장 후 <span class="mono">bash setup.sh</span>). 노드·토큰은 이미 포탈에 등록됨 — 엣지가 뜨면 자동 폴링.</div>
+      <textarea id="pvScript" class="inp mono" style="width:100%; height:230px; white-space:pre;" readonly></textarea>
+      <div style="display:flex; gap:8px; margin-top:6px; align-items:center;">
+        <button id="pvCopy">📋 복사</button><span class="sub" id="pvCopyMsg"></span>
+      </div>
+    </div>
+    <div style="margin-top:14px; border-top:1px solid #2a3550; padding-top:12px;">
+      <div class="sub" style="margin-bottom:6px;"><b>② SSH로 원격 자동 설치 + 등록</b> — 위 <b>IP</b>에 SSH로 접속해 엣지를 <b>설치·기동·포탈 등록까지 한 번에</b>. (계정/비번만 더 입력하면 끝)</div>
+      <div class="note" style="margin:6px 0; border-color:#5a3030; color:#f0b0b0;">
+        ⚠ 포탈이 SSH로 접속해 실행합니다. <b>비밀번호는 저장하지 않고 1회만</b> 씁니다(포탈 호스트에 <span class="mono">sshpass</span> 필요, 비번 인증 시). 신뢰망·키 인증 권장.
+      </div>
+      <div class="setgrid">
+        <label class="fld">SSH 사용자<input id="pvSshUser" class="inp mono" placeholder="root" /></label>
+        <label class="fld">SSH 포트<input id="pvSshPort" class="inp mono" type="number" value="22" /></label>
+        <label class="fld">비밀번호(키 인증이면 비움)<input id="pvSshPass" class="inp mono" type="password" placeholder="(키 인증 시 비움)" /></label>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:10px; align-items:center;">
+        <button id="pvSshBtn" class="primary">② SSH로 자동 설치 + 등록</button><span class="sub" id="pvSshMsg"></span>
+      </div>
+      <pre id="pvSshOut" class="note mono" style="display:none; white-space:pre-wrap; max-height:260px; overflow:auto; margin-top:8px;"></pre>
+    </div>
+  </div>
+  </div>
+
+  <!-- ② 업그레이드 (원격 버전 + 자동/감시폴더/전노드) -->
+  <div class="subpane" id="np-upgrade">
+  <div class="card" id="netUpgCard" style="margin-bottom:14px; border:1px solid var(--accent2);">
+    <h2>🌐 인터넷(URL) 자동 업그레이드 — 포탈 + 전 엣지</h2>
+    <div id="nuInfo" class="sub" style="margin-bottom:10px;">상태 불러오는 중…</div>
+    <div class="setgrid" style="margin-bottom:8px;">
+      <label class="fld">소스<select id="nuSource" class="inp">
+        <option value="off">끔(수동)</option>
+        <option value="github">Update Server</option></select></label>
+      <label class="fld">Site Info(URL)
+        <input id="nuUrl" class="inp mono" placeholder="https://raw… 또는 사내 미러/사설 레포 폴더 주소" /></label>
+      <label class="fld">인증토큰
+        <input id="nuToken" class="inp mono" type="password" autocomplete="new-password"
+          placeholder="인증토큰" /></label>
+      <label class="fld">확인 주기(초)<input id="nuSecs" class="inp" type="number" min="10" value="60" /></label>
+      <label class="fld" style="flex-direction:row; align-items:center; gap:6px;">
+        <input type="checkbox" id="nuAuto" /> 새 버전 자동 설치·재시작(+엣지 전파)</label>
+    </div>
+    <div class="sub" style="margin:-2px 0 8px;">
+      <label style="display:inline-flex; align-items:center; gap:5px;"><input type="checkbox" id="nuTokenClear" /> 저장된 토큰 지우기</label>
+      · 사설(비공개) 레포는 <b>토큰</b>을 함께 저장하세요. 비공개 <b>GitHub</b> 는 raw 주소를 그대로 넣으면
+      자동으로 contents API 로 인증 조회합니다(브랜치에 <code>/</code> 가 있어도 OK). 사내 미러는
+      <code>versions.json</code> + <code>isilon_usage-*.tar.gz</code> 가 있는 <b>폴더</b> 주소를 넣으세요.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <button id="nuSaveBtn">설정 저장</button>
+      <button id="nuCheckBtn" class="primary">🔄 지금 확인</button>
+      <button id="nuInstallBtn" style="display:none; border-color:var(--warn); color:#ffd591;">⬆ 지금 업그레이드(+전 엣지)</button>
+      <span id="nuMsg" class="sub"></span>
+    </div>
+    <div id="nuLog" class="sub mono" style="display:none; max-height:160px; overflow:auto;
+      background:#0d1219; border:1px solid var(--line); border-radius:8px; padding:8px; white-space:pre-wrap; margin-top:8px;"></div>
+  </div>
+  <div class="card" style="margin-bottom:14px;">
+    <h2>🔄 원격 버전 업그레이드 — 엣지를 HQ 최신 코드로</h2>
+    <div class="sub" style="margin-bottom:8px;">HQ 포탈의 현재 코드로 엣지를 올립니다 — 최신 코드(agent-bundle)를 받아 코드 디렉터리에 덮어쓰고 서비스를 재시작합니다(스캔 DB·설정은 data-dir 라 보존). 노드 버전은 ‘노드 관리’ 탭 표의 ‘버전’ 열에서 확인하세요.</div>
+    <div class="setgrid">
+      <label class="fld">대상 노드 id(표시용·선택)<input id="ugId" class="inp mono" placeholder="(노드 id)" /></label>
+      <label class="fld">엣지 코드 디렉터리<input id="ugDir" class="inp mono" value="/opt/isilon_edge" /></label>
+      <label class="fld">systemd 서비스명<input id="ugSvc" class="inp mono" value="isilon-edge" /></label>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center;">
+      <button id="ugGenBtn" class="primary">① 업그레이드 스크립트 생성</button>
+      <span class="sub" id="ugMsg"></span>
+    </div>
+    <div id="ugScriptWrap" style="display:none; margin-top:10px;">
+      <div class="sub" style="margin-bottom:4px;">아래를 <b>해당 엣지 서버에서 1회 복붙 실행</b>하세요.</div>
+      <textarea id="ugScript" class="inp mono" style="width:100%; height:180px; white-space:pre;" readonly></textarea>
+      <div style="display:flex; gap:8px; margin-top:6px; align-items:center;">
+        <button id="ugCopy">📋 복사</button><span class="sub" id="ugCopyMsg"></span>
+      </div>
+    </div>
+    <details style="margin-top:12px;">
+      <summary class="sub" style="cursor:pointer;">[옵션 B] SSH로 원격 업그레이드 실행 — 보안 주의</summary>
+      <div class="note" style="margin:8px 0; border-color:#5a3030; color:#f0b0b0;">
+        ⚠ 포탈이 SSH로 접속해 위 스크립트를 실행합니다. <b>비밀번호는 1회만</b> 쓰고 저장하지 않습니다. 신뢰망·키 인증 권장.
+      </div>
+      <div class="setgrid">
+        <label class="fld">원격 IP/주소<input id="ugHost" class="inp mono" placeholder="192.168.40.221" /></label>
+        <label class="fld">SSH 사용자<input id="ugSshUser" class="inp mono" placeholder="root" /></label>
+        <label class="fld">SSH 포트<input id="ugSshPort" class="inp mono" type="number" value="22" /></label>
+        <label class="fld">비밀번호(키 인증이면 비움)<input id="ugSshPass" class="inp mono" type="password" placeholder="(키 인증 시 비움)" /></label>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:10px; align-items:center;">
+        <button id="ugSshBtn">② SSH로 업그레이드 실행</button><span class="sub" id="ugSshMsg"></span>
+      </div>
+      <pre id="ugSshOut" class="note mono" style="display:none; white-space:pre-wrap; max-height:260px; overflow:auto; margin-top:8px;"></pre>
+    </details>
+  </div>
+
+  <div class="card" style="margin-bottom:14px;">
+    <h2>🔁 자동 업그레이드 (감시 폴더 + 전 노드)</h2>
+    <div class="sub" style="margin-bottom:8px;">감시 폴더에 새 버전 <span class="mono">isilon_usage-*.tar.gz/.zip</span> 을 두면 포탈이 자동 적용·재시작하고, 등록된 모든 엣지에도 새 코드를 푸시합니다(엣지 <span class="mono">api_token</span> 인증). 비우면 끔.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <input id="ugWatchDir" class="inp mono" placeholder="예: /opt/isilon_releases" style="flex:1; min-width:240px;" />
+      <button id="ugWatchBrowse" type="button">📁 찾아보기</button>
+      <button id="ugWatchSave">감시 폴더 저장</button>
+      <button id="ugPushAll" class="primary">전 노드 지금 업그레이드</button>
+      <span class="sub" id="ugWatchMsg"></span>
+    </div>
+    <pre id="ugPushOut" class="note mono" style="display:none; white-space:pre-wrap; max-height:220px; overflow:auto; margin-top:8px;"></pre>
+    <details style="margin-top:10px;">
+      <summary class="sub" style="cursor:pointer;">[부트스트랩] 구버전 엣지(&lt;1.41.0)를 SSH로 한 번에 — 보안 주의</summary>
+      <div class="note" style="margin:8px 0; border-color:#5a3030; color:#f0b0b0;">
+        ⚠ 위 ‘전 노드 지금 업그레이드’(푸시)는 엣지가 <b>1.41.0+</b> 일 때만 됩니다. 구버전은 포탈이 SSH로 접속해 업그레이드 스크립트를 실행합니다(엣지가 HQ에서 새 코드를 받아 교체·재시작). 비밀번호는 1회만 쓰고 저장 안 함. 신뢰망·키 인증 권장.
+      </div>
+      <div class="setgrid">
+        <label class="fld">SSH 사용자<input id="ugAllUser" class="inp mono" placeholder="root" /></label>
+        <label class="fld">SSH 포트<input id="ugAllPort" class="inp mono" type="number" value="22" /></label>
+        <label class="fld">비밀번호(키 인증이면 비움)<input id="ugAllPass" class="inp mono" type="password" placeholder="(공용 비번)" /></label>
+        <label class="fld">엣지 코드 디렉터리<input id="ugAllDir" class="inp mono" value="/opt/isilon_edge" /></label>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:10px; align-items:center;">
+        <button id="ugPushAllSsh">전 노드 SSH 업그레이드</button><span class="sub" id="ugSshAllMsg"></span>
+      </div>
+    </details>
+  </div>
+
+  <div class="card" style="margin-bottom:14px;">
+    <h2>📦 엣지 오프라인 업그레이드 (포탈 릴리스 폴더 → 엣지가 당겨감)</h2>
+    <div class="sub" style="margin-bottom:8px;">포탈 서버의 이 폴더에 <span class="mono">isilon_usage-*.tar.gz</span> 를 두면, 각 엣지가 인터넷·토큰 없이 포탈에서 받아 스스로 업그레이드합니다(아래 한 줄을 <b>엣지 콘솔</b>에서 실행). 푸시와 달리 엣지가 당겨가므로 노드 등록·인바운드 접근이 필요 없습니다.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <input id="relDir" class="inp mono" placeholder="/opt/isilon_release" style="flex:1; min-width:240px;" />
+      <button id="relSave">릴리스 폴더 저장</button>
+      <button id="relCheck">🔄 지금 확인</button>
+      <span class="sub" id="relMsg"></span>
+    </div>
+    <div class="sub" style="margin-top:8px;">현재 내려줄 패키지: <span class="mono" id="relFile">—</span></div>
+    <div class="sub" style="margin-top:4px;" id="relSeen"></div>
+    <div class="sub" style="margin-top:10px;">엣지 콘솔에서 1줄(업그레이드) — 클릭하면 복사:</div>
+    <pre id="relCmd" class="note mono" style="white-space:pre-wrap; word-break:break-all; margin-top:4px; cursor:pointer;" title="클릭하면 복사">—</pre>
+  </div>
+
+  <div class="card" id="cardDbDir" style="margin-bottom:14px;">
+    <h2>💾 중앙 DB 저장 경로 (노드 복제본)</h2>
+    <div class="sub" style="margin-bottom:8px;">엣지에서 복제해 온 노드 DB(통합 조회용)를 저장할 <b>포탈 서버의 디렉터리</b>입니다.
+      비우고 저장하면 기본 경로(<span class="mono" id="dbDirDefault">데이터 폴더/replicas</span>)로 돌아갑니다.
+      저장 시 같은 디스크면 기존 복제본을 <b>즉시 이동</b>하고(복사 없음), 이동하지 못하면(다른 디스크 등)
+      경로만 바뀌며 <b>다음 동기화가 새 경로를 자동으로 다시 채웁니다</b>(증분 복제 — 그때까지 통합 조회가 비어 보일 수 있음).</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <input id="dbDir" class="inp mono" placeholder="예: /bigdisk/isilon_replicas (비우면 기본)" style="flex:1; min-width:240px;" />
+      <button id="dbDirBrowse" type="button">📁 찾아보기</button>
+      <button id="dbDirSave" class="primary">저장</button>
+      <span class="sub" id="dbDirMsg"></span>
+    </div>
+    <div class="sub" style="margin-top:8px;">현재 적용 경로: <span class="mono" id="dbDirEff">—</span> · 노드 복제본 <b id="dbDirCount">—</b>개</div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px;">
+    <h2>📜 업그레이드 기록 (History) <button id="histRefresh" class="sub" style="float:right; font-weight:400; padding:2px 8px;">↻ 새로고침</button></h2>
+    <div class="sub" style="margin-bottom:8px;">자동(인터넷·감시 폴더)·수동·전 노드 푸시 업그레이드가 일어나면 여기에 남습니다(포탈 재시작에도 보존). <b>세부</b>를 누르면 단계 로그와 엣지별 결과를 봅니다.</div>
+    <div id="histList" class="sub">불러오는 중…</div>
+  </div>
+
+  <!-- 업그레이드 기록 세부 모달 -->
+  <div id="histModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.62); z-index:2000; align-items:center; justify-content:center;">
+    <div style="background:#141a2b; border:1px solid #2a3550; border-radius:12px; width:min(820px,95vw); max-height:90vh; display:flex; flex-direction:column; box-shadow:0 14px 44px rgba(0,0,0,.55);">
+      <div style="padding:13px 18px; border-bottom:1px solid #2a3550; display:flex; align-items:center; gap:10px;">
+        <span style="font-size:18px;">📜</span><b style="font-size:15px;" id="histModalTitle">업그레이드 세부</b>
+        <button id="histModalClose" style="margin-left:auto;">닫기</button>
+      </div>
+      <div id="histModalBody" style="padding:14px 18px; overflow:auto; flex:1; min-height:240px;"></div>
+    </div>
+  </div>
+
+  <!-- 업그레이드 진행 모달(단계별 라이브 로그) -->
+  <div id="upgModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.62); z-index:2000; align-items:center; justify-content:center;">
+    <div style="background:#141a2b; border:1px solid #2a3550; border-radius:12px; width:min(760px,94vw); max-height:88vh; display:flex; flex-direction:column; box-shadow:0 14px 44px rgba(0,0,0,.55);">
+      <div style="padding:13px 18px; border-bottom:1px solid #2a3550; display:flex; align-items:center; gap:10px;">
+        <span style="font-size:18px;">⬆️</span><b style="font-size:15px;">업그레이드 진행</b>
+        <span id="upgModalStat" class="sub" style="margin-left:auto;"></span>
+      </div>
+      <pre id="upgModalLog" class="mono" style="margin:0; padding:14px 18px; overflow:auto; flex:1; min-height:240px; white-space:pre-wrap; word-break:break-all; font-size:12.5px; line-height:1.75;"></pre>
+      <div style="padding:10px 18px; border-top:1px solid #2a3550; display:flex; align-items:center; gap:10px;">
+        <span class="sub">닫아도 업그레이드는 백그라운드로 계속됩니다.</span>
+        <button id="upgModalClose" style="margin-left:auto;">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 전 노드 업그레이드 — 노드별 라이브 상세 진행 팝업 -->
+  <div id="pushModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.62); z-index:2000; align-items:center; justify-content:center;">
+    <div style="background:#141a2b; border:1px solid #2a3550; border-radius:12px; width:min(900px,96vw); max-height:90vh; display:flex; flex-direction:column; box-shadow:0 14px 44px rgba(0,0,0,.55);">
+      <div style="padding:13px 18px; border-bottom:1px solid #2a3550; display:flex; align-items:center; gap:10px;">
+        <span style="font-size:18px;">⬆️</span><b style="font-size:15px;">전 노드 업그레이드 진행</b>
+        <span id="pushModalStat" class="sub" style="margin-left:auto;"></span>
+      </div>
+      <div style="padding:12px 18px; border-bottom:1px solid #2a3550;">
+        <div id="pushModalHead" class="sub" style="margin-bottom:7px;">시작하는 중…</div>
+        <div class="capbar" style="height:18px; border-radius:9px;"><i id="pushBar" style="width:0"></i><b id="pushBarTxt">—</b></div>
+      </div>
+      <div style="overflow:auto; flex:1; min-height:260px;">
+        <table style="width:100%; font-size:12.5px; border-collapse:collapse;">
+          <thead><tr style="position:sticky; top:0; background:#141a2b; z-index:1;">
+            <th style="text-align:left; padding:7px 18px;">노드</th>
+            <th style="text-align:left; padding:7px 8px;">지역</th>
+            <th style="text-align:left; padding:7px 8px;">현재</th>
+            <th style="text-align:left; padding:7px 8px;">상태</th>
+            <th style="text-align:left; padding:7px 18px;">상세 (새 버전 / 사유)</th>
+          </tr></thead>
+          <tbody id="pushTbody"></tbody>
+        </table>
+      </div>
+      <div style="padding:10px 18px; border-top:1px solid #2a3550; display:flex; align-items:center; gap:10px;">
+        <span class="sub">닫아도 전파는 백그라운드로 계속됩니다.</span>
+        <button id="pushModalClose" style="margin-left:auto;">닫기</button>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <!-- ③ 노드 관리 (추가/수정 + 등록 목록) -->
+  <div class="subpane active" id="np-nodes">
+  <div class="card" style="margin-bottom:14px;">
+    <h2>글로벌 노드 추가 / 수정</h2>
+    <div class="setgrid">
+      <label class="fld">노드 이름(고유)<input id="nId" class="inp mono" placeholder="dc-tokyo" /></label>
+      <label class="fld">지역(표시용)<input id="nRegion" class="inp" placeholder="아시아/도쿄" /></label>
+      <label class="fld">주소(URL)<input id="nUrl" class="inp mono" placeholder="http://10.20.1.5:8765" /></label>
+      <label class="fld">API 토큰(엣지 api_token 과 동일)<input id="nToken" class="inp mono" type="password" placeholder="(변경 시에만)" /></label>
+      <label class="fld">경로 별칭: 로컬 접두어(선택)<input id="nAliasLocal" class="inp mono" placeholder="/mnt/isilon/data" /></label>
+      <label class="fld">경로 별칭: 논리 접두어(선택)<input id="nAliasLogical" class="inp mono" placeholder="/data" /></label>
+      <label class="fld">복제 단위<select id="nUnit" class="inp">
+        <option value="minute">분 마다</option><option value="hour">시간 마다</option>
+        <option value="day">일 마다</option><option value="week">주 마다</option>
+        <option value="month">개월 마다</option></select></label>
+      <label class="fld">수집 방식<select id="nMode" class="inp"><option value="both">복제 + 폴링(권장)</option><option value="replicate">복제만</option><option value="poll">폴링만</option></select></label>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center;">
+      <span class="sub">반복주기</span>
+      <input id="nEvery" class="inp" type="number" min="1" value="30" style="width:74px;" />
+      <span id="nUnitLabel" class="sub">분마다</span>
+      <span id="nWeekdays" style="display:none; gap:5px; align-items:center;"></span>
+      <select id="nMonth" class="inp" style="display:none;"></select>
+      <select id="nDay" class="inp" style="display:none;"></select>
+      <input id="nAt" type="time" class="inp" style="width:110px; display:none;" value="03:00" />
+      <span class="sub" id="nSummary" style="margin-left:8px;"></span>
+    </div>
+    <div style="display:flex; gap:10px; align-items:center; margin-top:14px; flex-wrap:wrap;">
+      <label class="sub" style="display:flex; gap:6px; align-items:center;"><input id="nEnabled" type="checkbox" checked /> 사용함</label>
+      <span class="sub" id="nodeMsg"></span>
+      <div class="spacer"></div>
+      <button id="testBtn">연결 테스트</button>
+      <button id="addBtn" class="primary">저장(추가/수정)</button>
+    </div>
+    <div class="note" style="margin-top:12px;">연결 테스트는 <span class="mono">/api/dbexport</span>(meta.json)로 응답·토큰·요약을 확인합니다. 같은 이름으로 저장하면 수정됩니다.</div>
+  </div>
+
+  <div class="card" id="csvImportCard" style="margin-bottom:14px;">
+    <h2>📋 CSV로 여러 서버 한 번에 가져오기</h2>
+    <div class="sub" style="margin-bottom:8px;">
+      여러 노드를 줄 단위로 붙여넣거나 <b>.csv 파일</b>을 선택해 한 번에 등록합니다. 첫 줄은 헤더이며
+      <b>id,url</b> 은 필수, 나머지(region·token·alias_local·alias_logical)는 선택입니다.
+      같은 id 는 <b>덮어쓰기(수정)</b>, 토큰을 비우면 기존 토큰이 유지됩니다.
+    </div>
+    <textarea id="csvText" class="inp mono" rows="6" spellcheck="false"
+      style="width:100%; resize:vertical; box-sizing:border-box;"
+      placeholder="id,url,region,token&#10;dc-seoul,http://10.1.1.5:8765,아시아/서울,TOKEN&#10;dc-tokyo,10.2.2.6:8765,아시아/도쿄,"></textarea>
+    <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; align-items:center;">
+      <input type="file" id="csvFile" accept=".csv,text/csv,text/plain" class="sub" />
+      <button id="csvImportBtn" class="primary">⬆ 가져오기</button>
+      <button id="csvSampleDownload">⬇ 샘플 CSV 받기</button>
+      <button id="csvSampleBtn">예시 채우기</button>
+      <button id="csvExportBtn" title="현재 등록된 노드를 CSV로 내려받기(토큰은 빈칸 — 채워서 가져오기)">⬇ 현재 구성 내보내기</button>
+      <span id="csvMsg" class="sub" style="margin-left:4px;"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>등록된 글로벌 노드</h2>
+    <table>
+      <thead><tr><th>이름</th><th>지역</th><th>주소</th><th>복제 주기</th><th>마지막 동기화</th><th>상태</th><th>동작</th></tr></thead>
+      <tbody id="regRows"><tr><td colspan="7" class="sub">불러오는 중…</td></tr></tbody>
+    </table>
+  </div>
+  </div>
+
+  <!-- ④ 보안 · 감사 -->
+  <div class="subpane" id="np-security">
+  <div class="card" id="cardTitle" style="margin-bottom:14px;">
+    <h2>🏷 포탈 제목 (브랜딩)</h2>
+    <div class="sub" style="margin-bottom:8px;">상단 제목과 브라우저 탭 제목을 바꿉니다. 둘 다 비우면 기본값(“다빈치 글로벌 아이실론 관제센터 — 한국 HQ”)을 씁니다.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <input id="setTitle" class="inp" placeholder="제목 (예: 다빈치 글로벌 아이실론 관제센터)" style="flex:2; min-width:240px;" />
+      <input id="setSubtitle" class="inp" placeholder="부제 (예: 한국 HQ) — 선택" style="flex:1; min-width:140px;" />
+      <button id="setTitleBtn" class="primary">제목 저장</button>
+      <span class="sub" id="setTitleMsg"></span>
+    </div>
+  </div>
+  <div class="card" id="cardLoginSec" style="margin-bottom:14px;">
+    <h2>🔒 접속 보안 (로그인 비밀번호)</h2>
+    <div class="sub" style="margin-bottom:8px;">비밀번호를 설정하면 접속 시 <b>읽기 전용</b>이 되고, 우상단 <b>로그인</b> 후 노드 등록·원격 구성 등 변경 작업을 할 수 있습니다. 비우고 저장하면 보호가 해제됩니다.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <input id="setPw" type="password" placeholder="새 비밀번호(변경 시에만)" style="flex:1; min-width:220px;" />
+      <label class="sub" style="display:flex; align-items:center; gap:6px;"><input id="setPwEnc" type="checkbox" /> 암호화 저장(해시)</label>
+      <button id="setPwBtn">비밀번호 저장</button>
+      <button id="setPwClearBtn" title="설정된 비밀번호를 지워 보호를 끕니다(로그인 필요)">🔓 비밀번호 해제</button>
+      <span class="sub" id="setPwMsg"></span>
+    </div>
+    <div class="sub" style="margin-top:6px;">비밀번호를 잊었다면: 포탈 서버의 데이터 폴더 <span class="mono">portal_settings.json</span> 에서 <span class="mono">"op_password"</span> 를 <span class="mono">""</span> 로 바꾸고 포탈을 재시작하세요.</div>
+    <div style="margin-top:8px;">
+      <button id="pAuditBtn" style="padding:4px 10px;">🧾 감사 로그 보기</button>
+      <span class="sub" id="pAuditMsg"></span>
+      <div id="pAuditBox" style="display:none; margin-top:6px; max-height:260px; overflow:auto; border:1px solid #2a3550; border-radius:8px;"></div>
+    </div>
+  </div>
+  <div class="card" id="cardSessPrefs" style="margin-bottom:14px;">
+    <h2>⏱ 로그인 세션 / 화면 표시</h2>
+    <div class="sub" style="margin-bottom:8px;">한 번 로그인하면 지정한 시간 동안 다시 묻지 않습니다. 업그레이드 후 첫 접속 시 변경내용 팝업은 기본으로 꺼져 있습니다.</div>
+    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+      <label class="sub" style="display:flex; align-items:center; gap:6px;">로그인 유지 시간(분)
+        <input id="setOpTtl" type="number" min="1" max="10080" step="1" class="inp mono" style="width:120px;" placeholder="30" />
+      </label>
+      <label class="sub" style="display:flex; align-items:center; gap:6px;"><input id="setShowUpdatePopup" type="checkbox" /> 업그레이드 후 변경내용 팝업 보기</label>
+      <label class="sub" style="display:flex; align-items:center; gap:6px;" title="업그레이드 진행·전 노드 푸시·기록 세부 등 로그 팝업이 뜨는 위치">로그 팝업 위치
+        <select id="setLogPopupPos" class="inp" style="padding:4px 8px;">
+          <option value="center">중앙(기본)</option>
+          <option value="tl">좌상단</option>
+          <option value="tr">우상단</option>
+          <option value="bl">좌하단</option>
+          <option value="br">우하단</option>
+        </select>
+      </label>
+      <button id="setSessPrefsBtn" class="primary">저장</button>
+      <span class="sub" id="setSessPrefsMsg"></span>
+    </div>
+    <div class="sub" style="margin-top:4px;">유지 시간은 1~10080분(7일) 범위. 기본 30분. 로그 팝업 위치는 저장 즉시 모든 로그 팝업에 적용됩니다.</div>
+  </div>
+  <div class="card" id="cardNodePw" style="margin-bottom:14px;">
+    <h2>🔐 노드 작업 비밀번호 (포탈에서 설정)</h2>
+    <div class="sub" style="margin-bottom:8px;">엣지의 <b>작업 보호 비밀번호</b>를 포탈에서 일괄/개별로 설정·변경·해제합니다. <b>api_token(토큰)이 등록된 노드</b>만 적용되며, 엣지 비밀번호를 몰라도 api_token 인증으로 푸시합니다.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <select id="npNode" class="inp" style="min-width:200px;" title="대상 노드(전체 또는 개별)"><option value="">전체 노드</option></select>
+      <input id="npPass" type="password" class="inp mono" placeholder="새 비밀번호" style="flex:1; min-width:200px;" />
+      <button id="npSetBtn" class="primary">설정/변경</button>
+      <button id="npClearBtn" title="선택 노드의 비밀번호를 지워 보호를 끕니다">🔓 해제</button>
+      <span class="sub" id="npMsg"></span>
+    </div>
+    <div id="npResult" class="sub" style="margin-top:8px;"></div>
+  </div>
+  <div class="card" id="cardNodeToken" style="margin-bottom:14px;">
+    <h2>🔧 노드 토큰 강제 맞추기 (포탈 저장값 교정)</h2>
+    <div class="sub" style="margin-bottom:8px;">재부팅 등으로 엣지 <b>api_token</b> 이 바뀌어 <b>토큰 불일치(401)</b> 로 오프라인이 됐을 때, 엣지의 <b>현재 토큰</b>을 알고 있으면 포탈 저장값을 그 값으로 강제로 맞춥니다 — 엣지는 건드리지 않고 <b>포탈 로컬만</b> 교정하므로 다음 폴링부터 인증이 통과합니다. 엣지에서 <span class="mono">cat &lt;data-dir&gt;/settings.json</span> 의 <span class="mono">api_token</span> 으로 확인하세요.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <select id="tkNode" class="inp" style="min-width:200px;" title="대상 노드(개별 선택 → 1개 적용)"><option value="">— 노드 선택 —</option></select>
+      <input id="tkToken" type="password" class="inp mono" placeholder="엣지 api_token" autocomplete="new-password" style="flex:1; min-width:220px;" />
+      <button id="tkOneBtn" class="primary" title="드롭다운에서 고른 노드 1개에 적용">1개 적용</button>
+      <button id="tkAllBtn" title="입력한 토큰을 등록된 모든 노드에 일괄 적용">전체 일괄 적용</button>
+      <span class="sub" id="tkMsg"></span>
+    </div>
+    <div id="tkResult" class="sub" style="margin-top:8px;"></div>
+  </div>
+  <div class="card" id="cardEnroll" style="margin-bottom:14px;">
+    <h2>🔑 엣지 자기등록 토큰 (enroll token)</h2>
+    <div class="sub" style="margin-bottom:8px;">엣지 설치 시 <span class="mono">--hq http://&lt;이포탈&gt;:8800</span> 을 주면 엣지가 스스로 등록됩니다. 포탈에 <b>로그인 비밀번호가 설정된 경우</b>엔 엣지가 이 공유 토큰을 함께 보내야 등록됩니다(엣지 쪽 <span class="mono">--enroll &lt;토큰&gt;</span>). 비밀번호가 없으면(신뢰망) 토큰 없이도 등록됩니다. 비우고 저장하면 토큰 검사를 끕니다.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <input id="setEnroll" class="inp mono" placeholder="enroll 공유 토큰" style="flex:1; min-width:240px;" />
+      <button id="setEnrollBtn">저장</button>
+      <span class="sub" id="setEnrollMsg"></span>
+    </div>
+  </div>
+  <div class="card" id="cardBackup" style="margin-bottom:14px;">
+    <h2>💾 백업 (포탈 설정 + 노드 목록)</h2>
+    <div class="sub" style="margin-bottom:8px;">포탈 설정·등록 노드 목록(+감사 로그·핑 이력)을 <b>tar.gz 하나</b>로 묶습니다. 노드 <b>api_token·로그인 비밀번호</b>가 포함되니 안전하게 보관하세요. (대용량 <span class="mono">replicas/</span> 는 제외)</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <button id="bkDownload" class="primary">⬇ 백업 다운로드</button>
+      <input id="bkDir" class="inp mono" placeholder="서버에 저장할 폴더 (예: /opt/isilon_backups)" style="flex:1; min-width:260px;" />
+      <button id="bkSave">📁 지금 저장</button>
+      <span class="sub" id="bkMsg"></span>
+    </div>
+    <div class="sub" style="margin-top:12px; border-top:1px solid var(--line); padding-top:10px;">⏰ <b>자동 백업 일정</b> — 위 <b>폴더</b>에 주기적으로 저장하고, <b>최대 보관 수</b>를 넘으면 오래된 것부터 지웁니다(폴더가 비어 있으면 자동 백업 끔).</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px;">
+      <label class="sub">주기(시간)<input id="bkEvery" class="inp" type="number" min="0.1" step="0.5" value="1" style="width:84px; margin-left:5px;" /></label>
+      <label class="sub">최대 보관 수<input id="bkKeep" class="inp" type="number" min="1" max="1000" value="100" style="width:92px; margin-left:5px;" /></label>
+      <button id="bkSchedSave">일정 저장</button>
+      <span class="sub" id="bkSchedMsg"></span>
+    </div>
+    <div class="sub" id="bkStatus" style="margin-top:7px;"></div>
+  </div>
+  <div class="card" id="cardAskLlm" style="margin-bottom:14px;">
+    <h2>💬 질의응답(자연어) — 로컬 LLM</h2>
+    <div class="sub" style="margin-bottom:8px;">‘물어보기’의 숫자는 항상 규칙 엔진이 계산합니다. 로컬 LLM을 켜면 사내 GPU에서 도는 OpenAI 호환 서버(Ollama·vLLM·llama.cpp 등)로 <b>문장만</b> 자연스럽게 다듬습니다. 데이터는 외부로 나가지 않습니다(끄면 규칙 기반만).</div>
+    <label style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+      <input id="setAskLlm" type="checkbox" /> 로컬 LLM 사용
+    </label>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <input id="setAskLlmEp" class="inp mono" placeholder="엔드포인트: http://127.0.0.1:11434/v1" style="flex:1; min-width:240px;" />
+      <input id="setAskLlmModel" class="inp mono" placeholder="모델: qwen2.5:7b" style="width:180px;" />
+      <input id="setAskLlmTimeout" class="inp" type="number" min="1" max="600" placeholder="초" style="width:72px;" title="응답 대기(초)" />
+      <input id="setAskLlmKey" class="inp" type="password" placeholder="토큰(선택)" autocomplete="new-password" style="width:160px;" />
+      <button id="setAskLlmBtn" class="primary">저장</button>
+      <span class="sub" id="setAskLlmMsg"></span>
+    </div>
+  </div>
+  </div>
+
+  <div class="subpane" id="np-about">
+    <div class="about-hero">
+      <div class="about-hero-row">
+        <div class="about-icon">📦</div>
+        <div>
+          <div class="about-title">Isilon Global Usage Portal</div>
+          <div class="about-tagline">The Davinci Platform · 전세계 분산 아이실론 사용량 통합 관제</div>
+        </div>
+      </div>
+      <div class="about-slogan">⭐ <b>전세계 최고의 NAS 사용량 관리 솔루션</b> · <i>World's Best Isilon Usage Management Solution</i></div>
+      <div class="about-badges">
+        <span class="about-badge ver" id="aboutVer">v—</span>
+        <span class="about-badge stack">Python · Vanilla JS</span>
+        <span class="about-badge edition">Offline · Air-gapped Edition</span>
+      </div>
+    </div>
+
+    <div class="about-2col">
+      <div class="card">
+        <div class="about-label">저작자 · AUTHOR</div>
+        <div class="about-author-row">
+          <div class="about-avatar">박</div>
+          <div>
+            <div class="about-author-name">박준호 <span class="sub" style="font-weight:400;">(Park Junho)</span></div>
+            <a class="about-mail" href="mailto:noainred@lgcns.com">noainred@lgcns.com</a>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="about-label">저작권 · COPYRIGHT</div>
+        <div class="about-copy">© 2026 박준호</div>
+        <div class="sub">All rights reserved.</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px;">
+      <div class="about-label">주요 기능 · KEY FEATURES</div>
+      <div class="about-grid">
+        <div class="about-feat"><span class="fi">🌐</span><div><b>글로벌 사용량 통합 관제</b><span class="sub">전세계 분산 노드의 루트·용량·파일시스템·스캔을 단일 화면에서 집계</span></div></div>
+        <div class="about-feat"><span class="fi">🗺️</span><div><b>지역·노드 롤업 · 랭킹</b><span class="sub">지역별 요약, 노드 온라인 상태, 용량 큰 루트/노드 순위</span></div></div>
+        <div class="about-feat"><span class="fi">🧭</span><div><b>초대용량 멀티프로세스 스캔</b><span class="sub">pscan 으로 GIL 우회 — 코어 수만큼 선형 가속(수억 파일 대응)</span></div></div>
+        <div class="about-feat"><span class="fi">📊</span><div><b>분석 리포트</b><span class="sub">파일 나이·소유자·확장자·최대 파일 Top·용량 소진 예측</span></div></div>
+        <div class="about-feat"><span class="fi">💬</span><div><b>자연어 물어보기</b><span class="sub">규칙 기반 + 로컬 LLM(Ollama 등) — 숫자는 결정적 계산, 데이터 외부 전송 없음</span></div></div>
+        <div class="about-feat"><span class="fi">🗄️</span><div><b>스토리지 어레이 연동</b><span class="sub">Isilon OneFS·PowerStore·Unity 등 네이티브 API 로 용량·상태 집계</span></div></div>
+        <div class="about-feat"><span class="fi">🛰️</span><div><b>분산 수집 · 자동 배포</b><span class="sub">엣지 에이전트 SSH 자동 설치/원격 업그레이드, 중앙 집계</span></div></div>
+        <div class="about-feat"><span class="fi">⏰</span><div><b>예약 · 반복 스캔 · 알림</b><span class="sub">캘린더/간격 예약, 완료·오류 웹훅·메일 알림, 반복 자동 재시작</span></div></div>
+        <div class="about-feat"><span class="fi">📦</span><div><b>오프라인 설치 · 에어갭</b><span class="sub">인터넷 차단 폐쇄망 배포, 릴리스 SHA-256 검증, 원격 업그레이드</span></div></div>
+        <div class="about-feat"><span class="fi">🔒</span><div><b>보안 · 감사 · 네트워크 점검</b><span class="sub">작업 보호 비밀번호·읽기전용·감사 로그, 노드 Ping·응답시간(1년 누적)</span></div></div>
+      </div>
+    </div>
+
+    <div class="about-notice">
+      본 소프트웨어 <b>Isilon Global Usage Portal</b> 의 모든 저작권은 저작권자 <b>박준호</b> 에게 있습니다. 저작권자의 사전 서면 동의 없이 본 프로그램의 전부 또는 일부를 무단으로 복제·배포·수정·역설계할 수 없습니다.
+      <div class="sub" style="margin-top:8px; font-style:italic;">Copyright © 2026 박준호 (Park Junho). All rights reserved. Unauthorized reproduction or distribution is prohibited.</div>
+    </div>
+    <div class="about-foot">Made with ❤ for global Isilon operations · 2026</div>
+  </div>
+
+  <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--line); text-align:center; font-size:11.5px; color:var(--muted); letter-spacing:.4px;">
+    ✦ Crafted with care by <b style="color:#cfe6ff; font-weight:800; letter-spacing:.6px; text-shadow:0 0 10px rgba(124,196,255,.45);">JunHo&nbsp;Park</b> ✦ <span style="opacity:.6;">© 2026</span>
+  </div>
+</div>
+
+<!-- 경로 비교(Cross-DC) -->
+<div class="wrap view" id="view-compare">
+  <div class="card" style="margin-bottom:14px;">
+    <h2>같은 경로를 데이터센터별로 비교 — <b>논리 경로</b> 입력(노드별 경로 별칭으로 로컬 경로에 매핑)</h2>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <input id="cmpPath" class="inp mono" style="flex:1; min-width:300px;" placeholder="/data/nexus-data" />
+      <button id="cmpRun" class="primary">비교</button>
+    </div>
+    <table style="margin-top:12px;">
+      <thead><tr><th>노드</th><th>지역</th><th class="num">사용 용량</th><th class="num">파일 수</th><th class="num">최대 대비</th><th>판정</th></tr></thead>
+      <tbody id="cmpRows"><tr><td colspan="6" class="sub">경로를 입력하고 “비교”를 누르세요.</td></tr></tbody>
+    </table>
+    <div class="sub" id="cmpNote" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="card">
+    <h2>통합 디렉터리 매트릭스 — 행=디렉터리, 열=노드 · 클릭하면 더 깊이</h2>
+    <div style="display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; align-items:center;">
+      <button id="cmpRoot">🏠 루트로</button>
+      <span id="cmpCrumb" class="sub mono" style="flex:1; word-break:break-all;">—</span>
+    </div>
+    <div style="overflow:auto;"><table id="cmpMatrix">
+      <thead id="cmpMHead"></thead>
+      <tbody id="cmpMBody"><tr><td class="sub">경로를 비교하면 표시됩니다.</td></tr></tbody>
+    </table></div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const escAttr = (s) => String(s==null?"":s).replace(/[&"'<>]/g,c=>({"&":"&amp;",'"':"&quot;","'":"&#39;","<":"&lt;",">":"&gt;"}[c]));
+// ---- 인증(로그인): 보기는 자유, 변경(POST)은 토큰 필요 — fetch 래퍼로 자동 처리 ----
+let _opRequired=false, _opExpiry=0, _opTimer=null;
+const _origFetch = window.fetch.bind(window);
+function _opToken(){ try{ return sessionStorage.getItem("pOpToken")||""; }catch(e){ return ""; } }
+function _opLeft(){ return Math.max(0, Math.ceil((_opExpiry-Date.now())/1000)); }
+function canMutate(){ return !_opRequired || (!!_opToken() && _opLeft()>0); }
+function updateLoginUI(){
+  const ro=_opRequired && !canMutate();
+  const b=$("roBanner"); if(b) b.style.display=ro?"":"none";
+  // 비밀번호 설정 + 비로그인이면 '설정'(관리) 탭을 아예 숨기고, 그 화면이면 대시보드로
+  const nodesBtn=document.querySelector('.navbtn[data-view="nodes"]');
+  if(nodesBtn) nodesBtn.style.display=ro?"none":"";
+  if(ro && $("view-nodes") && $("view-nodes").classList.contains("active")) show("dash");
+  const btn=$("loginBtn");
+  if(btn){
+    btn.style.display=_opRequired?"":"none";
+    if(_opRequired && canMutate()){ const m=Math.floor(_opLeft()/60);
+      btn.textContent="🔓 로그아웃 ("+(m>0?m+"분":_opLeft()+"초")+")"; }
+    else btn.textContent="🔑 로그인";
+  }
+  ["addBtn","testBtn","pvGenBtn","pvSshBtn","setPwBtn","setPwClearBtn","ugGenBtn","ugSshBtn","pAuditBtn","ugWatchSave","ugPushAll","ugPushAllSsh","bkDownload","bkSave","bkSchedSave"].forEach(id=>{ const e=$(id); if(e) e.disabled=ro; });
+}
+// 상단/탭 제목(브랜딩) 적용 — 옵션에서 지정한 값이 있으면 그것으로, 없으면 기본값.
+function applyPortalTitle(title, sub){
+  title=(title||"").trim(); sub=(sub||"").trim();
+  const t = title || "NAS Management";   // 헤더 아랫줄(커스텀 제목 없으면 기본 브랜드)
+  const s = title ? sub : sub;
+  document.title = title || "[The Davinci] NAS Management";   // 탭 제목(브랜드 접두; 커스텀 제목 있으면 그대로)
+  const bt=document.getElementById("brandTitle"); if(bt) bt.textContent=t;
+  const bs=document.getElementById("brandSub"); if(bs) bs.textContent = s?("— "+s):"";
+  // 헤더 제목 클릭으로 이름 변경하던 동작은 제거(실수 클릭 방지) — 제목 변경은 '설정' 탭에서.
+}
+// 헤더 제목 클릭 → 이름 변경 모달(저장은 /api/portal/settings, 로그인 필요 시 먼저 로그인)
+async function editPortalTitle(){
+  if(_opRequired && !canMutate()){ const ok=await doLogin(); if(!ok) return; }
+  const curT=($("setTitle")&&$("setTitle").value)||"", curS=($("setSubtitle")&&$("setSubtitle").value)||"";
+  const ov=document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center;";
+  const box=document.createElement("div");
+  box.style.cssText="background:#16202c;border:1px solid #2a3550;border-radius:10px;padding:18px;min-width:360px;box-shadow:0 12px 40px rgba(0,0,0,.55);";
+  const ttl=document.createElement("div"); ttl.textContent="🏷 관제센터 이름 변경";
+  ttl.style.cssText="font-size:14px;font-weight:700;color:#dfe8f3;margin-bottom:4px;";
+  const hint=document.createElement("div"); hint.textContent="비우면 기본값을 씁니다.";
+  hint.style.cssText="font-size:12px;color:#8aa0b6;margin-bottom:10px;";
+  const i1=document.createElement("input"); i1.type="text"; i1.value=curT; i1.placeholder="제목 (예: 다빈치 글로벌 아이실론 관제센터)";
+  const i2=document.createElement("input"); i2.type="text"; i2.value=curS; i2.placeholder="부제 (예: 한국 HQ) — 선택";
+  [i1,i2].forEach(i=>i.style.cssText="width:100%;box-sizing:border-box;padding:8px 10px;margin-bottom:8px;border-radius:7px;border:1px solid #2a3550;background:#0e1620;color:#dfe8f3;font:inherit;");
+  const btns=document.createElement("div"); btns.style.cssText="margin-top:6px;display:flex;gap:8px;justify-content:flex-end;";
+  const cancel=document.createElement("button"); cancel.textContent="취소"; cancel.type="button";
+  const ok=document.createElement("button"); ok.textContent="저장"; ok.type="button"; ok.className="primary";
+  btns.appendChild(cancel); btns.appendChild(ok);
+  box.appendChild(ttl); box.appendChild(hint); box.appendChild(i1); box.appendChild(i2); box.appendChild(btns);
+  ov.appendChild(box); document.body.appendChild(ov); setTimeout(()=>{i1.focus(); i1.select();},20);
+  function done(){ try{document.body.removeChild(ov);}catch(e){} }
+  cancel.onclick=done;
+  ok.onclick=async()=>{
+    try{
+      const j=await (await fetch("/api/portal/settings",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({portal_title:i1.value.trim(), portal_subtitle:i2.value.trim()})})).json();
+      if(j.ok){ applyPortalTitle(j.portal_title,j.portal_subtitle);
+        if($("setTitle")) $("setTitle").value=j.portal_title||""; if($("setSubtitle")) $("setSubtitle").value=j.portal_subtitle||"";
+        done(); }
+      else alert("저장 실패: "+(j.reason||"로그인이 필요할 수 있습니다."));
+    }catch(e){ alert("오류: "+e); }
+  };
+  i2.addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); ok.onclick(); } });
+  ov.addEventListener("mousedown",e=>{ if(e.target===ov) done(); });
+}
+async function loadAuth(){
+  try{ const j=await (await _origFetch("/api/portal/auth",{cache:"no-store"})).json();
+    _opRequired=!!j.op_required;
+    if($("aboutVer") && j.version) $("aboutVer").textContent = "v"+j.version;   // About 버전 배지
+    applyPortalTitle(j.portal_title, j.portal_subtitle);
+    applyNavHidden(j.nav_hidden); renderNavMenu(j.nav_hidden);   // 상단 메뉴 표시 적용 + 선택 UI
+    if(!window._updChecked){ window._updChecked=true; if(j.show_update_popup) checkUpdatePopup(j.version); }   // 업그레이드 후 첫 접속 안내(설정 ON일 때만)
+    const ti=$("setTitle"), su=$("setSubtitle");
+    if(ti) ti.value=j.portal_title||""; if(su) su.value=j.portal_subtitle||"";
+    const tt=$("setOpTtl"); if(tt && document.activeElement!==tt) tt.value=j.op_ttl_minutes||30;
+    const sp=$("setShowUpdatePopup"); if(sp) sp.checked=!!j.show_update_popup;
+    const lp=$("setLogPopupPos"); if(lp && document.activeElement!==lp) lp.value=j.log_popup_pos||"center";
+    applyLogPopupPos(j.log_popup_pos||"center");
+  }catch(e){}
+  updateLoginUI();
+}
+// 로그 팝업(업그레이드 진행·전 노드 푸시·기록 세부) 앵커 위치 — 설정값 하나로 전부 통일 적용
+function applyLogPopupPos(pos){
+  const jc={center:"center",tl:"flex-start",tr:"flex-end",bl:"flex-start",br:"flex-end"};
+  const ai={center:"center",tl:"flex-start",tr:"flex-start",bl:"flex-end",br:"flex-end"};
+  ["upgModal","pushModal","histModal"].forEach(id=>{ const m=$(id); if(!m) return;
+    m.style.justifyContent=jc[pos]||"center";
+    m.style.alignItems=ai[pos]||"center";
+    m.style.padding=(pos&&pos!=="center")?"20px":"0"; });
+}
+// ── 업그레이드 후 첫 접속 안내 팝업 (브라우저별 1회) ──
+function _changelogSection(text, ver){
+  if(!text||!ver) return "";
+  const re=new RegExp("^##\\s*\\[?"+ver.replace(/\./g,"\\.")+"\\]?.*$","m");
+  const m=re.exec(text); if(!m) return "";
+  const rest=text.slice(m.index+m[0].length);
+  const nx=rest.search(/\n##\s*\[/);
+  return ((nx>=0)?rest.slice(0,nx):rest).replace(/\n---\s*$/,"").trim();
+}
+// 변경 내용을 '간단하게' — 각 ### 헤더의 한 줄 요약만(상세는 '버전 기록').
+function _changelogSummary(text, ver){
+  const section=_changelogSection(text, ver);
+  if(!section) return "";
+  const emo={"추가":"✨","변경":"🔧","수정":"🐛","문서":"📄","보안":"🔒","성능":"⚡"};
+  const out=[];
+  section.split("\n").forEach(ln=>{
+    const m=ln.match(/^###\s+(\S+)/); if(!m) return;
+    const e=emo[m[1].slice(0,2)]||"•";
+    const dash=ln.indexOf("—");
+    const sum=(dash>=0?ln.slice(dash+1):ln.replace(/^###\s+/,"").replace(/\([^)]*\)/,"")).trim();
+    if(sum) out.push(e+" "+sum);
+  });
+  return out.length?out.join("\n"):section;
+}
+function showUpdatePopup(ver, notes){
+  const ov=document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;";
+  const box=document.createElement("div");
+  box.style.cssText="background:#16202c;border:1px solid #2a3550;border-radius:12px;max-width:640px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 16px 50px rgba(0,0,0,.6);";
+  const hd=document.createElement("div");
+  hd.style.cssText="padding:16px 20px;border-bottom:1px solid #2a3550;display:flex;align-items:center;gap:10px;";
+  hd.innerHTML='<span style="font-size:22px;">🎉</span><b style="font-size:16px;color:#dfe8f3;">업데이트됨 — v'+ver+'</b><div style="flex:1"></div>';
+  const close=document.createElement("button"); close.textContent="닫기"; close.style.cssText="padding:4px 14px;";
+  hd.appendChild(close);
+  const body=document.createElement("div");
+  body.style.cssText="padding:14px 20px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.6;color:#cfe0f0;font-family:ui-monospace,Menlo,monospace;";
+  body.textContent=notes||("v"+ver+" 로 업데이트되었습니다.");
+  box.appendChild(hd); box.appendChild(body); ov.appendChild(box); document.body.appendChild(ov);
+  function done(){ try{document.body.removeChild(ov);}catch(e){} }
+  close.onclick=done;
+  ov.addEventListener("mousedown",e=>{ if(e.target===ov) done(); });
+}
+async function checkUpdatePopup(ver){
+  if(!ver) return;
+  let seen=null; try{ seen=localStorage.getItem("portalSeenVer"); localStorage.setItem("portalSeenVer", ver); }catch(e){}
+  if(!seen || seen===ver) return;   // 첫 방문이거나 같은 버전이면 안 띄움(업그레이드된 경우만)
+  let notes=""; try{ const j=await (await fetch("/api/portal/changelog",{cache:"no-store"})).json(); notes=_changelogSummary(j.changelog||"", ver); }catch(e){}
+  showUpdatePopup(ver, notes);
+}
+// 비밀번호 입력 모달(브라우저 prompt 은 평문 노출 → type=password 로 마스킹). Promise<string|null>.
+function passwordPrompt(msg){
+  return new Promise(resolve=>{
+    const ov=document.createElement("div");
+    ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center;";
+    const box=document.createElement("div");
+    box.style.cssText="background:#16202c;border:1px solid #2a3550;border-radius:10px;padding:18px;min-width:300px;box-shadow:0 12px 40px rgba(0,0,0,.55);";
+    const lbl=document.createElement("div"); lbl.textContent=msg||"비밀번호를 입력하세요:";
+    lbl.style.cssText="margin-bottom:10px;font-size:14px;color:#dfe8f3;";
+    const inp=document.createElement("input"); inp.type="password"; inp.autocomplete="current-password";
+    inp.style.cssText="width:100%;box-sizing:border-box;padding:8px 10px;border-radius:7px;border:1px solid #2a3550;background:#0e1620;color:#dfe8f3;font:inherit;";
+    const btns=document.createElement("div"); btns.style.cssText="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;";
+    const cancel=document.createElement("button"); cancel.textContent="취소"; cancel.type="button";
+    const ok=document.createElement("button"); ok.textContent="로그인"; ok.type="button"; ok.className="primary";
+    btns.appendChild(cancel); btns.appendChild(ok);
+    box.appendChild(lbl); box.appendChild(inp); box.appendChild(btns); ov.appendChild(box);
+    document.body.appendChild(ov); setTimeout(()=>inp.focus(),20);
+    function done(v){ try{document.body.removeChild(ov);}catch(e){} resolve(v); }
+    cancel.onclick=()=>done(null); ok.onclick=()=>done(inp.value);
+    inp.addEventListener("keydown",e=>{ if(e.key==="Enter"){e.preventDefault();done(inp.value);} else if(e.key==="Escape"){e.preventDefault();done(null);} });
+    ov.addEventListener("mousedown",e=>{ if(e.target===ov) done(null); });
+  });
+}
+async function doLogin(){
+  const pw=await passwordPrompt("로그인 — 비밀번호를 입력하세요:"); if(pw==null) return false;
+  try{ const r=await _origFetch("/api/portal/login",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pw})});
+    const j=await r.json();
+    if(j.ok && j.token){ try{ sessionStorage.setItem("pOpToken",j.token); }catch(e){}
+      _opExpiry=Date.now()+(j.ttl||1800)*1000; _opRequired=true;
+      // 만료 시각도 저장 → 새로고침해도 남은 시간을 알 수 있어 다시 로그인할 필요가 없다.
+      try{ sessionStorage.setItem("pOpExpiry",String(_opExpiry)); }catch(e){}
+      _opStartTimer();
+      updateLoginUI(); return true; }
+  }catch(e){}
+  window.alert("비밀번호가 올바르지 않습니다."); return false;
+}
+function _opStartTimer(){
+  if(_opTimer) clearInterval(_opTimer);
+  _opTimer=setInterval(()=>{ if(_opLeft()<=0){ clearInterval(_opTimer); _opTimer=null;
+    try{ sessionStorage.removeItem("pOpToken"); sessionStorage.removeItem("pOpExpiry"); }catch(e){} }
+    updateLoginUI(); },1000);
+}
+// 새로고침/재접속 시 살아있는 로그인 세션 복원(서버 토큰은 고정 만료라 절대 만료시각이 일치).
+function restoreOpSession(){
+  try{
+    const tok=sessionStorage.getItem("pOpToken")||"";
+    const exp=parseInt(sessionStorage.getItem("pOpExpiry")||"0",10);
+    if(tok && exp>Date.now()){ _opExpiry=exp; _opRequired=true; _opStartTimer(); updateLoginUI(); }
+    else if(tok){ try{ sessionStorage.removeItem("pOpToken"); sessionStorage.removeItem("pOpExpiry"); }catch(e){} }
+  }catch(e){}
+}
+function doLogout(){ if(_opTimer){ clearInterval(_opTimer); _opTimer=null; } _opExpiry=0;
+  try{ sessionStorage.removeItem("pOpToken"); sessionStorage.removeItem("pOpExpiry"); }catch(e){} updateLoginUI(); }
+window.fetch=async function(url,opts){
+  opts=opts||{}; const m=(opts.method||"GET").toUpperCase();
+  const u=(typeof url==="string")?url:"";
+  if(m==="POST" && u.indexOf("/api/portal/login")<0){
+    opts.headers=Object.assign({},opts.headers||{},{"X-Op-Token":_opToken()});
+    let res=await _origFetch(url,opts);
+    if(res.status===401){ _opRequired=true; updateLoginUI();
+      if(await doLogin()){ opts.headers["X-Op-Token"]=_opToken(); res=await _origFetch(url,opts); } }
+    return res;
+  }
+  return _origFetch(url,opts);
+};
+function fmtBytes(n){ n=Number(n||0); const u=["B","KB","MB","GB","TB","PB"]; let i=0;
+  while(n>=1024 && i<u.length-1){ n/=1024; i++; } return (i===0? n.toFixed(0): n.toFixed(1))+" "+u[i]; }
+function fmtNum(n){ return Number(n||0).toLocaleString(); }
+function ago(ts){ if(!ts) return "—"; const s=Math.max(0,(Date.now()/1000-ts));
+  if(s<60) return Math.floor(s)+"초 전"; if(s<3600) return Math.floor(s/60)+"분 전"; return Math.floor(s/3600)+"시간 전"; }
+function fmtDur(sec){ sec=Math.max(0,Math.floor(sec||0)); const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;
+  return h?(h+"시간 "+m+"분"):(m?(m+"분 "+s+"초"):(s+"초")); }
+function fmtClock(ts){ if(!ts) return "—"; const d=new Date(ts*1000);
+  return d.toLocaleString("ko-KR",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}); }
+function freshClass(ts){ if(!ts) return ""; const s=Date.now()/1000-ts;
+  return s<120?"fresh-ok":(s<900?"fresh-warn":"fresh-old"); }
+function capColor(p){ return p>=85?"#ff5c5c":(p>=80?"#f5a623":(p>=70?"#f5d142":"#38d39f")); }  // 70노랑/80주황/85빨강
+// 원형 게이지(SVG, 외부 라이브러리 0) — 전체 사용률 표시용
+function donutGauge(pct, color, size){
+  size = size || 104; pct = Math.max(0, Math.min(100, pct||0));
+  const sw = 12, r = (size - sw) / 2, cx = size / 2, cy = size / 2, C = 2 * Math.PI * r;
+  const off = (C * (1 - pct / 100)).toFixed(1);
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="display:block">
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="${sw}"/>
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round"
+      stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${off}" transform="rotate(-90 ${cx} ${cy})"
+      style="transition:stroke-dashoffset .6s ease"/>
+    <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" fill="#fff"
+      style="font:700 ${Math.round(size*0.23)}px ui-monospace,Menlo,monospace">${pct.toFixed(0)}%</text></svg>`;
+}
+// 지역 스택 바/범례 색(카테고리) — 브랜드 계열 위주로 구분되게
+// 검증된 카테고리 팔레트(dataviz — CVD·대비 통과). 지역 구분용, 순서 고정.
+// 지역 카테고리 팔레트 — dataviz 검증 통과 순서(인접쌍 CVD ΔE≥8·정상시각 ΔE≥19, 표면 #070b14).
+// 순서가 CVD 안전장치다 — 임의로 재배열하지 말 것(재배열 시 검증기 재실행).
+const REGION_PAL = ["#3987e5","#d95926","#199e70","#c98500","#d55181","#008300","#9085e9"];
+// 진행 중 스캔의 '집계(sizing)' 단계 진행률(%). 없으면(탐색 단계 등) null.
+function nodeScanPct(n){
+  for(const r of ((n && n.roots) || [])){
+    if(r.phase === "sizing" && (r.total_dirs || 0) > 0)
+      return Math.min(100, Math.round((r.processed_dirs || 0) / r.total_dirs * 100));
+  }
+  return null;
+}
+function capCell(used,total){
+  if(!total) return '<span class="sub" title="엣지가 fs 전체 용량(statvfs)을 보고하지 않음 — 엣지 마운트/버전 확인">—</span>';
+  const p=Math.min(100, used/total*100), c=capColor(p);
+  return `<div class="capbar" title="사용 ${fmtBytes(used)} / 전체 ${fmtBytes(total)} (${p.toFixed(1)}%)">
+      <i style="width:${p.toFixed(1)}%;background:${c}"></i><b>${p.toFixed(0)}%</b></div>
+      <div class="sub mono" style="white-space:nowrap;margin-top:2px;">${fmtBytes(used)} / ${fmtBytes(total)}</div>`;
+}
+function show(v){ if(v==="nodes" && _opRequired && !canMutate()) v="dash";   // 비번설정+비로그인이면 관리 탭 차단
+  ["dash","compare","nodes","netmon"].forEach(n=>$("view-"+n).classList.toggle("active", n===v));
+  if(v==="compare") loadCompare();
+  if(v==="netmon") netmonStart(); else netmonStop();
+  document.querySelectorAll(".navbtn").forEach(b=>b.classList.toggle("active", b.dataset.view===v)); }
+document.querySelectorAll(".navbtn").forEach(b=>b.addEventListener("click",()=>show(b.dataset.view)));
+// 설정 하위 탭(설치·구성 / 업그레이드 / 노드 관리 / 보안·감사)
+function showSub(id){
+  document.querySelectorAll("#view-nodes .subpane").forEach(p=>p.classList.toggle("active", p.id===id));
+  document.querySelectorAll("#view-nodes .stab").forEach(b=>b.classList.toggle("active", b.dataset.pane===id));
+  // 업그레이드 탭을 열 때마다 릴리스 폴더/인터넷 업그레이드 상태를 라이브로 새로고침(stale 표시 방지).
+  if(id==="np-upgrade"){ try{ loadRelease(); loadNetUpg(); loadHistory(); }catch(e){} }
+  if(id==="np-security"){ try{ pLoadUpgradeCfg(); }catch(e){} }   // 백업 현황 갱신
+}
+document.querySelectorAll("#view-nodes .stab").forEach(b=>b.addEventListener("click",()=>showSub(b.dataset.pane)));
+
+// 설정 카드를 종류별 탭으로 재배치(노드 관리 / 계정·보안 / 모니터링·백업 / 일반).
+(function(){
+  const moves={ "np-nodes":["cardProvision"], "np-account":["cardLoginSec","cardNodePw","cardNodeToken","cardEnroll"], "np-monitor":["cardDbDir","cardBackup","cardAskLlm"] };
+  Object.keys(moves).forEach(pane=>{ const p=document.getElementById(pane); if(!p) return;
+    moves[pane].forEach(id=>{ const el=document.getElementById(id); if(el) p.appendChild(el); }); });
+  const g=document.getElementById("np-general"), t=document.getElementById("cardTitle");
+  if(g&&t) g.insertBefore(t, g.firstElementChild);   // 포탈 제목을 '상단 메뉴' 카드 위로
+})();
+
+// 상단 메뉴 표시 선택 — '설정'은 잠금 방지를 위해 항상 표시.
+const NAV_LABELS={dash:"글로벌 대시보드", netmon:"네트워크 모니터링", compare:"경로 비교", nodes:"설정"};
+function applyNavHidden(hidden){
+  const hset=new Set(hidden||[]);
+  document.querySelectorAll(".navbtn").forEach(b=>{
+    const v=b.dataset.view; b.style.display=(v!=="nodes" && hset.has(v))?"none":"";
+  });
+}
+function renderNavMenu(hidden){
+  const box=$("navMenuBox"); if(!box) return;
+  const hset=new Set(hidden||[]);
+  box.innerHTML=Object.keys(NAV_LABELS).map(v=>{
+    const always=(v==="nodes");
+    return '<label style="display:inline-flex; align-items:center; gap:6px;">'
+      +'<input type="checkbox" data-nav="'+v+'" '+(!hset.has(v)?"checked":"")+' '+(always?"disabled":"")+'/> '
+      +NAV_LABELS[v]+(always?" (항상)":"")+'</label>';
+  }).join("");
+  box.querySelectorAll("input[data-nav]").forEach(c=>c.addEventListener("change",saveNavMenu));
+}
+async function saveNavMenu(){
+  const hidden=[];
+  document.querySelectorAll("#navMenuBox input[data-nav]").forEach(c=>{ if(!c.checked && c.dataset.nav!=="nodes") hidden.push(c.dataset.nav); });
+  applyNavHidden(hidden);
+  const msg=$("navMenuMsg"); if(msg) msg.textContent=" 저장 중…";
+  try{
+    const j=await (await fetch("/api/portal/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({nav_hidden:hidden})})).json();
+    if(msg) msg.textContent=j.ok?" ✓ 저장됨":(" 실패: "+(j.reason||"로그인이 필요할 수 있습니다"));
+  }catch(e){ if(msg) msg.textContent=" 오류: "+e; }
+}
+
+// ---- 네트워크 모니터링 (HQ→노드 핑, 5초 자동) ----
+let netmonTimer=null, netmonHist={}, _nmInflight=false;
+const NETMON_KEEP=40;
+function _nmHost(u){ try{ return new URL(u).hostname; }catch(e){ return u||""; } }
+function _nmSpark(h){
+  const vals=h.map(x=>x.ms).filter(v=>v!=null);
+  if(!vals.length) return "";
+  const max=Math.max.apply(null,vals.concat([1])), w=84, hh=18, n=h.length;
+  const path=h.map((x,i)=>{ const xx=(n<=1?0:(i/(n-1))*w);
+    const yy=(x.ms!=null?(hh-x.ms/max*hh):hh); return xx.toFixed(1)+","+yy.toFixed(1); }).join(" ");
+  return '<svg width="'+w+'" height="'+hh+'" style="vertical-align:middle"><polyline points="'+path+'" fill="none" stroke="#5cc8ff" stroke-width="1.5"/></svg>';
+}
+async function loadNetmon(){
+  if(_nmInflight) return; _nmInflight=true;
+  try{
+    const j=await (await fetch("/api/portal/ping",{cache:"no-store"})).json();
+    if(j.ok){
+      (j.results||[]).forEach(n=>{ const h=netmonHist[n.id]||(netmonHist[n.id]=[]);
+        h.push({ms:n.latency_ms, up:n.online}); if(h.length>NETMON_KEEP) h.shift(); });
+      renderNetmon(j.results||[]);
+    }
+  }catch(e){}
+  finally{ _nmInflight=false; }
+}
+function renderNetmon(nodes){
+  const up=nodes.filter(n=>n.online).length, down=nodes.length-up;
+  const lats=nodes.filter(n=>n.latency_ms!=null).map(n=>n.latency_ms);
+  const avg=lats.length?Math.round(lats.reduce((a,b)=>a+b,0)/lats.length):null;
+  if($("nmUp")) $("nmUp").textContent=up;
+  if($("nmDown")) $("nmDown").textContent=down;
+  if($("nmAvg")) $("nmAvg").textContent=avg!=null?(avg+" ms"):"—";
+  if($("nmAt")) $("nmAt").textContent="최근 "+new Date().toLocaleTimeString("ko-KR");
+  const rows=nodes.slice().sort((a,b)=>(a.online-b.online)||((b.latency_ms||0)-(a.latency_ms||0)));
+  $("nmBody").innerHTML = rows.length ? rows.map(n=>{
+    const h=netmonHist[n.id]||[]; const ms=h.map(x=>x.ms).filter(v=>v!=null);
+    const mn=ms.length?Math.round(Math.min.apply(null,ms)):"—", mx=ms.length?Math.round(Math.max.apply(null,ms)):"—";
+    const loss=h.length?Math.round(h.filter(x=>!x.up).length/h.length*100):0;
+    const stat=n.online?'<span class="badge b-online">🟢 UP</span>':'<span class="badge b-offline">🔴 DOWN</span>';
+    const col=n.latency_ms==null?'#9fb3c8':(n.latency_ms<150?'#7be0aa':(n.latency_ms<600?'#f0c86a':'#ff9a9a'));
+    const lat=n.latency_ms!=null?('<b style="color:'+col+'">'+n.latency_ms+' ms</b>'):'<span class="sub">—</span>';
+    return '<tr><td>'+stat+'</td><td><b>'+_he(n.id)+'</b></td><td>'+_he(n.region||'—')+'</td><td class="mono sub">'+_he(_nmHost(n.url))+'</td>'
+      +'<td class="num">'+lat+'</td><td class="num sub">'+mn+'/'+mx+'</td><td class="num sub">'+loss+'%</td>'
+      +'<td>'+_nmSpark(h)+'</td><td class="sub" style="color:#ff9a9a">'+_he(n.error||'')+'</td></tr>';
+  }).join("") : '<tr><td colspan="9" class="sub">등록된 노드가 없습니다.</td></tr>';
+}
+function netmonStart(){ if(netmonTimer) return; loadNetmon(); netmonTimer=setInterval(loadNetmon, 5000);
+  loadPingHistory(); if(!phTimer) phTimer=setInterval(loadPingHistory, 60000); }
+function netmonStop(){ if(netmonTimer){ clearInterval(netmonTimer); netmonTimer=null; }
+  if(phTimer){ clearInterval(phTimer); phTimer=null; } }
+
+// ---- 인프라 체크: 서버별 핑 이력(1년 누적) ----
+let phRange=86400, phTimer=null, phInflight=false, _phLast=null, _phRz=null;
+const _he=s=>String(s==null?"":s).replace(/[<>&"']/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;","'":"&#39;"}[c]));
+const esc=_he;   // 여러 함수(히스토리·파일브라우저·업그레이드표)가 전역 esc 를 쓴다(예전엔 일부 함수에만 지역 정의돼 ReferenceError 발생)
+async function loadPingHistory(){
+  if(phInflight) return; phInflight=true;
+  try{
+    const j=await (await fetch("/api/portal/ping-history?range="+phRange,{cache:"no-store"})).json();
+    if(j&&j.ok) renderPingHistory(j);
+    else if($("phGroups")) $("phGroups").innerHTML='<div class="sub" style="padding:14px 2px;">이력을 불러오지 못했습니다'+(j&&j.reason?': '+_he(j.reason):'')+'.</div>';
+  }catch(e){ if($("phGroups")) $("phGroups").innerHTML='<div class="sub" style="padding:14px 2px;">이력 요청에 실패했습니다.</div>'; }
+  finally{ phInflight=false; }
+}
+function renderPingHistory(j){
+  _phLast=j; const nodes=j.nodes||[];
+  if(!nodes.length){ $("phGroups").innerHTML='<div class="sub" style="padding:14px 2px;">아직 누적된 핑 표본이 없습니다 — 백그라운드 측정이 1분마다 쌓입니다.</div>'; return; }
+  const groups={}, order=[];
+  nodes.forEach((n,i)=>{ n._i=i; const r=n.region||'기타'; if(!groups[r]){ groups[r]=[]; order.push(r); } groups[r].push(n); });
+  let html='';
+  order.forEach(r=>{
+    html+='<div class="reglabel">'+_he(r)+' <span class="sub" style="font-weight:400">· '+groups[r].length+'대</span></div><div class="phgrid">';
+    groups[r].forEach(n=>{
+      html+='<div class="phcard"><div class="phhead"><b>'+_he(n.id)+'</b>'
+        +'<span class="sub" id="ph'+n._i+'_m"></span></div>'
+        +'<canvas id="ph'+n._i+'"></canvas>'
+        +'<div class="sub" id="ph'+n._i+'_x" style="display:flex;justify-content:space-between;margin-top:3px;"></div></div>';
+    });
+    html+='</div>';
+  });
+  $("phGroups").innerHTML=html;
+  nodes.forEach(n=>drawPhChart(n, j.range));
+}
+function _phTime(t,range){ const d=new Date(t*1000), p=x=>String(x).padStart(2,"0");
+  if(range<=86400) return p(d.getHours())+":"+p(d.getMinutes());
+  if(range<=2592000) return (d.getMonth()+1)+"/"+p(d.getDate())+" "+p(d.getHours())+"시";
+  return (d.getFullYear()%100)+"/"+p(d.getMonth()+1)+"/"+p(d.getDate()); }
+function drawPhChart(n, range){
+  const cv=$("ph"+n._i); if(!cv) return;
+  const now=Math.floor(Date.now()/1000);
+  _drawSpark(cv, n.series, n.median, now-range, range);
+  cv._node=n; cv._range=range;
+  if(!cv._phBound){ cv._phBound=1; _bindPhCanvas(cv); }
+  const mEl=$("ph"+n._i+"_m");
+  if(mEl) mEl.textContent=(n.median!=null?("중앙값 "+n.median+"ms"):"표본 없음")+" · "+(n.series||[]).length+"점 · 더블클릭=확대";
+  const xEl=$("ph"+n._i+"_x");
+  if(xEl) xEl.innerHTML='<span>'+_phTime(now-range,range)+'</span><span>'+_phTime(now,range)+'</span>';
+}
+// 공통 스파크라인 렌더(작은 카드/큰 모달 공용) — t0~t0+range 윈도우, 점 좌표를 cv._pts 에 저장
+function _drawSpark(cv, series, med, t0, range){
+  const dpr=window.devicePixelRatio||1, W=cv.clientWidth||320, H=cv.clientHeight||120;
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  const ctx=cv.getContext("2d"); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,W,H);
+  series=(series||[]).filter(p=>p.ms!=null);
+  const padL=6, padR=8, padT=8, padB=4, plotW=W-padL-padR, plotH=H-padT-padB;
+  const vis=series.filter(p=>p.t>=t0-1 && p.t<=t0+range+1);   // 윈도우 안 점만(패닝 대응)
+  const msVals=vis.map(p=>p.ms);
+  let ymax=Math.max.apply(null,(msVals.length?msVals:[1]).concat([med?med*1.6:1]))*1.12;
+  if(!(ymax>0)) ymax=1;
+  const xOf=t=>padL+Math.max(0,Math.min(1,(t-t0)/range))*plotW;
+  const yOf=v=>padT+(1-Math.min(v,ymax)/ymax)*plotH;
+  ctx.strokeStyle="rgba(255,255,255,0.06)"; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(padL,padT+plotH*0.5); ctx.lineTo(W-padR,padT+plotH*0.5); ctx.stroke();
+  if(med!=null){ const ym=yOf(med); ctx.save(); ctx.setLineDash([4,3]); ctx.strokeStyle="#8aa0b8"; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(padL,ym); ctx.lineTo(W-padR,ym); ctx.stroke(); ctx.restore(); }
+  if(vis.length>1){ ctx.strokeStyle="rgba(120,160,200,0.22)"; ctx.lineWidth=1; ctx.beginPath();
+    vis.forEach((p,i)=>{ const x=xOf(p.t), y=yOf(p.ms); i?ctx.lineTo(x,y):ctx.moveTo(x,y); }); ctx.stroke(); }
+  const rad=(H>200?3.2:2.2);
+  vis.forEach(p=>{ const x=xOf(p.t), y=yOf(p.ms); let c="#4aa3ff";
+    if(med){ const d=p.ms/med; if(d>=1.5) c="#ff5c5c"; else if(d>=1.2) c="#f5a623"; }
+    ctx.fillStyle=c; ctx.beginPath(); ctx.arc(x,y,rad,0,6.2832); ctx.fill(); });
+  ctx.fillStyle="#7c8aa0"; ctx.font="10px ui-monospace,Menlo,monospace"; ctx.textAlign="left";
+  ctx.fillText(Math.round(ymax)+"ms", padL+1, padT+8);
+  cv._pts=vis.map(p=>({x:xOf(p.t), y:yOf(p.ms), t:p.t, ms:p.ms}));
+}
+// ---- 핑 차트 인터랙션: 마우스오버 툴팁 · 더블클릭 확대 · 드래그 시점이동 · 휠 줌 ----
+function _nearestPt(pts, mx, my){
+  let best=null, bd=20*20;
+  (pts||[]).forEach(p=>{ const dx=p.x-mx, dy=p.y-my, d=dx*dx+dy*dy; if(d<bd){ bd=d; best=p; } });
+  return best;
+}
+function _phTipEl(){
+  let t=$("phTip");
+  if(!t){ t=document.createElement("div"); t.id="phTip"; document.body.appendChild(t);
+    t.style.cssText="position:fixed;z-index:9999;background:#0d1622;border:1px solid var(--line);"
+      +"border-radius:6px;padding:4px 9px;font-size:12px;color:var(--text);pointer-events:none;"
+      +"white-space:nowrap;box-shadow:0 6px 18px #000b;display:none;"; }
+  return t;
+}
+function _showPhTip(cx, cy, pt){
+  const t=_phTipEl(), d=new Date(pt.t*1000), p=x=>String(x).padStart(2,"0");
+  const ts=(d.getMonth()+1)+"/"+p(d.getDate())+" "+p(d.getHours())+":"+p(d.getMinutes())+":"+p(d.getSeconds());
+  t.innerHTML='<b>'+Math.round(pt.ms)+' ms</b> · '+ts;
+  t.style.display="block"; t.style.left=(cx+13)+"px"; t.style.top=(cy+13)+"px";
+}
+function _hidePhTip(){ const t=$("phTip"); if(t) t.style.display="none"; }
+function _bindPhCanvas(cv){
+  cv.style.cursor="crosshair";
+  cv.addEventListener("mousemove", e=>{
+    const r=cv.getBoundingClientRect(), pt=_nearestPt(cv._pts, e.clientX-r.left, e.clientY-r.top);
+    if(pt) _showPhTip(e.clientX, e.clientY, pt); else _hidePhTip();
+  });
+  cv.addEventListener("mouseleave", _hidePhTip);
+  cv.addEventListener("dblclick", ()=>{ if(cv._node) openPhModal(cv._node); });
+}
+let _phMV=null;   // 모달 뷰 상태 {series, med, id, t0, range}
+function openPhModal(node){
+  let m=$("phModal");
+  if(!m){
+    m=document.createElement("div"); m.id="phModal"; document.body.appendChild(m);
+    m.style.cssText="position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.72);display:none;align-items:center;justify-content:center;";
+    m.innerHTML='<div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;width:92vw;max-width:1150px;">'
+      +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">'
+      +'<b id="phmTitle" style="font-size:15px;"></b><span class="sub" id="phmInfo"></span><div style="flex:1"></div>'
+      +'<span class="sub">드래그=시점 이동 · 휠=확대/축소 · 더블클릭=리셋</span>'
+      +'<button id="phmClose">✕ 닫기</button></div>'
+      +'<canvas id="phmCanvas" style="width:100%;height:400px;display:block;cursor:grab;"></canvas>'
+      +'<div class="sub" id="phmX" style="display:flex;justify-content:space-between;margin-top:5px;"></div></div>';
+    $("phmClose").addEventListener("click", _closePhModal);
+    m.addEventListener("click", e=>{ if(e.target===m) _closePhModal(); });
+    document.addEventListener("keydown", e=>{ if(e.key==="Escape" && m.style.display==="flex") _closePhModal(); });
+    _bindPhModalCanvas();
+  }
+  m.style.display="flex";
+  $("phmTitle").textContent=node.id;
+  $("phmInfo").textContent="불러오는 중…";
+  // 1년치를 받아 그 노드만 큰 차트로(드래그로 과거까지 탐색)
+  fetch("/api/portal/ping-history?range=31536000",{cache:"no-store"}).then(r=>r.json()).then(j=>{
+    const nn=((j&&j.nodes)||[]).find(x=>x.id===node.id) || node;
+    const series=(nn.series||[]).filter(p=>p.ms!=null).slice().sort((a,b)=>a.t-b.t);
+    _phMV={ series, med:nn.median, id:node.id };
+    if(series.length){ const span=Math.max(3600, series[series.length-1].t-series[0].t);
+      _phMV.range=span; _phMV.t0=series[0].t; }
+    else { _phMV.range=86400; _phMV.t0=Math.floor(Date.now()/1000)-86400; }
+    drawPhModal();
+  }).catch(()=>{ const inf=$("phmInfo"); if(inf) inf.textContent="불러오기 실패"; });
+}
+function _closePhModal(){ const m=$("phModal"); if(m) m.style.display="none"; _hidePhTip(); }
+function drawPhModal(){
+  const cv=$("phmCanvas"), v=_phMV; if(!cv||!v) return;
+  _drawSpark(cv, v.series, v.med, v.t0, v.range);
+  const inf=$("phmInfo"); if(inf) inf.textContent=(v.med!=null?("중앙값 "+v.med+"ms · "):"")+v.series.length+"점";
+  const xe=$("phmX"); if(xe) xe.innerHTML='<span>'+_phTime(v.t0,v.range)+'</span><span>'+_phTime(v.t0+v.range,v.range)+'</span>';
+}
+function _bindPhModalCanvas(){
+  const cv=$("phmCanvas"); let drag=null;
+  cv.addEventListener("mousedown", e=>{ if(!_phMV) return; drag={x:e.clientX, t0:_phMV.t0}; cv.style.cursor="grabbing"; e.preventDefault(); });
+  window.addEventListener("mousemove", e=>{
+    const m=$("phModal"); if(!m || m.style.display!=="flex" || !_phMV) return;
+    if(drag){ const r=cv.getBoundingClientRect(); const frac=(e.clientX-drag.x)/(r.width||1);
+      _phMV.t0=drag.t0 - frac*_phMV.range; drawPhModal(); _hidePhTip(); return; }
+    const r=cv.getBoundingClientRect(), mx=e.clientX-r.left, my=e.clientY-r.top;
+    if(mx>=0&&my>=0&&mx<=r.width&&my<=r.height){ const pt=_nearestPt(cv._pts, mx, my); if(pt) _showPhTip(e.clientX,e.clientY,pt); else _hidePhTip(); }
+    else _hidePhTip();
+  });
+  window.addEventListener("mouseup", ()=>{ if(drag){ drag=null; cv.style.cursor="grab"; } });
+  cv.addEventListener("dblclick", ()=>{ const v=_phMV; if(v&&v.series.length){ v.t0=v.series[0].t; v.range=Math.max(3600, v.series[v.series.length-1].t-v.series[0].t); drawPhModal(); } });
+  cv.addEventListener("wheel", e=>{ if(!_phMV) return; e.preventDefault();
+    const r=cv.getBoundingClientRect(), frac=(e.clientX-r.left)/(r.width||1);
+    const center=_phMV.t0+frac*_phMV.range, f=(e.deltaY<0?0.8:1.25);
+    _phMV.range=Math.max(600, Math.min(31536000, _phMV.range*f)); _phMV.t0=center-frac*_phMV.range; drawPhModal();
+  }, {passive:false});
+}
+(function _phInit(){
+  const box=$("phRange");
+  if(box) box.querySelectorAll(".rbtn").forEach(b=>b.addEventListener("click",()=>{
+    box.querySelectorAll(".rbtn").forEach(x=>x.classList.remove("active"));
+    b.classList.add("active"); phRange=parseInt(b.dataset.r,10)||86400; loadPingHistory(); }));
+  const rb=$("phRefresh"); if(rb) rb.addEventListener("click",loadPingHistory);
+  window.addEventListener("resize",()=>{ if(_phLast && $("view-netmon") && $("view-netmon").classList.contains("active")){
+    clearTimeout(_phRz); _phRz=setTimeout(()=>{ (_phLast.nodes||[]).forEach(n=>drawPhChart(n,_phLast.range)); }, 200); } });
+})();
+
+let pOverview=null, regionFilter="", nodeSort="used_bytes", nodeOrder="desc";
+let pingResults={};
+async function loadOverview(){
+  try {
+    const j = await (await fetch("/api/portal/overview",{cache:"no-store"})).json();
+    if(!j.ok) return; pOverview=j; _ovFetch=Date.now(); renderPortalDash();
+  } catch(e){ /* 무시 */ }
+}
+async function loadPing(){
+  const btn=$("pingBtn"); if(btn){ btn.disabled=true; btn.textContent="📡 핑 측정 중…"; }
+  try {
+    const j = await (await fetch("/api/portal/ping",{cache:"no-store"})).json();
+    if(j.ok){
+      pingResults={}; (j.results||[]).forEach(r=>pingResults[r.id]=r);
+      const on=(j.results||[]).filter(r=>r.latency_ms!=null);
+      const avg=on.length? Math.round(on.reduce((a,r)=>a+r.latency_ms,0)/on.length):0;
+      if($("pingNote")) $("pingNote").textContent =
+        `📡 HQ→노드 왕복 응답시간 · ${on.length}/${(j.results||[]).length} 응답 · 평균 ${avg} ms · 방금 측정 (DC↔DC 메시 아님)`;
+      renderPortalDash();
+    }
+  } catch(e){ /* 무시 */ }
+  if(btn){ btn.disabled=false; btn.textContent="📡 Ping 체크"; }
+}
+function statRank(n){ return n.online ? (n.active_scans>0?2:1) : 0; }
+let _ovFetch=Date.now();   // 마지막 오버뷰 수신 시각(클라) — 경과를 라이브로 더해 시계오차에도 안전
+function elapsedLive(srv){ return Math.max(0,(srv||0)+(Date.now()-_ovFetch)/1000); }
+function elapsedSpan(started, updated){   // 진행 중 경과를 1초마다 라이브로 틱업하는 span(멈춤 방지)
+  const srv=Math.max(0,((+updated||+started||0)-(+started||0)));
+  return `<span class="js-elapsed" data-srv="${srv}">${fmtDur(elapsedLive(srv))}</span>`;
+}
+function tickElapsed(){ document.querySelectorAll(".js-elapsed").forEach(el=>{
+  el.textContent=fmtDur(elapsedLive(+el.dataset.srv||0)); }); }
+function scanElapsed(n){ const rn=n&&n.running; if(!rn) return 0;   // 진행 중 스캔 경과(초, 라이브)
+  return elapsedLive(Math.max(0,(rn.updated_at||rn.started_at||0)-(rn.started_at||0))); }
+function scanProgress(r){   // 루트별 스캔 단계/진행률
+  if(!r) return "";
+  if(r.status==="done") return "✅ 완료";
+  if(r.status==="paused") return "⏸ 일시정지";
+  if(r.status==="error") return "⚠ 오류";
+  if(r.phase==="sizing"){ const t=r.total_dirs||0,p=r.processed_dirs||0; return "📦 집계 "+(t?Math.round(p/t*100):0)+"% ("+fmtNum(p)+"/"+fmtNum(t)+")"; }
+  if(r.status==="discovering"||r.phase==="discovering") return "🔄 탐색 중 ("+fmtNum(r.discovered_dirs||0)+"개)";
+  return r.status||"";
+}
+function renderPortalDash(){
+  const j=pOverview; if(!j) return;
+  if(j.version){ const _bv=document.getElementById("brandVer"); if(_bv) _bv.textContent="v"+j.version; }
+  const t=j.totals||{};
+  $("kUsed").textContent=fmtBytes(t.used_bytes); $("kStorages").textContent=fmtNum(t.storages);
+  // '총 사용 용량' 카드에 아이실론 전체 용량/사용량(전 DC fs 합계)도 함께 표시
+  if($("kUsedSub")){
+    const _ft=t.fs_total_bytes||0, _fu=t.fs_used_bytes||0;
+    $("kUsedSub").innerHTML = _ft
+      ? `조사 용량 합계 · 아이실론 전체 <b>${fmtBytes(_ft)}</b> 중 사용 ${fmtBytes(_fu)} (${(_fu/_ft*100).toFixed(1)}%)`
+      : "조사 용량 합계 (전체 용량은 엣지가 fs 용량을 수집하면 표시)";
+  }
+  $("kNodes").textContent=(t.nodes_online||0)+" / "+(t.nodes_total||0); $("kActive").textContent=fmtNum(t.active_scans);
+  // 전체 스토리지 용량 바(사용/전체 · %)
+  const ft=t.fs_total_bytes||0, fu=t.fs_used_bytes||0, fp=ft?Math.min(100,fu/ft*100):0;
+  if($("capFill")){ $("capFill").style.width=fp.toFixed(1)+"%"; $("capFill").style.background=capColor(fp); }
+  if($("capPct")) $("capPct").textContent = ft? (fp.toFixed(1)+"%") : "용량 정보 없음";
+  if($("capLabel")) $("capLabel").textContent = ft? ("사용 "+fmtBytes(fu)+" / 전체 "+fmtBytes(ft)+" · 여유 "+fmtBytes(ft-fu)) : "(엣지에서 fs 용량 미수집)";
+  // 원형 게이지(전체 사용률)
+  if($("capDonut")) $("capDonut").innerHTML = ft ? donutGauge(fp, capColor(fp), 104) : "";
+  // 지역 구성 스택 바(사용량 비율) + 범례 — 기존 j.regions 재사용(새 상태 복제 없음)
+  if($("capStack")){
+    const regs=(j.regions||[]).filter(r=>(r.fs_used_bytes||0)>0);
+    const tot=regs.reduce((s,r)=>s+(r.fs_used_bytes||0),0);
+    $("capStack").innerHTML = (regs.length && tot) ? (
+      '<div style="display:flex; height:12px; border-radius:6px; overflow:hidden; background:rgba(255,255,255,.05);">'
+      + regs.map((r,i)=>`<div title="${escAttr(r.region)}: ${fmtBytes(r.fs_used_bytes)}" style="width:${(r.fs_used_bytes/tot*100).toFixed(2)}%; background:${REGION_PAL[i%REGION_PAL.length]}; box-shadow:inset -2px 0 0 var(--panel)"></div>`).join("")
+      + '</div><div style="display:flex; gap:14px; flex-wrap:wrap; margin-top:9px;">'
+      + regs.map((r,i)=>`<span class="sub" style="display:inline-flex; align-items:center; gap:6px;"><span style="width:9px; height:9px; border-radius:2px; background:${REGION_PAL[i%REGION_PAL.length]};"></span>${escAttr(r.region)} <b style="color:var(--text)">${fmtBytes(r.fs_used_bytes)}</b> ${(r.fs_used_bytes/tot*100).toFixed(0)}%</span>`).join("")
+      + '</div>'
+    ) : "";
+  }
+  // 지역 카드(클릭 = 필터 토글)
+  $("regions").innerHTML = (j.regions||[]).map(r=>
+    `<div class="regcard${regionFilter===r.region?' active':''}" data-region="${escAttr(r.region)}">
+       <div class="big" style="font-size:20px">${fmtBytes(r.fs_used_bytes)} <span class="sub" style="font-size:13px; font-weight:400;">/ ${fmtBytes(r.fs_total_bytes)}</span></div>
+       ${r.fs_total_bytes?`<div class="capbar" style="height:6px; min-width:0; margin:9px 0 7px; border-radius:4px;"><i style="width:${Math.min(100,r.fs_used_bytes/r.fs_total_bytes*100).toFixed(1)}%; background:${capColor(r.fs_used_bytes/r.fs_total_bytes*100)}; box-shadow:none;"></i></div>`:""}
+       <div class="sub">${escAttr(r.region)} · ${fmtNum(r.storages)} 스토리지${r.fs_total_bytes?` · 사용률 ${(r.fs_used_bytes/r.fs_total_bytes*100).toFixed(1)}%`:""}</div></div>`
+  ).join("") || '<div class="sub">등록된 노드가 없습니다.</div>';
+  $("regions").querySelectorAll(".regcard").forEach(c=>c.addEventListener("click",()=>{
+    regionFilter=(regionFilter===c.dataset.region)?"":c.dataset.region; renderPortalDash(); }));
+  // 노드 필터 + 정렬
+  let rows=(j.nodes||[]).slice();
+  if(regionFilter) rows=rows.filter(n=>(n.region||"")===regionFilter);
+  rows.sort((a,b)=>{
+    let va,vb;
+    if(nodeSort==="status"){   // 상태 정렬 = 스캔 경과시간(오래 스캔한 순) 우선, 동률이면 상태 분류
+      const ea=scanElapsed(a), eb=scanElapsed(b);
+      if(ea!==eb) return nodeOrder==="asc"?ea-eb:eb-ea;
+      va=statRank(a); vb=statRank(b);
+    }
+    else { va=a[nodeSort]; vb=b[nodeSort]; }
+    if(typeof va==="string"||typeof vb==="string"){ va=String(va||""); vb=String(vb||"");
+      return nodeOrder==="asc"?va.localeCompare(vb):vb.localeCompare(va); }
+    va=va||0; vb=vb||0; return nodeOrder==="asc"?va-vb:vb-va;
+  });
+  $("nodeRows").innerHTML = rows.length ? rows.map((n,idx)=>{
+    const st = !n.enabled ? '<span class="badge">사용 안 함</span>'
+      : (n.online ? (n.active_scans>0 ? '<span class="badge b-scan">🔄 스캔 중 '+n.active_scans+'</span>' : '<span class="badge b-online">온라인</span>')
+                  : '<span class="badge b-offline">오프라인</span>');
+    // 온라인인데 스캔 안 함 + 이전 스캔 기록 있음 → '스캔 시작'(마지막 경로와 동일)
+    const canScan = n.enabled && n.online && n.active_scans===0 && !n.running && n.roots && n.roots.length;
+    const scanLocked = _opRequired && !canMutate();   // 비번설정+비로그인이면 스캔 시작 잠금
+    const scanBtn = !canScan ? ""
+      : scanLocked
+        ? ` <button class="ssbtn" disabled title="로그인 후 스캔을 시작할 수 있습니다">🔒 스캔 시작</button>`
+        : ` <button class="ssbtn" data-id="${escAttr(n.id)}" title="마지막 스캔과 동일한 경로로 새 스캔 시작">▶ 스캔 시작</button>`;
+    // 새창(엣지 대시보드)을 열 때 포탈의 노드명(예: WA)을 넘겨, 새창 제목이 호스트네임 대신 노드명으로 뜨게 한다
+    const _ou = /^https?:\/\//i.test(n.url||"") ? (n.url||"") : "#";   // http/https 만 링크(javascript: 등 차단)
+    const open = `<a class="link" href="${escAttr(_ou)}${_ou.includes("?")?"&":"?"}node=${encodeURIComponent(n.id)}" target="_blank" rel="noopener">열기 ↗</a>`;
+    // 스토리지 어레이(아이실론/PowerStore) — storage 리스트, 없으면 isilon 단일로 폴백
+    const arrays = (n.storage && n.storage.length) ? n.storage
+                   : ((n.isilon && n.isilon.configured !== false) ? [n.isilon] : []);
+    const cfgArr = arrays.filter(a => a && a.configured !== false);
+    const TCODE = {isilon:"ISI", powerstore:"PS", unity:"UNI", powermax:"PMAX", vmax:"VMAX", xtremio:"XIO", vplex:"VPLEX"};
+    const arrBadges = cfgArr.map(a => {
+      const lab = escAttr(TCODE[a.type] || String(a.type||"ARR").toUpperCase().slice(0,5));
+      const tl = escAttr(a.label||a.type);
+      return a.ok ? (a.health === "ok"
+          ? ` <span class="badge b-online" title="${tl} 정상">${lab} ✓</span>`
+          : ` <span class="badge" style="background:#3f3516;color:#f0c86a" title="${tl} 주의">${lab} ⚠</span>`)
+        : ` <span class="badge b-offline" title="${tl} 연결 실패">${lab} ✕</span>`;
+    }).join("");
+    const arrRows = cfgArr.map(a => `<tr class="rr-${idx}" style="display:none; background:#101a26;"><td></td><td colspan="8" class="sub">${
+      a.type === "isilon" ? "🟦" : "🟧"} ${_he(a.label||a.type)} ${
+      a.ok ? `<b>${_he(a.name||"?")}</b> · ${_he(a.version||"")} · 노드 ${(a.nodes&&a.nodes.online)!=null?a.nodes.online:"?"}/${(a.nodes&&a.nodes.total)!=null?a.nodes.total:"?"} · 용량 ${(a.capacity&&a.capacity.used_pct!=null)?a.capacity.used_pct+"%":"—"} · 이벤트/알림 ${a.events_unresolved!=null?a.events_unresolved:"—"} · ${a.health==="ok"?"정상":"주의"}`
+           : `연결 실패: ${_he(a.error||"")}`}</td></tr>`).join("");
+    const roots = arrRows + (n.roots||[]).map(r=>{
+      const act=(r.status==="discovering"||r.status==="sizing");
+      const startTxt=(act&&r.started_at)?(" · 시작 "+fmtClock(r.started_at)+" · 진행 "+elapsedSpan(r.started_at, r.updated_at)):"";
+      const fsTxt=r.fs_total_bytes?(" of "+fmtBytes(r.fs_total_bytes)+" ("+Math.round((r.fs_used_bytes||0)/r.fs_total_bytes*100)+"%)"):"";
+      return `<tr class="rr-${idx}" style="display:none; background:#121a24;"><td></td>
+        <td colspan="8" class="sub mono">📁 ${escAttr(r.root_path)} — 조사 ${fmtBytes(r.scanned_bytes)} · fs ${fmtBytes(r.fs_used_bytes)}${fsTxt} · ${scanProgress(r)}${startTxt}${r.finished_at?(" · 완료 "+ago(r.finished_at)):(r.updated_at?(" · 갱신 "+ago(r.updated_at)):"")}</td></tr>`;
+    }).join("");
+    const outdated = j.version && n.version && n.version!==j.version;
+    const verBadge = n.version
+      ? ` <span class="pill" title="${outdated?('구버전 — 포탈 v'+escAttr(j.version)):'버전'}" style="color:${outdated?'#f0c86a':'#9fb3c8'};border-color:${outdated?'#6a5a25':'var(--line)'}">v${_he(n.version)}${outdated?' ⬆':''}</span>`
+      : "";
+    const pr=pingResults[n.id];
+    const pingB = pr ? (pr.latency_ms!=null
+        ? ` <span class="pill" title="HQ→노드 왕복${pr.error?(' · '+escAttr(pr.error)):''}" style="color:${pr.latency_ms<150?'#7be0aa':(pr.latency_ms<600?'#f0c86a':'#ff9a9a')};border-color:${pr.latency_ms<150?'#2f6f50':(pr.latency_ms<600?'#6a5a25':'#7a3030')}">${pr.latency_ms} ms</span>`
+        : ` <span class="pill" title="${escAttr(pr.error||'실패')}" style="color:#ff9a9a;border-color:#7a3030">✕</span>`) : "";
+    const rn=n.running;
+    const runLine = rn ? `<div class="sub" style="white-space:nowrap; margin-top:3px;">⏱ ${elapsedSpan(rn.started_at, rn.updated_at)} · 시작 ${fmtClock(rn.started_at)}</div>` : "";
+    const loopBadge = n.auto_restart ? ` <span style="color:#ff5c5c; font-weight:700; white-space:nowrap;" title="완료되면 같은 설정으로 자동 재시작(반복) 중">🔁 반복 동작 중</span>` : "";
+    // 스캔 진행 바(집계 단계 % 가 있을 때만 — 정직하게)
+    const _spct = (n.online && n.active_scans>0) ? nodeScanPct(n) : null;
+    const scanBar = (_spct!=null) ? `<div class="capbar" style="height:5px; min-width:0; max-width:170px; margin-top:5px; border-radius:3px;"><i style="width:${_spct}%; background:var(--accent); box-shadow:none;"></i></div><div class="sub" style="margin-top:2px;">집계 진행률 ${_spct}%</div>` : "";
+    return `<tr class="noderow" data-idx="${idx}" style="cursor:pointer;" title="클릭하면 스토리지/어레이 펼침">
+      <td><b>${escAttr(n.id)}</b>${verBadge}${arrBadges}<div class="sub mono">${escAttr(n.hostname||"")}</div></td><td>${escAttr(n.region||"—")}</td>
+      <td class="num">▸ ${fmtNum(n.storages)}</td><td class="num">${fmtBytes(n.used_bytes)}</td>
+      <td class="num">${fmtBytes(n.fs_used_bytes)}${n.fs_total_bytes?` <span class="sub">${n.fs_used_pct}%</span>`:""}${n.fs_total_bytes?`<div class="capbar" style="height:4px; min-width:0; margin-top:5px; border-radius:3px;"><i style="width:${Math.min(100,n.fs_used_pct||0)}%; background:${capColor(n.fs_used_pct||0)}; box-shadow:none;"></i></div>`:""}</td>
+      <td class="num">${fmtBytes(n.fs_total_bytes)}</td>
+      <td class="sub">${ago(n.last_scan_at)}</td>
+      <td>${st}${loopBadge}${scanBtn}${pingB}${runLine}${scanBar}</td><td>${open}</td></tr>` + roots +
+      (n.last_error ? `<tr><td colspan="9" class="sub" style="color:#ff9a9a">${escAttr(n.id)}: ${_he(n.last_error)}</td></tr>` : "");
+  }).join("") : '<tr><td colspan="9" class="sub">표시할 노드가 없습니다.</td></tr>';
+  $("nodeRows").querySelectorAll("tr.noderow").forEach(tr=>tr.addEventListener("click",e=>{
+    if(e.target.closest("a,button")) return;
+    $("nodeRows").querySelectorAll(".rr-"+tr.dataset.idx).forEach(r=>r.style.display = r.style.display==="none"?"table-row":"none");
+  }));
+  $("nodeRows").querySelectorAll(".ssbtn").forEach(b=>b.addEventListener("click",async e=>{
+    e.stopPropagation();
+    const id=b.dataset.id; if(!id) return;
+    if(!confirm(id+" — 마지막 스캔과 동일한 경로로 새 스캔을 시작할까요?")) return;
+    b.disabled=true; b.textContent="시작 중…";
+    try{
+      const j=await (await fetch("/api/portal/node-scan",{method:"POST",
+        headers:{"Content-Type":"application/json"},body:JSON.stringify({id})})).json();
+      if(j&&j.ok){ b.textContent="✓ 시작됨"; setTimeout(loadOverview,1500); }
+      else { b.textContent="✗ 실패"; b.title=(j&&j.reason)||"실패"; b.disabled=false;
+             setTimeout(()=>{ b.textContent="▶ 스캔 시작"; }, 4000); }
+    }catch(err){ b.textContent="✗ 오류"; b.disabled=false; }
+  }));
+  $("nodeTable").querySelectorAll("th[data-nsort]").forEach(th=>{
+    th.textContent = th.dataset.label + (th.dataset.nsort===nodeSort ? (nodeOrder==="desc"?" ▼":" ▲") : ""); });
+  $("updAt").textContent = "마지막 갱신: 방금" + (regionFilter?` · ‘${regionFilter}’ 필터`:"");
+  $("dashNote").textContent = regionFilter
+    ? `‘${regionFilter}’ 지역만 표시 중 — 지역 카드를 다시 클릭하면 해제됩니다.`
+    : "노드 행 클릭=스토리지 펼침 · 지역 카드=필터 · 머리글=정렬. 깊은 경로 비교는 ‘경로 비교’ 탭에서.";
+}
+
+async function loadNodes(){
+  try {
+    const j = await (await fetch("/api/portal/nodes",{cache:"no-store"})).json();
+    const rows=(j.nodes||[]);
+    $("regRows").innerHTML = rows.length ? rows.map(n=>
+      `<tr><td class="mono">${_he(n.id)}</td><td>${_he(n.region||"—")}</td><td class="mono">${_he(n.url)}</td>
+        <td>${nodeSummary(n)}</td><td class="sub">${ago(n.last_poll)}</td>
+        <td>${!n.online?'<span class="badge b-offline">오프라인</span>':(n.active_scans>0?'<span class="badge b-scan">🔄 스캔 중 '+n.active_scans+'</span>':'<span class="badge b-online">온라인</span>')}</td>
+        <td><button data-edit="${escAttr(n.id)}">수정</button> <button data-sync="${escAttr(n.id)}">동기화</button> <button data-del="${escAttr(n.id)}">삭제</button></td></tr>`
+    ).join("") : '<tr><td colspan="7" class="sub">등록된 노드 없음</td></tr>';
+    $("regRows").querySelectorAll("button[data-del]").forEach(b=>b.addEventListener("click",async()=>{
+      if(confirm("노드 "+b.dataset.del+" 삭제?")){ await fetch("/api/portal/nodes/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:b.dataset.del})}); loadNodes(); loadOverview(); }}));
+    $("regRows").querySelectorAll("button[data-sync]").forEach(b=>b.addEventListener("click",async()=>{
+      await fetch("/api/portal/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:b.dataset.sync})}); b.textContent="동기화…"; setTimeout(()=>{loadNodes();loadOverview();},1500); }));
+    $("regRows").querySelectorAll("button[data-edit]").forEach(b=>b.addEventListener("click",()=>{
+      const n=rows.find(x=>x.id===b.dataset.edit); if(!n) return;
+      $("nId").value=n.id; $("nRegion").value=n.region||""; $("nUrl").value=n.url; $("nToken").value="";
+      $("nAliasLocal").value=n.alias_local||""; $("nAliasLogical").value=n.alias_logical||"";
+      $("nUnit").value=n.unit||"minute"; $("nEvery").value=n.every||n.interval_minutes||30;
+      $("nAt").value=n.at||"03:00"; $("nMonth").value=n.start_month||1; $("nDay").value=n.start_day||1;
+      nWsel=new Set(n.weekdays&&n.weekdays.length?n.weekdays:[1]); buildNW();
+      $("nMode").value=n.mode||"both"; $("nEnabled").checked=!!n.enabled; updateNUnit();
+      show("nodes"); $("nodeMsg").textContent="수정 모드: "+n.id; }));
+    // 노드 비밀번호 관리 드롭다운(전체 + 개별, 토큰 없는 노드 표시)
+    const np=$("npNode");
+    if(np){ const cur=np.value;
+      np.innerHTML='<option value="">전체 노드</option>'+rows.map(n=>
+        `<option value="${escAttr(n.id)}">${n.id}${n.token_set===false?" (토큰없음)":""}</option>`).join("");
+      np.value=cur; }
+    // 토큰 강제 맞추기 드롭다운(개별 노드 — 온라인/오프라인 표시)
+    const tk=$("tkNode");
+    if(tk){ const cur=tk.value;
+      tk.innerHTML='<option value="">— 노드 선택 —</option>'+rows.map(n=>
+        `<option value="${escAttr(n.id)}">${n.id}${n.online?"":" (오프라인)"}</option>`).join("");
+      tk.value=cur; }
+  } catch(e){ /* 무시 */ }
+}
+
+
+// 전체 노드 일괄 스캔 시작(옵션: -x · 오토튜닝 · 진행 중 노드 멈추고 재시작) — 시작 전 확인받음
+async function scanAllNodes(){
+  const ofs=$("scanAllOFS").checked;
+  const engine=($("scanAllEngine")&&$("scanAllEngine").value)||"auto";
+  const auto=engine==="auto";
+  const foldRaw=(($("scanAllFold")&&$("scanAllFold").value)||"").trim();
+  const fold=foldRaw===""?null:Math.max(0,Math.min(100000,parseInt(foldRaw,10)||0));
+  const busyEl=document.querySelector('input[name="scanAllBusy"]:checked');
+  const restart=!!(busyEl && busyEl.value==="restart");
+  const msg=$("scanAllMsg");
+  const engLabel=auto?"오토튜닝(최적 자동)":engine;
+  const foldLabel=fold===null?"노드 설정값":(fold===0?"전체 상세":("깊이 "+fold+"까지"));
+  const summary="전체 노드를 ‘마지막 스캔 경로’로 다시 스캔 시작합니다.\n\n"
+    + "• 엔진: "+engLabel+"\n"
+    + "• 깊이(fold): "+foldLabel+(auto&&fold!==null?" (오토튜닝은 노드 설정값 사용)":"")+"\n"
+    + "• 한 파일시스템(-x): "+(ofs?"적용":"미적용")+"\n"
+    + "• 진행 중 노드: "+(restart?"멈추고 다시 시작":"건너뜀(작업 안 하는 노드만)")+"\n\n"
+    + ((engine==="pscan"||auto)?("⚠ pscan(멀티프로세스)은 시작 후 중간에 멈출 수 없습니다"+(auto?"(오토튜닝이 pscan 을 고를 수 있음)":"")+".\n"):"")
+    + (restart?"⚠ ‘멈추고 다시 시작’에서 pscan 으로 도는 노드는 중지 불가라 건너뜁니다.\n":"")
+    + "\n시작할까요?";
+  if(!confirm(summary)) return;
+  msg.textContent="시작 요청 중… (노드 수에 따라 수 초 걸릴 수 있습니다)";
+  try{
+    const j=await (await fetch("/api/portal/node-scan-all",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({one_file_system:ofs, autotune:auto, engine:engine, restart_busy:restart, fold_depth:fold})})).json();
+    if(!j.ok){ msg.textContent="실패: "+(j.reason||"오류 — 로그인이 필요할 수 있습니다"); return; }
+    const rs=j.results||[];
+    msg.innerHTML=`✓ ${j.count}/${j.total} 노드 시작 — `
+      + rs.map(r=>`${r.ok?"✅":"⏭️"} ${escAttr(r.id)}${(!r.ok&&r.reason)?(' <span class="sub">('+escAttr(r.reason)+')</span>'):""}`).join(" · ");
+    setTimeout(()=>{ loadNodes(); if(typeof loadOverview==="function") loadOverview(); }, 1800);
+  }catch(e){ msg.textContent="요청 오류: "+e; }
+}
+if($("scanAllBtn")) $("scanAllBtn").addEventListener("click", scanAllNodes);
+
+// 전체 노드 진행 중 스캔 일괄 중단 — threads 는 'paused'로 남아 이어하기 가능, pscan 은 중지 불가
+async function stopAllNodes(){
+  if(!confirm("전체 노드의 진행 중 스캔을 모두 중단할까요?\n\n"
+    +"• threads 엔진: 중단 후 각 노드에서 '이어하기(재개)' 가능\n"
+    +"• pscan 엔진: 중간 중지가 불가해 건너뜁니다\n"
+    +"• 진행 중이 아닌 노드는 대상에서 제외됩니다")) return;
+  const msg=$("scanAllMsg");
+  msg.textContent="중단 요청 중…";
+  try{
+    const j=await (await fetch("/api/portal/node-stop-all",{method:"POST",
+      headers:{"Content-Type":"application/json"}, body:"{}"})).json();
+    if(!j.ok){ msg.textContent="실패: "+(j.reason||"오류 — 로그인이 필요할 수 있습니다"); return; }
+    const rs=(j.results||[]).filter(r=>r.stopped>0||(r.reason&&r.reason!=="진행 중 스캔 없음"));
+    msg.innerHTML=`⏹ 스캔 ${j.stopped}개 중단`
+      +(rs.length?(" — "+rs.map(r=>`${r.stopped>0?"✅":"⏭️"} ${escAttr(r.id)}`
+        +((r.reason&&r.reason!=="진행 중 스캔 없음")?(' <span class="sub">('+escAttr(r.reason)+')</span>'):"")).join(" · ")):" (진행 중 스캔 없음)");
+    setTimeout(()=>{ loadNodes(); if(typeof loadOverview==="function") loadOverview(); }, 1800);
+  }catch(e){ msg.textContent="요청 오류: "+e; }
+}
+if($("stopAllBtn")) $("stopAllBtn").addEventListener("click", stopAllNodes);
+
+// 노드 작업 비밀번호 설정/변경/해제(포탈→엣지 /api/op-password 푸시)
+async function nodePassword(clear){
+  const id=$("npNode").value, ids=id?[id]:[], pass=$("npPass").value;
+  if(!clear && !pass){ $("npMsg").textContent="새 비밀번호를 입력하세요."; return; }
+  const tgt=id?("노드 ‘"+id+"’"):"전체 노드";
+  if(!confirm(tgt+" 의 작업 비밀번호를 "+(clear?"해제":"설정/변경")+"할까요?")) return;
+  $("npMsg").textContent="적용 중…"; $("npResult").innerHTML="";
+  try{
+    const j=await (await fetch("/api/portal/node-password",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({ids, password:pass, clear:!!clear})})).json();
+    if(!j.ok && j.reason){ $("npMsg").textContent="실패: "+j.reason; return; }
+    $("npMsg").textContent=`${j.ok_count||0}/${j.total||0} 노드 ${clear?"해제":"설정"} 완료`;
+    $("npPass").value="";
+    $("npResult").innerHTML=(j.results||[]).map(r=>
+      `<div>${r.ok?"✅":"❌"} <span class="mono">${r.id}</span>${r.reason?(" — "+r.reason):""}</div>`).join("");
+    loadNodes();
+  }catch(e){ $("npMsg").textContent="요청 오류: "+e; }
+}
+$("npSetBtn").addEventListener("click",()=>nodePassword(false));
+$("npClearBtn").addEventListener("click",()=>nodePassword(true));
+
+// 노드 토큰 강제 맞추기(포탈 저장값 교정) — 1개 적용 / 전체 일괄 적용
+async function applyNodeToken(all){
+  const tok=$("tkToken").value.trim(), id=$("tkNode").value, msg=$("tkMsg");
+  if(!tok){ msg.textContent="엣지 api_token 을 입력하세요."; return; }
+  let ids;
+  if(all){ ids=[]; }
+  else { if(!id){ msg.textContent="대상 노드를 고르거나 ‘전체 일괄 적용’을 쓰세요."; return; } ids=[id]; }
+  const tgt=all?"전체 노드":("노드 ‘"+id+"’");
+  if(!confirm(tgt+" 의 포탈 저장 토큰을 입력값으로 맞출까요?")) return;
+  msg.textContent="적용 중…"; $("tkResult").innerHTML="";
+  try{
+    const j=await (await fetch("/api/portal/nodes/set-token",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({ids, token:tok})})).json();
+    if(!j.ok){ msg.textContent="실패: "+(j.reason||"오류 — 로그인이 필요할 수 있습니다"); return; }
+    $("tkToken").value="";
+    msg.textContent=`✓ ${j.count} 개 노드 적용 — 동기화 중…`;
+    $("tkResult").innerHTML="적용: "+(j.applied||[]).map(i=>`<span class="mono">${escAttr(i)}</span>`).join(", ");
+    // 즉시 전체 폴링으로 온라인 반영
+    try{ await fetch("/api/portal/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:null})}); }catch(e){}
+    setTimeout(()=>{ loadNodes(); if(typeof loadOverview==="function") loadOverview(); }, 1500);
+  }catch(e){ msg.textContent="요청 오류: "+e; }
+}
+if($("tkOneBtn")) $("tkOneBtn").addEventListener("click",()=>applyNodeToken(false));
+if($("tkAllBtn")) $("tkAllBtn").addEventListener("click",()=>applyNodeToken(true));
+
+// 포탈 제목(브랜딩) 저장
+$("setTitleBtn").addEventListener("click",async()=>{
+  const msg=$("setTitleMsg"); msg.textContent="저장 중…";
+  try{
+    const j=await (await fetch("/api/portal/settings",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({portal_title:$("setTitle").value.trim(),
+                           portal_subtitle:$("setSubtitle").value.trim()})})).json();
+    if(j.ok){ msg.textContent="✓ 저장됨"; applyPortalTitle(j.portal_title,j.portal_subtitle); }
+    else msg.textContent="실패: "+(j.reason||"locked?");
+  }catch(e){ msg.textContent="오류: "+e; }
+});
+
+// 외부 사용량 API — 엔드포인트 안내 + 토큰 설정/해제
+function loadExportApi(){
+  const ep=$("exportEndpoint");
+  if(ep){ const url=location.origin+"/api/portal/usage";
+    ep.innerHTML='엔드포인트: <b>GET '+_he(url)+'</b><br>예시: curl -H "X-Auth-Token: &lt;토큰&gt;" '+_he(url); }
+  fetch("/api/portal/settings",{cache:"no-store"}).then(r=>r.json()).then(j=>{
+    const m=$("setExportMsg"); if(m) m.textContent=j.export_token_set?" (현재: 토큰 보호됨)":" (현재: 공개)";
+  }).catch(()=>{});
+}
+if($("setExportTokenBtn")) $("setExportTokenBtn").addEventListener("click",async()=>{
+  const msg=$("setExportMsg"); msg.textContent=" 저장 중…";
+  try{
+    const j=await (await fetch("/api/portal/settings",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({export_token:$("setExportToken").value})})).json();
+    if(j.ok){ msg.textContent=j.export_token_set?" ✓ 저장됨(토큰 보호)":" ✓ 저장됨(공개)"; $("setExportToken").value=""; }
+    else msg.textContent=" 실패: "+(j.reason||"로그인이 필요할 수 있습니다");
+  }catch(e){ msg.textContent=" 오류: "+e; }
+});
+loadExportApi();
+
+// ── 💬 자연어 질의응답 ──
+function mdLite(s){
+  const esc=String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  return esc.replace(/\*\*(.+?)\*\*/g,"<b>$1</b>").replace(/\n/g,"<br>");
+}
+async function doAsk(){
+  const q=($("askInput").value||"").trim(); const out=$("askOut");
+  if(!q){ out.textContent=""; return; }
+  out.innerHTML='<span class="sub">분석 중…</span>';
+  try{
+    const j=await (await fetch("/api/portal/ask?q="+encodeURIComponent(q),{cache:"no-store"})).json();
+    if(!j||!j.ok){ out.textContent="답을 만들지 못했습니다."; return; }
+    const llm=(j.source==="rules+llm")?' <span class="sub">· 🧠 LLM 다듬음</span>':"";
+    out.innerHTML=mdLite(j.answer)+llm;
+  }catch(e){ out.textContent="오류: "+e; }
+}
+if($("askBtn")) $("askBtn").addEventListener("click",doAsk);
+if($("askInput")) $("askInput").addEventListener("keydown",(e)=>{ if(e.key==="Enter") doAsk(); });
+
+// 로컬 LLM 설정 로드/저장(설정은 /api/portal/settings)
+function loadAskLlm(){
+  fetch("/api/portal/settings",{cache:"no-store"}).then(r=>r.json()).then(j=>{
+    if($("setAskLlm")) $("setAskLlm").checked=!!j.ask_llm_enabled;
+    if($("setAskLlmEp")) $("setAskLlmEp").value=j.ask_llm_endpoint||"";
+    if($("setAskLlmModel")) $("setAskLlmModel").value=j.ask_llm_model||"";
+    if($("setAskLlmTimeout")) $("setAskLlmTimeout").value=j.ask_llm_timeout||20;
+    if($("setAskLlmKey")) $("setAskLlmKey").placeholder=j.ask_llm_key_set?"(설정됨 — 변경 시에만)":"토큰(선택)";
+    if($("askLlmTag")) $("askLlmTag").style.display=j.ask_llm_enabled?"inline-block":"none";
+  }).catch(()=>{});
+}
+if($("setAskLlmBtn")) $("setAskLlmBtn").addEventListener("click",async()=>{
+  const msg=$("setAskLlmMsg"); msg.textContent=" 저장 중…";
+  const body={ ask_llm_enabled:$("setAskLlm").checked,
+    ask_llm_endpoint:$("setAskLlmEp").value.trim(),
+    ask_llm_model:$("setAskLlmModel").value.trim(),
+    ask_llm_timeout:parseInt($("setAskLlmTimeout").value)||20 };
+  const k=$("setAskLlmKey").value; if(k) body.ask_llm_key=k;
+  try{
+    const j=await (await fetch("/api/portal/settings",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(body)})).json();
+    if(j.ok){ msg.textContent=" ✓ 저장됨"+(j.ask_llm_enabled?" (LLM 켜짐)":" (규칙 기반)"); $("setAskLlmKey").value=""; loadAskLlm(); }
+    else msg.textContent=" 실패: "+(j.reason||"로그인이 필요할 수 있습니다");
+  }catch(e){ msg.textContent=" 오류: "+e; }
+});
+loadAskLlm();
+
+// 로그인 세션 유지 시간 · 업데이트 팝업 표시 저장
+if($("setSessPrefsBtn")) $("setSessPrefsBtn").addEventListener("click",async()=>{
+  const msg=$("setSessPrefsMsg"); msg.textContent=" 저장 중…";
+  const mins=parseInt($("setOpTtl").value)||30;
+  try{
+    const j=await (await fetch("/api/portal/settings",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({op_ttl_minutes:mins, show_update_popup:$("setShowUpdatePopup").checked,
+                           log_popup_pos:($("setLogPopupPos")&&$("setLogPopupPos").value)||"center"})})).json();
+    if(j.ok){ msg.textContent=" ✓ 저장됨 (유지 "+(j.op_ttl_minutes||mins)+"분)"; if($("setOpTtl")) $("setOpTtl").value=j.op_ttl_minutes||mins;
+      applyLogPopupPos(j.log_popup_pos||"center"); }
+    else msg.textContent=" 실패: "+(j.reason||"로그인이 필요할 수 있습니다");
+  }catch(e){ msg.textContent=" 오류: "+e; }
+});
+
+// 복제 반복주기 선택기(예약 스캔과 같은 시작 + 반복주기 모델)
+const N_DOW = ["일","월","화","수","목","금","토"]; let nWsel = new Set([1]);
+function nodeSummary(o){
+  const u=o.unit||"minute", y=o.every||o.interval_minutes||1;
+  if(u==="minute") return `매 ${y}분마다`;
+  if(u==="hour") return `${o.at||"00:00"} 기준 · 매 ${y}시간마다`;
+  if(u==="day") return `${o.at||"03:00"} · 매 ${y}일마다`;
+  if(u==="week"){ const d=(o.weekdays||[]).map(i=>N_DOW[i]).join(","); return `${d||"?"}요일 ${o.at||"03:00"} · 매 ${y}주마다`; }
+  if(u==="month") return `${o.start_month||1}월 ${o.start_day||1}일 ${o.at||"04:00"} · 매 ${y}개월마다`;
+  return "—";
+}
+function buildNW(){ const b=$("nWeekdays"); b.innerHTML="";
+  N_DOW.forEach((d,i)=>{ const c=document.createElement("span"); c.className="chip"+(nWsel.has(i)?" on":""); c.textContent=d;
+    c.onclick=()=>{ nWsel.has(i)?nWsel.delete(i):nWsel.add(i); c.classList.toggle("on"); updateNUnit(); }; b.appendChild(c); }); }
+function fillNSel(id,n,s){ const e=$(id); if(e.options.length) return; for(let i=1;i<=n;i++){ const o=document.createElement("option"); o.value=i; o.textContent=i+s; e.appendChild(o);} }
+function updateNUnit(){ const u=$("nUnit").value;
+  $("nAt").style.display=(u!=="minute")?"inline-block":"none";
+  $("nWeekdays").style.display=(u==="week")?"inline-flex":"none";
+  $("nMonth").style.display=(u==="month")?"inline-block":"none"; $("nDay").style.display=(u==="month")?"inline-block":"none";
+  $("nUnitLabel").textContent={minute:"분마다",hour:"시간마다",day:"일마다",week:"주마다",month:"개월마다"}[u];
+  $("nSummary").textContent="복제: "+nodeSummary({unit:u,every:parseInt($("nEvery").value)||1,at:$("nAt").value,
+    weekdays:[...nWsel].sort((a,b)=>a-b),start_month:parseInt($("nMonth").value)||1,start_day:parseInt($("nDay").value)||1}); }
+function nodePayload(){
+  const u=$("nUnit").value;
+  return { id:$("nId").value.trim(), region:$("nRegion").value.trim(), url:$("nUrl").value.trim(),
+    token:$("nToken").value, mode:$("nMode").value, enabled:$("nEnabled").checked,
+    alias_local:$("nAliasLocal").value.trim(), alias_logical:$("nAliasLogical").value.trim(),
+    unit:u, every:Math.max(1,parseInt($("nEvery").value)||1), at:$("nAt").value||"03:00",
+    weekdays:[...nWsel].sort((a,b)=>a-b), start_month:parseInt($("nMonth").value)||1,
+    start_day:parseInt($("nDay").value)||1,
+    interval_minutes: (u==="minute") ? (parseInt($("nEvery").value)||30) : 30 };
+}
+$("addBtn").addEventListener("click", async ()=>{
+  const j = await (await fetch("/api/portal/nodes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(nodePayload())})).json();
+  $("nodeMsg").textContent = j.ok ? "✓ 저장됨" : ("실패: "+(j.reason||""));
+  if(j.ok){ loadNodes(); loadOverview(); }
+});
+$("testBtn").addEventListener("click", async ()=>{
+  $("nodeMsg").textContent="테스트 중…";
+  const j = await (await fetch("/api/portal/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(nodePayload())})).json();
+  $("nodeMsg").textContent = j.ok ? `✓ 연결 OK · v${j.version||"?"} · ${fmtNum(j.storages)} 스토리지 · ${fmtBytes(j.used_bytes)}` : ("✗ "+(j.reason||"실패"));
+});
+// ---- CSV 일괄 가져오기/내보내기 ----
+// 현재 등록 노드를 CSV 로 내보내기(가져오기 헤더와 호환 · 토큰은 보안상 빈칸 → 채워서 가져오기)
+async function exportNodesCsv(){
+  try{
+    const j=await (await fetch("/api/portal/nodes",{cache:"no-store"})).json();
+    const rows=j.nodes||[];
+    if(!rows.length){ $("csvMsg").textContent="내보낼 노드가 없습니다."; return; }
+    const esc=s=>{ s=String(s==null?"":s); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
+    const head=["id","url","region","token","alias_local","alias_logical"];
+    const lines=[head.join(",")];
+    rows.forEach(n=>lines.push([esc(n.id),esc(n.url),esc(n.region),"",
+      esc(n.alias_local),esc(n.alias_logical)].join(",")));
+    const blob=new Blob([lines.join("\r\n")],{type:"text/csv;charset=utf-8"});
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob); a.download="portal_nodes.csv"; a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+    $("csvMsg").textContent=`현재 ${rows.length}개 노드를 내보냈습니다 — token 칸을 엣지 실제 토큰으로 채워 ‘가져오기’ 하세요.`;
+  }catch(e){ $("csvMsg").textContent="내보내기 실패: "+e; }
+}
+if($("csvExportBtn")) $("csvExportBtn").addEventListener("click", exportNodesCsv);
+$("csvFile").addEventListener("change", async (e)=>{
+  const f = e.target.files && e.target.files[0]; if(!f) return;
+  try { $("csvText").value = await f.text();
+        $("csvMsg").textContent = `파일 ‘${f.name}’ 불러옴 — ‘가져오기’를 누르세요.`; }   // textContent — 이스케이프 불필요
+  catch(err){ $("csvMsg").innerHTML = '<span class="err">파일 읽기 실패: '+err+'</span>'; }
+});
+const CSV_SAMPLE = "id,url,region,token,alias_local,alias_logical\n"
+  + "dc-seoul,http://10.1.1.5:8765,아시아/서울,TOKEN1,/mnt/isilon/data,/data\n"
+  + "dc-tokyo,http://10.2.2.6:8765,아시아/도쿄,TOKEN2,/mnt/isilon/data,/data\n";
+$("csvSampleBtn").addEventListener("click", ()=>{
+  $("csvText").value = CSV_SAMPLE;
+  $("csvMsg").textContent = "예시를 채웠습니다. 값을 바꾼 뒤 ‘가져오기’.";
+});
+$("csvSampleDownload").addEventListener("click", ()=>{
+  // 엑셀에서 한글이 깨지지 않도록 UTF-8 BOM 을 앞에 붙여 다운로드
+  const blob = new Blob(["\uFEFF" + CSV_SAMPLE], {type:"text/csv;charset=utf-8"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "isilon_nodes_sample.csv";
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 0);
+  $("csvMsg").textContent = "샘플 CSV 를 내려받았습니다 — 값을 채워 다시 올리세요.";
+});
+$("csvImportBtn").addEventListener("click", async ()=>{
+  const csv = $("csvText").value.trim();
+  if(!csv){ $("csvMsg").innerHTML = '<span class="err">CSV 내용을 입력하거나 파일을 선택하세요.</span>'; return; }
+  $("csvImportBtn").disabled = true; $("csvMsg").textContent = "가져오는 중…";
+  try {
+    const j = await (await fetch("/api/portal/nodes/import",{method:"POST",
+      headers:{"Content-Type":"application/json"}, body:JSON.stringify({csv})})).json();
+    if(j.ok){
+      let m = `✓ 추가 ${j.added} · 수정 ${j.updated} (총 ${j.total}행)`;
+      if(j.errors && j.errors.length){
+        m += ` · <span class="err">오류 ${j.errors.length}</span>`;
+        m += "<br><span class='sub'>오류 행: "
+           + j.errors.slice(0,10).map(e=>`${e.line}행(${e.error})`).join(", ") + "</span>";
+      }
+      $("csvMsg").innerHTML = `<span style="color:var(--ok)">${m}</span>`;
+      loadNodes(); loadOverview();
+    } else {
+      $("csvMsg").innerHTML = '<span class="err">실패: '+(j.reason||"")+'</span>';
+    }
+  } catch(err){ $("csvMsg").innerHTML = '<span class="err">요청 오류: '+err+'</span>'; }
+  $("csvImportBtn").disabled = false;
+});
+// ---- 경로 비교(Cross-DC) ----
+let cmpCur = "";
+async function loadCompare(path){
+  if(path!==undefined && path!==null && path!=="") { cmpCur = path; $("cmpPath").value = path; }
+  const p = (cmpCur || $("cmpPath").value.trim());
+  if(!p) return;
+  cmpCur = p;
+  try {
+    const j = await (await fetch("/api/portal/compare?path="+encodeURIComponent(p),{cache:"no-store"})).json();
+    renderCompare(j);
+    const m = await (await fetch("/api/portal/matrix?path="+encodeURIComponent(p),{cache:"no-store"})).json();
+    renderMatrix(m);
+    $("cmpCrumb").textContent = p;
+  } catch(e){ $("cmpNote").textContent = "오류: "+e; }
+}
+function renderCompare(j){
+  const all=(j.rows||[]); const found=all.filter(r=>r.found);
+  const maxB = found.reduce((a,r)=>Math.max(a,r.total_bytes),0) || 1;
+  $("cmpRows").innerHTML = all.length ? all.map(r=>{
+    if(!r.found) return `<tr><td><b>${_he(r.id)}</b></td><td>${_he(r.region||"—")}</td><td class="num miss">없음</td><td class="num">—</td><td class="num">—</td><td><span class="badge b-offline">미스캔/누락</span></td></tr>`;
+    const pct=r.total_bytes/maxB*100, drift=pct<85;
+    return `<tr><td><b>${_he(r.id)}</b></td><td>${_he(r.region||"—")}</td>
+      <td class="num">${fmtBytes(r.total_bytes)}</td><td class="num">${fmtNum(r.total_files)}</td>
+      <td class="num">${pct.toFixed(0)}%</td>
+      <td>${drift?'<span class="badge b-offline">드리프트 ⚠</span>':'<span class="badge b-online">정상</span>'}</td></tr>`;
+  }).join("") : '<tr><td colspan="6" class="sub">등록된 노드가 없습니다.</td></tr>';
+  $("cmpNote").textContent = `${found.length}/${all.length} 노드에서 발견 · ‘최대 대비’ 85% 미만이면 드리프트(복제 지연/누락 의심). 마운트 접두어가 다른 노드는 ‘설정’의 경로 별칭으로 매핑하세요.`;
+}
+function renderMatrix(j){
+  const nodes=j.nodes||[], kids=j.children||[];
+  $("cmpMHead").innerHTML = "<tr><th>디렉터리</th>"+nodes.map(n=>`<th class="num">${escAttr(n)}</th>`).join("")+"</tr>";
+  if(!kids.length){ $("cmpMBody").innerHTML = `<tr><td colspan="${nodes.length+1}" class="sub">하위 디렉터리가 없습니다(집계 완료 복제본 필요).</td></tr>`; return; }
+  $("cmpMBody").innerHTML = kids.map(k=>{
+    const present=nodes.map(n=>k.vals[n]).filter(v=>v!==undefined&&v!==null).sort((a,b)=>a-b);
+    const med = present.length? present[Math.floor(present.length/2)] : 0;
+    const name = (k.subdir_count>0) ? `<a href="#" class="link cmpdrill" data-name="${escAttr(k.name)}">${escAttr(k.name)}</a>` : escAttr(k.name);
+    const cells = nodes.map(n=>{
+      const v=k.vals[n];
+      if(v===undefined||v===null) return '<td class="num miss">없음</td>';
+      const off = med>0? Math.abs(v-med)/med : 0;
+      return `<td class="num ${off>0.15?'warn':''}">${fmtBytes(v)}</td>`;
+    }).join("");
+    return `<tr><td class="mono">${name}</td>${cells}</tr>`;
+  }).join("");
+  $("cmpMBody").querySelectorAll("a.cmpdrill").forEach(a=>a.addEventListener("click",e=>{
+    e.preventDefault(); loadCompare(cmpCur.replace(/\/+$/,"")+"/"+a.dataset.name); }));
+}
+$("cmpRun").addEventListener("click", ()=>loadCompare($("cmpPath").value.trim()));
+$("cmpPath").addEventListener("keydown", e=>{ if(e.key==="Enter") loadCompare($("cmpPath").value.trim()); });
+$("cmpRoot").addEventListener("click", ()=>{ const up=cmpCur.replace(/\/[^/]+$/,""); loadCompare(up||"/"); });
+$("refreshBtn").addEventListener("click", ()=>{ loadOverview(); loadNodes(); });
+$("pingBtn").addEventListener("click", loadPing);
+$("nodeTable").querySelectorAll("th[data-nsort]").forEach(th=>th.addEventListener("click",()=>{
+  const c=th.dataset.nsort;
+  if(nodeSort===c) nodeOrder=(nodeOrder==="desc")?"asc":"desc";
+  else { nodeSort=c; nodeOrder=(c==="id"||c==="region")?"asc":"desc"; }
+  renderPortalDash();
+}));
+$("nUnit").addEventListener("change", updateNUnit);
+["nEvery","nAt","nMonth","nDay"].forEach(id=>$(id).addEventListener("input", updateNUnit));
+buildNW(); fillNSel("nMonth",12,"월"); fillNSel("nDay",31,"일"); updateNUnit();
+
+// ---- 원격 자동 구성 ----
+function pvBody(){
+  return { host:$("pvHost").value.trim(), port:Number($("pvPort").value)||8765,
+    token:$("pvToken").value.trim(), path:$("pvPath").value.trim(),
+    name:$("pvName").value.trim(), region:$("pvRegion").value.trim(),
+    install:$("pvInstall").value, hq_base:location.origin,
+    overwrite: $("pvOverwrite") ? $("pvOverwrite").checked : true };
+}
+$("pvGenBtn").addEventListener("click", async ()=>{
+  const b=pvBody(); if(!b.host){ $("pvMsg").textContent="원격 IP/주소를 입력하세요."; return; }
+  $("pvMsg").textContent="생성 중…";
+  try{
+    const j=await (await fetch("/api/portal/provision",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)})).json();
+    if(!j.ok){ $("pvMsg").textContent="✗ "+(j.reason||"실패"); return; }
+    $("pvScript").value=j.script; $("pvScriptWrap").style.display="block";
+    const ov=j.overwritten?(j.replaced_prev?`덮어씀(옛 '${j.replaced_prev}' 대체)`:"덮어씀"):"신규 등록";
+    const tk=j.token_reused?"기존 토큰 유지":`새 토큰 ${(j.token||"").slice(0,8)}…(스크립트로 엣지에 적용)`;
+    $("pvMsg").textContent=`✓ 노드 '${j.node?j.node.id:""}' ${ov} · ${tk} · 엣지 ${j.edge_url}`;
+    loadNodes(); loadOverview();
+  }catch(e){ $("pvMsg").textContent="✗ "+e; }
+});
+$("pvCopy").addEventListener("click", ()=>{ const t=$("pvScript"); t.select(); t.setSelectionRange(0,99999);
+  try{ document.execCommand("copy"); $("pvCopyMsg").textContent="복사됨"; }catch(e){ $("pvCopyMsg").textContent="수동 복사하세요"; }
+  setTimeout(()=>$("pvCopyMsg").textContent="",1500); });
+$("pvSshBtn").addEventListener("click", async ()=>{
+  const b=pvBody(); if(!b.host){ $("pvSshMsg").textContent="IP 먼저 입력"; return; }
+  b.ssh_user=$("pvSshUser").value.trim()||"root"; b.ssh_port=Number($("pvSshPort").value)||22; b.ssh_password=$("pvSshPass").value;
+  $("pvSshBtn").disabled=true; $("pvSshMsg").textContent="원격 설치 중… (최대 5분)";
+  try{
+    const j=await (await fetch("/api/portal/provision/ssh",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)})).json();
+    if(j.script){ $("pvScript").value=j.script; $("pvScriptWrap").style.display="block"; }
+    $("pvSshMsg").textContent = j.ok ? "✓ 원격 설치 완료" : ("✗ "+(j.reason||("returncode "+j.returncode)));
+    if(j.output){ $("pvSshOut").style.display="block"; $("pvSshOut").textContent=j.output; }
+    loadNodes(); loadOverview();
+  }catch(e){ $("pvSshMsg").textContent="✗ "+e; }
+  $("pvSshBtn").disabled=false;
+});
+
+// ---- 원격 버전 업그레이드 ----
+function ugPayload(){ return {id:$("ugId").value.trim(), hq_base:location.origin, edge_dir:$("ugDir").value.trim(),
+  service:$("ugSvc").value.trim(), host:$("ugHost").value.trim(), ssh_user:$("ugSshUser").value.trim(),
+  ssh_port:$("ugSshPort").value.trim(), ssh_password:$("ugSshPass").value}; }
+$("ugGenBtn").addEventListener("click", async()=>{
+  $("ugMsg").textContent=" 생성 중…";
+  try{ const j=await (await fetch("/api/portal/upgrade",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify(ugPayload())})).json();
+    if(j.ok){ $("ugScript").value=j.script; $("ugScriptWrap").style.display="";
+      $("ugMsg").textContent=" ✓ HQ v"+(j.hq_version||"?")+(j.node_version?(" · 노드 v"+j.node_version):""); }
+    else $("ugMsg").textContent=" ✗ "+(j.reason||j.error||"실패"); }
+  catch(e){ $("ugMsg").textContent=" ✗ "+e; }
+});
+$("ugCopy").addEventListener("click", ()=>{ const t=$("ugScript"); t.select(); t.setSelectionRange(0,99999);
+  try{ document.execCommand("copy"); $("ugCopyMsg").textContent=" 복사됨"; }catch(e){} });
+$("ugSshBtn").addEventListener("click", async()=>{
+  if(!$("ugHost").value.trim()){ $("ugSshMsg").textContent=" 원격 IP 필요"; return; }
+  $("ugSshBtn").disabled=true; $("ugSshMsg").textContent=" SSH 업그레이드 중…";
+  try{ const j=await (await fetch("/api/portal/upgrade/ssh",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify(ugPayload())})).json();
+    $("ugSshMsg").textContent=j.ok?" ✓ 완료":(" ✗ "+(j.reason||("종료코드 "+j.returncode)));
+    if(j.output){ $("ugSshOut").style.display=""; $("ugSshOut").textContent=j.output; } }
+  catch(e){ $("ugSshMsg").textContent=" ✗ "+e; }
+  $("ugSshBtn").disabled=false;
+});
+
+function tickClock(){ const el=$("clock"); if(el) el.textContent=new Date().toLocaleString("ko-KR",{hour12:false}); }
+tickClock(); setInterval(()=>{ tickClock(); tickElapsed(); },1000);
+if($("loginBtn")) $("loginBtn").addEventListener("click", async()=>{
+  if(_opRequired && canMutate()) doLogout(); else await doLogin(); });
+if($("roLoginBtn")) $("roLoginBtn").addEventListener("click", doLogin);
+if($("setPwBtn")) $("setPwBtn").addEventListener("click", async()=>{
+  const msg=$("setPwMsg"); msg.textContent=" 저장 중…";
+  try{ const j=await (await fetch("/api/portal/password",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({password:$("setPw").value, encrypt:$("setPwEnc").checked})})).json();
+    if(j.ok){ msg.textContent=j.op_required?(" ✓ 보호 켜짐 "+(j.encrypted?"(암호화)":"(평문)")):" ✓ 보호 해제됨";
+      $("setPw").value=""; _opRequired=!!j.op_required; updateLoginUI(); }
+    else msg.textContent=" ✗ "+(j.reason||j.error||"실패"); }
+  catch(e){ msg.textContent=" ✗ "+e; }
+});
+if($("setPwClearBtn")) $("setPwClearBtn").addEventListener("click", async()=>{
+  if(!confirm("로그인 비밀번호를 해제할까요?\n이후에는 로그인 없이 노드 등록·업그레이드 등 변경 작업이 가능해집니다.")) return;
+  const msg=$("setPwMsg"); msg.textContent=" 해제 중…";
+  try{ const j=await (await fetch("/api/portal/password",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({password:"", encrypt:false})})).json();
+    if(j.ok){ msg.textContent=" ✓ 보호 해제됨"; $("setPw").value=""; _opRequired=!!j.op_required; updateLoginUI(); }
+    else if(j.reason==="locked"||j.op_required) msg.textContent=" ✗ 먼저 우상단에서 로그인하세요(현재 비밀번호 필요)";
+    else msg.textContent=" ✗ "+(j.reason||j.error||"실패"); }
+  catch(e){ msg.textContent=" ✗ "+e; }
+});
+async function pLoadAudit(){
+  $("pAuditMsg").textContent=" 불러오는 중…";
+  try{ const j=await (await fetch("/api/portal/audit",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})).json();
+    if(!j.ok){ $("pAuditMsg").textContent=" "+(j.error||j.reason||"실패"); return; }
+    $("pAuditMsg").textContent=" 최근 "+j.events.length+"건";
+    const box=$("pAuditBox"); box.style.display="";
+    box.innerHTML='<table style="width:100%;font-size:12px;"><thead><tr><th style="text-align:left;">시각</th><th style="text-align:left;">동작</th><th>결과</th><th style="text-align:left;">출처</th><th style="text-align:left;">상세</th></tr></thead><tbody>'
+      +j.events.map(e=>`<tr><td class="mono">${new Date(e.ts*1000).toLocaleString("ko-KR")}</td><td class="mono">${esc(e.action)}</td><td style="text-align:center;">${e.ok?"✓":'<span style="color:#ff5c5c">✗</span>'}</td><td class="mono">${esc(e.ip)||"—"}</td><td class="sub">${esc(e.detail)}</td></tr>`).join("")
+      +"</tbody></table>";
+  }catch(e){ $("pAuditMsg").textContent=" 오류: "+e; }
+}
+if($("pAuditBtn")) $("pAuditBtn").addEventListener("click", pLoadAudit);
+// 백업 — 포탈 설정 + 노드 목록(+감사/핑) tar.gz 다운로드 / 서버 저장 (fetch 가 op-token 자동 첨부)
+if($("bkDownload")) $("bkDownload").addEventListener("click", async()=>{
+  $("bkMsg").textContent=" 백업 만드는 중…";
+  try{
+    const r=await fetch("/api/portal/backup/download",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+    if(!r.ok){ let j={}; try{ j=await r.json(); }catch(e){} $("bkMsg").textContent=" ✗ "+(j.error||j.reason||("HTTP "+r.status)); return; }
+    const blob=await r.blob();
+    const cd=r.headers.get("Content-Disposition")||"", m=cd.match(/filename="([^"]+)"/);
+    const fname=m?m[1]:"isilon_portal_backup.tar.gz";
+    const url=URL.createObjectURL(blob), a=document.createElement("a");
+    a.href=url; a.download=fname; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+    $("bkMsg").textContent=" ✓ 다운로드: "+fname+" ("+fmtBytes(blob.size)+")";
+  }catch(e){ $("bkMsg").textContent=" ✗ "+e; }
+});
+if($("bkSave")) $("bkSave").addEventListener("click", async()=>{
+  const dir=$("bkDir").value.trim();
+  if(!dir){ $("bkMsg").textContent=" 저장할 폴더를 입력하세요."; return; }
+  $("bkMsg").textContent=" 저장 중…";
+  try{ const j=await (await fetch("/api/portal/backup/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({dir})})).json();
+    $("bkMsg").textContent = j.ok ? (" ✓ 저장됨: "+j.path+" ("+fmtBytes(j.size)+")") : (" ✗ "+(j.reason||j.error||"실패")); }
+  catch(e){ $("bkMsg").textContent=" ✗ "+e; }
+});
+async function pLoadUpgradeCfg(){
+  try{ const j=await (await fetch("/api/portal/settings",{cache:"no-store"})).json();
+    if(j.ok && $("ugWatchDir")) $("ugWatchDir").value=j.upgrade_watch_dir||"";
+    if(j.ok && $("setEnroll")) $("setEnroll").placeholder=j.enroll_token_set?"설정됨 — 바꾸려면 새 토큰 입력(비우고 저장=해제)":"enroll 공유 토큰";
+    if(j.ok){ // 중앙 DB 저장 경로(복제본) 카드
+      if($("dbDir") && document.activeElement!==$("dbDir")) $("dbDir").value=j.replica_dir||"";
+      if($("dbDirEff")) $("dbDirEff").textContent=j.replica_dir_effective||"—";
+      if($("dbDirDefault")) $("dbDirDefault").textContent=j.replica_dir_default||"데이터 폴더/replicas";
+      if($("dbDirCount")) $("dbDirCount").textContent=(j.replica_count==null?"—":j.replica_count);
+    }
+    if(j.ok) renderBackup(j); }catch(e){}
+  loadNetUpg();
+}
+// 중앙 DB 저장 경로 저장 — 이동 결과(즉시 이동/재동기화 안내)를 그대로 보여준다
+if($("dbDirSave")) $("dbDirSave").addEventListener("click", async()=>{
+  const msg=$("dbDirMsg"); msg.textContent=" 저장 중…";
+  try{ const j=await (await fetch("/api/portal/settings",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({replica_dir:$("dbDir").value.trim()})})).json();
+    if(j.ok){ msg.textContent=" ✓ 저장됨"+(j.replica_moved?" — 기존 복제본 이동 완료":"")
+        +(j.replica_note?" — "+j.replica_note:"");
+      if($("dbDirEff")) $("dbDirEff").textContent=j.replica_dir_effective||"—"; }
+    else msg.textContent=" ✗ "+(j.reason||"실패(로그인이 필요할 수 있습니다)");
+  }catch(e){ msg.textContent=" ✗ "+e; }
+});
+function renderBackup(j){
+  if($("bkDir") && document.activeElement!==$("bkDir")) $("bkDir").value=j.backup_dir||"";
+  if($("bkEvery") && document.activeElement!==$("bkEvery")) $("bkEvery").value=j.backup_every_hours||1;
+  if($("bkKeep") && document.activeElement!==$("bkKeep")) $("bkKeep").value=j.backup_keep||100;
+  if($("bkStatus")){
+    if(j.backup_dir){
+      const nxt=j.backup_next?("다음 예정 "+new Date(j.backup_next*1000).toLocaleString("ko-KR")):"첫 주기 대기";
+      $("bkStatus").innerHTML=`<span style="color:var(--ok)">⏰ 자동 백업 켜짐</span> · 보관 <b>${j.backup_count||0}</b>/${j.backup_keep||100}개 (${fmtBytes(j.backup_total_bytes||0)})`
+        +(j.backup_newest?` · 최근 <span class="mono">${j.backup_newest}</span>`:"")+` · ${nxt}`;
+    } else $("bkStatus").innerHTML='<span class="sub">자동 백업 꺼짐 — 폴더를 넣고 ‘일정 저장’ 하면 켜집니다.</span>';
+  }
+}
+if($("bkSchedSave")) $("bkSchedSave").addEventListener("click", async()=>{
+  $("bkSchedMsg").textContent=" 저장 중…";
+  try{ const j=await (await fetch("/api/portal/backup/config",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({dir:$("bkDir").value.trim(), every_hours:parseFloat($("bkEvery").value)||1, keep:parseInt($("bkKeep").value,10)||100})})).json();
+    if(j.ok){ $("bkSchedMsg").textContent=" ✓ 저장됨"; renderBackup(j); } else $("bkSchedMsg").textContent=" ✗ "+(j.reason||j.error||"실패"); }
+  catch(e){ $("bkSchedMsg").textContent=" ✗ "+e; }
+});
+// 인터넷(GitHub) 자동 업그레이드 — 포탈 자가 + 전 엣지 전파
+async function loadNetUpg(){
+  try{ renderNetUpg(await (await fetch("/api/portal/upgrade/status",{cache:"no-store"})).json()); }catch(e){}
+}
+function renderNetUpg(j){
+  if(!j||j.ok===false){ if($("nuInfo")) $("nuInfo").textContent="상태를 불러올 수 없습니다."; return; }
+  const a=!!j.available;
+  $("nuInfo").innerHTML=`현재 <b>v${_he(j.current||"?")}</b> · 최신 `+(j.latest?`<b>v${_he(j.latest)}</b>`:"—")
+    +(a?' <span style="color:var(--warn);font-weight:700">⬆ 업데이트 가능</span>':(j.latest?' <span style="color:var(--ok)">✓ 최신</span>':""))
+    +(j.last_check?` · 확인 ${new Date(j.last_check*1000).toLocaleString("ko-KR")}`:" · 아직 확인 안 함")
+    +` · 엣지 ${j.node_count||0}대`
+    +(j.edges_outdated>0
+        ? ` · <span style="color:var(--warn);font-weight:700">⚠ ${j.edges_outdated}대 구버전</span>`
+          +((j.edges_outdated_list&&j.edges_outdated_list.length)
+             ? ` <span class="sub">(${j.edges_outdated_list.map(e=>`${_he(e.id)} v${_he(e.version)}`).join(", ")})</span>` : "")
+        : ((j.node_count>0&&j.edges_unknown<j.node_count) ? ` · <span style="color:var(--ok)">엣지 모두 최신</span>` : ""))
+    +((j.edges_unknown>0)?` <span class="sub">· ${j.edges_unknown}대 버전 미확인</span>`:"")
+    +(j.bundle_version
+        ? (j.bundle_stale
+            ? `<br><span style="color:var(--danger);font-weight:700">⚠ 엣지에 보낼 배포 코드 v${j.bundle_version} ≠ 실행 v${j.current} — 포탈 재시작 필요</span>`
+            : `<br><span class="sub">엣지에 보낼 배포 코드 <b>v${j.bundle_version}</b> (실행 버전과 일치)</span>`)
+        : "")
+    +(j.check_error?`<br><span style="color:var(--danger)">확인 오류: ${_he(j.check_error)}</span>`:"")
+    +`<br><span class="sub">소스: ${_he(j.url||"—")}</span>`
+    +(j.auto_reason?`<br><span style="color:${j.auto_blocked?"var(--warn)":"var(--ok)"};font-weight:600">`
+        +`${j.auto_blocked?"⚠":"✓"} 자동설치: </span><span class="sub">${_he(j.auto_reason)}</span>`:"");
+  if(document.activeElement!==$("nuSource")) $("nuSource").value=j.source_mode||"off";
+  if($("nuUrl") && document.activeElement!==$("nuUrl")) $("nuUrl").value=j.url_custom||"";
+  if($("nuToken") && document.activeElement!==$("nuToken"))
+    $("nuToken").placeholder = j.token_set ? "•••• 저장됨 (바꾸려면 새로 입력)" : "GitHub PAT 등 — 공개 소스면 비움";
+  if(document.activeElement!==$("nuAuto")) $("nuAuto").checked=!!j.auto;
+  if(j.check_secs && document.activeElement!==$("nuSecs")) $("nuSecs").value=j.check_secs;
+  $("nuInstallBtn").style.display=a?"inline-block":"none";
+  const log=j.log||[];
+  if(log.length){ $("nuLog").style.display="block";
+    $("nuLog").textContent=log.slice().reverse().map(e=>`${new Date(e.t*1000).toLocaleTimeString("ko-KR")}  ${e.msg}`).join("\n"); }
+}
+if($("nuSaveBtn")) $("nuSaveBtn").addEventListener("click", async()=>{
+  $("nuMsg").textContent="저장 중…";
+  const body={upgrade_source:$("nuSource").value,upgrade_url:$("nuUrl").value.trim(),
+    upgrade_auto:$("nuAuto").checked,upgrade_check_secs:parseInt($("nuSecs").value,10)||60};
+  const tok=$("nuToken")?$("nuToken").value:"";
+  if($("nuTokenClear")&&$("nuTokenClear").checked) body.upgrade_token="";   // 명시적 비움
+  else if(tok!=="") body.upgrade_token=tok;        // 빈칸이면 미전송 → 기존 토큰 유지
+  try{ await (await fetch("/api/portal/upgrade/net",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(body)})).json();
+    if($("nuToken")) $("nuToken").value=""; if($("nuTokenClear")) $("nuTokenClear").checked=false;
+    $("nuMsg").textContent="✓ 저장됨"; loadNetUpg(); }
+  catch(e){ $("nuMsg").textContent="✗ "+e; }
+});
+if($("nuCheckBtn")) $("nuCheckBtn").addEventListener("click", async()=>{
+  $("nuMsg").textContent="확인 중…";
+  try{ const j=await (await fetch("/api/portal/upgrade/check",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})).json();
+    renderNetUpg(j); $("nuMsg").textContent=j.available?"새 버전이 있습니다.":"최신입니다."; }
+  catch(e){ $("nuMsg").textContent="✗ "+e; }
+});
+function _upgLine(e){
+  const t=new Date(e.t*1000).toLocaleTimeString("ko-KR");
+  let cls="";
+  if(/✓|성공|완료|돌아옵|복귀/.test(e.msg)) cls="color:var(--ok)";
+  else if(/✗|실패|오류|거부/.test(e.msg)) cls="color:var(--danger)";
+  else if(/내려받|교체|전파|재시작|시작|①|②|③|④/.test(e.msg)) cls="color:var(--warn)";
+  return `<div style="${cls}"><span class="sub">${t}</span>  ${_he(e.msg||"")}</div>`;
+}
+let _upgTimer=null;
+function closeUpgModal(){ if(_upgTimer){clearTimeout(_upgTimer);_upgTimer=null;} const m=$("upgModal"); if(m) m.style.display="none"; }
+async function runUpgradeModal(){
+  const m=$("upgModal"); if(!m) return;
+  m.style.display="flex";
+  $("upgModalLog").innerHTML='<div class="sub">시작하는 중…</div>';
+  $("upgModalStat").innerHTML='<span style="color:var(--warn)">⏳ 시작</span>';
+  let target=null, sawRestart=false; const t0=Date.now();
+  try{
+    const j=await (await fetch("/api/portal/upgrade/install",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({propagate:true})})).json();
+    if(j&&j.ok===false && !/이미 설치/.test(j.error||"")){ $("upgModalStat").innerHTML=`<span style="color:var(--danger)">시작 실패: ${j.error||""}</span>`; return; }
+    // '이미 설치 중'이면 진행 중인 설치를 그대로 폴링해 보여준다(중복 시작 안 함)
+    target=(j&&(j.target||j.latest))||null;
+  }catch(e){ /* 시작 응답이 끊겨도 폴링이 이어서 보여줌 */ }
+  if(_upgTimer) clearTimeout(_upgTimer);
+  const poll=async()=>{
+    let j=null, err=false;
+    try{ j=await (await fetch("/api/portal/upgrade/status",{cache:"no-store"})).json(); }catch(e){ err=true; }
+    if(err){
+      sawRestart=true;
+      $("upgModalStat").innerHTML='<span style="color:var(--warn)">🔄 포탈 재시작 중… (잠시만요)</span>';
+    } else {
+      target=target||j.latest;
+      const lines=j.log||[];
+      if(lines.length){ $("upgModalLog").innerHTML=lines.map(_upgLine).join(""); const b=$("upgModalLog"); b.scrollTop=b.scrollHeight; }
+      if(j.install_error){ $("upgModalStat").innerHTML='<span style="color:var(--danger)">✗ 실패 — 아래 로그 확인</span>'; return; }
+      if((target && j.current===target && (sawRestart||j.install_done)) || (sawRestart && !j.installing && (!j.log||!j.log.length))){
+        $("upgModalStat").innerHTML=`<span style="color:var(--ok)">✅ 완료 — v${j.current}</span>`;
+        $("upgModalLog").innerHTML+=`<div style="color:var(--ok)">✅ 새 버전 v${j.current} 로 복귀 — 업그레이드 완료</div>`;
+        const b=$("upgModalLog"); b.scrollTop=b.scrollHeight;
+        loadNetUpg(); try{ loadOverview(); loadNodes(); }catch(_){}
+        return;
+      }
+      $("upgModalStat").innerHTML=j.installing?'<span style="color:var(--warn)">⏳ 진행 중…</span>':(sawRestart?'<span style="color:var(--warn)">🔄 복귀 대기…</span>':'<span style="color:var(--warn)">⏳ 진행 중…</span>');
+    }
+    if(Date.now()-t0<90000){ _upgTimer=setTimeout(poll,700); }
+    else { $("upgModalStat").innerHTML+=' <span class="sub">— 오래 걸립니다. ‘노드 관리’에서 확인하세요.</span>'; }
+  };
+  poll();
+}
+if($("nuInstallBtn")) $("nuInstallBtn").addEventListener("click", ()=>{
+  if(!confirm("포탈을 최신 버전으로 설치하고, 등록된 모든 엣지에도 전파한 뒤 재시작할까요?\n(진행 상황은 팝업으로 단계별 표시됩니다)")) return;
+  runUpgradeModal();
+});
+if($("upgModalClose")) $("upgModalClose").addEventListener("click", closeUpgModal);
+if($("ugWatchSave")) $("ugWatchSave").addEventListener("click", async()=>{
+  $("ugWatchMsg").textContent=" 저장 중…";
+  try{ const j=await (await fetch("/api/portal/settings",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({upgrade_watch_dir:$("ugWatchDir").value.trim()})})).json();
+    $("ugWatchMsg").textContent=j.ok?(" ✓ 저장됨"+(j.upgrade_watch_dir?"":" (감시 끔)")):(" ✗ "+(j.reason||"실패")); }
+  catch(e){ $("ugWatchMsg").textContent=" ✗ "+e; }
+});
+if($("setEnrollBtn")) $("setEnrollBtn").addEventListener("click", async()=>{
+  $("setEnrollMsg").textContent=" 저장 중…";
+  try{ const j=await (await fetch("/api/portal/settings",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({enroll_token:$("setEnroll").value.trim()})})).json();
+    $("setEnrollMsg").textContent=j.ok?(j.enroll_token_set?" ✓ 저장됨":" ✓ 해제됨(토큰 검사 끔)"):(" ✗ "+(j.reason||"실패"));
+    if(j.ok){ $("setEnroll").value=""; if($("setEnroll")) $("setEnroll").placeholder=j.enroll_token_set?"설정됨 — 바꾸려면 새 토큰 입력(비우고 저장=해제)":"enroll 공유 토큰"; } }
+  catch(e){ $("setEnrollMsg").textContent=" ✗ "+e; }
+});
+// ── 엣지 오프라인 업그레이드: 릴리스 폴더 + 엣지 한 줄 ──
+async function loadRelease(){
+  try{ const j=await (await fetch("/api/portal/release/info",{cache:"no-store"})).json();
+    if(!j.ok) return;
+    if($("relDir")) $("relDir").value=j.release_dir||"";
+    if($("relFile")){
+      const fn=_he(j.release_file||"");
+      const rs=_he(j.release_reason||"");
+      if(!j.release_available){
+        $("relFile").innerHTML=`<span style="color:var(--warn)">(없음)</span> <span class="sub">${rs||"폴더에 isilon_usage-*.tar.gz 를 두세요"}</span>`;
+      } else if(j.release_version_mismatch){
+        $("relFile").innerHTML=`${fn} <span style="color:var(--danger);font-weight:700">⚠ 엣지가 받을 실제 버전 v${j.release_content_version||"?"} · 파일명은 v${j.release_version||"?"}</span>`
+          +`<div class="sub" style="color:var(--danger)">${rs}</div>`;
+      } else {
+        const cv=j.release_content_version||j.release_version||"?";
+        $("relFile").innerHTML=`${fn} <span style="color:var(--ok)">→ 엣지가 받을 버전 <b>v${cv}</b></span>`
+          +(rs?` <span class="sub">${rs}</span>`:"");
+      }
+    }
+    if($("relSeen")){
+      const host=j.release_host?` · 포탈 서버 <b>${_he(j.release_host)}</b>`:"";
+      const seen=(j.release_seen||[]);
+      $("relSeen").innerHTML = seen.length
+        ? `이 폴더에서 보이는 패키지: <span class="mono">${_he(seen.join(", "))}</span>${host}`
+        : `이 폴더에서 isilon_usage-* 패키지가 안 보입니다${host}. (파일을 <b>이 포탈 서버</b>의 위 경로에 두었는지 확인)`;
+    }
+    if($("relCmd")) $("relCmd").textContent=
+      `curl -fsSL "${location.origin}/api/portal/release" | sudo tar -xz -C /opt/isilon_edge --strip-components=1 && sudo find /opt/isilon_edge -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null; (cd /opt/isilon_edge && python3 -m isilon_usage --version) && sudo systemctl restart isilon-edge`;
+  }catch(e){}
+}
+if($("relSave")) $("relSave").addEventListener("click", async()=>{
+  $("relMsg").textContent=" 저장 중…";
+  try{ const j=await (await fetch("/api/portal/settings",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({release_dir:$("relDir").value.trim()})})).json();
+    $("relMsg").textContent=j.ok?" ✓ 저장됨":(" ✗ "+(j.reason||"실패")); loadRelease(); }
+  catch(e){ $("relMsg").textContent=" ✗ "+e; }
+});
+if($("relCmd")) $("relCmd").addEventListener("click",()=>{
+  if(navigator.clipboard) navigator.clipboard.writeText($("relCmd").textContent);
+  if($("relMsg")) $("relMsg").textContent=" (명령 복사됨)"; });
+if($("relCheck")) $("relCheck").addEventListener("click",()=>{
+  if($("relMsg")) $("relMsg").textContent=" 확인 중…"; loadRelease();
+  setTimeout(()=>{ if($("relMsg")&&$("relMsg").textContent===" 확인 중…") $("relMsg").textContent=""; }, 800); });
+loadRelease();
+// ── 서버 디렉터리 브라우저(감시 폴더 선택) — HQ 로컬 경로를 클릭으로 탐색 ──
+let _fbCur="/";
+function fbOpen(){
+  let m=$("fbModal");
+  if(!m){
+    m=document.createElement("div"); m.id="fbModal"; document.body.appendChild(m);
+    m.style.cssText="position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.72);display:none;align-items:center;justify-content:center;";
+    m.innerHTML='<div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;width:92vw;max-width:760px;">'
+      +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">'
+      +'<b style="font-size:15px;">📁 서버 디렉터리 선택 (HQ 로컬)</b><div style="flex:1"></div>'
+      +'<button id="fbClose">✕ 닫기</button></div>'
+      +'<div style="display:flex;gap:6px;margin-bottom:8px;">'
+      +'<button id="fbUp">⬆ 위로</button>'
+      +'<input id="fbPath" class="inp mono" style="flex:1;" placeholder="/opt" />'
+      +'<button id="fbGo">탐색</button></div>'
+      +'<div id="fbList" style="max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:4px;"></div>'
+      +'<div class="sub" id="fbErr" style="color:#ff8a8a;margin-top:6px;"></div>'
+      +'<div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+      +'<span class="sub" id="fbUseLbl">이 폴더를 감시 폴더로:</span>'
+      +'<b id="fbCurLbl" class="mono" style="flex:1;min-width:160px;word-break:break-all;"></b>'
+      +'<button id="fbPick" class="primary">이 디렉터리 선택</button></div></div>';
+    $("fbClose").addEventListener("click", fbClose);
+    m.addEventListener("click", e=>{ if(e.target===m) fbClose(); });
+    document.addEventListener("keydown", e=>{ if(e.key==="Escape" && m.style.display==="flex") fbClose(); });
+    $("fbUp").addEventListener("click", ()=>fbBrowse($("fbUp").dataset.parent||"/"));
+    $("fbGo").addEventListener("click", ()=>fbBrowse($("fbPath").value.trim()||"/"));
+    $("fbPath").addEventListener("keydown", e=>{ if(e.key==="Enter") fbBrowse($("fbPath").value.trim()||"/"); });
+    $("fbPick").addEventListener("click", ()=>{ const t=$(_fbTarget.input); if(t) t.value=_fbCur; fbClose();
+      const ms=$(_fbTarget.msg); if(ms) ms.textContent=" (선택됨 — '저장'을 누르세요)"; });
+  }
+  if($("fbUseLbl")) $("fbUseLbl").textContent="이 폴더를 "+(_fbTarget.label||"대상")+"(으)로:";
+  m.style.display="flex";
+  fbBrowse((($(_fbTarget.input)||{}).value||"").trim()||"/");
+}
+// 찾아보기 대상(감시 폴더/중앙 DB 경로 등) — 버튼이 대상을 지정하고 같은 모달을 재사용
+let _fbTarget={input:"ugWatchDir", msg:"ugWatchMsg", label:"감시 폴더"};
+function fbClose(){ const m=$("fbModal"); if(m) m.style.display="none"; }
+async function fbBrowse(p){
+  const errEl=$("fbErr"); if(errEl) errEl.textContent="";
+  try{
+    const j=await (await fetch("/api/portal/browse?path="+encodeURIComponent(p||"/"),{cache:"no-store",headers:{"X-Op-Token":_opToken()}})).json();
+    if(!j.ok){ if(errEl) errEl.textContent="탐색 실패: "+(j.reason||j.error||""); return; }
+    _fbCur=j.path; $("fbPath").value=j.path; $("fbCurLbl").textContent=j.path;
+    $("fbUp").dataset.parent=j.parent||"/";
+    const list=$("fbList");
+    const items=(j.dirs||[]).map(d=>`<div class="fbitem" data-go="${encodeURIComponent(d.path)}" style="padding:7px 9px;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;"><span>📁 ${esc(d.name)}</span><span class="sub">열기 ▶</span></div>`);
+    list.innerHTML=items.length?items.join(""):'<span class="sub" style="padding:8px;display:block;">하위 디렉터리가 없습니다.</span>';
+    list.querySelectorAll(".fbitem").forEach(el=>{
+      el.addEventListener("click", ()=>fbBrowse(decodeURIComponent(el.dataset.go)));
+      el.addEventListener("mouseenter", ()=>{ el.style.background="var(--panel2)"; });
+      el.addEventListener("mouseleave", ()=>{ el.style.background=""; });
+    });
+    if(j.error && errEl) errEl.textContent="일부 접근 불가: "+j.error;
+  }catch(e){ if(errEl) errEl.textContent="오류: "+e; }
+}
+if($("ugWatchBrowse")) $("ugWatchBrowse").addEventListener("click", ()=>{
+  _fbTarget={input:"ugWatchDir", msg:"ugWatchMsg", label:"감시 폴더"}; fbOpen(); });
+if($("dbDirBrowse")) $("dbDirBrowse").addEventListener("click", ()=>{
+  _fbTarget={input:"dbDir", msg:"dbDirMsg", label:"중앙 DB 저장 경로"}; fbOpen(); });
+// 전 노드 업그레이드 진행 팝업 — /upgrade/status 의 push 를 폴링해 노드별 라이브 표시
+let _pushTimer=null;
+function closePushModal(){ if(_pushTimer){clearTimeout(_pushTimer);_pushTimer=null;} const m=$("pushModal"); if(m) m.style.display="none"; }
+function _pushBadge(s){
+  if(s==="ok")      return '<span style="color:var(--ok);font-weight:700">✓ 성공</span>';
+  if(s==="fail")    return '<span style="color:var(--danger);font-weight:700">✗ 실패</span>';
+  if(s==="sending") return '<span style="color:var(--warn)">⏳ 전송 중…</span>';
+  return '<span class="sub">· 대기</span>';
+}
+function renderPush(p){
+  if(!p) return;
+  const tot=p.total||0, done=p.done||0, ok=p.ok||0, fail=p.fail||0;
+  const pct=tot?Math.round(done/tot*100):0;
+  if($("pushBar")){ $("pushBar").style.width=pct+"%";
+    $("pushBar").style.background = (!p.active && fail) ? "var(--danger)" : (!p.active ? "var(--ok)" : "var(--warn)"); }
+  if($("pushBarTxt")) $("pushBarTxt").textContent = done+" / "+tot;
+  if($("pushModalHead")) $("pushModalHead").innerHTML =
+    `보내는 코드 <b>v${p.bundle_version||"?"}</b> · 성공 <b style="color:var(--ok)">${ok}</b> · 실패 <b style="color:var(--danger)">${fail}</b> / 전체 ${tot}대`;
+  if($("pushModalStat")) $("pushModalStat").innerHTML = p.active
+    ? '<span style="color:var(--warn)">⏳ 진행 중…</span>'
+    : (fail? `<span style="color:var(--danger)">완료 — 실패 ${fail}대 (사유는 아래 표)</span>` : '<span style="color:var(--ok)">✅ 모두 성공</span>');
+  if($("pushTbody")) $("pushTbody").innerHTML=(p.nodes||[]).map(n=>{
+    const detail = n.state==="ok" ? ("→ v"+(n.version||"?")) : (n.reason||"");
+    return `<tr style="border-top:1px solid #222c44">`
+      +`<td class="mono" style="padding:5px 18px">${esc(n.id)}</td>`
+      +`<td class="sub" style="padding:5px 8px">${esc(n.region||"")}</td>`
+      +`<td class="mono sub" style="padding:5px 8px">${n.current?("v"+esc(""+n.current)):"—"}</td>`
+      +`<td style="padding:5px 8px">${_pushBadge(n.state)}</td>`
+      +`<td class="${n.state==="fail"?"":"sub"}" style="padding:5px 18px; ${n.state==="fail"?"color:var(--danger)":""}">${esc(detail)}</td></tr>`;
+  }).join("");
+}
+async function pollPush(){
+  let j=null;
+  try{ j=await (await fetch("/api/portal/upgrade/status",{cache:"no-store"})).json(); }catch(e){}
+  if(j&&j.push) renderPush(j.push);
+  _pushTimer = (j&&j.push&&j.push.active) ? setTimeout(pollPush, 1000) : null;
+}
+function openPushModal(){
+  const m=$("pushModal"); if(!m) return;
+  m.style.display="flex";
+  if($("pushModalHead")) $("pushModalHead").textContent="시작하는 중…";
+  if($("pushTbody")) $("pushTbody").innerHTML="";
+  if($("pushBar")){ $("pushBar").style.width="0"; $("pushBar").style.background="var(--warn)"; }
+  if($("pushBarTxt")) $("pushBarTxt").textContent="—";
+  if($("pushModalStat")) $("pushModalStat").innerHTML='<span style="color:var(--warn)">⏳ 시작</span>';
+  if(_pushTimer){clearTimeout(_pushTimer);_pushTimer=null;}
+  pollPush();
+}
+if($("pushModalClose")) $("pushModalClose").addEventListener("click", closePushModal);
+if($("ugPushAll")) $("ugPushAll").addEventListener("click", async()=>{
+  if(!confirm("등록된 모든 엣지를 현재 HQ 코드로 업그레이드할까요?")) return;
+  $("ugPushAll").disabled=true; $("ugWatchMsg").textContent=" 시작…";
+  openPushModal();
+  try{ const j=await (await fetch("/api/portal/upgrade-all",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:"{}"})).json();
+    if(j.ok){ $("ugWatchMsg").textContent=" 전파 시작 — 보내는 코드 v"+(j.bundle_version||"?")+" · "+(j.total||0)+"대"; }
+    else { $("ugWatchMsg").textContent=" ✗ "+(j.error||j.reason||"실패");
+      if($("pushModalStat")) $("pushModalStat").innerHTML=`<span style="color:var(--danger)">시작 실패: ${(j.error||j.reason||"")}</span>`; } }
+  catch(e){ $("ugWatchMsg").textContent=" ✗ "+e; }
+  $("ugPushAll").disabled=false;
+});
+// 업그레이드 기록(History) — 목록 + 세부 모달
+async function loadHistory(){
+  const box=$("histList"); if(!box) return;
+  try{ const r=await fetch("/api/portal/upgrade/history",{cache:"no-store"});
+    if(!r.ok){ box.innerHTML='<span style="color:var(--warn)">기록을 불러올 수 없습니다 (HTTP '+r.status+')'
+      +(r.status===404?' — 포탈(백엔드)이 구버전입니다. <b>포탈을 재시작/업데이트</b>하면 기록 기능이 켜집니다.':'')+'</span>'; return; }
+    const j=await r.json();
+    window._histEvents=(j&&j.events)||[]; window._histVer=j.version; window._histLimit=20;
+    renderHist();
+  }catch(e){ box.innerHTML='<span class="sub">불러오기 실패: '+e+'</span>'; }
+}
+// 기본 20줄만 보이고, '더 보기'를 누르면 나머지를 펼친다.
+function renderHist(){
+  const box=$("histList"); if(!box) return;
+  const ev=window._histEvents||[];
+  if(!ev.length){ box.innerHTML='<span class="sub">아직 기록이 없습니다 (포탈 v'+(window._histVer||"?")+'). 자동·수동·전 노드 푸시·재설치 업그레이드가 일어나면 여기에 남습니다.</span>'; return; }
+  const lim=window._histLimit||20;
+  box.innerHTML='<table style="width:100%;font-size:12.5px;border-collapse:collapse;"><thead><tr class="sub" style="text-align:left;">'
+    +'<th style="padding:5px 8px;">시각</th><th style="padding:5px 8px;">종류</th><th style="padding:5px 8px;">버전</th><th style="padding:5px 8px;">결과</th><th style="padding:5px 8px;">엣지</th><th></th></tr></thead><tbody>'
+    +ev.slice(0,lim).map((e,i)=>{
+        const res=e.ok?'<span style="color:var(--ok)">✓ 성공</span>':'<span style="color:var(--danger)">✗ 실패</span>';
+        const ver=(e.from?("v"+e.from+" → "):"")+(e.to?("v"+e.to):(e.bundle_version?("v"+e.bundle_version):"—"));
+        const edges=(e.push_total!=null)?((e.push_ok||0)+"/"+e.push_total):"—";
+        return '<tr style="border-top:1px solid #222c44">'
+          +'<td class="mono" style="padding:5px 8px;">'+new Date(e.ts*1000).toLocaleString("ko-KR")+'</td>'
+          +'<td style="padding:5px 8px;">'+esc(e.kind||"")+'</td>'
+          +'<td class="mono" style="padding:5px 8px;">'+esc(ver)+'</td>'
+          +'<td style="padding:5px 8px;">'+res+(e.error?(' <span class="sub">'+esc(e.error)+'</span>'):'')+'</td>'
+          +'<td style="padding:5px 8px;">'+edges+'</td>'
+          +'<td style="padding:5px 8px;"><button class="histDetail" data-i="'+i+'" style="padding:2px 10px;">세부</button></td></tr>';
+      }).join("")+'</tbody></table>'
+    +(ev.length>lim
+       ? '<div style="margin-top:8px;text-align:center;"><button id="histMore" style="padding:4px 16px;">더 보기 ('+(ev.length-lim)+'개 더) ▾</button></div>'
+       : (ev.length>20?'<div class="sub" style="margin-top:6px;text-align:center;">전체 '+ev.length+'건 표시</div>':''));
+  box.querySelectorAll(".histDetail").forEach(b=>b.addEventListener("click",()=>showHist(+b.dataset.i)));
+  const mb=$("histMore"); if(mb) mb.addEventListener("click",()=>{ window._histLimit=ev.length; renderHist(); });
+}
+function showHist(i){
+  const e=(window._histEvents||[])[i]; if(!e) return; const m=$("histModal"); if(!m) return;
+  $("histModalTitle").textContent=(e.kind||"업그레이드")+" — "+new Date(e.ts*1000).toLocaleString("ko-KR")+" ("+(e.ok?"성공":"실패")+")";
+  const ver=(e.from?("v"+e.from+" → "):"")+(e.to||e.bundle_version||"?");
+  let html='<div class="sub" style="margin-bottom:8px;">버전 <b>'+esc(ver)+'</b>'+(e.error?(' · <span style="color:var(--danger)">'+esc(e.error)+'</span>'):'')+'</div>';
+  const log=(e.log||[]);
+  if(log.length) html+='<div class="sub" style="margin-bottom:4px;">단계 로그</div><pre class="mono" style="background:#0d1219;border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;max-height:240px;overflow:auto;font-size:12px;">'
+    +log.map(l=>new Date(l.t*1000).toLocaleTimeString("ko-KR")+"  "+esc(l.msg)).join("\n")+'</pre>';
+  const nodes=(e.nodes||[]);
+  if(nodes.length){ html+='<div class="sub" style="margin:8px 0 4px;">엣지별 결과 ('+(e.push_ok||0)+'/'+(e.push_total||nodes.length)+')</div>'
+    +'<table style="width:100%;font-size:12px;border-collapse:collapse;"><tbody>'
+    +nodes.map(n=>'<tr style="border-top:1px solid #222c44"><td class="mono" style="padding:4px 8px;">'+esc(n.id||"")+'</td>'
+      +'<td style="padding:4px 8px;">'+(n.ok?('<span style="color:var(--ok)">✓ v'+esc(n.version||"?")+'</span>'):('<span style="color:var(--danger)">✗ '+esc(n.reason||"실패")+'</span>'))+'</td></tr>').join("")
+    +'</tbody></table>'; }
+  $("histModalBody").innerHTML=html; m.style.display="flex";
+}
+if($("histModalClose")) $("histModalClose").addEventListener("click",()=>{ const m=$("histModal"); if(m) m.style.display="none"; });
+if($("histRefresh")) $("histRefresh").addEventListener("click", loadHistory);
+if($("ugPushAllSsh")) $("ugPushAllSsh").addEventListener("click", async()=>{
+  if(!confirm("등록된 모든 엣지에 SSH로 접속해 업그레이드를 실행할까요?(구버전 부트스트랩)")) return;
+  $("ugPushAllSsh").disabled=true; $("ugSshAllMsg").textContent=" SSH 업그레이드 중… (노드 수만큼 시간 소요)";
+  try{ const j=await (await fetch("/api/portal/upgrade-all/ssh",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({hq_base:location.origin, ssh_user:$("ugAllUser").value.trim(),
+        ssh_port:$("ugAllPort").value.trim(), ssh_password:$("ugAllPass").value,
+        edge_dir:$("ugAllDir").value.trim()})})).json();
+    if(j.ok){ const ok=j.results.filter(r=>r.ok).length, fail=j.results.length-ok;
+      $("ugSshAllMsg").textContent=" 성공 "+ok+" · 실패 "+fail+" (총 "+j.results.length+")";
+      $("ugPushOut").style.display=""; $("ugPushOut").textContent=
+        j.results.map(r=> r.ok ? `✓ ${r.id} — 성공`
+          : `✗ ${r.id} — 실패: ${r.reason||""}`+(r.detail?("\n    "+String(r.detail).replace(/\n/g,"\n    ")):"")
+        ).join("\n"); }
+    else $("ugSshAllMsg").textContent=" ✗ "+(j.reason||j.error||"실패"); }
+  catch(e){ $("ugSshAllMsg").textContent=" ✗ "+e; }
+  $("ugPushAllSsh").disabled=false;
+});
+pLoadUpgradeCfg();
+restoreOpSession();   // 새로고침/재접속 시 살아있는 로그인 세션 복원(첫 렌더 전에)
+// ── 📊 법인별 시간당 처리량(윈도우별, 영구 DB) ──
+let _thruData=null; const _thruOpen={};
+const _THRU_LABEL={"60":"최근 1분","600":"최근 10분","1800":"최근 30분","3600":"최근 1시간","36000":"최근 10시간","86400":"최근 1일"};
+function _bph(v){ return (v==null)?"—":(fmtBytes(v)+"/h"); }
+async function loadThroughput(){
+  try{ const j=await (await fetch("/api/portal/throughput",{cache:"no-store"})).json();
+    if(j&&j.ok){ _thruData=j; renderThroughput(); } }catch(e){}
+}
+function renderThroughput(){
+  const box=$("thruRows"); if(!box||!_thruData) return;
+  const nodes=_thruData.nodes||[], wins=_thruData.windows||[];
+  if(!nodes.length){ box.innerHTML='<div class="sub">등록된 노드가 없습니다.</div>'; return; }
+  const peak=Math.max(1, ...nodes.map(n=>n.since_start_bph||0));
+  box.innerHTML=nodes.map(n=>{
+    const bph=n.since_start_bph||0, pct=Math.min(100, bph/peak*100), open=_thruOpen[n.id];
+    const run=n.scanning?'':' <span class="sub">(유휴)</span>';
+    const head=`<div class="thru-row" data-tid="${escAttr(n.id)}" style="display:flex; align-items:center; gap:10px; padding:6px 0; cursor:pointer; border-bottom:1px solid var(--line);">
+        <div style="width:150px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"><b>${escAttr(n.id)}</b> <span class="sub">${escAttr(n.region||"")}</span>${run}</div>
+        <div style="flex:1; min-width:80px;"><div class="capbar" style="height:9px; border-radius:6px;"><i style="width:${pct}%"></i></div></div>
+        <div style="width:120px; text-align:right;"><b>${_bph(n.since_start_bph)}</b></div>
+        <div style="width:16px; color:var(--muted);">${open?"▾":"▸"}</div></div>`;
+    let detail="";
+    if(open){
+      // 윈도우별(최근 1분~1일)을 박스(카드) 형태로 — '총 사용 용량' 카드와 같은 스타일.
+      detail='<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; padding:10px 0 14px;">'+wins.map(w=>{
+        const k=String(w), d=(n.win||{})[k]||{};
+        return `<div class="card" style="padding:12px 14px;">
+          <h2 style="margin:0 0 6px;">${_THRU_LABEL[k]||k+"s"}</h2>
+          <div class="big" style="font-size:20px; color:#7fc8ff;">${_bph(d.bph)}</div>
+          <div class="sub" style="margin-top:5px;"><b>${fmtBytes(d.bytes||0)}</b> 처리 · ${fmtNum(Math.round(d.files||0))} 파일</div>
+        </div>`;
+      }).join("")+'</div>';
+    }
+    return head+detail;
+  }).join("");
+  box.querySelectorAll(".thru-row").forEach(r=>r.addEventListener("click",()=>{
+    const id=r.dataset.tid; _thruOpen[id]=!_thruOpen[id]; renderThroughput(); }));
+}
+
+loadAuth();
+loadOverview(); loadNodes(); loadThroughput();
+setInterval(()=>{ loadAuth(); loadOverview(); loadNodes(); }, 5000);
+setInterval(loadThroughput, 20000);
+</script>
+</body>
+</html>
