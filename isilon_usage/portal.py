@@ -497,10 +497,6 @@ class PortalController:
                 out["log_popup_pos"] = _lp if _lp in ("center", "tl", "tr", "bl", "br") else "center"
                 _rd = str(s.get("replica_dir") or "").strip()
                 out["replica_dir"] = _rd if os.path.isabs(_rd) else ""
-                # 지도 배치({노드id:[x,y]}) — set_map_layout 이 검증해 저장하므로 형식만 확인
-                lay = s.get("map_layout")
-                if isinstance(lay, dict):
-                    out["map_layout"] = lay
                 out["ask_llm_enabled"] = bool(s.get("ask_llm_enabled"))
                 out["ask_llm_endpoint"] = str(s.get("ask_llm_endpoint") or "").strip()
                 out["ask_llm_model"] = str(s.get("ask_llm_model") or "").strip()
@@ -546,38 +542,6 @@ class PortalController:
         self.settings["nav_hidden"] = hidden
         self._save_settings()
         return {"ok": True, "nav_hidden": hidden}
-
-    # ----- 지도 배치(전세계 데이터센터 분포) -----
-    def map_layout(self) -> dict:
-        """지도에 배치된 노드 좌표({노드id: [x,y]}, 0~100%)를 돌려준다(읽기 전용)."""
-        lay = self.settings.get("map_layout")
-        return {"ok": True, "positions": dict(lay) if isinstance(lay, dict) else {}}
-
-    def set_map_layout(self, positions) -> dict:
-        """지도 배치를 저장한다 — 사용자가 드래그로 놓은 좌표를 영속화.
-
-        positions: {노드id: [x, y]} (x/y 는 지도 viewBox 대비 0~100%).
-        등록된 노드만 저장하고(삭제된 노드 좌표는 자연 정리), 좌표는 0~100 으로 클램프.
-        키가 빠진 노드는 '미배치'로 돌아간다(부분 저장이 아니라 전체 배치 교체).
-        """
-        if not isinstance(positions, dict):
-            return {"ok": False, "reason": "positions 는 {노드id:[x,y]} 형식이어야 합니다."}
-        with self._lock:
-            ids = {n["id"] for n in self.nodes}
-        clean = {}
-        for k, v in positions.items():
-            k = str(k)
-            if k not in ids:
-                continue
-            try:
-                x, y = float(v[0]), float(v[1])
-            except (TypeError, ValueError, IndexError, KeyError):
-                continue
-            clean[k] = [round(min(100.0, max(0.0, x)), 2),
-                        round(min(100.0, max(0.0, y)), 2)]
-        self.settings["map_layout"] = clean
-        self._save_settings()
-        return {"ok": True, "positions": clean, "count": len(clean)}
 
     def set_title(self, title: str, subtitle: str) -> dict:
         """상단/탭 제목(브랜딩)을 설정한다. 호출 측(핸들러)에서 인증을 확인한다."""
@@ -2253,6 +2217,51 @@ class PortalController:
                         % (ok, len(results), one_file_system, autotune, restart_busy))
         return {"ok": True, "count": ok, "total": len(results), "results": results}
 
+    def node_stop(self, node_id: str) -> dict:
+        """노드의 진행 중 스캔(탐색/집계)을 모두 중지한다(베스트에포트).
+
+        pscan(멀티프로세스)은 중간 중지가 불가 — 엣지가 거부한 사유를 그대로 돌려준다.
+        중지된 스캔은 엣지에서 'paused' 로 남아 이어하기(재개)가 가능하다(threads 엔진).
+        """
+        with self._lock:
+            node = next((dict(n) for n in self.nodes if n["id"] == node_id), None)
+            cache = dict(self._cache.get(node_id, {})) if node else {}
+        if not node:
+            return {"ok": False, "reason": "노드를 찾을 수 없습니다."}
+        roots = (cache.get("overall") or {}).get("roots") or []
+        busy = [r for r in roots if r.get("status") in ("discovering", "sizing")]
+        if not busy:
+            return {"ok": True, "stopped": 0, "reason": "진행 중 스캔 없음"}
+        stopped, reasons = 0, []
+        for r in busy:
+            sid = int(r.get("scan_id") or 0)
+            if not sid:
+                continue
+            res = self._edge_post(node, "/api/scan/stop", {"scan_id": sid})
+            if res.get("ok"):
+                stopped += 1
+            else:
+                reasons.append(res.get("reason") or "중지 거부(pscan 은 중지 불가)")
+        return {"ok": stopped > 0 or not reasons, "stopped": stopped,
+                "reason": "; ".join(reasons)}
+
+    def node_stop_all(self) -> dict:
+        """등록된(활성) 노드 전체의 진행 중 스캔을 일괄 중지하고 노드별 결과를 모은다."""
+        with self._lock:
+            ids = [n["id"] for n in self.nodes if n.get("enabled", True)]
+        results = []
+        stopped_total = 0
+        for nid in ids:
+            r = self.node_stop(nid)
+            stopped_total += int(r.get("stopped") or 0)
+            results.append({"id": nid, "ok": bool(r.get("ok")),
+                            "stopped": int(r.get("stopped") or 0),
+                            "reason": r.get("reason") or ""})
+        auditmod.record(self.data_dir, action="node_stop_all", ok=True,
+                        detail="스캔 %d개 중지 (노드 %d개 대상)" % (stopped_total, len(results)))
+        return {"ok": True, "stopped": stopped_total, "total": len(results),
+                "results": results}
+
     def set_node_password(self, ids, password: str, *, clear: bool = False) -> dict:
         """선택한(또는 전체) 노드의 작업 보호 비밀번호를 설정/변경/해제한다.
 
@@ -2648,9 +2657,6 @@ class PortalHandler(BaseHTTPRequestHandler):
             if path == "/api/portal/nodes":
                 self._send_json(c.list_nodes())
                 return
-            if path == "/api/portal/map-layout":   # 지도 배치 좌표(읽기 전용)
-                self._send_json(c.map_layout())
-                return
             if path == "/api/portal/overview":
                 self._send_json(c.overview())
                 return
@@ -2838,9 +2844,6 @@ class PortalHandler(BaseHTTPRequestHandler):
             if path == "/api/portal/nodes/delete":
                 self._send_json(c.delete_node(str(body.get("id") or "")))
                 return
-            if path == "/api/portal/map-layout":  # 지도 배치 저장(로그인 필요 — 위 게이트 통과)
-                self._send_json(c.set_map_layout(body.get("positions")))
-                return
             if path == "/api/portal/nodes/set-token":  # 토큰 강제 맞추기(1개/일괄) — 포탈 로컬만 교정
                 self._send_json(c.set_node_token(body.get("ids") or [],
                                                  str(body.get("token") or "")))
@@ -2853,6 +2856,9 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/portal/node-scan":
                 self._send_json(c.node_scan(str(body.get("id") or "")))
+                return
+            if path == "/api/portal/node-stop-all":   # 전체 노드 진행 중 스캔 일괄 중단
+                self._send_json(c.node_stop_all())
                 return
             if path == "/api/portal/node-scan-all":   # 전체 노드 일괄 스캔(옵션: -x·엔진·진행중 재시작)
                 self._send_json(c.node_scan_all(

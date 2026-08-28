@@ -1086,4 +1086,11 @@
      모달 _fbTarget 으로 다중 대상 일반화. 단위테스트(_test_replica_dir)·실서버 GET/POST 왕복·
      CSS/JS·ruff 통과. v1.99.28.
 
+289. (데이터센터 배포 지도 삭제 + 중앙 포탈에서 전체 시작 버튼 옆에 전체 중단 버튼) v1.99.27 지도
+     기능 전체 제거(카드·드래그 JS·map-layout API·설정 로딩·테스트 — 잔여 참조 0 확인, 로그 팝업
+     위치 설정은 유지). 전체 중단: scanAllBar 에 ⏹ 버튼 + POST /api/portal/node-stop-all →
+     node_stop_all(진행 중 스캔만 /api/scan/stop 푸시 — 기존 재시작 옵션 경로 재사용, threads=paused
+     로 재개 가능·pscan=중지 불가 사유 표시·유휴 제외, 감사 기록). 단위테스트(_test_node_stop_all)·
+     실서버 렌더·CSS/JS·ruff 통과. v1.99.29.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
