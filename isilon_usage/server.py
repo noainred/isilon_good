@@ -643,6 +643,9 @@ class ScanController:
         self.settings = setmod.load(data_dir)
         self._scans: Dict[int, dict] = {}   # manager scan_id -> {stop, thread}
         self._lock = threading.Lock()
+        # '중복 검사 → 등록 → 실행' 임계 구역(start_scan·resume_scan). 동시 요청(더블클릭·포탈 중복 등록 노드·
+        # 예약 동시 발화)이 같은 루트를 두 번 등록하지 못하게 한다. _lock 과 별개(내부에서 _lock 을 잡음).
+        self._start_lock = threading.RLock()
         self._pause_watch: Dict[int, dict] = {}   # 중단 후 N분 미재시작 감시: scan_id -> {due, root}
         self._auto_restart: Dict[int, dict] = {}  # 완료 후 자동 재시작(반복): scan_id -> {경로·설정}
         self._storage_cache = None          # 스토리지 어레이(아이실론/PowerStore) 상태 캐시
@@ -1597,14 +1600,61 @@ class ScanController:
         return {"ok": True}
 
     # ----- 시작 -----
-    def start_scan(self, path: str, *, backend=None, size_mode=None,
-                   one_file_system=None, engine=None,
-                   processes=None, threads=None, confirm_outside=False,
-                   auto_restart=False, fold_depth=None) -> dict:
+    # 매니저 하트비트(updated_at)가 이보다 오래된 '진행 중' 스캔은 죽은 것으로 본다(다른 프로세스 판정용).
+    _DUP_STALE_SECS = 900
+
+    def _active_scan_on(self, path: str, exclude=None):
+        """루트 path 를 이미 스캔 중인 scan_id 를 돌려준다(없으면 None).
+
+        같은 트리를 두 스캔이 동시에 걸으면 처리량이 반토막 나고, 업그레이드 재개 때마다 둘 다
+        되살아나 끝나지 않는다(현장: #3/#4·#9/#10·#12/#13 이 같은 초에 쌍으로 시작). 이 프로세스가
+        돌리는 스캔(_scans)은 확정으로, 다른 프로세스의 스캔은 매니저 DB 의 진행 상태 + 최근
+        하트비트로 판정한다(죽은 스캔의 잔여 상태로 영원히 막히지 않도록 오래된 건 무시).
+        """
+        path = os.path.abspath(path)
+        with self._lock:
+            for sid, rec in self._scans.items():
+                if sid != exclude and os.path.abspath(rec.get("path") or "") == path:
+                    return sid
+            mine = set(self._scans.keys())
+        try:
+            mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+            try:
+                rows = mc.execute(
+                    "SELECT id, updated_at FROM scans WHERE root_path=? "
+                    "AND status IN ('discovering','sizing')", (path,)).fetchall()
+            finally:
+                mc.close()
+        except Exception:  # noqa: BLE001 — 매니저 DB 가 없으면(첫 실행) 중복도 없다
+            return None
+        now = time.time()
+        for r in rows:
+            sid = int(r["id"])
+            if sid == exclude or sid in mine:
+                continue
+            if now - float(r["updated_at"] or 0) < self._DUP_STALE_SECS:
+                return sid
+        return None
+
+    def start_scan(self, path: str, **kw) -> dict:
+        """새 스캔을 시작한다. '중복 검사 → 등록 → 실행' 을 한 임계 구역에서 처리해, 동시 요청이
+        같은 루트를 두 번 등록하지 못하게 한다(같은 루트가 이미 스캔 중이면 거부)."""
+        with self._start_lock:
+            return self._start_scan_locked(path, **kw)
+
+    def _start_scan_locked(self, path: str, *, backend=None, size_mode=None,
+                           one_file_system=None, engine=None,
+                           processes=None, threads=None, confirm_outside=False,
+                           auto_restart=False, fold_depth=None) -> dict:
         path = os.path.abspath(path)
         ok, err = self.scan_path_check(path, confirm_outside)
         if not ok:
             return err
+        dup = self._active_scan_on(path)
+        if dup is not None:
+            self._log("scan start 거부: %s 는 이미 스캔 #%s 가 진행 중(중복 방지)" % (path, dup))
+            return {"ok": False, "duplicate": True, "scan_id": dup,
+                    "reason": "이미 같은 경로를 스캔 중입니다(#%s). 끝나거나 중지한 뒤 다시 시작하세요." % dup}
         # fold_depth: None 이면 설정 기본값(fold_depth)을 쓰고, 주면 이번 스캔만 그 값으로 오버라이드
         if fold_depth is not None:
             try:
@@ -1934,6 +1984,12 @@ class ScanController:
 
     # ----- 재개 -----
     def resume_scan(self, scan_id: int) -> dict:
+        # 시작과 같은 임계 구역 — 재개도 같은 루트 중복 실행을 만들 수 있다(업그레이드 후 자동 재개가
+        # 같은 루트의 두 스캔을 둘 다 살려 쌍이 영구화되던 문제). 먼저 재개된 쪽만 계속된다.
+        with self._start_lock:
+            return self._resume_scan_locked(scan_id)
+
+    def _resume_scan_locked(self, scan_id: int) -> dict:
         if scan_id in self.running_ids():
             return {"ok": False, "reason": "이미 실행 중입니다."}
         mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
@@ -1943,6 +1999,11 @@ class ScanController:
             mconn.close()
         if row is None:
             return {"ok": False, "reason": "없는 scan"}
+        dup = self._active_scan_on(row["root_path"], exclude=scan_id)
+        if dup is not None:
+            self._log("scan #%s 재개 거부: 같은 경로를 #%s 가 스캔 중(중복 방지)" % (scan_id, dup))
+            return {"ok": False, "duplicate": True, "scan_id": dup,
+                    "reason": "같은 경로를 다른 스캔(#%s)이 진행 중이라 재개하지 않습니다(중복 스캔 방지)." % dup}
         is_pscan = (row["backend"] == "pscan")
         # threads(native)는 '부분 재개'라 per-run DB 가 있어야 이어서 한다. pscan 은 부분 재개가
         # 없어 어차피 처음부터 다시 스캔하므로 per-run DB 가 없어도 재개(재스캔)할 수 있다 —

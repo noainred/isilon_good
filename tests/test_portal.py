@@ -327,11 +327,37 @@ def _test_node_stop_all() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _test_node_scan_all_dedupe() -> None:
+    """같은 엣지가 다른 id 로 중복 등록돼 있어도 전체 스캔은 한 번만 보낸다
+    (두 번 보내면 그 엣지에 같은 루트 스캔이 동시에 둘 생겨 끝나지 않던 현장 문제)."""
+    d = tempfile.mkdtemp(prefix="portal_dedupe_")
+    try:
+        K = portalmod.PortalController._edge_key
+        assert K("http://NJ:8765/") == K("nj:8765") == K("HTTP://nj:8765/api"), (K("http://NJ:8765/"),)
+        assert K("http://a:8765") != K("http://a:8766")
+        assert K("") == ""
+        pc = portalmod.PortalController(d)
+        pc.upsert_node({"id": "NJ", "url": "http://10.0.0.5:8765", "token": "T"})
+        pc.upsert_node({"id": "NJ-dup", "url": "10.0.0.5:8765/", "token": "T"})   # 같은 엣지 중복 등록
+        pc.upsert_node({"id": "OC2", "url": "http://10.0.0.6:8765", "token": "T"})
+        calls = []
+        pc.node_scan = lambda nid, **kw: (calls.append(nid) or {"ok": True})   # type: ignore[assignment]
+        r = pc.node_scan_all()
+        assert calls == ["NJ", "OC2"], calls                  # 중복 노드엔 보내지 않음
+        assert r["count"] == 2 and r["total"] == 3, r
+        skipped = [x for x in r["results"] if not x["ok"]]
+        assert len(skipped) == 1 and skipped[0]["id"] == "NJ-dup" and "중복 등록" in skipped[0]["reason"], r
+        print("[portal] node_scan_all 중복 등록 엣지 1회만 전송 OK")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     _test_merge_scan_lists()
     _test_log_popup_pos()
     _test_replica_dir()
     _test_node_stop_all()
+    _test_node_scan_all_dedupe()
     _test_save_nodes_concurrent()
     _test_ping_history()
     _test_csv_import()

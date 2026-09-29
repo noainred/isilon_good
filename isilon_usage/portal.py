@@ -2199,13 +2199,42 @@ class PortalController:
         return {"ok": False, "path": path,
                 "reason": res.get("reason") or "엣지가 스캔 시작을 거부했습니다."}
 
+    @staticmethod
+    def _edge_key(url: str) -> str:
+        """노드 URL 을 '호스트:포트' 로 정규화(스킴·경로·끝 슬래시·대소문자 무시) — 같은 엣지 중복 등록 판별용."""
+        u = (url or "").strip().lower()
+        if not u:
+            return ""
+        if "://" not in u:
+            u = "http://" + u
+        try:
+            p = urlparse(u)
+            port = p.port or (443 if p.scheme == "https" else 80)
+            return "%s:%s" % (p.hostname or "", port)
+        except ValueError:
+            return u
+
     def node_scan_all(self, *, one_file_system=None, autotune=False,
                       restart_busy=False, engine=None, fold_depth=None) -> dict:
-        """등록된(활성) 노드 전체에 '마지막 경로' 스캔을 시작하고 노드별 결과를 모은다."""
+        """등록된(활성) 노드 전체에 '마지막 경로' 스캔을 시작하고 노드별 결과를 모은다.
+
+        같은 엣지(호스트:포트)가 다른 id 로 중복 등록돼 있으면 한 번만 보낸다 — 두 번 보내면 그
+        엣지에서 같은 루트 스캔이 동시에 두 개 생겨(현장 #12/#13 쌍) 처리량이 반토막 나고 끝나지 않는다.
+        (엣지도 같은 루트 중복 시작을 거부하지만, 포탈에서 먼저 걸러 사유를 분명히 보여준다.)
+        """
         with self._lock:
-            ids = [n["id"] for n in self.nodes if n.get("enabled", True)]
+            nodes = [(n["id"], n.get("url") or "") for n in self.nodes if n.get("enabled", True)]
         results = []
-        for nid in ids:
+        seen: dict = {}
+        for nid, url in nodes:
+            key = self._edge_key(url)
+            if key and key in seen:
+                results.append({"id": nid, "ok": False,
+                                "reason": "같은 엣지(%s)가 '%s'로도 등록돼 있어 건너뜀(중복 등록)"
+                                          % (key, seen[key])})
+                continue
+            if key:
+                seen[key] = nid
             r = self.node_scan(nid, one_file_system=one_file_system,
                                autotune=autotune, restart_busy=restart_busy, engine=engine,
                                fold_depth=fold_depth)

@@ -531,8 +531,100 @@ def _check_last_scan_remember() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _check_duplicate_scan_guard() -> None:
+    """같은 루트 중복 스캔 방지 — 현장에서 같은 루트 스캔이 같은 초에 쌍으로 시작(#3/#4·#9/#10·#12/#13)해
+    같은 트리를 두 번 걷고(처리량 반토막), 업그레이드 재개 때마다 둘 다 살아나 끝나지 않던 문제."""
+    from isilon_usage.server import ScanController
+    from isilon_usage import db as dbmod
+    from isilon_usage import manager as mgrmod
+    d = tempfile.mkdtemp(prefix="isilon_dup_")
+    try:
+        roots = {}
+        for nm in ("A", "B", "C", "D", "E"):
+            p = os.path.join(d, nm, "x")
+            os.makedirs(p)
+            with open(os.path.join(p, "f"), "wb") as fh:
+                fh.write(b"x" * 10)
+            roots[nm] = os.path.join(d, nm)
+        c = ScanController(os.path.join(d, "data"))
+        c.settings = dict(c.settings)
+        c.settings["mount_bases"] = [d]
+
+        # 실제 스캔 없이 '실행 중'으로 붙잡아 둔다(_scans 등록만) — 타이밍과 무관한 결정적 테스트
+        def fake_launch(scan_id, db_path, path, *a, **kw):
+            with c._lock:
+                c._scans[scan_id] = {"stop": threading.Event(), "thread": None, "path": path}
+        c._launch = fake_launch   # type: ignore[assignment]
+        c._launch_pscan = lambda scan_id, db_path, path, *a, **kw: fake_launch(scan_id, db_path, path)  # type: ignore[assignment]
+
+        def set_status(sid, status, updated_at=None):
+            mc = dbmod.connect(mgrmod.manager_db_path(c.data_dir))
+            try:
+                mc.execute("UPDATE scans SET status=?, phase=?, updated_at=COALESCE(?, updated_at) "
+                           "WHERE id=?", (status, status, updated_at, sid))
+                mc.commit()
+            finally:
+                mc.close()
+
+        # ① 같은 루트(끝 슬래시·엔진 달라도) 두 번째 시작 → 거부, 다른 루트 → 허용
+        r1 = c.start_scan(roots["A"], engine="threads")
+        r2 = c.start_scan(roots["A"] + "/", engine="pscan")
+        r3 = c.start_scan(roots["B"], engine="threads")
+        assert r1["ok"], r1
+        assert not r2["ok"] and r2.get("duplicate") and r2["scan_id"] == r1["scan_id"], r2
+        assert r3["ok"], r3
+        # ② 동시 요청(더블클릭·포탈 중복 등록 노드) — 8개 스레드가 같은 새 루트를 동시에 → 정확히 1개만
+        res = []
+        ths = [threading.Thread(target=lambda: res.append(c.start_scan(roots["C"], engine="threads")))
+               for _ in range(8)]
+        for t in ths:
+            t.start()
+        for t in ths:
+            t.join()
+        assert sum(1 for x in res if x.get("ok")) == 1, res
+        # ③ 재개도 중복을 만들지 않는다: A 는 r1 이 도는 중 → A 의 옛 스캔 재개는 거부
+        old = mgrmod.register_scan(c.data_dir, root_path=roots["A"],
+                                   db_path=os.path.join(d, "old.db"), backend="pscan", size_mode="disk")
+        set_status(old, "paused")
+        rr = c.resume_scan(old)
+        assert not rr["ok"] and rr.get("duplicate") and rr["scan_id"] == r1["scan_id"], rr
+        # 첫 스캔이 끝나면 같은 루트를 다시 시작할 수 있다
+        with c._lock:
+            c._scans.pop(r1["scan_id"])
+        set_status(r1["scan_id"], "done")
+        assert c.start_scan(roots["A"], engine="threads")["ok"]
+        # ④ 다른 프로세스가 돌리는 스캔(매니저 '진행 중' + 최신 하트비트, 이 프로세스엔 없음) → 거부,
+        #    하트비트가 오래돼(죽은 스캔 잔여) 있으면 막지 않는다
+        other = mgrmod.register_scan(c.data_dir, root_path=roots["D"],
+                                     db_path=os.path.join(d, "o.db"), backend="native", size_mode="disk")
+        set_status(other, "discovering", time.time())
+        rd = c.start_scan(roots["D"], engine="threads")
+        assert not rd["ok"] and rd["scan_id"] == other, rd
+        set_status(other, "discovering", time.time() - 2 * c._DUP_STALE_SECS)
+        assert c.start_scan(roots["D"], engine="threads")["ok"]
+        # ⑤ 업그레이드 후 자동 재개: 같은 루트의 두 스캔(쌍)이 마커에 있으면 먼저 것만 재개 → 쌍 해소
+        e1 = mgrmod.register_scan(c.data_dir, root_path=roots["E"],
+                                  db_path=os.path.join(d, "e1.db"), backend="pscan", size_mode="disk")
+        e2 = mgrmod.register_scan(c.data_dir, root_path=roots["E"],
+                                  db_path=os.path.join(d, "e2.db"), backend="pscan", size_mode="disk")
+        set_status(e1, "paused")
+        set_status(e2, "paused")
+        with open(os.path.join(c.data_dir, ScanController._RESUME_MARK), "w") as fh:
+            json.dump({"scan_ids": [e1, e2], "ts": time.time()}, fh)
+        c._resume_after_upgrade()
+        run = c.running_ids()
+        assert e1 in run and e2 not in run, (run, e1, e2)
+        lr = {x["scan_id"]: x for x in (c.upgrade_status().get("last_resume") or {}).get("results", [])}
+        assert lr[e1]["ok"] and not lr[e2]["ok"] and "중복" in (lr[e2]["reason"] or ""), lr
+        print("[dup-guard] OK  같은 루트 중복 시작·동시 8요청·재개·타 프로세스·업그레이드 쌍 모두 1개만 실행")
+    finally:
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     _check_insecure_warning()
+    _check_duplicate_scan_guard()
     _check_resume_after_upgrade()
     _check_resume_real()
     _check_persistence_guard()

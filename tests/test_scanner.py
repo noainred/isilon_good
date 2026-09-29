@@ -12,6 +12,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -419,7 +420,171 @@ def run_sizing_window_case() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _make_deep_tree(root: str) -> None:
+    """fold 넘김 검증용: 깊고 넓은 트리(깊이 5) + 빈 디렉터리 + 서로 다른 조각에 걸친 하드링크."""
+    first = None
+    for a in range(4):
+        for b in range(3):
+            for c in range(3):
+                p = os.path.join(root, "a%d" % a, "b%d" % b, "c%d" % c, "d")
+                os.makedirs(p, exist_ok=True)
+                for f in range(3):
+                    fp = os.path.join(p, "f%d.bin" % f)
+                    _write(fp, 1000 + 7 * f + a)
+                    if first is None:
+                        first = fp
+        os.makedirs(os.path.join(root, "a%d" % a, "empty", "deeper"), exist_ok=True)
+    # 서로 다른 fold 루트/넘김 조각에 걸친 하드링크 — 용량은 한 번만 세어야 한다
+    os.link(first, os.path.join(root, "a3", "b2", "c2", "d", "hl.bin"))
+    os.link(first, os.path.join(root, "a0", "hl_top.bin"))
+
+
+def _root_totals(db_path: str):
+    conn = dbmod.connect(db_path)
+    try:
+        r = conn.execute("SELECT total_bytes, total_files FROM directories "
+                         "WHERE parent_id IS NULL").fetchone()
+        md = conn.execute("SELECT COALESCE(MAX(depth),0) d FROM directories").fetchone()["d"]
+        n = conn.execute("SELECT COUNT(*) c FROM directories").fetchone()["c"]
+        return (r["total_bytes"], r["total_files"]), md, n
+    finally:
+        conn.close()
+
+
+def run_fold_overflow_case() -> None:
+    """fold 예산 초과 → 남은 하위를 행으로 넘김(병렬·체크포인트) → 집계 후 정리.
+
+    예전엔 fold 루트 하나의 하위 전체를 한 스레드가 통째로 걸어(수억 파일이면 수일) 병렬성이 사라지고
+    중단 시 처음부터 다시 했다. 넘김 방식이 어떤 예산·워커 수·fold 깊이에서도 합계를 정답(os.walk,
+    하드링크 1회)과 '정확히' 같게 유지하는지, 결과 행이 fold 깊이 이하로 정리되는지 확인한다.
+    max_depth 와 함께 쓸 때도 예산과 무관하게 결과가 같아야 한다(넘김 행은 fold walk 의 연속).
+    """
+    tmp = tempfile.mkdtemp(prefix="isilon_foldov_")
+    try:
+        root = os.path.join(tmp, "data")
+        _make_deep_tree(root)
+        exp = _expected_disk_bytes(root)
+        n = 0
+        for fold in (1, 2, 3):
+            for workers in (1, 4):
+                for budget in (1, 3, 10, 10 ** 9):
+                    dbp = os.path.join(tmp, "f%d_w%d_b%d.db" % (fold, workers, budget))
+                    dbmod.init_db(dbp)
+                    sc = Scanner(dbp, root, backend="native", batch_size=500,
+                                 workers=workers, fold_depth=fold)
+                    sc.fold_budget = budget
+                    sc.run()
+                    got, md, rows = _root_totals(dbp)
+                    assert got == exp, ("fold 넘김 합계 불일치", fold, workers, budget, got, exp)
+                    assert md <= fold, ("넘김 행이 정리되지 않음", fold, budget, md)
+                    # 넘김은 '미방문 하위 디렉터리'가 있을 때만 생긴다: fold 3 이면 fold 루트(c*)의
+                    # 유일한 자식 d 가 잎이라 넘길 게 없다 → 넘김 발생 단정은 다층 서브트리(fold 1·2)에만.
+                    if budget <= 3 and fold <= 2:
+                        assert sc._discovered > rows, ("예산 초과 넘김이 일어나지 않음", fold, budget)
+                    elif budget >= 10 ** 9:
+                        assert sc._discovered == rows, ("무제한 예산인데 넘김 발생", fold, budget)
+                    n += 1
+        # max_depth 상호작용: 넘김 여부(예산)와 무관하게 결과가 같아야 한다
+        for fold, mdepth in ((1, 1), (1, 2), (2, 3), (2, 1)):
+            res = []
+            for budget in (1, 10 ** 9):
+                dbp = os.path.join(tmp, "md_f%d_m%d_b%d.db" % (fold, mdepth, budget))
+                dbmod.init_db(dbp)
+                sc = Scanner(dbp, root, backend="native", batch_size=500, workers=3,
+                             fold_depth=fold, max_depth=mdepth)
+                sc.fold_budget = budget
+                sc.run()
+                res.append(_root_totals(dbp)[0])
+            assert res[0] == res[1], ("max_depth+fold: 예산에 따라 결과가 달라짐", fold, mdepth, res)
+            if mdepth > fold:
+                assert res[0] == exp, ("fold 는 max_depth 와 무관하게 끝까지 세야 함", fold, mdepth, res)
+            n += 1
+        print("[fold-overflow] OK  %d조합 합계 정답과 동일(bytes=%d files=%d)·결과 행 ≤ fold 깊이·"
+              "max_depth 상호작용 불변" % (n, exp[0], exp[1]))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_fold_overflow_resume_case() -> None:
+    """fold 넘김 도중 여러 지점에서 중단 → 재개해도 합계가 정확(누락·중복 0) — 체크포인트 경계 검증."""
+    from isilon_usage import scanner as scmod
+
+    class TripAfter:                      # is_set() 이 n번 뒤 True — 탐색 중간 결정적 중단
+        def __init__(self, n): self.n = n; self.c = 0
+        def is_set(self): self.c += 1; return self.c > self.n
+        def set(self): self.n = -1
+        def clear(self): self.n = 10 ** 9
+        def wait(self, t=None): return False
+
+    tmp = tempfile.mkdtemp(prefix="isilon_foldres_")
+    old = scmod.FOLD_BUDGET_ENTRIES
+    scmod.FOLD_BUDGET_ENTRIES = 3         # run_scan 이 만드는 Scanner 의 기본 예산을 작게 → 넘김 다발
+    try:
+        root = os.path.join(tmp, "data")
+        _make_deep_tree(root)
+        exp = _expected_disk_bytes(root)
+        trips = (5, 20, 60, 150, 400, 900)
+        # fold 0 도 포함: 하드링크 중복 방지 집합이 재개 때 비워져 중단 전·후에 걸친 하드링크를 두 번
+        # 세던 기존 버그(측정: k=60·150 에서 +4096B)가 fold 와 무관하게 났다 — 트리에 하드링크 포함.
+        for fold in (0, 1):
+            for k in trips:
+                for workers in (1, 3):
+                    dbp = os.path.join(tmp, "r%d_k%d_w%d.db" % (fold, k, workers))
+                    run_scan(dbp, root, workers=workers, with_monitor=False, fold_depth=fold,
+                             stop_event=TripAfter(k))
+                    run_scan(dbp, root, workers=workers, with_monitor=False, fold_depth=fold,
+                             resume=True)
+                    got, md, _ = _root_totals(dbp)
+                    assert got == exp, ("중단(fold=%d, k=%d, w=%d)→재개 후 합계 불일치"
+                                        % (fold, k, workers), got, exp)
+                    if fold:
+                        assert md <= fold, ("재개 후 넘김 행 미정리", k, md)
+        print("[fold-overflow-resume] OK  fold 0·1 × 중단 지점 %d곳 × 워커 2종 → 재개 후 합계 정확"
+              "(누락·중복 0, 하드링크 1회)" % len(trips))
+    finally:
+        scmod.FOLD_BUDGET_ENTRIES = old
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_claim_fairness_case() -> None:
+    """fold 경계에서 워커 간 균등 분배 — 예전엔 한 워커가 최대 500개를 선점해 나머지가 놀았다
+    (재현: fold 루트 40개를 8워커 중 1개가 전부 처리)."""
+    import collections
+    import threading as _th
+    tmp = tempfile.mkdtemp(prefix="isilon_fair_")
+    try:
+        root = os.path.join(tmp, "t")
+        for a in range(40):
+            p = os.path.join(root, "d%d" % a, "s", "x")
+            os.makedirs(p)
+            for f in range(15):
+                _write(os.path.join(p, "f%d" % f), 100)
+        dbp = os.path.join(tmp, "s.db")
+        dbmod.init_db(dbp)
+        sc = Scanner(dbp, root, workers=8, batch_size=500, fold_depth=1)
+        per = collections.Counter()
+        orig = sc._discover_one
+
+        def spy(dir_id, path, depth):
+            if depth == 1:                    # fold 루트
+                per[_th.current_thread().name] += 1
+                time.sleep(0.01)              # 무거운 fold 루트 흉내(워커가 겹치게)
+            return orig(dir_id, path, depth)
+        sc._discover_one = spy
+        sc.run()
+        assert sum(per.values()) == 40, per
+        assert len(per) >= 6, ("fold 루트가 소수 워커에 몰림(분배 실패)", dict(per))
+        assert max(per.values()) <= 12, ("한 워커가 fold 루트를 독점", dict(per))
+        print("[claim-fairness] OK  fold 루트 40개 → 워커 %d/8 이 나눠 처리(최대 %d개)"
+              % (len(per), max(per.values())))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main() -> int:
+    run_fold_overflow_case()
+    run_fold_overflow_resume_case()
+    run_claim_fairness_case()
     run_stop_resume_case()
     run_sizing_window_case()
     run_case("native")

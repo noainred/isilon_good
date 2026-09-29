@@ -127,6 +127,17 @@ CREATE TABLE IF NOT EXISTS scan_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_log_run_ts ON scan_log(run_id, ts);
+
+-- 하드링크 중복 방지(용량은 한 번만)용 '이미 센 inode'. 예전엔 메모리에만 있어 재개(업그레이드 재시작
+-- 포함)마다 비워졌고, 중단 전·후에 걸친 하드링크가 두 번 세어졌다(측정: 재개 후 +1블록). 디렉터리가
+-- 완료 확정될 때 같은 트랜잭션으로 기록하므로 중단으로 버려진 작업의 inode 는 남지 않는다(다시 셀 때
+-- 누락 없음). 재개 시 복원하고, 탐색이 끝나면 비운다(집계 단계엔 불필요). 가산적 테이블이라 스키마 버전 유지.
+CREATE TABLE IF NOT EXISTS seen_inodes (
+    run_id  INTEGER NOT NULL,
+    dev     INTEGER NOT NULL,
+    ino     INTEGER NOT NULL,
+    PRIMARY KEY (run_id, dev, ino)
+);
 """
 
 

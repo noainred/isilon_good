@@ -54,6 +54,14 @@ BLOCK_UNIT = 512
 # 수천만 파일이 있어도 메모리가 이 청크만큼만 쓰이도록 스트리밍 처리한다.
 STAT_CHUNK = 2000
 
+# 깊이 접기(fold) 인라인 walk 예산 — 한 디렉터리 처리에서 인라인으로 걷는 양(파일+디렉터리 수)·시간을
+# 이걸로 묶고, 넘치면 아직 안 훑은 하위 디렉터리를 프론티어 행으로 넘겨 다른 워커가 병렬로 이어받게
+# 한다(= 체크포인트). 예전엔 fold 루트 하나의 하위 전체(수억 파일이면 수일)를 한 스레드가 통째로 걸어
+# 병렬성이 사라졌고, 중단(업그레이드·재시작)되면 그 walk 전체를 처음부터 다시 해 거대 트리에서 스캔이
+# 끝나지 않았다. 넘긴 행(깊이 > fold_depth)은 집계 후 정리돼 결과 DB 는 순수 접기와 같은 모양이다.
+FOLD_BUDGET_ENTRIES = 200_000
+FOLD_BUDGET_SECS = 300.0
+
 # 파일 나이(mtime) 버킷 — (상한 일수, 라벨). 마지막은 상한 None(그 이상 전부).
 AGE_BUCKETS = [
     (30, "30일 이내"), (90, "30~90일"), (365, "90일~1년"),
@@ -180,6 +188,9 @@ class Scanner:
         # 깊이 접기: 깊이 N 까지만 행을 저장하고, 그 아래는 내려가서 용량은 다 세되
         # N 디렉터리의 own_bytes 에 합산한다 → DB 행 수(=크기) 묶임 + 합계 정확.
         self.fold_depth = max(0, int(fold_depth or 0))       # 0=off
+        # fold 인라인 walk 예산(넘치면 남은 하위를 행으로 넘김) — 인스턴스에서 조정 가능(테스트·튜닝)
+        self.fold_budget = FOLD_BUDGET_ENTRIES
+        self.fold_budget_secs = FOLD_BUDGET_SECS
         # DB 크기 가드: per-run DB(.db + -wal)가 이 바이트를 넘으면 자동 일시정지.
         self.db_max_bytes = max(0, int(db_max_bytes or 0))   # 0=off
         self.hardlink_dedup = bool(hardlink_dedup)           # False 면 메모리 절약(하드링크 중복 셈)
@@ -475,8 +486,16 @@ class Scanner:
             if self._stopped():
                 self._finish(conn, "paused")
                 return self.run_id
+            # 탐색 완료 → 하드링크 기록은 더는 필요 없다(집계는 파일을 세지 않음) — 디스크 회수
+            try:
+                conn.execute("DELETE FROM seen_inodes WHERE run_id=?", (self.run_id,))
+                conn.commit()
+            except Exception:  # noqa: BLE001
+                pass
 
             self._aggregate(conn)
+            if not self._stopped() and self.fold_depth:
+                self._prune_fold_overflow(conn)
             self._finish(conn, "paused" if self._stopped() else "done")
             return self.run_id
         except Exception as exc:  # 치명적 오류는 기록하고 종료
@@ -530,6 +549,13 @@ class Scanner:
         # 이미 기록된 최대 깊이를 복원 — 안 하면 재개 직후 얕은 깊이마다 불필요한
         # 'UPDATE scan_runs SET max_depth' 가 단일 _dlock 직렬 구간에서 반복된다(최적화).
         self._seen_max_depth = int((r2["max_depth"] or 0)) if r2 else 0
+        # 이미 센 하드링크 inode 복원 — 안 하면 재개 후 같은 inode 의 다른 링크를 또 세어 용량이 부푼다.
+        try:
+            for r in conn.execute("SELECT dev, ino FROM seen_inodes WHERE run_id=?",
+                                  (self.run_id,)):
+                self._seen_inodes.add((int(r["dev"]), int(r["ino"])))
+        except Exception:  # noqa: BLE001 — 옛 DB(테이블 없음)면 빈 집합으로 시작(예전 동작)
+            pass
         self._load_stats(conn)   # 나이/소유자/확장자 집계도 복원
 
     # ----- 집계 리포트(나이/소유자/확장자) -----
@@ -746,6 +772,7 @@ class Scanner:
                 (self.run_id, self.batch_size),
             ).fetchall()
             if rows:
+                rows = self._fair_share(rows)
                 ids = [r["id"] for r in rows]
                 ph = ",".join("?" * len(ids))
                 self._disc_conn.execute(
@@ -755,6 +782,27 @@ class Scanner:
                 return rows
             # pending 없음: 아무도 작업 중이 아니면 끝, 아니면 잠시 대기
             return None if self._disc_active == 0 else []
+
+    def _fair_share(self, rows):
+        """한 번의 claim 에서 이 워커가 가져갈 몫(워커 간 균등 분배).
+
+        - fold 루트·넘김 행(깊이 ≥ fold_depth)은 하나하나가 무거우므로 1개씩만 가져간다.
+          예전엔 최대 batch_size(기본 500)개를 한 워커가 선점해 나머지 워커가 놀았다
+          (재현: fold 루트 40개를 8워커 중 1개가 전부 순차 처리).
+        - 가벼운(얕은) 행과 무거운 행이 섞이면 가벼운 것까지만 가져간다(무거운 건 다음 claim 에서 1개씩).
+        - 프론티어가 한 배치보다 작으면 워커 수로 나눠 가져간다(꼬리 구간 독점 방지).
+        프론티어가 큰 동안은 예전처럼 batch_size 만큼 묶어 가져가 claim 오버헤드를 줄인다.
+        """
+        if self.fold_depth:
+            k = next((i for i, r in enumerate(rows) if int(r["depth"]) >= self.fold_depth), None)
+            if k == 0:
+                return rows[:1]
+            if k is not None:
+                rows = rows[:k]
+        if len(rows) < self.batch_size:
+            n = max(1, int(self.workers))
+            rows = rows[:max(1, -(-len(rows) // n))]
+        return rows
 
     def _discover_worker(self, widx: int = 0) -> None:
         while not self._stopped():
@@ -787,6 +835,15 @@ class Scanner:
         children: List[tuple] = []
         err: Optional[str] = None
         file_chunk: list = []
+        # fold 넘김 행(깊이 > fold_depth) = fold walk 의 연속. fold 는 max_depth 와 무관하게 끝까지 세므로
+        # 이 행들엔 max_depth 컷을 적용하지 않는다(예전 인라인 fold 와 같은 결과).
+        over_fold = bool(self.fold_depth) and depth > self.fold_depth
+        # 이 디렉터리 한 번의 처리에서 인라인 fold 로 걸을 예산(넘치면 남은 하위를 행으로 넘김)
+        fold_left = int(self.fold_budget)
+        fold_deadline = time.time() + float(self.fold_budget_secs)
+        # 이 디렉터리 처리 중 '처음' 센 하드링크 inode — 완료 확정 시 같은 트랜잭션으로 DB 에 기록해
+        # 재개 후에도 중복 방지가 유지되게 한다(중단으로 버려지면 기록 안 됨 → 다시 셀 때 누락 없음).
+        new_inodes: list = []
 
         def flush_files():
             # 직렬 구간 축소: stat + 파일당 파이썬 집계(나이/확장자/Top-N)를 _dlock '밖'에서
@@ -825,6 +882,7 @@ class Scanner:
                         cb = 0                       # 용량은 한 번만(개수는 셈)
                     else:
                         self._seen_inodes.add(key)
+                        new_inodes.append(key)
                         cb = eb
                     if cb:
                         l_bytes += cb
@@ -858,15 +916,28 @@ class Scanner:
                                 continue
                         subdir_count += 1
                         # 최대 깊이 제한(옵션): 그 아래는 탐색/저장하지 않아 DB 크기를 묶는다.
-                        if self.max_depth and (depth + 1) > self.max_depth:
+                        # (fold 넘김 행은 fold walk 의 연속이라 제외 — 위 over_fold 참고)
+                        if self.max_depth and (depth + 1) > self.max_depth and not over_fold:
                             continue
                         # 깊이 접기(옵션): 깊이 N 초과 디렉터리는 행을 만들지 않고,
                         # 하위 전체 용량을 이 디렉터리 own_bytes 에 합산한다.
                         # → DB 행 수(=크기)는 묶이고 상위 합계는 정확하다(상세만 N까지).
+                        # 단 인라인으로 걷는 양은 예산으로 묶는다: 예산 안이면 접어서 세고, 넘치면
+                        # 남은 하위(미방문 디렉터리)를 프론티어 행으로 넘겨 다른 워커가 병렬로 이어받는다
+                        # (체크포인트 — 중단돼도 그 조각만 다시). 넘긴 행은 집계 후 정리된다.
                         if self.fold_depth and (depth + 1) > self.fold_depth:
-                            fb, ff = self._fold_subtree(entry.path)
-                            own_bytes += fb
-                            file_count += ff
+                            if fold_left > 0 and time.time() < fold_deadline:
+                                fb, ff, over, used = self._fold_subtree(
+                                    entry.path, fold_left, fold_deadline, new_inodes)
+                                fold_left -= used
+                                own_bytes += fb
+                                file_count += ff
+                                for op in over:
+                                    children.append((self.run_id, dir_id, op,
+                                                     os.path.basename(op) or op, depth + 1))
+                            else:
+                                children.append(
+                                    (self.run_id, dir_id, entry.path, entry.name, depth + 1))
                             continue
                         children.append(
                             (self.run_id, dir_id, entry.path, entry.name, depth + 1))
@@ -906,30 +977,46 @@ class Scanner:
                    WHERE id=?""",
                 (own_bytes, file_count, subdir_count, err, dir_id),
             )
+            if new_inodes:   # 완료 확정과 같은 트랜잭션 — 재개 후에도 하드링크 1회 계산 유지
+                self._disc_conn.executemany(
+                    "INSERT OR IGNORE INTO seen_inodes (run_id, dev, ino) VALUES (?, ?, ?)",
+                    [(self.run_id, dv, ino) for dv, ino in new_inodes])
             # 커밋 배칭: 디렉터리마다 fsync 하던 것을 제거하고, 아래 진행 flush(최대
             # 0.4s 스로틀)에서 한 번에 커밋한다. 같은 커넥션이라 미커밋 쓰기도 다른 워커의
             # claim 쿼리엔 보인다(정합성 유지). 종료 시 _discover 의 마지막 커밋이 꼬리를
             # 비우고, kill -9 면 claimed→pending 으로 되돌아 재스캔되어 안전하다.
             self._discovered += 1
-            if depth > 0:
+            if depth > 0 and not over_fold:   # 넘김 행의 깊이는 논리값이라 최대 깊이 표시엔 반영 안 함
                 self._maybe_update_depth(self._disc_conn, depth)
             self._flush_progress_locked(self._disc_conn,
                                         current_dir=path, current_depth=depth)
 
-    def _fold_subtree(self, root: str):
-        """fold_depth 초과 하위 트리를 '행 없이' walk 하여 (bytes, files) 합을 반환.
+    def _fold_subtree(self, root: str, budget: int = 0, deadline: float = 0.0,
+                      new_inodes=None):
+        """fold_depth 초과 하위 트리를 '행 없이' walk 하여 (bytes, files, overflow, used) 를 반환.
 
         디렉터리 행을 만들지 않으므로 DB 가 커지지 않으면서, 용량/개수는 모두
         세어 상위(깊이 N) own_bytes 에 합산된다 → 합계가 정확하다. scandir/stat 는
         락 밖에서 하고, 공유 카운터/하드링크집합/진행 갱신만 _dlock 안에서 한다.
+
+        budget(파일+디렉터리 수)·deadline(시각)을 넘기면 디렉터리 경계에서 멈추고, 아직 안 훑은
+        하위 디렉터리 경로 목록(overflow)을 돌려준다 — 호출부가 이를 프론티어 행으로 넘겨 다른
+        워커가 병렬로 이어받는다(체크포인트). 각 디렉터리는 정확히 한 번만 세어진다: 훑은 쪽은 여기서,
+        넘긴 쪽은 행으로 처리될 때. budget<=0 이면 제한 없음. used 는 소비한 예산(최소 1 — 루트는 항상 처리).
         """
         total_b = 0
         total_f = 0
+        used = 0
         stack = [root]
         while stack:
             if self._stopped():
                 break
+            # 예산 초과 → 남은(미방문) 디렉터리를 넘긴다. 루트는 항상 먼저 처리(진행 보장).
+            if used > 0 and ((budget > 0 and used >= budget)
+                             or (deadline and time.time() >= deadline)):
+                return total_b, total_f, stack, used
             d = stack.pop()
+            used += 1
             ds = self._safe_stat_path(d)            # 디렉터리 자기 inode 분(du 동일)
             if ds is not None:
                 total_b += _entry_bytes(ds, self.size_mode)
@@ -954,20 +1041,22 @@ class Scanner:
                         else:
                             files_chunk.append(entry)
                             if len(files_chunk) >= STAT_CHUNK:
-                                b, f = self._fold_flush(files_chunk, d)
+                                b, f = self._fold_flush(files_chunk, d, new_inodes)
                                 total_b += b
                                 total_f += f
+                                used += len(files_chunk)
                                 files_chunk = []
                 if files_chunk:
-                    b, f = self._fold_flush(files_chunk, d)
+                    b, f = self._fold_flush(files_chunk, d, new_inodes)
                     total_b += b
                     total_f += f
+                    used += len(files_chunk)
             except OSError:
                 with self._dlock:
                     self._error_dirs += 1
-        return total_b, total_f
+        return total_b, total_f, [], used
 
-    def _fold_flush(self, entries: list, cur_dir: str):
+    def _fold_flush(self, entries: list, cur_dir: str, new_inodes=None):
         """접기 walk 의 파일 청크: stat(락 밖) 후 _dlock 안에서 용량/하드링크/진행 갱신."""
         stats = [self._safe_stat(e) for e in entries]   # I/O — 락 밖
         cb = 0
@@ -985,6 +1074,8 @@ class Scanner:
                         counted = False
                     else:
                         self._seen_inodes.add(key)
+                        if new_inodes is not None:   # 호출 디렉터리 완료 시 DB 에 기록(재개 후 중복 방지)
+                            new_inodes.append(key)
                 if counted:
                     cb += eb
                     self._top_push(entry.path, eb, st)   # 최대 파일 Top-N
@@ -993,6 +1084,23 @@ class Scanner:
             self._total_files += cf
             self._flush_progress_locked(self._disc_conn, current_dir=cur_dir)
         return cb, cf
+
+    def _prune_fold_overflow(self, conn) -> None:
+        """집계를 다 마친 뒤 fold 넘김 행(깊이 > fold_depth)을 지운다.
+
+        넘김 행의 용량은 집계에서 이미 fold 루트(깊이 N)의 total 에 합산됐으므로, 지워도 합계는
+        그대로다. 결과 DB 는 순수 접기와 같은 모양(상세 행은 fold_depth 까지)이 되고, 트리 화면에
+        깊은 경로가 fold 루트의 '직속 자식'처럼 보이는 혼동도 없다. 중단(미완료)이면 호출되지 않는다.
+        """
+        try:
+            cur = conn.execute("DELETE FROM directories WHERE run_id=? AND depth>?",
+                               (self.run_id, self.fold_depth))
+            n = cur.rowcount or 0
+            conn.commit()
+            if n:
+                self._log("fold 넘김 행 %s개 정리(용량은 fold 루트에 합산됨)" % f"{n:,}", conn)
+        except Exception as exc:  # noqa: BLE001 — 정리 실패는 결과(합계)에 영향 없음
+            self._log("fold 넘김 행 정리 실패(합계는 정상): %s" % exc, conn)
 
     def _maybe_update_depth(self, conn, depth: int) -> None:
         # 새 최대 깊이일 때만 DB 를 갱신한다(단일 _dlock 직렬 구간의 불필요한 쓰기 제거).
