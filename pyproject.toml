@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=40.8.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# 패키지 메타데이터는 옛 setuptools(폐쇄망 미러) + Python 3.6 에서도 설치되도록
+# classic setup.cfg 에 둔다(PEP 621 [project] 는 setuptools 61+ 필요).
+
+# 린트: 실제 오류(미정의 이름/문법 등)만 검사해 스타일로 CI 가 깨지지 않게 한다.
+[tool.ruff]
+target-version = "py37"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]

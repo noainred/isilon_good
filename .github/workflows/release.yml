@@ -1,14 +1,17 @@
 name: Release
 
-# v 로 시작하는 태그(예: v1.0.0)를 push 하면 자동으로 릴리즈를 만든다.
+# v 로 시작하는 태그(예: v1.1.0)를 push 하거나, GitHub 웹 UI 에서 릴리즈를
+# 발행하면 자동으로 릴리즈를 만들고 압축본(오프라인 tar.gz/zip + wheel)을 첨부한다.
 # 릴리즈 노트는 CHANGELOG.md 의 해당 버전 섹션에서 추출한다.
 on:
   push:
     tags:
       - 'v*'
+  release:
+    types: [published]
 
 permissions:
-  contents: write   # 릴리즈 생성에 필요
+  contents: write   # 릴리즈 생성/자산 업로드에 필요
 
 jobs:
   release:
@@ -22,42 +25,53 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: 태그/버전 결정
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
       - name: 테스트 (릴리즈 게이트)
         run: |
           python tests/test_scanner.py
           python tests/test_manager.py
+          python tests/test_server.py
 
-      - name: 버전/릴리즈 노트 추출
-        id: notes
+      - name: 릴리즈 노트 추출
         run: |
-          set -e
-          VERSION="${GITHUB_REF_NAME#v}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          # CHANGELOG.md 에서 "## [<버전>]" 섹션만 추출
-          awk -v ver="$VERSION" '
+          VER="${{ steps.meta.outputs.version }}"
+          awk -v ver="$VER" '
             $0 ~ "^## \\[" ver "\\]" { flag=1; next }
             flag && (/^## \[/ || /^\[[^][]+\]: http/) { exit }
             flag { print }
           ' CHANGELOG.md > release_notes.md
-          if [ ! -s release_notes.md ]; then
-            echo "이 릴리즈(${GITHUB_REF_NAME})에 대한 CHANGELOG 항목을 찾지 못했습니다." > release_notes.md
-          fi
-          echo "----- 추출된 릴리즈 노트 -----"
-          cat release_notes.md
+          [ -s release_notes.md ] || echo "릴리즈 ${{ steps.meta.outputs.tag }}" > release_notes.md
+          echo "----- 릴리즈 노트 -----"; cat release_notes.md
 
-      - name: GitHub 릴리즈 생성
+      - name: 배포 자산 빌드 (오프라인 압축본 + wheel)
+        run: |
+          python tools/make_release.py          # download/*.tar.gz, *.zip
+          python -m pip install --quiet build
+          python -m build --wheel               # dist/*.whl (pip 오프라인 설치용)
+
+      - name: 릴리즈 생성/갱신 + 압축본 첨부
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "릴리즈 $GITHUB_REF_NAME 가 이미 존재합니다 — 노트를 갱신합니다."
-            gh release edit "$GITHUB_REF_NAME" \
-              --title "isilon_usage ${{ steps.notes.outputs.version }}" \
-              --notes-file release_notes.md
+          TAG="${{ steps.meta.outputs.tag }}"
+          TITLE="isilon_usage ${{ steps.meta.outputs.version }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TITLE" --notes-file release_notes.md
           else
-            gh release create "$GITHUB_REF_NAME" \
-              --title "isilon_usage ${{ steps.notes.outputs.version }}" \
-              --notes-file release_notes.md \
-              --verify-tag
+            gh release create "$TAG" --title "$TITLE" --notes-file release_notes.md
           fi
+          gh release upload "$TAG" \
+            download/isilon_usage-*.tar.gz \
+            download/isilon_usage-*.zip \
+            dist/*.whl \
+            --clobber

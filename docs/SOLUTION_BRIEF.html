@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Isilon 디렉터리 사용량 스캐너 — 솔루션 제품소개</title>
+<style>
+  :root{
+    --ink:#16202c; --muted:#5b6b7d; --line:#e2e8f0;
+    --brand:#0e7490; --brand2:#0b3d6b; --accent:#f59e0b; --good:#0f9d58;
+    --bg-soft:#f1f6f9;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{font-family:-apple-system,"Segoe UI",Roboto,"Noto Sans KR",sans-serif;
+       color:var(--ink); line-height:1.5; -webkit-print-color-adjust:exact; print-color-adjust:exact;}
+  @page{ size:A4; margin:0; }
+  .page{ width:210mm; min-height:297mm; padding:16mm 15mm 14mm; margin:0 auto;
+         background:#fff; position:relative; page-break-after:always; overflow:hidden;}
+  .page:last-child{ page-break-after:auto; }
+  @media screen{
+    body{ background:#cbd5e1; }
+    .page{ margin:14px auto; box-shadow:0 10px 30px rgba(0,0,0,.25); }
+  }
+  h1,h2,h3{margin:0; line-height:1.18;}
+  p{margin:.4em 0;}
+  .small{font-size:11px}
+  .muted{color:var(--muted)}
+
+  /* ---- Hero ---- */
+  .hero{ margin:-16mm -15mm 0; padding:18mm 15mm 12mm;
+         background:linear-gradient(135deg,#0b3d6b 0%,#0e7490 70%,#13a3a3 100%);
+         color:#eaf6fb; position:relative;}
+  .hero::after{content:"";position:absolute;right:-40px;top:-40px;width:240px;height:240px;
+         border-radius:50%;background:rgba(255,255,255,.07);}
+  .kicker{font-size:12px; letter-spacing:.22em; text-transform:uppercase; color:#9fe3ef; font-weight:700}
+  .hero h1{font-size:34px; font-weight:800; margin:8px 0 4px; color:#fff;}
+  .hero .sub{font-size:15px; color:#cdeff6; max-width:150mm}
+  .hero .tag{display:inline-block; margin-top:14px; font-size:13.5px; font-weight:600;
+         background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.25);
+         padding:7px 13px; border-radius:999px;}
+
+  /* ---- Stat band ---- */
+  .stats{display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:14px 0 4px;}
+  .stat{background:var(--bg-soft); border:1px solid var(--line); border-radius:12px; padding:12px 12px;}
+  .stat .n{font-size:23px; font-weight:800; color:var(--brand2)}
+  .stat .l{font-size:11px; color:var(--muted); margin-top:2px}
+
+  .sec-title{font-size:13px; letter-spacing:.16em; text-transform:uppercase;
+       color:var(--brand); font-weight:800; margin:18px 0 8px; display:flex; align-items:center; gap:8px}
+  .sec-title::before{content:""; width:18px; height:3px; background:var(--accent); border-radius:2px}
+
+  .twocol{display:grid; grid-template-columns:1fr 1fr; gap:14px}
+  .panel{border:1px solid var(--line); border-radius:12px; padding:13px 14px; background:#fff}
+  .panel.prob{background:#fff7ed; border-color:#fed7aa}
+  .panel.sol{background:#ecfdf5; border-color:#bbf7d0}
+  .panel h3{font-size:15px; margin-bottom:5px}
+  .panel.prob h3{color:#b45309} .panel.sol h3{color:#047857}
+  .panel ul{margin:6px 0 0; padding-left:18px} .panel li{margin:3px 0; font-size:12.5px}
+
+  /* ---- Feature cards ---- */
+  .cards{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+  .card{border:1px solid var(--line); border-radius:13px; padding:13px 14px; background:#fff;
+        position:relative;}
+  .card .ic{font-size:22px}
+  .card h3{font-size:15px; margin:6px 0 4px}
+  .card p{font-size:12.3px; color:#33475b; margin:0}
+  .card .tagk{position:absolute; top:12px; right:12px; font-size:10px; font-weight:700;
+        color:var(--brand); background:var(--bg-soft); padding:2px 8px; border-radius:999px}
+
+  .band{margin-top:14px; background:linear-gradient(135deg,#0b3d6b,#0e7490); color:#eaf6fb;
+        border-radius:13px; padding:13px 16px; display:flex; gap:18px; align-items:center}
+  .band b{color:#fff}
+  .band .big{font-size:26px; font-weight:800; color:#ffd591}
+
+  table{width:100%; border-collapse:collapse; font-size:12.3px; margin-top:6px}
+  th,td{border:1px solid var(--line); padding:7px 9px; text-align:left}
+  th{background:var(--bg-soft); color:var(--brand2); font-weight:700}
+  td .hi{color:var(--good); font-weight:700}
+
+  /* ---- Architecture ---- */
+  .arch{display:flex; align-items:stretch; gap:8px; margin-top:8px; flex-wrap:nowrap}
+  .node{flex:1; border:1px solid var(--line); border-radius:11px; padding:10px; text-align:center; background:#fff}
+  .node .t{font-weight:700; font-size:12.5px; color:var(--brand2)}
+  .node .d{font-size:10.5px; color:var(--muted); margin-top:3px}
+  .arrow{align-self:center; color:var(--brand); font-weight:800; font-size:18px}
+
+  .bul{display:grid; grid-template-columns:1fr 1fr; gap:6px 18px; margin-top:6px}
+  .bul div{font-size:12.3px; padding-left:18px; position:relative}
+  .bul div::before{content:"✓"; position:absolute; left:0; color:var(--good); font-weight:800}
+
+  .cta{margin-top:14px; border:1px dashed var(--brand); border-radius:12px; padding:13px 15px; background:var(--bg-soft)}
+  .cta code{background:#0b2233; color:#d7f0f7; padding:2px 7px; border-radius:5px; font-size:12px}
+
+  .foot{position:absolute; left:15mm; right:15mm; bottom:9mm; border-top:1px solid var(--line);
+        padding-top:6px; display:flex; justify-content:space-between; font-size:10.5px; color:var(--muted)}
+</style>
+</head>
+<body>
+
+<!-- ===================== PAGE 1 ===================== -->
+<section class="page">
+  <div class="hero">
+    <div class="kicker">Enterprise Storage Usage Intelligence</div>
+    <h1>Isilon 디렉터리 사용량 스캐너</h1>
+    <div class="sub">초대용량 NAS(아이실론/OneFS)를 위한 <b>메모리 안전 · 자동 튜닝</b>
+      디렉터리 사용량 관제 솔루션 — 수십억 개의 파일도 죽지 않고, 측정으로 가장 빠르게.</div>
+    <div class="tag">🧠 메모리 일정 &nbsp;·&nbsp; ⚡ 측정 기반 2단 병렬 &nbsp;·&nbsp; 🔬 오토튜닝 &nbsp;·&nbsp; 🔒 폐쇄망 OK</div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="n">≈24<span class="small">MB</span></div><div class="l">스캐너 메모리(트리 크기와 무관하게 일정)</div></div>
+    <div class="stat"><div class="n">최대 13×</div><div class="l">고지연 영역 실측 가속(2단 병렬 vs 단일)</div></div>
+    <div class="stat"><div class="n">Py 3.6+</div><div class="l">표준 라이브러리만 — 의존성·설치 부담 0</div></div>
+    <div class="stat"><div class="n">1 + N</div><div class="l">관리 DB + 실행별 DB로 안전한 이력 관리</div></div>
+  </div>
+
+  <div class="sec-title">해결하는 문제</div>
+  <div class="twocol">
+    <div class="panel prob">
+      <h3>⚠ 기존 방식의 한계</h3>
+      <ul>
+        <li><b>du 한 방</b>: 한 폴더에 파일 수천만 개면 메모리가 터져 프로세스가 죽습니다.</li>
+        <li><b>단순 멀티스레드</b>: 파이썬 GIL + 단일 락에 막혀 워커를 늘려도 1~2배에서 정체.</li>
+        <li><b>6 PB 규모</b>: 트리를 다 걸으면 며칠~몇 주. 진행 상황·병목이 보이지 않음.</li>
+        <li><b>가시성 부재</b>: 어느 디렉터리·사용자·파일이 공간을 먹는지 알기 어려움.</li>
+      </ul>
+    </div>
+    <div class="panel sol">
+      <h3>✓ 이 솔루션의 접근</h3>
+      <ul>
+        <li><b>2단계 스캔</b>: 디렉터리 단위로 쪼개 DB에 흘려보내 <b>메모리를 일정</b>하게.</li>
+        <li><b>측정 기반 2단 병렬</b>: 프로세스(GIL 우회)×스레드(지연 은닉)로 처리량 확장.</li>
+        <li><b>오토튜닝</b>: 영역마다 가장 빠른 방법을 <b>실측</b>해 자동 선택·시작.</li>
+        <li><b>웹 대시보드</b>: 진행·자원·드릴다운·분석 리포트를 실시간으로.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="sec-title">한눈에 보는 가치</div>
+  <div class="band">
+    <div><div class="big">추측이 아니라 측정</div></div>
+    <div style="font-size:12.8px">NAS는 영역·캐시 상태마다 빠른 방법이 다릅니다. 이 솔루션은
+      단일·멀티프로세스·2단 병렬을 <b>실제로 재 보고</b> 가장 빠른 설정으로 스캔합니다 —
+      그래서 빠른 영역은 낭비 없이, 느린 고지연 영역은 <b>몇 배</b> 빠르게 처리합니다.</div>
+  </div>
+
+  <div class="foot"><span>Isilon 디렉터리 사용량 스캐너 — 솔루션 제품소개</span><span>1 / 3</span></div>
+</section>
+
+<!-- ===================== PAGE 2 ===================== -->
+<section class="page">
+  <div class="sec-title">핵심 기능</div>
+  <div class="cards">
+    <div class="card"><span class="tagk">Memory-safe</span>
+      <div class="ic">🧠</div><h3>메모리 최소 스캔</h3>
+      <p>① 탐색(top-down)으로 디렉터리당 한 번만 훑어 DB에 기록 → 다음 목록도 메모리가 아닌 DB에.
+         ② 상향식 집계로 재귀 용량 계산. <b>트리가 아무리 커도 메모리는 평탄</b>(약 24MB).</p></div>
+    <div class="card"><span class="tagk">Throughput</span>
+      <div class="ic">⚡</div><h3>2단 병렬 엔진 (pscan)</h3>
+      <p><b>프로세스</b>로 GIL을 우회하고 <b>프로세스당 스레드</b>로 NFS 왕복 지연을 숨깁니다.
+         1단계 자식이 적은 영역은 <b>적응형 깊이 분할</b>로 병렬 단위를 자동 확보.</p></div>
+    <div class="card"><span class="tagk">Auto</span>
+      <div class="ic">🔬</div><h3>오토튜닝</h3>
+      <p>새 스캔 시 단일·멀티프로세스·2단 병렬을 짧게 측정해 <b>가장 빠른 방법을 자동 선택</b>,
+         그 설정으로 본 스캔을 시작합니다. 측정 진행은 첫 화면에 실시간 표시.</p></div>
+    <div class="card"><span class="tagk">Visibility</span>
+      <div class="ic">📊</div><h3>웹 대시보드</h3>
+      <p>웹에서 폴더를 골라 <b>스캔 시작·중지·재개</b>, 디스크 <b>파이차트</b>·드릴다운·검색,
+         진행률·서버 자원(메모리/CPU)·DB 생존 지표를 실시간으로.</p></div>
+    <div class="card"><span class="tagk">Insight</span>
+      <div class="ic">📈</div><h3>분석 리포트</h3>
+      <p>파일 <b>나이(콜드 데이터)</b>·소유자·확장자별 사용량, <b>최대 파일 Top</b>,
+         <b>용량 소진 예측</b>(90%/가득 참 예상일), 직전 대비 <b>변화 Top</b>.</p></div>
+    <div class="card"><span class="tagk">Global</span>
+      <div class="ic">🌐</div><h3>글로벌 통합 포탈</h3>
+      <p>여러 데이터센터를 <b>한 화면</b>에 — 지역별 롤업, <b>Cross-DC 경로 비교</b>,
+         네트워크/인프라 모니터링. 저대역(20Mbps↓)에서도 <b>요약만</b> 받아 가볍게.</p></div>
+  </div>
+
+  <div class="sec-title">초대용량을 위한 안전장치</div>
+  <div class="bul">
+    <div><b>깊이 접기</b> — DB 행 수를 묶되 합계는 정확</div>
+    <div><b>최대 깊이 컷</b> — 빠른 부분 조사</div>
+    <div><b>DB 크기 가드</b> — 한도 초과 시 자동 일시정지</div>
+    <div><b>디스크 여유 가드</b> — 부족하면 깨지기 전 정지</div>
+    <div><b>중단·재개</b> — kill 후에도 DB에서 이어하기</div>
+    <div><b>하드링크 중복 제거</b> — du와 일치하는 용량</div>
+  </div>
+
+  <div class="sec-title">측정으로 확인한 성과</div>
+  <table>
+    <tr><th>구분</th><th>단일 스레드(serial)</th><th>2단 병렬(프로세스×스레드)</th><th>비고</th></tr>
+    <tr><td>고지연·자식 많은 영역</td><td>≈ 1,300~1,500 files/s</td><td class="hi">최대 13× ↑</td><td>실 아이실론 영역 실측</td></tr>
+    <tr><td>멀티프로세스 PoC</td><td>1×(기준)</td><td class="hi">4워커 5.48×</td><td>GIL 우회 효과</td></tr>
+    <tr><td>스캐너 메모리(RSS)</td><td colspan="2">트리 크기와 무관하게 <b>≈ 24MB 일정</b></td><td>파일 수억 개에도</td></tr>
+  </table>
+  <p class="small muted">※ 수치는 환경·영역·캐시 상태에 따라 달라집니다. 빠른(저지연) 영역은 단일이
+     유리할 수 있어, 오토튜닝이 영역마다 최적을 실측해 고릅니다(정직한 상대 비교).</p>
+
+  <div class="foot"><span>Isilon 디렉터리 사용량 스캐너 — 솔루션 제품소개</span><span>2 / 3</span></div>
+</section>
+
+<!-- ===================== PAGE 3 ===================== -->
+<section class="page">
+  <div class="sec-title">아키텍처</div>
+  <div class="arch">
+    <div class="node"><div class="t">🗄 NAS / OneFS</div><div class="d">읽기 전용 마운트<br>(/ifs)</div></div>
+    <div class="arrow">→</div>
+    <div class="node"><div class="t">⚙ 스캐너(엣지)</div><div class="d">2단계 스캔 · 2단 병렬<br>오토튜닝 · 대시보드</div></div>
+    <div class="arrow">→</div>
+    <div class="node"><div class="t">🗃 DB</div><div class="d">실행별 DB +<br>관리 DB(이력)</div></div>
+    <div class="arrow">→</div>
+    <div class="node"><div class="t">🌐 HQ 포탈</div><div class="d">여러 DC 통합<br>요약 복제(저대역)</div></div>
+  </div>
+  <p class="small muted" style="margin-top:6px">각 데이터센터에서 무거운 스캔은 로컬로 수행하고,
+     본사(HQ) 포탈은 <b>요약·완료 DB 스냅샷만</b> 받아 전 세계 스토리지를 한 화면에서 조망합니다.</p>
+
+  <div class="sec-title">왜 이 솔루션인가</div>
+  <div class="twocol">
+    <div class="panel">
+      <h3>🔒 안전하고 가벼움</h3>
+      <ul>
+        <li><b>표준 라이브러리만</b> — 폐쇄망 서버에 그대로 설치(Python 3.6+).</li>
+        <li><b>읽기 전용</b> — 데이터를 변경하지 않음. mount도 ro 권장.</li>
+        <li><b>작업 보호·로그인·감사 로그</b> — 보기는 자유, 작업엔 비밀번호.</li>
+        <li><b>MIT 라이선스</b> — 사내 자유 도입·확장.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>💡 도입 효과</h3>
+      <ul>
+        <li><b>정리 후보 식별</b> — 콜드 데이터·최대 파일·급증 디렉터리로 공간 회수.</li>
+        <li><b>차지백</b> — 소유자·부서·유형별 사용량 가시화.</li>
+        <li><b>용량 계획</b> — 추세 기반 가득 참 예상일로 선제 대응.</li>
+        <li><b>글로벌 가시성</b> — 15개 DC를 한 화면에서 통합 관리.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="sec-title">3분이면 시작합니다</div>
+  <div class="cta">
+    <div style="font-size:12.5px; margin-bottom:7px">아이실론을 리눅스 서버에 마운트하고 한 줄로 실행 →
+      웹에서 폴더를 골라 <b>스캔 시작</b>만 누르면 끝.</div>
+    <code>python3 -m isilon_usage serve --data-dir /var/lib/isilon_usage --mount-base /mnt/isilon --port 8765</code>
+    <div class="bul" style="margin-top:10px; grid-template-columns:1fr 1fr">
+      <div>설치 불필요 — 코드 복사 후 바로 실행</div>
+      <div>오토튜닝이 가장 빠른 방법을 자동 선택</div>
+      <div>첫 화면에서 진행·결과 실시간 확인</div>
+      <div>초보자 가이드 · 설치 매뉴얼 동봉</div>
+    </div>
+  </div>
+
+  <p class="small muted" style="margin-top:12px">문서: 처음 시작하기(GETTING_STARTED) · 설치 매뉴얼(INSTALL) ·
+     사용 설명서(USER_GUIDE) · 변경 이력(CHANGELOG) · 보안 가이드(SECURITY).
+     &nbsp;|&nbsp; 브라우저에서 <b>인쇄 → PDF로 저장</b>하면 그대로 배포용 자료가 됩니다.</p>
+
+  <div class="foot"><span>Isilon 디렉터리 사용량 스캐너 — 메모리 안전 · 자동 튜닝 사용량 관제 솔루션</span><span>3 / 3</span></div>
+</section>
+
+</body>
+</html>

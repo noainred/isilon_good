@@ -1,0 +1,65 @@
+# isilon_usage 대시보드를 systemd 서비스로 실행하는 유닛 템플릿.
+#
+# 설치(요약):
+#   1) /etc/systemd/system/isilon-edge.service 로 복사
+#   2) 아래 <경로/마운트/포트>를 환경에 맞게 수정
+#   3) sudo systemctl daemon-reload
+#   4) sudo systemctl enable --now isilon-edge
+#   5) 로그:  journalctl -u isilon-edge -f
+#
+# 자세한 안내: docs/SERVICE.md
+
+[Unit]
+Description=Isilon 디렉터리 사용량 스캐너 대시보드
+Documentation=https://github.com/noainred/isilon_good
+# 네트워크 + 원격 마운트(NFS)가 올라온 뒤 시작한다
+After=network-online.target remote-fs.target
+Wants=network-online.target remote-fs.target
+
+[Service]
+Type=simple
+
+# (선택) 최소 권한 전용 계정 — 대상 마운트에 '읽기' 권한만 있으면 됨.
+# 두 줄을 주석 해제하면 그 계정으로 돈다(생략하면 root). NFS 권한에 맞춰 결정.
+#User=isilon
+#Group=isilon
+
+# 압축본을 푼 위치 = 'isilon_usage/' 패키지가 바로 아래 있는 디렉터리.
+# (info.MD = 작업 비밀번호도 이 디렉터리에 저장된다)
+WorkingDirectory=/opt/isilon_edge
+
+# 데이터·설정 디렉터리: 기본 /data/isilon_usage (절대경로 고정 → 코드 업그레이드와
+# 무관하게 설정·DB 보존). 앱이 자동 생성한다. 전용 계정(User=)으로 돌리면 이 경로에
+# 쓰기 권한을 주거나 아래 ReadWritePaths 를 켤 것.
+# (참고) /var/lib 를 쓰려면 StateDirectory=isilon_usage 로 되돌리고 --data-dir 도 맞춘다.
+
+# 실행 명령 — serve 가 받는 유효 옵션만 사용한다.
+#  · --host 0.0.0.0  : LAN(예: 192.168.x)에서 접근. 사내 신뢰망이면 이대로.
+#                      외부 노출이면 127.0.0.1 + 리버스 프록시 권장(docs/SECURITY.md).
+#  · --mount-base    : 웹에서 스캔 허용할 경로(여러 개면 줄을 더 추가 X — 옵션 반복).
+#  · 안전장치(min-free/db-max/fold-depth)는 대시보드 '설정'(settings.json)에서 적용.
+ExecStart=/usr/bin/python3 -m isilon_usage serve \
+    --data-dir /data/isilon_usage \
+    --mount-base /mnt/hadoop \
+    --host 0.0.0.0 --port 8765 \
+    --workers 8
+
+# 비정상 종료 시 자동 재시작(프론티어가 DB에 있어 '재개'로 이어감)
+Restart=on-failure
+RestartSec=5
+# 깔끔한 종료: SIGTERM 으로 스캐너가 진행상황을 flush 하고 멈춘다(데이터 보존)
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# 다중 워커가 여는 fd 여유(= 튜닝 점검 권장값)
+LimitNOFILE=65536
+
+# 기본 보안 하드닝(NFS/데이터 접근을 깨지 않는 안전한 항목들)
+NoNewPrivileges=true
+PrivateTmp=true
+# 더 강하게: 아래를 켜되 NFS/데이터 쓰기가 막히면 되돌릴 것
+#ProtectSystem=full
+#ReadWritePaths=/data/isilon_usage
+
+[Install]
+WantedBy=multi-user.target
