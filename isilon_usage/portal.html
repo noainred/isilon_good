@@ -1721,8 +1721,11 @@ function renderPortalDash(){
     const pingB = pr ? (pr.latency_ms!=null
         ? ` <span class="pill" title="HQ→노드 왕복${pr.error?(' · '+escAttr(pr.error)):''}" style="color:${pr.latency_ms<150?'#7be0aa':(pr.latency_ms<600?'#f0c86a':'#ff9a9a')};border-color:${pr.latency_ms<150?'#2f6f50':(pr.latency_ms<600?'#6a5a25':'#7a3030')}">${pr.latency_ms} ms</span>`
         : ` <span class="pill" title="${escAttr(pr.error||'실패')}" style="color:#ff9a9a;border-color:#7a3030">✕</span>`) : "";
+    // 상태 신선도: 포탈이 이 노드 상태를 마지막으로 받은 지 2분 넘으면 표시(값이 실제와 다를 수 있음을 정직하게)
+    const staleB = (n.enabled && n.online && n.last_poll && (Date.now()/1000 - n.last_poll) >= 120)
+      ? ` <span class="sub ${freshClass(n.last_poll)}" style="white-space:nowrap;" title="포탈이 이 노드 상태를 마지막으로 받은 시각 — 오래되면 표시 값이 실제와 다를 수 있습니다">⏳ 상태 ${ago(n.last_poll)}</span>` : "";
     const rn=n.running;
-    const runLine = rn ? `<div class="sub" style="white-space:nowrap; margin-top:3px;">⏱ ${elapsedSpan(rn.started_at, rn.updated_at)} · 시작 ${fmtClock(rn.started_at)}</div>` : "";
+    const runLine = rn ?`<div class="sub" style="white-space:nowrap; margin-top:3px;">⏱ ${elapsedSpan(rn.started_at, rn.updated_at)} · 시작 ${fmtClock(rn.started_at)}</div>` : "";
     const loopBadge = n.auto_restart ? ` <span style="color:#ff5c5c; font-weight:700; white-space:nowrap;" title="완료되면 같은 설정으로 자동 재시작(반복) 중">🔁 반복 동작 중</span>` : "";
     // 스캔 진행 바(집계 단계 % 가 있을 때만 — 정직하게)
     const _spct = (n.online && n.active_scans>0) ? nodeScanPct(n) : null;
@@ -1733,7 +1736,7 @@ function renderPortalDash(){
       <td class="num">${fmtBytes(n.fs_used_bytes)}${n.fs_total_bytes?` <span class="sub">${n.fs_used_pct}%</span>`:""}${n.fs_total_bytes?`<div class="capbar" style="height:4px; min-width:0; margin-top:5px; border-radius:3px;"><i style="width:${Math.min(100,n.fs_used_pct||0)}%; background:${capColor(n.fs_used_pct||0)}; box-shadow:none;"></i></div>`:""}</td>
       <td class="num">${fmtBytes(n.fs_total_bytes)}</td>
       <td class="sub">${ago(n.last_scan_at)}</td>
-      <td>${st}${loopBadge}${scanBtn}${pingB}${runLine}${scanBar}</td><td>${open}</td></tr>` + roots +
+      <td>${st}${staleB}${loopBadge}${scanBtn}${pingB}${runLine}${scanBar}</td><td>${open}</td></tr>` + roots +
       (n.last_error ? `<tr><td colspan="9" class="sub" style="color:#ff9a9a">${escAttr(n.id)}: ${_he(n.last_error)}</td></tr>` : "");
   }).join("") : '<tr><td colspan="9" class="sub">표시할 노드가 없습니다.</td></tr>';
   $("nodeRows").querySelectorAll("tr.noderow").forEach(tr=>tr.addEventListener("click",e=>{

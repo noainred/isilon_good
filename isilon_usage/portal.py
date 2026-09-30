@@ -43,9 +43,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PORTAL_HTML = os.path.join(HERE, "portal.html")
 
 # 폴링(연결+요약)은 자주, 복제(완료 DB 내려받기)는 노드별 주기마다.
+# 둘은 서로 막지 않는다 — 큰 DB 복제(수 분~수 시간)가 도는 동안에도 폴링은 계속 돈다.
 POLL_EVERY = 15.0       # 초
 SCHED_TICK = 5.0        # 초
 FAR_FUTURE = 9999999999  # since 가 미래면 meta.json 만 받아 가볍게 연결/요약 확인
+# 폴링에서 '새로 완료된 스캔'을 보면 복제 주기를 기다리지 않고 바로 복제한다.
+# 단 직전 복제 시도 후 REP_RETRY_SECS 는 쉬고, 실패가 이어지면 2배씩(최대 REP_RETRY_MAX) 늘린다.
+REP_RETRY_SECS = 60.0
+REP_RETRY_MAX = 1800.0
+_TERMINAL = ("done", "paused", "error")   # 엣지 _export_dbs 가 복제로 보내는 상태(완료로 간주)
 
 
 # --------------------------------------------------------------- 노드 레지스트리
@@ -179,8 +185,8 @@ def save_nodes(data_dir: str, nodes: list) -> None:
         raise
 
 
-def _public_node(n: dict, cache: dict) -> dict:
-    """화면용 노드(토큰 마스킹 + 실시간 캐시 상태 병합)."""
+def _public_node(n: dict, cache: dict, rep_err: Optional[dict] = None) -> dict:
+    """화면용 노드(토큰 마스킹 + 실시간 캐시 상태 병합). rep_err: id -> 마지막 복제 오류."""
     c = cache.get(n["id"], {})
     ov = c.get("overall") or {}
     out = dict(n)
@@ -189,7 +195,7 @@ def _public_node(n: dict, cache: dict) -> dict:
     out["online"] = bool(c.get("online"))
     out["version"] = c.get("version")
     out["hostname"] = c.get("hostname")
-    out["error"] = n.get("last_error") or c.get("error") or ""
+    out["error"] = n.get("last_error") or c.get("error") or (rep_err or {}).get(n["id"], "")
     out["active_scans"] = int(ov.get("active_scans") or 0)   # 지금 스캔 중인 개수
     out["scanning"] = out["active_scans"] > 0
     out["used_bytes"] = int(ov.get("total_scanned_bytes") or 0)
@@ -431,7 +437,11 @@ class PortalController:
         self._init_throughput_db()
         self._thru_last = {}      # id -> 마지막 기록한 scanned_bytes(값 바뀔 때만 적재)
         self._cache = {}          # id -> {online, ts, version, hostname, overall, error}
-        self._inflight = set()
+        self._inflight = set()      # 상태 폴링 중인 노드(가벼움 — 수 초)
+        self._rep_inflight = set()  # DB 복제 중인 노드(큰 DB 는 수 분~수 시간) — 폴링과 별개
+        self._rep_at = {}           # id -> 마지막 복제 '시도' 시각(포탈 시계) — 복제 주기 판정 기준
+        self._rep_fail = {}         # id -> 연속 복제 실패 횟수(재시도 백오프)
+        self._rep_err = {}          # id -> 마지막 복제 오류(다음 복제 성공 전까지 표시)
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._thread = None
@@ -1054,11 +1064,12 @@ class PortalController:
     def _check_self_upgrade(self) -> None:
         """새 버전을 자가 적용 → 엣지 푸시 → 재시작 — ① 감시 폴더 ② 인터넷(GitHub).
 
-        이미 설치 중(installing)이거나 동기화 중(_inflight)이면 건너뛴다(수동 '지금 업그레이드'
-        와의 중복 실행 방지).
+        이미 설치 중(installing)이거나 DB 복제 중(_rep_inflight)이면 건너뛴다(수동 '지금 업그레이드'
+        와의 중복 실행·복제 파일 쓰는 도중 재시작 방지). 가벼운 상태 폴링(_inflight)은 재시작해도
+        잃을 것이 없으므로 막지 않는다 — 폴링은 15초마다 도니, 막으면 업그레이드가 계속 밀린다.
         """
         with self._lock:
-            if self._inflight or self._upg_state.get("installing"):
+            if self._rep_inflight or self._upg_state.get("installing"):
                 return
         code_dir = upgrademod.code_dir_of(__file__)
         # ① 로컬 감시 폴더
@@ -1331,7 +1342,7 @@ class PortalController:
     def list_nodes(self) -> dict:
         with self._lock:
             cache = dict(self._cache)
-            nodes = [_public_node(n, cache) for n in self.nodes]
+            nodes = [_public_node(n, cache, self._rep_err) for n in self.nodes]
         return {"ok": True, "nodes": nodes}
 
     def upsert_node(self, raw: dict) -> dict:
@@ -1544,75 +1555,170 @@ class PortalController:
                     if not n.get("enabled"):
                         continue
                     nid = n["id"]
-                    with self._lock:
-                        if nid in self._inflight:
-                            continue
+                    # 폴링과 복제는 각자 따로 돈다(서로의 진행 여부를 보지 않는다).
+                    # 예전엔 한 스레드가 폴링→복제를 이어서 하고 _inflight 하나로 묶여 있어,
+                    # 큰 완료 DB 복제가 도는 동안 그 노드의 폴링이 멈춰 포탈 상태가 수 시간 묵었다
+                    # (엣지는 '완료'인데 포탈은 '스캔 중'·옛 용량).
                     due_poll = (now - n.get("last_poll", 0)) >= self.poll_every
-                    # 복제 시점은 예약 스캔과 동일한 반복주기 모델(schedule_due)로 판정.
-                    # last_run 자리에 last_sync 를 넣어 마지막 복제 이후를 기준으로 한다.
-                    due_rep = (n.get("mode") in ("both", "replicate") and
-                               setmod.schedule_due(dict(n, last_run=n.get("last_sync", 0)), now))
-                    if due_poll or due_rep:
-                        with self._lock:
+                    with self._lock:
+                        start_poll = due_poll and nid not in self._inflight
+                        if start_poll:
                             self._inflight.add(nid)
-                        threading.Thread(target=self._sync_one, args=(nid, due_rep),
+                        start_rep = nid not in self._rep_inflight and self._rep_due(n, now)
+                        if start_rep:
+                            self._rep_inflight.add(nid)
+                            self._rep_at[nid] = now
+                    if start_poll:
+                        threading.Thread(target=self._poll_task, args=(nid,),
+                                         daemon=True).start()
+                    if start_rep:
+                        threading.Thread(target=self._rep_task, args=(nid,),
                                          daemon=True).start()
             except Exception:  # noqa: BLE001 — 스케줄러는 죽지 않는다
                 pass
             self._stop.wait(self.tick)
 
+    def _rep_due(self, n: dict, now: float) -> bool:
+        """이 노드의 DB 복제를 지금 시작할 차례인가(호출자가 self._lock 보유).
+
+        ① 설정한 복제 주기(schedule_due) — 기준은 '마지막 복제 시도 시각'(_rep_at).
+           예전엔 last_sync(=받은 완료 스캔의 finished_at 워터마크)를 기준으로 써서, 마지막
+           스캔 완료 후 주기가 한 번 지나면 매 틱(5초)마다 복제가 다시 돌았다.
+        ② 폴링에서 새로 완료된 스캔(finished_at > last_sync)을 보면 주기를 기다리지 않고 바로
+           — 단 직전 시도 후 REP_RETRY_SECS 는 쉬고, 연속 실패면 2배씩(최대 REP_RETRY_MAX).
+        오프라인(마지막 폴링 실패) 노드는 복제하지 않는다(폴링이 먼저 살아나야 함).
+        """
+        if n.get("mode") not in ("both", "replicate"):
+            return False
+        nid = n["id"]
+        c = self._cache.get(nid) or {}
+        if not c.get("online"):
+            return False
+        last = float(self._rep_at.get(nid, 0.0))
+        if setmod.schedule_due(dict(n, last_run=last), now):
+            return True
+        if not self._has_unreplicated(nid, float(n.get("last_sync", 0) or 0)):
+            return False
+        fails = int(self._rep_fail.get(nid, 0))
+        gap = min(REP_RETRY_MAX, REP_RETRY_SECS * (2 ** min(fails, 10)))
+        return (now - last) >= gap
+
+    def _has_unreplicated(self, nid: str, wm: float) -> bool:
+        """폴링 캐시에 워터마크(wm) 이후 완료된 스캔이 보이는가(호출자가 self._lock 보유)."""
+        c = self._cache.get(nid) or {}
+        return any(rt.get("status") in _TERMINAL and float(rt.get("finished_at") or 0) > wm
+                   for rt in ((c.get("overall") or {}).get("roots") or []))
+
     def sync_now(self, nid: Optional[str] = None) -> dict:
         targets = [nid] if nid else [n["id"] for n in self.nodes if n.get("enabled")]
         for t in targets:
-            with self._lock:
-                if t in self._inflight:
-                    continue
-                self._inflight.add(t)
             threading.Thread(target=self._sync_one, args=(t, True), daemon=True).start()
         return {"ok": True, "syncing": targets}
 
-    def _sync_one(self, nid: str, do_rep: bool) -> None:
+    def _poll_task(self, nid: str) -> None:
         try:
-            n = self._get(nid)
-            if n is None:
-                return
-            try:
-                meta = _probe_meta(n["url"], n.get("token"))
-                with self._lock:
-                    self._cache[nid] = {
-                        "online": True, "ts": time.time(),
-                        "version": meta.get("version"), "hostname": meta.get("hostname"),
-                        "overall": meta.get("overall") or {},
-                        "isilon": meta.get("isilon") or {"configured": False},
-                        "storage": meta.get("storage") or [],
-                        "error": "",
-                    }
-                    n["last_poll"] = time.time()
-                    n["last_status"] = "online"
-                    n["last_error"] = ""
-                self._record_throughput(nid, meta.get("overall") or {})   # 처리량 시계열(영구)
-            except Exception as e:  # noqa: BLE001
-                emsg = _poll_error_msg(e)
-                with self._lock:
-                    c = self._cache.get(nid, {})
-                    c.update({"online": False, "error": emsg})
-                    self._cache[nid] = c
-                    n["last_poll"] = time.time()
-                    n["last_status"] = "offline"
-                    n["last_error"] = emsg
-                return  # 오프라인이면 복제 생략
-            if do_rep and n.get("mode") in ("both", "replicate"):
-                try:
-                    newest = self._replicate(n)          # 느린 네트워크 — 락 밖에서
-                    with self._lock:
-                        n["last_sync"] = max(float(n.get("last_sync", 0)), newest)
-                        self._save()
-                except Exception as e:  # noqa: BLE001
-                    with self._lock:
-                        n["last_error"] = "replicate: " + str(e)
+            self._poll_one(nid)
         finally:
             with self._lock:
                 self._inflight.discard(nid)
+
+    def _rep_task(self, nid: str) -> None:
+        try:
+            self._replicate_one(nid)
+        finally:
+            with self._lock:
+                self._rep_inflight.discard(nid)
+
+    def _sync_one(self, nid: str, do_rep: bool = True) -> None:
+        """수동 '동기화'(동기 실행): 폴링 → (온라인이고 do_rep 면) 복제.
+
+        같은 노드의 폴링/복제가 이미 돌고 있으면 그쪽은 건너뛴다(중복 요청 방지).
+        """
+        with self._lock:
+            do_poll = nid not in self._inflight
+            if do_poll:
+                self._inflight.add(nid)
+        if do_poll:
+            try:
+                online = self._poll_one(nid)
+            finally:
+                with self._lock:
+                    self._inflight.discard(nid)
+        else:
+            with self._lock:
+                online = bool((self._cache.get(nid) or {}).get("online"))
+        if not (do_rep and online):
+            return  # 오프라인이면 복제 생략
+        with self._lock:
+            if nid in self._rep_inflight:
+                return
+            self._rep_inflight.add(nid)
+            self._rep_at[nid] = time.time()
+        try:
+            self._replicate_one(nid)
+        finally:
+            with self._lock:
+                self._rep_inflight.discard(nid)
+
+    def _poll_one(self, nid: str) -> bool:
+        """상태 폴링(가벼움): meta.json 만 받아 캐시(온라인·버전·overall)를 갱신. 온라인 여부 반환."""
+        n = self._get(nid)
+        if n is None:
+            return False
+        try:
+            meta = _probe_meta(n["url"], n.get("token"))
+        except Exception as e:  # noqa: BLE001
+            emsg = _poll_error_msg(e)
+            with self._lock:
+                c = self._cache.get(nid, {})
+                c.update({"online": False, "error": emsg})
+                self._cache[nid] = c
+                cur = self._get(nid)   # 폴링 도중 노드가 수정(upsert)됐으면 새 객체에 기록
+                if cur is not None:
+                    cur["last_poll"] = time.time()
+                    cur["last_status"] = "offline"
+                    cur["last_error"] = emsg
+            return False
+        with self._lock:
+            self._cache[nid] = {
+                "online": True, "ts": time.time(),
+                "version": meta.get("version"), "hostname": meta.get("hostname"),
+                "overall": meta.get("overall") or {},
+                "isilon": meta.get("isilon") or {"configured": False},
+                "storage": meta.get("storage") or [],
+                "error": "",
+            }
+            cur = self._get(nid)
+            if cur is not None:
+                cur["last_poll"] = time.time()
+                cur["last_status"] = "online"
+                cur["last_error"] = ""
+        self._record_throughput(nid, meta.get("overall") or {})   # 처리량 시계열(영구)
+        return True
+
+    def _replicate_one(self, nid: str) -> None:
+        """DB 복제 1회(느린 네트워크 — 락 밖에서). 성공 시 워터마크(last_sync) 전진·저장."""
+        n = self._get(nid)
+        if n is None or n.get("mode") not in ("both", "replicate"):
+            return
+        try:
+            newest = self._replicate(n)
+        except Exception as e:  # noqa: BLE001
+            with self._lock:
+                self._rep_fail[nid] = int(self._rep_fail.get(nid, 0)) + 1
+                self._rep_err[nid] = "replicate: " + str(e)
+            return
+        with self._lock:
+            cur = self._get(nid) or n
+            cur["last_sync"] = max(float(cur.get("last_sync", 0) or 0), newest)
+            self._rep_err.pop(nid, None)
+            if self._has_unreplicated(nid, cur["last_sync"]):
+                # 받았는데도 워터마크가 그 완료 스캔을 못 넘음 = 엣지가 그 스캔을 보내지 않음(드묾 —
+                # 예: 엣지 스캔 목록 최근 200개 밖). 실패처럼 백오프해 60초마다 헛복제하지 않게 한다.
+                self._rep_fail[nid] = int(self._rep_fail.get(nid, 0)) + 1
+            else:
+                self._rep_fail.pop(nid, None)
+            self._save()
 
     @staticmethod
     def _merge_scan_lists(old_scans, new_scans):
@@ -1629,8 +1735,11 @@ class PortalController:
 
     def _replicate(self, n: dict) -> float:
         """완료 DB(증분) + meta.json 을 replicas/<id>/ 로 안전하게 내려받는다."""
-        since = int(float(n.get("last_sync", 0) or 0))
-        url = n["url"].rstrip("/") + "/api/dbexport?since=%d" % since
+        since = float(n.get("last_sync", 0) or 0)
+        # since = '이미 받은 완료 스캔의 finished_at' 워터마크(소수 초). 예전처럼 정수로 자르면
+        # (int) 엣지의 'finished_at > since' 가 그 스캔에도 참이 되어, 마지막 완료 DB 를 복제할
+        # 때마다 통째로 다시 받았다(대용량이면 수 GB 를 끝없이). repr 은 실수를 정확히 왕복한다.
+        url = n["url"].rstrip("/") + "/api/dbexport?since=%s" % repr(since)
         dest = os.path.join(self.replicas_dir, n["id"])
         os.makedirs(os.path.join(dest, "scans"), exist_ok=True)
         fd, tmp = tempfile.mkstemp(suffix=".tar.gz", dir=self.replicas_dir)
@@ -1736,6 +1845,7 @@ class PortalController:
         with self._lock:
             cache = dict(self._cache)
             nodes_snapshot = list(self.nodes)
+            rep_err = dict(self._rep_err)
         regions = {}
         total_used = 0
         total_fs_total = 0
@@ -1774,7 +1884,8 @@ class PortalController:
                 "version": c.get("version"), "hostname": c.get("hostname"),
                 "last_poll": n.get("last_poll"), "last_sync": n.get("last_sync"),
                 "last_scan_at": last_scan or None,
-                "last_error": n.get("last_error") or c.get("error") or "",
+                # 폴링 오류 우선, 없으면 마지막 복제 오류(다음 복제 성공 전까지 유지)
+                "last_error": n.get("last_error") or c.get("error") or rep_err.get(n["id"], ""),
                 "used_bytes": used, "storages": st,
                 "active_scans": int(ov.get("active_scans") or 0),
                 "fs_total_bytes": fs_total, "fs_used_bytes": fs_used,

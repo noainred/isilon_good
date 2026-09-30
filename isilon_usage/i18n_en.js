@@ -174,7 +174,9 @@
     "사용 안 함": "Disabled", "열기 ↗": "Open ↗", "▶ 스캔 시작": "▶ Start scan", "🔒 스캔 시작": "🔒 Start scan",
     "집계 진행률": "Aggregation", "구버전": "Outdated", "반복 동작 중": "repeating",
     "엔진": "Engine", "Engine": "Engine", "새 스캔 시작 — 조사할 디렉터리 지정": "New Scan — pick a directory to survey",
-    "마지막 갱신: 방금": "Last updated: just now"
+    "마지막 갱신: 방금": "Last updated: just now",
+    "포탈이 이 노드 상태를 마지막으로 받은 시각 — 오래되면 표시 값이 실제와 다를 수 있습니다":
+      "When the portal last received this node's status — if old, the values shown may differ from the node"
   };
 
   var LANG = "ko";

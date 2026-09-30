@@ -352,8 +352,150 @@ def _test_node_scan_all_dedupe() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _test_poll_not_blocked_by_replication() -> None:
+    """현장 회귀(GM2): 엣지는 '완료'인데 포탈은 '스캔 중'·옛 용량으로 수 시간 머묾.
+
+    원인 — 폴링과 복제가 한 스레드·한 in-flight 로 묶여, 큰 완료 DB 복제가 도는 동안 그 노드의
+    폴링이 멈췄다. 가짜 엣지에서 복제 응답을 4초 늦추고, 복제가 도는 도중 엣지 상태를 '완료'로
+    바꿔 포탈 캐시가 복제 끝나기 전에 반영되는지 본다.
+    """
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import urlparse, parse_qs
+    state = {"status": "discovering"}
+
+    def meta_tar():
+        meta = {"hostname": "gm2", "version": "x", "scans": [],
+                "overall": {"roots": [{"scan_id": 11, "root_path": "/mnt/h", "status": state["status"],
+                                       "scanned_bytes": 1}]}}
+        b = io.BytesIO()
+        with tarfile.open(fileobj=b, mode="w:gz") as tf:
+            d = json.dumps(meta).encode()
+            ti = tarfile.TarInfo("meta.json")
+            ti.size = len(d)
+            tf.addfile(ti, io.BytesIO(d))
+        return b.getvalue()
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            since = float(parse_qs(urlparse(self.path).query).get("since", ["0"])[0])
+            if since < portalmod.FAR_FUTURE:
+                time.sleep(4.0)                       # 큰 DB 복제 흉내
+            body = meta_tar()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    d = tempfile.mkdtemp(prefix="portal_decouple_")
+    pc = portalmod.PortalController(d)
+    try:
+        pc.upsert_node({"id": "gm2", "url": "http://127.0.0.1:%d" % srv.server_address[1], "token": "T"})
+        pc.poll_every, pc.tick = 0.3, 0.1
+
+        def st():
+            return (((pc._cache.get("gm2") or {}).get("overall") or {}).get("roots") or [{}])[0].get("status")
+
+        pc.start()
+        t0 = time.time()
+        while "gm2" not in pc._rep_inflight and time.time() - t0 < 5:   # 첫 폴링 후 복제 시작
+            time.sleep(0.05)
+        assert "gm2" in pc._rep_inflight, "복제가 시작되지 않음"
+        assert st() == "discovering", st()
+        state["status"] = "done"                      # 엣지에서 스캔 완료
+        flip = time.time()
+        while st() != "done" and time.time() - flip < 2.5:
+            time.sleep(0.05)
+        assert st() == "done", "복제(4초)가 도는 동안 폴링이 막혀 상태가 반영되지 않음"
+        assert "gm2" in pc._rep_inflight, "복제가 이미 끝남 — 분리 검증이 무의미"
+        print("[portal] 복제 중에도 폴링 계속(상태 %.1f초 만에 반영) OK" % (time.time() - flip))
+    finally:
+        pc.stop()
+        srv.shutdown()
+        srv.server_close()
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def _test_rep_due_policy() -> None:
+    """복제 시점 판정(_rep_due): 주기는 '마지막 복제 시도' 기준, 새 완료 스캔은 즉시(간격·백오프).
+
+    회귀: 예전엔 last_sync(받은 완료 스캔의 finished_at 워터마크)를 주기 기준으로 써서, 마지막 완료
+    후 30분만 지나면 매 틱(5초)마다 복제가 돌았다(+ since 정수 절단으로 마지막 DB 를 매번 재전송).
+    """
+    d = tempfile.mkdtemp(prefix="portal_repdue_")
+    try:
+        pc = portalmod.PortalController(d)
+        pc.upsert_node({"id": "n1", "url": "http://10.0.0.9:8765", "token": "T",
+                        "unit": "minute", "every": 30, "mode": "both"})
+        now = time.time()
+        fin = now - 3 * 3600 + 0.123                    # 3시간 전 완료(이미 복제됨)
+        n = pc._get("n1")
+        n["last_sync"] = fin
+
+        def cache(online=True, finished=fin, status="done"):
+            pc._cache["n1"] = {"online": online, "overall": {"roots": [
+                {"status": status, "finished_at": finished}]}}
+
+        due = lambda: pc._rep_due(n, now)  # noqa: E731
+        cache()
+        pc._rep_at["n1"] = now - 60
+        assert not due(), "완료 후 주기가 지났다고 매 틱 복제하면 안 됨(마지막 시도 1분 전)"
+        pc._rep_at["n1"] = now - 31 * 60
+        assert due(), "복제 주기(30분) 경과 → 복제"
+        cache(online=False)
+        assert not due(), "오프라인 노드는 복제하지 않음"
+        # 새로 완료된 스캔(finished_at > 워터마크) → 주기를 기다리지 않되, 직전 시도 후 60초는 쉼
+        cache(finished=now - 5)
+        pc._rep_at["n1"] = now - 10
+        assert not due(), "직전 시도 10초 전 — 재시도 간격 전"
+        pc._rep_at["n1"] = now - 61
+        assert due(), "새 완료 스캔 → 즉시 복제"
+        cache(finished=now - 5, status="sizing")
+        assert not due(), "진행 중 스캔은 완료로 치지 않음"
+        # 연속 실패 백오프: 2회 실패 → 240초
+        cache(finished=now - 5)
+        pc._rep_fail["n1"] = 2
+        pc._rep_at["n1"] = now - 200
+        assert not due(), "실패 2회 → 240초 백오프"
+        pc._rep_at["n1"] = now - 241
+        assert due()
+        pc._rep_fail.clear()
+        # 'poll' 모드는 복제하지 않음
+        assert not pc._rep_due(dict(n, mode="poll"), now)
+
+        # 복제 오류는 다음 폴링 성공에 지워지지 않고, 다음 복제 성공 때까지 화면에 남는다
+        def boom(_n):
+            raise OSError("disk full")
+        pc._replicate = boom  # type: ignore[assignment]
+        pc._replicate_one("n1")
+        assert pc._rep_fail["n1"] == 1
+        ov = next(x for x in pc.overview()["nodes"] if x["id"] == "n1")
+        assert "replicate: disk full" in ov["last_error"], ov["last_error"]
+        pc._replicate = lambda _n: now  # type: ignore[assignment]
+        pc._replicate_one("n1")
+        assert "n1" not in pc._rep_fail and not pc._rep_err, (pc._rep_fail, pc._rep_err)
+        assert pc._get("n1")["last_sync"] == now
+        assert pc.overview()["nodes"][0]["last_error"] == ""
+        # 복제는 성공했는데 워터마크가 그 완료 스캔을 못 넘음(엣지가 안 보냄) → 백오프(60초 헛복제 방지)
+        cache(finished=now + 100)
+        pc._replicate_one("n1")
+        assert pc._rep_fail.get("n1") == 1, pc._rep_fail
+        pc._replicate = lambda _n: now + 100  # type: ignore[assignment]
+        pc._replicate_one("n1")
+        assert "n1" not in pc._rep_fail, pc._rep_fail          # 워터마크가 넘어서면 해소
+        print("[portal] 복제 시점 판정(주기·새 완료 즉시·백오프·오류 유지·무진전 백오프) OK")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     _test_merge_scan_lists()
+    _test_rep_due_policy()
+    _test_poll_not_blocked_by_replication()
     _test_log_popup_pos()
     _test_replica_dir()
     _test_node_stop_all()
@@ -397,6 +539,20 @@ def main() -> int:
 
         # 5) 동기화(폴링 + 복제) 동기 실행
         pc._sync_one("dc-test", True)
+
+        # 5b) 재전송 회귀: 방금 받은 완료 DB 는 다음 복제에서 다시 오지 않아야 한다
+        #     (예전엔 since 를 정수로 잘라 보내 finished_at(소수) > since 가 참 → 매번 통째 재전송)
+        rep_scans = os.path.join(portal_data, "replicas", "dc-test", "scans")
+        got = sorted(os.listdir(rep_scans))
+        assert got, "복제된 DB 없음"
+        for f in got:
+            os.remove(os.path.join(rep_scans, f))
+        n0 = pc._get("dc-test")
+        pc._replicate(n0)
+        assert not os.listdir(rep_scans), "이미 받은 완료 DB 가 다시 전송됨(since 절단)"
+        n0["last_sync"] = 0.0                                # 워터마크를 되돌리면 다시 받는다
+        n0["last_sync"] = pc._replicate(n0)
+        assert sorted(os.listdir(rep_scans)) == got, os.listdir(rep_scans)
 
         # 6) 글로벌 롤업
         ov = pc.overview()
