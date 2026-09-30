@@ -581,7 +581,62 @@ def run_claim_fairness_case() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def run_claim_cost_case() -> None:
+    """claim 비용 회귀 방지.
+
+    1.99.30 에서 fold 깊이 이상 행을 1개씩 claim 하게 바꾸자 claim 이 행 수만큼 늘었고, claim 쿼리가
+    (전용 인덱스 없이) 이미 발견된 행을 전부 훑고 지나가 1회 비용이 행 수에 비례했다 → 깊이 4 디렉터리가
+    많은 NAS 에서 10배+ 느려짐(측정: 1.6만 디렉터리 2.7초 → 26.4초, 현장 13대 17시간째 미완료).
+    ① claim 쿼리가 전용 인덱스를 쓰는지(실행계획) ② 가벼운 fold 루트가 많을 때 claim 횟수가
+    행 수에 비례해 폭증하지 않는지 — 시간이 아니라 결정적 지표로 확인한다.
+    """
+    tmp = tempfile.mkdtemp(prefix="isilon_claimcost_")
+    try:
+        dbp = os.path.join(tmp, "plan.db")
+        dbmod.init_db(dbp)
+        c = dbmod.connect(dbp)
+        try:
+            plan = " ".join(str(tuple(r)) for r in c.execute(
+                "EXPLAIN QUERY PLAN SELECT id, path, depth FROM directories "
+                "WHERE run_id=? AND status='pending' ORDER BY depth ASC, id ASC LIMIT ?", (1, 500)))
+        finally:
+            c.close()
+        assert "idx_dir_run_pending" in plan, ("claim 쿼리가 전용 인덱스를 안 씀", plan)
+
+        root = os.path.join(tmp, "t")
+        for a in range(5):
+            for b in range(4):
+                for cc in range(10):
+                    for d in range(10):          # 깊이 4 = fold 루트 2,000개(각 1파일, 가벼움)
+                        p = os.path.join(root, "a%d" % a, "b%d" % b, "c%d" % cc, "d%d" % d)
+                        os.makedirs(p)
+                        _write(os.path.join(p, "f"), 100)
+        exp = _expected_disk_bytes(root)
+        dbp2 = os.path.join(tmp, "s.db")
+        dbmod.init_db(dbp2)
+        sc = Scanner(dbp2, root, workers=8, batch_size=500, fold_depth=4)
+        n = [0]
+        orig = sc._claim_batch
+
+        def counted():
+            r = orig()
+            if r:
+                n[0] += 1
+            return r
+        sc._claim_batch = counted
+        sc.run()
+        got, _, rows = _root_totals(dbp2)
+        assert got == exp, ("합계 불일치", got, exp)
+        # 1개씩 claim 하면 ≈ 행 수(2,226)회. 공정 분배(보이는 목록의 1/워커수)면 수백 회 이하.
+        assert n[0] < rows / 4, ("claim 횟수 폭증(행마다 claim?)", n[0], rows)
+        print("[claim-cost] OK  claim 쿼리 전용 인덱스 사용 · 디렉터리 %d개에 claim %d회(행당 아님) · 합계 정확"
+              % (rows, n[0]))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main() -> int:
+    run_claim_cost_case()
     run_fold_overflow_case()
     run_fold_overflow_resume_case()
     run_claim_fairness_case()

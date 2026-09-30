@@ -75,6 +75,10 @@ CREATE INDEX IF NOT EXISTS idx_dir_run_depth   ON directories(run_id, depth);
 CREATE INDEX IF NOT EXISTS idx_dir_run_parent  ON directories(run_id, parent_id);
 CREATE INDEX IF NOT EXISTS idx_dir_run_status  ON directories(run_id, status);
 CREATE INDEX IF NOT EXISTS idx_dir_run_total   ON directories(run_id, total_bytes);
+-- 탐색 claim 전용: WHERE run_id=? AND status='pending' ORDER BY depth, id 를 인덱스 순서 그대로 앞에서
+-- k개만 읽게 한다. 이게 없으면 (run_id, depth) 인덱스로 이미 발견된 행을 전부 훑고 지나가야 해서 claim
+-- 1회 비용이 발견된 행 수에 비례했다(측정: 50만 행에서 52ms — 수백만 행 NAS 에선 claim 만으로 수십 시간).
+CREATE INDEX IF NOT EXISTS idx_dir_run_pending ON directories(run_id, status, depth);
 
 CREATE TABLE IF NOT EXISTS resource_samples (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,

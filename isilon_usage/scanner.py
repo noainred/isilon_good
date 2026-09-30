@@ -784,25 +784,17 @@ class Scanner:
             return None if self._disc_active == 0 else []
 
     def _fair_share(self, rows):
-        """한 번의 claim 에서 이 워커가 가져갈 몫(워커 간 균등 분배).
+        """한 번의 claim 에서 이 워커가 가져갈 몫 = 보이는 대기 목록(최대 batch_size)의 1/워커수.
 
-        - fold 루트·넘김 행(깊이 ≥ fold_depth)은 하나하나가 무거우므로 1개씩만 가져간다.
-          예전엔 최대 batch_size(기본 500)개를 한 워커가 선점해 나머지 워커가 놀았다
-          (재현: fold 루트 40개를 8워커 중 1개가 전부 순차 처리).
-        - 가벼운(얕은) 행과 무거운 행이 섞이면 가벼운 것까지만 가져간다(무거운 건 다음 claim 에서 1개씩).
-        - 프론티어가 한 배치보다 작으면 워커 수로 나눠 가져간다(꼬리 구간 독점 방지).
-        프론티어가 큰 동안은 예전처럼 batch_size 만큼 묶어 가져가 claim 오버헤드를 줄인다.
+        한 워커가 목록을 통째로 선점해 나머지 워커가 노는 것을 막는다(재현: fold 루트 40개를 8워커 중
+        1개가 전부 처리). 항상 (n-1)/n 을 남기므로 목록이 작든 크든 워커 전원이 나눠 갖는다.
+
+        (1.99.30 의 'fold 깊이 이상은 1개씩' 규칙은 뺐다: 깊이 4 디렉터리가 수만~수백만인 일반 NAS 에서
+         claim 횟수가 수백 배로 늘고 claim 은 _dlock 안에서 직렬이라 스캔이 크게 느려졌다 — 측정: 1.6만
+         디렉터리 트리 2.7초 → 26.4초. 무거운 행 하나의 비용은 fold 예산이 이미 묶는다.)
         """
-        if self.fold_depth:
-            k = next((i for i, r in enumerate(rows) if int(r["depth"]) >= self.fold_depth), None)
-            if k == 0:
-                return rows[:1]
-            if k is not None:
-                rows = rows[:k]
-        if len(rows) < self.batch_size:
-            n = max(1, int(self.workers))
-            rows = rows[:max(1, -(-len(rows) // n))]
-        return rows
+        n = max(1, int(self.workers))
+        return rows[:max(1, -(-len(rows) // n))]
 
     def _discover_worker(self, widx: int = 0) -> None:
         while not self._stopped():
