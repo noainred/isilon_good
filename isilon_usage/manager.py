@@ -11,19 +11,32 @@ manager.db 에는 각 스캔의 "요약 한 줄"이 들어가 전체를 한눈�
 스캐너가 진행하면서 manager.db 의 해당 행을 주기적으로 갱신한다.
 """
 
-from __future__ import annotations
+from typing import Dict, Optional
 
 import os
 import re
+import secrets
+import shutil
 import socket
+import sys
 import time
 
 from . import db as dbmod
 
 
-DEFAULT_DATA_DIR = "isilon_data"
+# 모든 영속 데이터/설정의 기본 위치 — 절대경로로 고정해 '실행 위치'나 '코드 업그레이드'
+# 와 무관하게 항상 같은 곳에 저장한다(업그레이드 시 설정 유실 방지). --data-dir 로 변경 가능.
+DEFAULT_DATA_DIR = "/data/isilon_usage"
 MANAGER_DB_NAME = "manager.db"
 SCANS_SUBDIR = "scans"
+
+# 레거시(이전 기본/예시) data-dir — 기본 위치로 설정을 1회 이관해 업그레이드 보존.
+LEGACY_DATA_DIRS = (
+    "/var/lib/isilon_usage", "/var/lib/isilon_portal",
+    "isilon_data", "isilon_portal_data",
+)
+# 이관 대상은 '설정'만(스캔/복제 DB 는 재생성 가능하므로 옮기지 않는다).
+MIGRATE_CONFIG_FILES = ("settings.json", "portal_nodes.json")
 
 
 MANAGER_SCHEMA = """
@@ -69,6 +82,37 @@ def scans_dir(data_dir: str) -> str:
     return os.path.join(data_dir, SCANS_SUBDIR)
 
 
+def migrate_legacy_config(data_dir: str) -> None:
+    """업그레이드로 설정이 사라지지 않도록, 기본 data-dir 로 레거시 설정을 1회 복사한다.
+
+    - 기본(canonical) data-dir 일 때만 동작한다(사용자가 직접 지정한 경로는 건드리지 않음).
+    - 새 위치에 그 설정이 아직 없을 때만 레거시에서 복사한다(비파괴: 원본은 남긴다).
+    - 베스트에포트 — 어떤 오류도 기동을 막지 않는다.
+    """
+    try:
+        target = os.path.abspath(data_dir)
+        if target != os.path.abspath(DEFAULT_DATA_DIR):
+            return
+        os.makedirs(target, exist_ok=True)
+        for fname in MIGRATE_CONFIG_FILES:
+            dst = os.path.join(target, fname)
+            if os.path.exists(dst):
+                continue
+            for legacy in LEGACY_DATA_DIRS:
+                src_dir = os.path.abspath(legacy)
+                if src_dir == target:
+                    continue
+                src = os.path.join(src_dir, fname)
+                if os.path.exists(src):
+                    shutil.copy2(src, dst)
+                    sys.stderr.write(
+                        "[isilon_usage] 설정 이관(업그레이드 보존): %s -> %s\n" % (src, dst)
+                    )
+                    break
+    except OSError:
+        pass
+
+
 def init_manager(data_dir: str) -> str:
     """data-dir 레이아웃과 manager.db 를 준비하고 manager.db 경로를 반환."""
     from . import SCHEMA_VERSION
@@ -87,12 +131,16 @@ def init_manager(data_dir: str) -> str:
 
 
 def make_run_db_path(data_dir: str, root_path: str) -> str:
-    """루트 경로 + 현재 시각으로 per-run DB 파일 경로를 생성."""
+    """루트 경로 + 현재 시각 + 고유 토큰으로 per-run DB 파일 경로를 생성.
+
+    같은 루트를 같은 초에 두 번 시작해도 파일명이 충돌하지 않도록 짧은 난수
+    토큰을 붙인다(충돌 시 두 스캔이 같은 DB 를 공유하는 문제 방지).
+    """
     base = re.sub(r"[^A-Za-z0-9._-]+", "_", root_path.strip("/")) or "root"
     base = base[-60:].strip("_") or "root"
     ts = time.strftime("%Y%m%d-%H%M%S")
-    fname = f"scan_{ts}_{base}.db"
-    return os.path.join(scans_dir(data_dir), fname)
+    token = secrets.token_hex(3)
+    return os.path.join(scans_dir(data_dir), f"scan_{ts}_{token}_{base}.db")
 
 
 # ---------------------------------------------------------------- CRUD
@@ -152,7 +200,7 @@ def list_scans(conn, limit: int = 200) -> list:
     return [dict(r) for r in rows]
 
 
-def pick_default_scan(conn) -> int | None:
+def pick_default_scan(conn) -> Optional[int]:
     """대시보드 기본 표시 대상: 진행 중인 스캔 우선, 없으면 가장 최근."""
     row = conn.execute(
         "SELECT id FROM scans WHERE status IN ('discovering','sizing') "
@@ -164,6 +212,74 @@ def pick_default_scan(conn) -> int | None:
     return int(row["id"]) if row else None
 
 
+def scans_for_root(conn, root_path: str) -> list:
+    """특정 루트의 모든 스캔(오래된→최신). 용량 추세 그래프용."""
+    rows = conn.execute(
+        "SELECT * FROM scans WHERE root_path=? ORDER BY id ASC", (root_path,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_scan(data_dir: str, scan_id: int) -> dict:
+    """스캔의 per-run DB 파일과 관리 DB 행을 삭제한다."""
+    conn = dbmod.connect(manager_db_path(data_dir))
+    try:
+        row = get_scan(conn, scan_id)
+        if row is None:
+            return {"ok": False, "reason": "없는 scan"}
+        db_path = row["db_path"]
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(db_path + suffix)
+            except OSError:
+                pass
+        conn.execute("DELETE FROM scans WHERE id=?", (scan_id,))
+        conn.commit()
+        return {"ok": True, "scan_id": scan_id}
+    finally:
+        conn.close()
+
+
+def prune_scans(data_dir: str, *, keep_per_root: Optional[int] = None,
+                older_than_days: Optional[float] = None,
+                running_ids=None) -> dict:
+    """오래된 스캔을 정리한다.
+
+    keep_per_root: 루트별로 최신 N개만 남기고 나머지 삭제.
+    older_than_days: 그보다 오래된(완료/오류) 스캔 삭제.
+    실행 중(running_ids)인 스캔은 건너뛴다.
+    """
+    running = set(running_ids or [])
+    conn = dbmod.connect(manager_db_path(data_dir))
+    try:
+        rows = conn.execute("SELECT * FROM scans ORDER BY id DESC").fetchall()
+    finally:
+        conn.close()
+
+    to_delete = set()
+    if keep_per_root and keep_per_root > 0:
+        seen: Dict[str, int] = {}
+        for r in rows:
+            rp = r["root_path"]
+            seen[rp] = seen.get(rp, 0) + 1
+            if seen[rp] > keep_per_root:
+                to_delete.add(r["id"])
+    if older_than_days and older_than_days > 0:
+        cutoff = time.time() - older_than_days * 86400
+        for r in rows:
+            ts = r["finished_at"] or r["started_at"] or 0
+            if ts and ts < cutoff and r["status"] in ("done", "error", "paused"):
+                to_delete.add(r["id"])
+
+    deleted = []
+    for sid in to_delete:
+        if sid in running:
+            continue
+        if delete_scan(data_dir, sid).get("ok"):
+            deleted.append(sid)
+    return {"ok": True, "deleted": deleted, "count": len(deleted)}
+
+
 def overall_capacity(conn) -> dict:
     """전체 용량 관리 집계.
 
@@ -171,7 +287,7 @@ def overall_capacity(conn) -> dict:
     골라 합산한다(과거 스캔 중복 합산 방지). 루트별 최신 요약 목록도 함께 준다.
     """
     scans = conn.execute("SELECT * FROM scans ORDER BY id DESC").fetchall()
-    latest_by_root: dict[str, dict] = {}
+    latest_by_root: Dict[str, dict] = {}
     for s in scans:
         rp = s["root_path"]
         if rp not in latest_by_root:  # id 내림차순이므로 처음 본 게 최신
@@ -189,10 +305,13 @@ def overall_capacity(conn) -> dict:
             "phase": s["phase"],
             "scanned_bytes": s.get("scanned_bytes") or 0,
             "total_dirs": s.get("total_dirs") or 0,
+            "discovered_dirs": s.get("discovered_dirs") or 0,
+            "processed_dirs": s.get("processed_dirs") or 0,
             "total_files": s.get("total_files") or 0,
             "fs_total_bytes": s.get("fs_total_bytes") or 0,
             "fs_used_bytes": s.get("fs_used_bytes") or 0,
             "fs_free_bytes": s.get("fs_free_bytes") or 0,
+            "started_at": s.get("started_at"),
             "finished_at": s.get("finished_at"),
             "updated_at": s.get("updated_at"),
         })
