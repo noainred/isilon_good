@@ -2229,8 +2229,8 @@ let _tsAutoTimer = null, _tsBusy = false;
 const TS_COLOR = {ok: "var(--ok)", warn: "var(--warn)", bad: "var(--danger)", info: "var(--accent2)", danger: "var(--danger)"};
 const TS_DOT = {ok: "🟢", warn: "🟠", bad: "🔴", info: "🟡", danger: "🔴"};
 const SEG_LABEL = {
-  readdir: "디렉터리 읽기(NAS)", stat: "파일 stat(NAS)", fold: "하위 합산(NAS)",
-  db: "DB 쓰기/커밋", claim: "일감 가져오기", idle: "유휴(대기)", other: "기타",
+  lock: "공유 락 대기(실측)", readdir: "디렉터리 읽기(NAS 호출 또는 GIL 대기)", stat: "파일 stat(NAS 호출 또는 GIL 대기)",
+  compute: "파일별 집계 계산(파이썬)", db: "DB 쓰기/커밋/체크포인트", claim: "일감 가져오기", idle: "유휴/청크 대기", other: "기타",
 };
 async function tsRun() {
   if (_tsBusy) return;
@@ -2268,14 +2268,22 @@ function tsRender(j) {
   // 워커 구간 분포
   const w = j.workers || {}, tot = w.total || 1;
   let segs = "";
-  ["readdir", "stat", "fold", "db", "claim", "idle", "other"].forEach(k => {
+  ["lock", "readdir", "stat", "compute", "db", "claim", "idle", "other"].forEach(k => {
     if (!w[k]) return;
     const pct = Math.round(w[k] / tot * 100);
     segs += '<div style="margin-bottom:6px;"><div class="sub">' + SEG_LABEL[k] + ' — <b>' + w[k] + '</b>/' + tot + '</div>'
       + '<div class="bar" style="height:12px;"><span style="width:' + pct + '%"></span></div></div>';
   });
   $("tsSegs").innerHTML = segs || '<span class="sub">워커 없음(집계 단계이거나 유휴).</span>';
-  $("tsSegNote").innerHTML = '동시 워커 ' + (j.active_workers || 0) + ' / 설정 ' + (j.configured_workers || 0) + '개';
+  const _sc = j.scanner || {}, _lk = _sc.lock || {}, _ck = _sc.checkpoint || {};
+  $("tsSegNote").innerHTML = '동시 워커 ' + (j.active_workers || 0) + ' / 설정 ' + (j.configured_workers || 0) + '개'
+    + ' <span class="sub">(구간은 표본 3회 합산 · 프레임 기반 추정이라 NAS 대기와 GIL 대기를 구분하지 못함 — 락 대기만 실측)</span>'
+    + (_lk.acquisitions != null ? '<div class="sub" style="margin-top:6px;">스캐너 실측 — 락 대기 <b>' + (_lk.waiting_now || 0) + '</b>개 · 보유 최대 <b>' + (_lk.hold_max_s || 0).toFixed(2) + 's</b> · 대기 최대 <b>' + (_lk.wait_max_s || 0).toFixed(2) + 's</b>'
+      + ' · 체크포인트 최근 <b>' + Math.round(_ck.last_ms || 0) + 'ms</b>' + (_ck.busy_streak ? ' <span style="color:var(--warn)">busy 연속 ' + _ck.busy_streak + '회(읽기가 WAL 회수를 막음 — backoff 중)</span>' : '')
+      + ' · 청크 나눔 ' + (_sc.sharing ? '<b>켜짐</b>' : '꺼짐') + ' (stat ' + (_sc.stat_us_ema || 0) + 'µs/파일)'
+      + ((_sc.worker_errors || []).length ? '<br><span style="color:var(--danger)">워커 오류: ' + escHtml(_sc.worker_errors.join("; ")) + '</span>' : '')
+      + '</div>' : '')
+    + (j.children ? '<div class="sub" style="margin-top:4px;">자식 프로세스 ' + j.children.count + '개 · CPU ' + j.children.cpu_pct + '% · RSS ' + fmtBytes(j.children.rss || 0) + '</div>' : '');
   // 처리량/진행
   let aggHtml = "";
   if (j.aggregating) {     // 집계(용량 합산) 단계 — 탐색 워커가 없어 속도/워커가 0인 게 정상
@@ -2288,7 +2296,8 @@ function tsRender(j) {
   }
   $("tsRates").innerHTML = aggHtml +
     '디렉터리 <b>' + Math.round((j.aggregating ? j.rate_agg : j.rate_dirs) || 0) + '</b>/초 · 파일 <b>' + Math.round(j.rate_files || 0) + '</b>/초<br>'
-    + '하트비트(진행 갱신) <b>' + (j.heartbeat_age || 0).toFixed(1) + 's</b> 전<br>'
+    + '하트비트(진행 갱신) <b>' + (j.heartbeat_age || 0).toFixed(1) + 's</b> 전'
+    + (j.advance_age != null ? ' · 마지막 전진(파일/디렉터리 수 증가) <b>' + (j.advance_age).toFixed(1) + 's</b> 전' : '') + '<br>'
     + '처리완료 <b>' + fmtNum(j.discovered || 0) + '</b> · 대기(추정) <b>' + fmtNum(j.pending_est || 0) + '</b>개'
     + (j.aggregating ? ' · 집계 <b>' + fmtNum(j.agg_done || 0) + '</b>/' + fmtNum(j.agg_total || 0) : '') + '<br>'
     + 'DB ' + fmtBytes(j.db_bytes || 0) + ' (WAL ' + fmtBytes(j.wal_bytes || 0) + ') · 디스크 여유 ' + fmtBytes(j.disk_free || 0);
@@ -2960,14 +2969,30 @@ let pieHit = [];         // 캔버스 클릭 히트테스트용 슬라이스 각
 const PIE_COLORS = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181",
                     "#008300", "#9085e9", "#e66767"];
 
+// /api/topdirs 요청 공유: 파이(loadPie)와 상위 디렉터리(loadTopDirs)가 같은 조건이면 한 요청을 같이 쓰고,
+// 같은 URL 의 느린 요청이 끝나기 전에 또 보내지 않는다. 늦게 온 응답은 요청 순번(seq)으로 버린다 —
+// 이전 스캔/경로의 응답이 새 화면을 덮지 않게. (브라우저가 요청을 끊어도 서버의 SQLite 실행은 취소되지 않는다.)
+const _tdInflight = new Map();
+function fetchTopDirsShared(url) {
+  let pr = _tdInflight.get(url);
+  if (!pr) {
+    pr = fetch(url, {cache: "no-store"}).then(r => r.json());
+    _tdInflight.set(url, pr);
+    pr.then(() => _tdInflight.delete(url), () => _tdInflight.delete(url));
+  }
+  return pr;
+}
+let _pieSeq = 0, _topSeq = 0;
 async function loadPie() {
   if (selectedScan == null) return;
   const under = piePath.length ? piePath[piePath.length - 1] : null;
   const p = new URLSearchParams({scan: String(selectedScan), rel: "1",
                                  sort: "size", order: "desc"});
   if (under) p.set("under", String(under.id));
+  const seq = ++_pieSeq;
   try {
-    const j = await (await fetch("/api/topdirs?" + p.toString(), {cache: "no-store"})).json();
+    const j = await fetchTopDirsShared("/api/topdirs?" + p.toString());
+    if (seq !== _pieSeq) return;     // 그 사이 조건이 바뀜 — 늦은 응답은 버린다
     renderPie(j);
   } catch (e) { /* 폴링 중 일시 오류 무시 */ }
 }
@@ -3138,8 +3163,10 @@ async function loadTopDirs() {
   const p = new URLSearchParams({scan: String(selectedScan), sort: topSort,
                                  order: topOrder, rel: String(topRel)});
   if (under) p.set("under", String(under.id));
+  const seq = ++_topSeq;
   try {
-    const j = await (await fetch("/api/topdirs?" + p.toString(), {cache: "no-store"})).json();
+    const j = await fetchTopDirsShared("/api/topdirs?" + p.toString());
+    if (seq !== _topSeq) return;     // 조건이 바뀐 뒤 도착한 응답은 무시
     renderTopDirs(j);
   } catch (e) { /* 폴링 중 일시 오류는 무시 */ }
 }

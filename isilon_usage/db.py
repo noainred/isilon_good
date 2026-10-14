@@ -145,6 +145,11 @@ CREATE TABLE IF NOT EXISTS seen_inodes (
 """
 
 
+# 일반 DB 쓰기의 잠금 대기(ms). 스캐너의 WAL 체크포인트만 호출 동안 0 으로 낮췄다가 복구한다
+# (scanner._checkpoint_locked) — 전역으로 줄이지 않는다.
+BUSY_TIMEOUT_MS = 30000
+
+
 def connect(db_path: str, *, timeout: float = 30.0) -> sqlite3.Connection:
     """스레드별/용도별로 호출하는 SQLite 연결 팩토리.
 
@@ -156,7 +161,7 @@ def connect(db_path: str, *, timeout: float = 30.0) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA busy_timeout=%d" % BUSY_TIMEOUT_MS)
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
@@ -192,6 +197,8 @@ def init_db(db_path: str) -> None:
         ensure_column(conn, "top_files", "atime", "REAL")
         # 집계(sizing) 행/초 — 스캐너 자체 측정(진단 API 의 짧은 표본이 0 으로 보이는 문제 보완)
         ensure_column(conn, "scan_runs", "agg_rate", "REAL NOT NULL DEFAULT 0")
+        # 마지막으로 파일/디렉터리 수가 실제로 늘어난 시각(진행 갱신 시각과 구분 — 정체 판정용)
+        ensure_column(conn, "scan_runs", "advanced_at", "REAL")
         conn.execute(f"PRAGMA user_version={int(SCHEMA_VERSION)}")
         conn.commit()
     finally:

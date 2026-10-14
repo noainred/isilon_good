@@ -207,6 +207,163 @@ def run_write_db() -> None:
         shutil.rmtree(base, ignore_errors=True)
 
 
+# ---- R5 회귀: 분할·진행 보고·시간상자·워커 실패 구분 ----
+_BOOM_MARK = None
+_ORIG_SCAN_SUBTREE = pscan.scan_subtree
+
+
+def _boom_scan_subtree(path, *a, **k):
+    """모듈 레벨(피클 가능) — 특정 경로의 작업 단위만 예외로 실패시킨다(fork 자식이 상속)."""
+    if _BOOM_MARK and (path.endswith(_BOOM_MARK) or ("/%s/" % _BOOM_MARK) in path):
+        raise RuntimeError("주입 실패: " + path)
+    return _ORIG_SCAN_SUBTREE(path, *a, **k)
+
+
+def run_split_deep_chain() -> None:
+    """R5 회귀: 깊은 공통 경로(체인) 뒤의 독립 작업이 재귀 단위로 분배되는지 + 분할 목표가 최초 자식 수
+    (procs0)에 묶이지 않는지. 예전엔 펼친 부모(shallow)까지 단위 수로 세어 체인 31단에서 멈췄다(재귀 1개)."""
+    base = tempfile.mkdtemp(prefix="iu_ps_")
+    try:
+        chain = os.path.join(base, "chain")
+        d = chain
+        for i in range(40):
+            d = os.path.join(d, "c%02d" % i)
+        for j in range(16):
+            leaf = os.path.join(d, "d%02d" % j)
+            os.makedirs(leaf)
+            for f in range(3):
+                with open(os.path.join(leaf, "f%d" % f), "w") as fh:
+                    fh.write("x" * 10)
+        units = pscan._split_units([chain], 8)
+        rec = [u for u in units if u[2]]
+        assert len(rec) >= 16, ("체인 뒤 독립 작업 미분배", len(rec), len(units))
+        # 루트 자식 1개(a) 아래 x·y 각각 8개: 예전엔 목표=min(processes, 자식 1개)×4=4 라 y 가 통째로 한 단위
+        root2 = os.path.join(base, "r2")
+        for top in ("x", "y"):
+            for j in range(8):
+                leaf = os.path.join(root2, "a", top, "s%d" % j)
+                os.makedirs(leaf)
+                with open(os.path.join(leaf, "f"), "w") as fh:
+                    fh.write("y" * 20)
+        units2 = pscan._split_units([os.path.join(root2, "a")], 8)
+        rec2 = {u[0] for u in units2 if u[2]}
+        assert os.path.join(root2, "a", "y") not in rec2 and len(rec2) >= 16, (len(rec2), sorted(rec2)[:4])
+        r = pscan.parallel_scan(root2, processes=8, size_mode="apparent")
+        rb, rf, rd = _reference(root2)
+        assert r["ok"] and r["units"] >= 16 and (r["total_bytes"], r["total_files"], r["total_dirs"]) == (rb, rf, rd), r
+        print("[split-deep-chain] OK  체인 40단 뒤 잎 16개 → 재귀 단위 %d개 · 자식 1개 루트도 %d단위(합계 정확)"
+              % (len(rec), r["units"]))
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def run_progress_reports() -> None:
+    """R5 회귀: 작업 단위가 끝나기 전에도(큰 디렉터리 안에서) 파일 수/바이트/현재 경로를 보고하는지 —
+    scan_subtree/threaded/shallow 모두. parallel_scan 의 on_progress 에 워커 보고·실패 수가 실린다."""
+    import queue
+    base = tempfile.mkdtemp(prefix="iu_ps_")
+    try:
+        big = os.path.join(base, "big")
+        os.makedirs(big)
+        for i in range(5000):
+            with open(os.path.join(big, "f%04d" % i), "w") as fh:
+                fh.write("z" * 10)
+
+        def _collect(fn, *a):
+            q = queue.Queue()
+            pscan._PROG_Q = q
+            pscan._PROG_LAST[0] = 0.0
+            try:
+                fn(*a)
+            finally:
+                pscan._PROG_Q = None
+            out = []
+            while True:
+                try:
+                    out.append(q.get_nowait())
+                except queue.Empty:
+                    return out
+        it = _collect(pscan.scan_subtree, big, "apparent")
+        assert it and it[0][2] == 4096 and it[-1][2] == 5000 and it[-1][1] == big, [(x[2], x[4]) for x in it]
+        it = _collect(pscan._scan_subtree_threaded, big, "apparent", 2)
+        assert it and it[-1][2] == 5000, [(x[2], x[4]) for x in it]
+        it = _collect(pscan._scan_shallow, big, "apparent")
+        assert it and it[0][2] == 4096, [(x[2], x[4]) for x in it]
+        payloads = []
+        r = pscan.parallel_scan(base, processes=2, size_mode="apparent", on_progress=payloads.append)
+        assert r["ok"] and r["complete"] and r["failed_units"] == [], r
+        last = payloads[-1]
+        assert last["done"] == last["units"] and last["files"] == r["total_files"] == 5000, last
+        assert "workers" in last and "failed" in last and "bytes" in last, last
+        print("[progress-reports] OK  단위 완료 전 보고(4096파일 시점·종료 시점) · on_progress 에 파일/바이트/워커/실패 수")
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def run_worker_failure() -> None:
+    """R6 회귀: 워커(작업 단위) 예외를 0바이트 성공으로 합치지 않고 failed_units 로 구분하며,
+    write_run_db 는 'error'(부분 집계) + 사유를 기록한다."""
+    global _BOOM_MARK
+    from isilon_usage import db as dbmod
+    base = tempfile.mkdtemp(prefix="iu_ps_")
+    try:
+        _mk(base)
+        rb, rf, rd = _reference(base)
+        _BOOM_MARK = "t2"
+        pscan.scan_subtree = _boom_scan_subtree
+        try:
+            r = pscan.parallel_scan(base, processes=2, size_mode="apparent")
+        finally:
+            pscan.scan_subtree = _ORIG_SCAN_SUBTREE
+            _BOOM_MARK = None
+        assert r["ok"] and not r["complete"] and r["failed_units"], r.get("failed_units")
+        assert "주입 실패" in r["failed_units"][0]["error"], r["failed_units"][0]
+        assert r["total_files"] < rf, ("실패분이 합계에 섞임", r["total_files"], rf)
+        t2 = next(t for t in r["per_top"] if t["path"].endswith("t2"))
+        assert t2["failed_units"] >= 1 and t2["files"] == 0, t2
+        dbf = os.path.join(base, "fail.db")
+        rid = pscan.write_run_db(dbf, base, r, size_mode="apparent")
+        conn = dbmod.connect(dbf)
+        try:
+            run = conn.execute("SELECT status, error FROM scan_runs WHERE id=?", (rid,)).fetchone()
+            row = conn.execute("SELECT error FROM directories WHERE run_id=? AND path LIKE '%/t2'", (rid,)).fetchone()
+        finally:
+            conn.close()
+        assert run["status"] == "error" and "워커 실패" in (run["error"] or ""), tuple(run)
+        assert row is not None and "부분 집계" in (row["error"] or ""), row
+        print("[worker-failure] OK  실패 단위 %d개 → failed_units·합계 제외·run status=error(부분 집계)·행 오류 표시"
+              % len(r["failed_units"]))
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def run_deadline_checks() -> None:
+    """R5 회귀: 시간상자(max_seconds)가 큰 디렉터리 안에서도(4096파일 단위 검사) 적용돼 부분 결과로
+    빨리 돌아온다. (커널 안에서 막힌 NFS 호출은 시간 검사로 끊지 못한다 — 여기선 검사하지 않는다.)"""
+    import time as _t
+    base = tempfile.mkdtemp(prefix="iu_ps_")
+    orig = pscan._entry_bytes
+    try:
+        big = os.path.join(base, "big")
+        os.makedirs(big)
+        for i in range(20000):
+            with open(os.path.join(big, "f%05d" % i), "w") as fh:
+                fh.write("q")
+
+        def slow(st, mode):           # 파일당 0.2ms → 단위 하나 4초(fork 자식이 상속)
+            _t.sleep(0.0002)
+            return orig(st, mode)
+        pscan._entry_bytes = slow
+        t0 = _t.time()
+        r = pscan.parallel_scan(base, processes=2, max_seconds=0.5, size_mode="apparent")
+        dt = _t.time() - t0
+        assert r["ok"] and dt < 3.0 and r["total_files"] < 20000, (dt, r.get("total_files"))
+        print("[deadline] OK  시간상자 0.5초 → %.1f초 만에 부분 결과(파일 %d/20000)" % (dt, r["total_files"]))
+    finally:
+        pscan._entry_bytes = orig
+        shutil.rmtree(base, ignore_errors=True)
+
+
 if __name__ == "__main__":
     run_correctness()
     run_threads_per_proc()
@@ -214,4 +371,8 @@ if __name__ == "__main__":
     run_node_mounts()
     run_bad_path()
     run_write_db()
+    run_split_deep_chain()
+    run_progress_reports()
+    run_worker_failure()
+    run_deadline_checks()
     print("모든 테스트 통과 ✅")

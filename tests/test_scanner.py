@@ -635,7 +635,285 @@ def run_claim_cost_case() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+class _TripAfter:
+    """is_set() 이 n번 호출된 뒤 True — 탐색 도중 결정적 중단(재개 테스트용 가짜 stop_event)."""
+
+    def __init__(self, n):
+        self.n = n
+        self.c = 0
+
+    def is_set(self):
+        self.c += 1
+        return self.c > self.n
+
+    def set(self):
+        self.n = -1
+
+    def clear(self):
+        self.n = 10 ** 9
+
+    def wait(self, t=None):
+        return False
+
+
+def _make_flat(base: str, dirs: int, files: int, size: int = 100) -> None:
+    for a in range(dirs):
+        d = os.path.join(base, "d%03d" % a) if dirs > 1 else base
+        os.makedirs(d, exist_ok=True)
+        for f in range(files):
+            _write(os.path.join(d, "f%05d.bin" % f), size)
+
+
+def run_checkpoint_nonblocking_case() -> None:
+    """R1 회귀: 오래된 스냅샷을 쥔 읽기 트랜잭션(대시보드 조회 흉내)이 있어도 WAL 체크포인트가
+    공유 락(_dlock) 안에서 기다리지 않는다(예전: busy_timeout 30초까지 워커 전체 정체).
+
+    ① 읽기를 스캔 내내 유지해도 스캔 시간·락 최대 대기가 늘지 않는다.
+    ② busy 면 다음 시도는 '완료 시각' 기준 + backoff(직후 재실행 없음), 읽기 해제 후 WAL 회수.
+    ③ 디스크 여유 가드는 체크포인트와 무관하게 동작(자동 일시정지 사유 기록).
+    """
+    d = tempfile.mkdtemp(prefix="iu_ckpt_")
+    try:
+        tree = os.path.join(d, "tree")
+        _make_flat(tree, 12, 120)
+        db = os.path.join(d, "s.db")
+        dbmod.init_db(db)
+        # ① 읽기 스냅샷 고정(BEGIN + SELECT → 해제 전까지 WAL 프레임이 남는다)
+        rd = dbmod.connect(db)
+        rd.execute("BEGIN")
+        rd.execute("SELECT count(*) FROM directories").fetchall()
+        sc = Scanner(db, tree, workers=4)
+        t0 = time.time()
+        sc.run()
+        wall = time.time() - t0
+        lk = sc._dlock.snapshot()
+        ck = sc._ckpt
+        assert wall < 2.0, "읽기 트랜잭션 때문에 스캔이 정체(%.2fs)" % wall
+        assert lk["wait_max_s"] < 1.0, lk
+        assert ck["count"] >= 1 and ck["busy_count"] >= 1 and ck["last_ms"] < 1000, ck
+        # ② 완료 기준 주기 + backoff + 회수
+        conn = dbmod.connect(db)
+        try:
+            dbmod.add_scan_log(conn, sc.run_id, "test", "새 프레임")   # 스냅샷보다 새 커밋
+            conn.commit()
+            sc.wal_ckpt_every = 5.0
+            n0 = ck["busy_streak"]
+            sc._checkpoint_locked(conn)
+            assert ck["last_busy"] == 1 and ck["busy_streak"] == n0 + 1, ck
+            gap1 = sc._next_ckpt_at - time.time()
+            assert gap1 >= 5.0 * 0.9, ("직후 재실행 방지(완료 기준 주기)", gap1)
+            sc._checkpoint_locked(conn)
+            gap2 = sc._next_ckpt_at - time.time()
+            assert gap2 > gap1 * 1.5, ("busy 연속 시 backoff", gap1, gap2)
+            rd.rollback()                               # 읽기 해제
+            sc._checkpoint_locked(conn)                 # 회수(로그 한 줄이 새 WAL 프레임이 된다)
+            conn.commit()
+            assert ck["last_busy"] == 0 and ck["busy_streak"] == 0, ck
+            sc._checkpoint_locked(conn)                 # 한 번 더 — 쓰기 없음 → WAL 0
+            assert ck["last_busy"] == 0 and _size(db + "-wal") == 0, ("읽기 해제 후 WAL 미회수", ck)
+            msgs = [r[0] for r in conn.execute(
+                "SELECT message FROM scan_log WHERE run_id=? AND message LIKE 'wal_checkpoint%'",
+                (sc.run_id,))]
+            assert any("busy" in m for m in msgs) and any("회수" in m for m in msgs), msgs
+            # busy_timeout 은 체크포인트 뒤 원래 값으로 복구돼 있어야 한다
+            assert int(conn.execute("PRAGMA busy_timeout").fetchone()[0]) == dbmod.BUSY_TIMEOUT_MS
+        finally:
+            conn.close()
+            rd.close()
+        # ③ 디스크 여유 가드(체크포인트 결과와 무관하게 주기 점검)
+        db2 = os.path.join(d, "g.db")
+        dbmod.init_db(db2)
+        sc2 = Scanner(db2, tree, workers=2, min_free_bytes=10 ** 18)
+        sc2.run()
+        c2 = dbmod.connect(db2)
+        try:
+            st = dbmod.get_run(c2, sc2.run_id)["status"]
+        finally:
+            c2.close()
+        assert st == "paused" and "디스크 공간 부족" in (sc2._stop_reason or ""), (st, sc2._stop_reason)
+        print("[ckpt-nonblocking] OK  읽기 유지 중 스캔 %.2fs(락 최대대기 %.3fs) · busy→backoff(%.0f→%.0f초) · "
+              "해제 후 WAL 회수 · 디스크 가드 유지" % (wall, lk["wait_max_s"], gap1, gap2))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def _size(p: str) -> int:
+    try:
+        return os.path.getsize(p)
+    except OSError:
+        return 0
+
+
+def run_resume_stats_dedup_case() -> None:
+    """R3 회귀: 중단→재개 후 집계 리포트(나이/소유자)·Top-N 이 중복되지 않는다.
+
+    예전엔 청크마다 공유 집계에 바로 더해, 중단 시점의 부분 통계가 저장되고 재개 후 그 디렉터리를
+    다시 훑어 또 더해졌다(파일 25개 → age 통계 26~50개, 루트 합계는 정상). 중단 지점 44가지 전부 검사.
+    """
+    d = tempfile.mkdtemp(prefix="iu_statsdup_")
+    try:
+        tree = os.path.join(d, "tree")
+        _make_flat(tree, 1, 25)
+        bad = []
+        for n in range(1, 45):
+            db = os.path.join(d, "r%d.db" % n)
+            run_scan(db, tree, workers=1, with_monitor=False, stop_event=_TripAfter(n))
+            run_scan(db, tree, workers=1, with_monitor=False, resume=True)
+            c = dbmod.connect(db)
+            try:
+                root = c.execute("SELECT total_files FROM directories WHERE depth=0").fetchone()[0]
+                age = c.execute("SELECT COALESCE(SUM(files),0) FROM scan_stats WHERE kind='age'").fetchone()[0]
+                own = c.execute("SELECT COALESCE(SUM(files),0) FROM scan_stats WHERE kind='owner'").fetchone()[0]
+                tp = c.execute("SELECT COUNT(*), COUNT(DISTINCT path) FROM top_files").fetchone()
+            finally:
+                c.close()
+            if not (root == 25 and age == 25 and own == 25 and tp[0] == tp[1] == 25):
+                bad.append((n, root, age, own, tuple(tp)))
+        assert not bad, ("재개 후 통계 중복/누락", bad[:5])
+        print("[resume-stats-dedup] OK  중단 지점 44가지 모두 age/owner/Top-N = 25 (중복 0)")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def run_worker_exception_case() -> None:
+    """R4 회귀: 워커 스레드의 예외(OSError 아님)가 '정상 완료'로 덮이지 않는다.
+
+    예전엔 워커가 죽어도 나머지가 끝나면 집계로 넘어가 status=done 이 됐고, 죽은 워커가 맡은
+    디렉터리(claimed)는 0바이트로 '완료'돼 파일이 조용히 빠졌다(재현: 240개 중 40개 누락).
+    """
+    d = tempfile.mkdtemp(prefix="iu_wexc_")
+    orig = Scanner._safe_stat
+    try:
+        tree = os.path.join(d, "tree")
+        _make_flat(tree, 12, 20)
+        db = os.path.join(d, "s.db")
+        dbmod.init_db(db)
+
+        def boom(self, entry):
+            if "d005" in entry.path:
+                raise RuntimeError("주입: 워커 내부 예외")
+            return orig(self, entry)
+        Scanner._safe_stat = boom
+        sc = Scanner(db, tree, workers=4)
+        raised = None
+        try:
+            sc.run()
+        except RuntimeError as exc:
+            raised = str(exc)
+        assert raised and "워커 예외" in raised, raised
+        c = dbmod.connect(db)
+        try:
+            run = dbmod.get_run(c, sc.run_id)
+            done_rows = c.execute("SELECT COUNT(*) FROM directories WHERE status='done'").fetchone()[0]
+            left = c.execute("SELECT COUNT(*) FROM directories WHERE status IN ('pending','claimed')").fetchone()[0]
+        finally:
+            c.close()
+        assert run["status"] == "error" and "워커 예외" in (run["error"] or ""), (run["status"], run["error"])
+        assert done_rows == 0 and left >= 1, ("미완료 행이 완료로 둔갑", done_rows, left)
+        print("[worker-exception] OK  워커 예외 → status=error(사유 기록), 미완료 행 %d개 보존(done 0)" % left)
+    finally:
+        Scanner._safe_stat = orig
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def run_chunk_sharing_case() -> None:
+    """R3b: 거대 평면 폴더(파일 수천~수십만) 하나도 유휴 워커가 파일 청크를 나눠 stat 한다.
+
+    stat 지연(NAS 흉내 0.3ms)이 있을 때 워커 8 이 1 보다 뚜렷이 빠르고 합계는 같아야 한다.
+    지연이 없으면(로컬 SSD) 나눔이 켜지지 않는다(GIL 경쟁만 늘어 되레 느림 — 측정으로 확정).
+    """
+    d = tempfile.mkdtemp(prefix="iu_share_")
+    orig = Scanner._safe_stat
+    try:
+        tree = os.path.join(d, "tree")
+        _make_flat(os.path.join(tree, "flat"), 1, 12000, size=10)
+        ref = None
+        times = {}
+
+        def slow(self, e):
+            time.sleep(0.0003)
+            return orig(self, e)
+        for w in (1, 8):
+            Scanner._safe_stat = slow
+            db = os.path.join(d, "w%d.db" % w)
+            dbmod.init_db(db)
+            sc = Scanner(db, tree, workers=w)
+            t0 = time.time()
+            sc.run()
+            times[w] = time.time() - t0
+            c = dbmod.connect(db)
+            try:
+                tot = tuple(c.execute("SELECT total_bytes, total_files FROM directories WHERE depth=0").fetchone())
+            finally:
+                c.close()
+            if ref is None:
+                ref = tot
+            assert tot == ref and tot[1] == 12000, (w, tot, ref)
+            if w == 8:
+                assert sc.diag_snapshot()["sharing"], sc.diag_snapshot()
+        assert times[8] < times[1] / 2.5, ("평면 폴더 병렬화 효과 없음", times)
+        Scanner._safe_stat = orig                    # 지연 없음 → 나눔 꺼짐
+        db = os.path.join(d, "local.db")
+        dbmod.init_db(db)
+        sc = Scanner(db, tree, workers=8)
+        sc.run()
+        snap = sc.diag_snapshot()
+        assert not snap["sharing"] and snap["lock"]["acquisitions"] > 0 and snap["advanced_at"] > 0, snap
+        print("[chunk-sharing] OK  평면 12,000파일(stat 0.3ms) 워커 1: %.2fs → 8: %.2fs · 합계 동일 · 로컬(지연 없음)은 나눔 꺼짐"
+              % (times[1], times[8]))
+    finally:
+        Scanner._safe_stat = orig
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def run_synthetic_pb_case() -> None:
+    """R8: 합성 메타데이터(수 PiB own_bytes)로 실제 집계 경로를 돌려 합계 계산·DB 저장이 정확한지.
+
+    실제 PB급 NAS 성능 검증이 아니다 — 정수 범위/집계 SQL/JSON 직렬화만 확인한다.
+    (SQLite INTEGER 64비트 = 최대 약 9.2EB. JS Number 는 2^53(약 9PiB) 초과 시 끝자리 정밀도를 잃는다.)
+    """
+    d = tempfile.mkdtemp(prefix="iu_pb_")
+    try:
+        PIB = 1024 ** 5
+        for own in (2 * PIB, 6 * PIB):              # 자식 3개 × own → 합계 6PiB / 18PiB (+루트 1PiB)
+            db = os.path.join(d, "pb%d.db" % (own // PIB))
+            dbmod.init_db(db)
+            conn = dbmod.connect(db)
+            try:
+                rid = dbmod.create_run(conn, "/synthetic", backend="native", size_mode="disk", scanner_pid=os.getpid())
+                conn.execute("INSERT INTO directories(run_id,parent_id,path,name,depth,status,own_bytes,file_count)"
+                             " VALUES(?,NULL,'/synthetic','synthetic',0,'discovered',?,1000)", (rid, PIB))
+                root_id = conn.execute("SELECT id FROM directories WHERE run_id=?", (rid,)).fetchone()[0]
+                for i in range(3):
+                    conn.execute("INSERT INTO directories(run_id,parent_id,path,name,depth,status,own_bytes,file_count)"
+                                 " VALUES(?,?,?,?,1,'discovered',?,?)",
+                                 (rid, root_id, "/synthetic/c%d" % i, "c%d" % i, own, 10 ** 9))
+                conn.commit()
+                sc = Scanner(db, "/synthetic", resume=True)
+                sc.run_id = rid
+                sc._aggregate(conn)
+                conn.commit()
+                row = conn.execute("SELECT total_bytes, total_files, status FROM directories WHERE id=?",
+                                   (root_id,)).fetchone()
+                exp = PIB + 3 * own
+                assert row["total_bytes"] == exp and row["total_files"] == 1000 + 3 * 10 ** 9, tuple(row)
+                import json as _json
+                from isilon_usage.server import build_status
+                st = build_status(conn, None, top=0)
+                assert int(_json.loads(_json.dumps(st))["run"]["processed_dirs"]) == 4, st["run"]
+            finally:
+                conn.close()
+        print("[synthetic-pb] OK  합성 7PiB·19PiB 집계 합계 정확(정수) · DB 저장 · JSON 직렬화 (실제 NAS 검증 아님)")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
+    run_checkpoint_nonblocking_case()
+    run_resume_stats_dedup_case()
+    run_worker_exception_case()
+    run_chunk_sharing_case()
+    run_synthetic_pb_case()
     run_claim_cost_case()
     run_fold_overflow_case()
     run_fold_overflow_resume_case()

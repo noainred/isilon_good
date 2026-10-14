@@ -418,10 +418,6 @@ def list_top_dirs(conn, run_id, *, under_id=None, rel_depth=None,
             parent = dict(urow)
             under_depth = int(urow["depth"])
             under_path = urow["path"]
-            like = (under_path.replace("\\", "\\\\")
-                    .replace("%", "\\%").replace("_", "\\_")).rstrip("/")
-            where.append("path LIKE ? ESCAPE '\\'")
-            params.append(like + "/%")
     else:
         rrow = conn.execute(
             "SELECT " + _cols + " FROM directories WHERE run_id=? AND parent_id IS NULL "
@@ -429,12 +425,26 @@ def list_top_dirs(conn, run_id, *, under_id=None, rel_depth=None,
         ).fetchone()
         if rrow is not None:
             parent = dict(rrow)
-    if rel_depth:
-        try:
+    try:
+        rel = int(rel_depth or 0)
+    except (TypeError, ValueError):
+        rel = 0
+    if rel == 1 and parent is not None:
+        # 직속 자식: parent_id 인덱스(idx_dir_run_parent)로 바로 찾는다. 예전엔 path LIKE + depth 로
+        # 그 깊이의 '전체 행'을 훑었다(측정: 30만 행 합성 DB 에서 직속 1,000개 조회 44ms → 0.6ms).
+        where.append("parent_id=?")
+        params.append(int(parent["id"]))
+    else:
+        if under_path is not None:
+            # 하위 전체/손자 이하: 경로 범위 조건 — UNIQUE(run_id, path) 인덱스로 하위 구간만 읽는다.
+            # (LIKE ... ESCAPE 는 인덱스를 못 써 run 의 전체 행을 훑었다.) '/'(0x2F) 다음 문자가 '0'(0x30)
+            # 이므로 base+'/' 로 시작하는 모든 경로는 base+'/' 와 base+'0' 사이에 있다.
+            base = under_path.rstrip("/")
+            where.append("path > ? AND path < ?")
+            params.extend([base + "/", base + "0"])
+        if rel:
             where.append("depth=?")
-            params.append(under_depth + int(rel_depth))
-        except (TypeError, ValueError):
-            pass
+            params.append(under_depth + rel)
 
     params.append(int(limit))
     rows = conn.execute(
@@ -1750,6 +1760,7 @@ class ScanController:
                     stop_event=stop, with_monitor=True,
                     manager_db=mgrmod.manager_db_path(self.data_dir),
                     manager_scan_id=scan_id,
+                    on_scanner=_reg_scanner,
                 )
             except Exception as exc:
                 try:
@@ -1765,10 +1776,37 @@ class ScanController:
                     self._scans.pop(scan_id, None)
                 self._on_scan_finished(scan_id)
 
+        def _reg_scanner(sc):
+            with self._lock:
+                rec = self._scans.get(scan_id)
+                if rec is not None:
+                    rec["scanner"] = sc
+
         t = threading.Thread(target=worker, name=f"scan-{scan_id}", daemon=True)
         with self._lock:
-            self._scans[scan_id] = {"stop": stop, "thread": t, "path": path}
+            self._scans[scan_id] = {"stop": stop, "thread": t, "path": path, "engine": "threads"}
         t.start()
+
+    def live_scanner(self, scan_id=None):
+        """실행 중인 threads 스캔의 Scanner 인스턴스(진단 스냅샷용). 없으면 None."""
+        with self._lock:
+            if scan_id is not None:
+                rec = self._scans.get(scan_id)
+                return rec.get("scanner") if rec else None
+            for rec in self._scans.values():
+                if rec.get("scanner") is not None:
+                    return rec["scanner"]
+        return None
+
+    def scan_engine(self, scan_id=None):
+        """실행 중인 스캔의 엔진('threads'/'pscan') — 진단이 자식 프로세스 부하를 볼지 결정."""
+        with self._lock:
+            if scan_id is not None:
+                rec = self._scans.get(scan_id)
+                return rec.get("engine") if rec else None
+            for rec in self._scans.values():
+                return rec.get("engine")
+        return None
 
     def _launch_pscan(self, scan_id, db_path, path, size_mode,
                       processes=None, threads=None) -> None:
@@ -1812,12 +1850,31 @@ class ScanController:
                                        stop_event=mon_stop).start()
 
                 def _prog(p):
+                    # parallel_scan 이 ≥1초 간격으로 호출(워커 보고를 모아서) — 작업 단위 완료 때만이
+                    # 아니라 큰 디렉터리 안에서도 파일 수/바이트/현재 경로가 올라온다.
+                    wl = p.get("workers") or []
+                    wdirs = [w.get("dir") or "" for w in wl]
                     try:
                         c = dbmod.connect(mdb)
                         mgrmod.update_scan(c, scan_id, processed_dirs=int(p.get("done", 0)),
                                            total_dirs=int(p.get("units", 0)),
-                                           discovered_dirs=int(p.get("units", 0)))
+                                           discovered_dirs=int(p.get("units", 0)),
+                                           total_files=int(p.get("files", 0) or 0),
+                                           scanned_bytes=int(p.get("bytes", 0) or 0),
+                                           current_dir=(wdirs[0] if wdirs else None))
                         c.commit(); c.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    try:
+                        pc = dbmod.connect(db_path)
+                        dbmod.update_run(pc, run_id, total_files=int(p.get("files", 0) or 0),
+                                         scanned_bytes=int(p.get("bytes", 0) or 0),
+                                         processed_dirs=int(p.get("done", 0)),
+                                         total_dirs=int(p.get("units", 0)),
+                                         active_workers=len(wl),
+                                         worker_dirs=json.dumps(wdirs, ensure_ascii=False),
+                                         current_dir=(wdirs[0] if wdirs else None))
+                        pc.commit(); pc.close()
                     except Exception:  # noqa: BLE001
                         pass
 
@@ -1835,8 +1892,13 @@ class ScanController:
                     fs_used = fs_total - (v.f_bfree * v.f_frsize)
                 except OSError:
                     pass
+                # 워커 실패(예외)가 있으면 부분 집계 → 'error' 로 끝낸다(0바이트 성공으로 합치지 않음)
+                failed = list(res.get("failed_units") or [])
+                fin_status = "error" if failed else "done"
+                fin_err = (("워커 실패 %d개(부분 집계): " % len(failed)) + "; ".join(
+                    "%s: %s" % (f.get("path"), f.get("error")) for f in failed[:3])) if failed else None
                 c = dbmod.connect(mdb)
-                mgrmod.update_scan(c, scan_id, status="done", phase="done",
+                mgrmod.update_scan(c, scan_id, status=fin_status, phase=fin_status, error=fin_err,
                                    scanned_bytes=int(res["total_bytes"]),
                                    total_files=int(res["total_files"]),
                                    total_dirs=int(res["total_dirs"]),

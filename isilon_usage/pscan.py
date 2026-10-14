@@ -31,6 +31,35 @@ def _entry_bytes(st, size_mode: str) -> int:
     return getattr(st, "st_blocks", 0) * 512
 
 
+# ---- 워커(자식 프로세스) → 부모 진행 보고 ----
+# 부모가 parallel_scan 에서 큐를 만들어 모듈 전역에 두면 fork 로 뜬 자식이 그대로 물려받는다
+# (spawn 방식이면 None 이라 보고를 건너뛴다 — 동작엔 영향 없음). 작업 단위가 끝날 때만이 아니라
+# 큰 디렉터리 안에서도 REPORT_FILES 파일 또는 REPORT_SECS 초마다 (pid, 단위 경로, 파일 수, 바이트,
+# 현재 디렉터리) 를 보내, 부모가 워커별 진행/현재 경로를 화면에 배치로 반영한다.
+_PROG_Q = None
+_PROG_LAST = [0.0]
+REPORT_FILES = 4096
+REPORT_SECS = 2.0
+
+
+def _maybe_report(unit: str, files: int, nbytes: int, cur_dir: str, force: bool = False) -> None:
+    q = _PROG_Q
+    if q is None:
+        return
+    now = time.time()
+    if not force and (now - _PROG_LAST[0]) < REPORT_SECS:
+        return
+    _PROG_LAST[0] = now
+    try:
+        q.put_nowait((os.getpid(), unit, int(files), int(nbytes), cur_dir, now))
+    except Exception:  # noqa: BLE001 — 큐가 차거나 닫혔으면 이번 보고는 버린다
+        pass
+
+
+def _expired(deadline: float) -> bool:
+    return bool(deadline) and time.time() >= deadline
+
+
 def scan_subtree(path: str, size_mode: str = "disk", per_file_work: int = 0,
                  threads: int = 1, recursive: bool = True, deadline: float = 0.0) -> tuple:
     """path 아래 전체(자기 포함)를 재귀로 훑어 (path, bytes, files, dirs, errors).
@@ -47,7 +76,7 @@ def scan_subtree(path: str, size_mode: str = "disk", per_file_work: int = 0,
     결과 + files_per_sec 만 쓰고 합계는 버린다).
     """
     if not recursive:
-        return _scan_shallow(path, size_mode)
+        return _scan_shallow(path, size_mode, deadline)
     if threads and threads > 1 and not per_file_work:
         return _scan_subtree_threaded(path, size_mode, threads, deadline)
     total_bytes = 0
@@ -61,6 +90,8 @@ def scan_subtree(path: str, size_mode: str = "disk", per_file_work: int = 0,
             break
         d = stack.pop()
         dirs += 1
+        if (dirs & 255) == 0:
+            _maybe_report(path, files, total_bytes, d)
         try:                                   # 디렉터리 자기 inode 분(du 와 동일)
             dst = os.stat(d, follow_symlinks=False)
             total_bytes += _entry_bytes(dst, size_mode)
@@ -79,12 +110,15 @@ def scan_subtree(path: str, size_mode: str = "disk", per_file_work: int = 0,
                             if per_file_work:          # 파일당 처리 비용 모사(벤치 전용)
                                 for k in range(per_file_work):
                                     acc += k * k
-                            if deadline and (files & 8191) == 0 and time.time() >= deadline:
-                                break                  # 거대 평면 디렉터리 대비
+                            if (files & 4095) == 0:
+                                _maybe_report(path, files, total_bytes, d)   # 거대 평면 디렉터리 안에서도
+                                if deadline and time.time() >= deadline:
+                                    break              # 시간상자(커널 안 NFS 호출은 끊지 못함)
                     except OSError:
                         errors += 1
         except OSError:
             errors += 1
+    _maybe_report(path, files, total_bytes, path, force=True)
     return (path, total_bytes, files, dirs, errors)
 
 
@@ -132,6 +166,11 @@ def _scan_subtree_threaded(path: str, size_mode: str, threads: int,
                             else:
                                 lb += _entry_bytes(e.stat(follow_symlinks=False), size_mode)
                                 lf += 1
+                                if (lf & 4095) == 0:
+                                    with lock:   # 큰 디렉터리 안에서도 진행 보고 + 시간상자
+                                        _maybe_report(path, tot["f"] + lf, tot["b"] + lb, d)
+                                    if deadline and time.time() >= deadline:
+                                        break
                         except OSError:
                             le += 1
             except OSError:
@@ -141,6 +180,8 @@ def _scan_subtree_threaded(path: str, size_mode: str, threads: int,
                 tot["f"] += lf
                 tot["d"] += 1
                 tot["e"] += le
+                if (tot["d"] & 255) == 0:
+                    _maybe_report(path, tot["f"], tot["b"], d)
                 for s in subs:
                     q.put(s)
                     tot["pending"] += 1
@@ -152,6 +193,7 @@ def _scan_subtree_threaded(path: str, size_mode: str, threads: int,
         t.start()
     for t in ts:
         t.join()
+    _maybe_report(path, tot["f"], tot["b"], path, force=True)
     return (path, tot["b"], tot["f"], tot["d"], tot["e"])
 
 
@@ -161,7 +203,7 @@ def _remap(child: str, root: str, node_mount: str) -> str:
     return os.path.join(node_mount, rel) if rel != "." else node_mount
 
 
-def _scan_shallow(path: str, size_mode: str) -> tuple:
+def _scan_shallow(path: str, size_mode: str, deadline: float = 0.0) -> tuple:
     """path 직속 파일만 센다(자식 디렉터리로 내려가지 않음 — 적응형 분할의 '부모' 단위).
 
     자식 디렉터리들은 각각 별도 단위로 재귀 스캔되므로, 부모는 자기 inode + 직속 파일만
@@ -181,6 +223,10 @@ def _scan_shallow(path: str, size_mode: str) -> tuple:
                         st = e.stat(follow_symlinks=False)
                         total_bytes += _entry_bytes(st, size_mode)
                         files += 1
+                        if (files & 4095) == 0:
+                            _maybe_report(path, files, total_bytes, path)
+                            if _expired(deadline):
+                                break
                 except OSError:
                     errors += 1
     except OSError:
@@ -188,18 +234,27 @@ def _scan_shallow(path: str, size_mode: str) -> tuple:
     return (path, total_bytes, files, 1, errors)
 
 
-def _split_units(child_dirs: List[str], procs: int, target_factor: int = 4) -> list:
+def _split_units(child_dirs: List[str], procs: int, target_factor: int = 4,
+                 deadline: float = 0.0) -> list:
     """1단계 자식이 프로세스 수보다 적으면 더 깊이 펼쳐 병렬 단위를 늘린다.
 
     반환: [(scan_path, top_label, recursive)]. 펼친 부모는 recursive=False(직속 파일만),
     그 자식들은 recursive=True(재귀). top_label 은 원래 1단계 자식 — per_top(드릴다운)
     집계가 바뀌지 않게 유지한다. 단위가 잘게 쪼개져 자식 적은 영역의 작업 불균형이
     완화된다(예: 자식 16개 영역도 프로세스를 꽉 채움).
+
+    목표(procs×target_factor)는 **재귀 단위 수**로 센다. 예전엔 펼친 부모(shallow — 직속 파일만,
+    일이 거의 없음)까지 세어, 깊은 공통 경로(a/b/c/…) 뒤에 독립 작업이 많아도 체인을 몇 단
+    펼치고 멈춰 재귀 단위 1개에 일이 몰렸다(재현: 체인 40단 뒤 잎 16개 → 재귀 단위 1개).
+    deadline 이 지나면 더 펼치지 않는다(오토튜닝 시간상자).
     """
     units = [(c, c, True) for c in child_dirs]
     target = max(int(procs) * max(1, int(target_factor)), int(procs))
+    n_rec = len(units)
     i = 0
-    while len(units) < target and i < len(units):
+    while n_rec < target and i < len(units):
+        if _expired(deadline):
+            break
         upath, top, rec = units[i]
         if not rec:
             i += 1
@@ -214,6 +269,7 @@ def _split_units(child_dirs: List[str], procs: int, target_factor: int = 4) -> l
             continue
         units[i] = (upath, top, False)                  # 부모: 직속 파일만
         units.extend((s, top, True) for s in subs)      # 자식: 재귀(top 라벨 유지)
+        n_rec += len(subs) - 1
         i += 1
     return units
 
@@ -253,6 +309,8 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
                     else:
                         total_bytes += _entry_bytes(e.stat(follow_symlinks=False), size_mode)
                         total_files += 1
+                        if (total_files & 4095) == 0 and _expired(deadline):
+                            break                      # 루트 직속 파일이 거대해도 시간상자 준수
                 except OSError:
                     errors += 1
     except OSError as exc:
@@ -261,46 +319,103 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
     total_dirs = 1   # 루트 자신
     per_top = []
     n_units = len(child_dirs)
+    failed_units: list = []     # 워커 실패(예외) — 0바이트 성공으로 합치지 않고 따로 보고한다
+    workers_live: dict = {}     # 단위 경로 → 마지막 진행 보고(파일/바이트/현재 경로/pid/시각)
 
     if child_dirs:
-        from concurrent.futures import ProcessPoolExecutor, as_completed
-        procs0 = max(1, min(int(processes or 1), n_units))
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
         # 적응형 깊이 분할: 1단계 자식이 프로세스보다 적으면 더 깊이 펼쳐 병렬 단위를
         # 늘린다(자식 적은 영역의 작업 불균형 완화). 펼친 부모는 직속 파일만, 자식은
         # 재귀로 스캔 → 누락/중복 없음. per_top 은 원래 1단계 자식(top)으로 합산.
-        units = _split_units(child_dirs, procs0)
+        # 목표는 요청한 프로세스 수 기준이다(예전엔 min(processes, 최초 자식 수) 로 묶어,
+        # 자식이 1~2개인 루트에선 목표 4~8 에서 펼치기를 멈춰 프로세스가 놀았다).
+        units = _split_units(child_dirs, int(processes or 1), deadline=deadline)
         n_units = len(units)
         procs = max(1, min(int(processes or 1), n_units))
         top_acc: dict = {}
-        with ProcessPoolExecutor(max_workers=procs) as ex:
+        global _PROG_Q
+        q = None
+        ex = None
+        try:
+            ctx = multiprocessing.get_context("fork")
+            q = ctx.Queue()
+            _PROG_Q = q                       # fork 자식이 물려받는다
+            try:
+                ex = ProcessPoolExecutor(max_workers=procs, mp_context=ctx)
+            except TypeError:                 # Python 3.6: mp_context 없음(리눅스 기본 fork)
+                ex = ProcessPoolExecutor(max_workers=procs)
+        except (ValueError, AttributeError, OSError):   # fork 불가 환경 — 진행 보고 없이 진행
+            _PROG_Q = None
+            q = None
+            ex = ProcessPoolExecutor(max_workers=procs)
+        try:
             futs = {}
             for j, (upath, top, rec) in enumerate(units):
                 sp = (_remap(upath, root, node_mounts[j % len(node_mounts)])
                       if node_mounts else upath)
                 futs[ex.submit(scan_subtree, sp, size_mode, 0,
-                               tpp if rec else 1, rec, deadline)] = top
-            done = 0
-            for fut in as_completed(futs):
-                top = futs[fut]
+                               tpp if rec else 1, rec, deadline)] = (top, sp)
+            done_n = 0
+            last_prog = 0.0
+            pending = set(futs)
+
+            def _drain():
+                if q is None:
+                    return
+                while True:
+                    try:
+                        pid, unit, f, b, cur, ts = q.get_nowait()
+                    except Exception:  # noqa: BLE001 — 비었거나 닫힘
+                        return
+                    workers_live[unit] = {"pid": pid, "files": f, "bytes": b, "dir": cur, "ts": ts}
+
+            while pending:
+                done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+                _drain()
+                for fut in done:
+                    top, sp = futs[fut]
+                    workers_live.pop(sp, None)
+                    try:
+                        _, b, f, d, e = fut.result()
+                    except Exception as exc:    # noqa: BLE001 — 한 단위 실패가 전체를 막지 않되, 성공으로 위장하지 않는다
+                        failed_units.append({"path": sp, "top": top,
+                                             "error": "%s: %s" % (type(exc).__name__, exc)})
+                        a = top_acc.setdefault(top, [0, 0, 0, 0])
+                        a[3] += 1
+                        done_n += 1
+                        continue
+                    total_bytes += b
+                    total_files += f
+                    total_dirs += d
+                    errors += e
+                    a = top_acc.setdefault(top, [0, 0, 0, 0])
+                    a[0] += b
+                    a[1] += f
+                    a[2] += d
+                    done_n += 1
+                now = time.time()
+                if on_progress and (done or (now - last_prog) >= 1.0):
+                    last_prog = now
+                    live = sorted(workers_live.values(), key=lambda w: w["pid"])
+                    on_progress({"done": done_n, "units": n_units,
+                                 "elapsed": now - t0,
+                                 "files": total_files + sum(w["files"] for w in live),
+                                 "bytes": total_bytes + sum(w["bytes"] for w in live),
+                                 "workers": [{"pid": w["pid"], "dir": w["dir"], "files": w["files"],
+                                              "bytes": w["bytes"]} for w in live],
+                                 "failed": len(failed_units)})
+        finally:
+            ex.shutdown(wait=True)
+            _PROG_Q = None
+            if q is not None:
                 try:
-                    _, b, f, d, e = fut.result()
-                except Exception:           # noqa: BLE001 — 한 단위 실패가 전체를 막지 않음
-                    b = f = d = 0
-                    e = 1
-                total_bytes += b
-                total_files += f
-                total_dirs += d
-                errors += e
-                a = top_acc.setdefault(top, [0, 0, 0])
-                a[0] += b
-                a[1] += f
-                a[2] += d
-                done += 1
-                if on_progress:
-                    on_progress({"done": done, "units": n_units,
-                                 "elapsed": time.time() - t0})
+                    q.close()
+                except Exception:  # noqa: BLE001
+                    pass
         for top, v in top_acc.items():
-            per_top.append({"path": top, "bytes": v[0], "files": v[1], "dirs": v[2]})
+            per_top.append({"path": top, "bytes": v[0], "files": v[1], "dirs": v[2],
+                            "failed_units": v[3]})
     else:
         procs = 1
 
@@ -315,6 +430,9 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
         "dirs_per_sec": (total_dirs / elapsed) if elapsed > 0 else 0,
         "files_per_sec": (total_files / elapsed) if elapsed > 0 else 0,
         "per_top": per_top,
+        # 워커 실패(예외로 끝난 단위) — 합계에 들어가지 않은 부분. 비어 있지 않으면 결과는 '부분'이다.
+        "failed_units": failed_units,
+        "complete": not failed_units,
     }
 
 
@@ -351,6 +469,14 @@ def write_run_db(db_path: str, root: str, result: dict, *,
               "own_bytes,total_bytes,total_files,scanned_at")
     _ph = "?,?,?,?,?,?,?,?,?,?,?,?"
 
+    # 워커 실패가 있으면 '완료'가 아니라 'error'(부분 집계)로 저장한다 — 0바이트 성공으로 위장하지 않는다.
+    failed = list(result.get("failed_units") or [])
+    status = "error" if failed else "done"
+    err_text = None
+    if failed:
+        err_text = "워커 실패 %d개(부분 집계): " % len(failed) + "; ".join(
+            "%s: %s" % (f.get("path"), f.get("error")) for f in failed[:3])
+
     dbmod.init_db(db_path)
     conn = dbmod.connect(db_path)
     try:
@@ -358,19 +484,19 @@ def write_run_db(db_path: str, root: str, result: dict, *,
             conn.execute(
                 "INSERT INTO scan_runs (root_path,status,phase,backend,size_mode,started_at,"
                 "updated_at,finished_at,total_dirs,processed_dirs,discovered_dirs,scanned_bytes,"
-                "total_files,workers,hostname,app_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (root, "done", "done", "pscan", size_mode, started, now, now, total_dirs,
+                "total_files,workers,hostname,app_version,error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (root, status, status, "pscan", size_mode, started, now, now, total_dirs,
                  len(per_top), total_dirs, total_bytes, total_files,
-                 int(result.get("processes", 0)), socket.gethostname(), __version__))
+                 int(result.get("processes", 0)), socket.gethostname(), __version__, err_text))
             run_id = conn.execute("SELECT id FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()[0]
         else:                       # 미리 만든 run(sizing) 을 갱신
             conn.execute(
-                "UPDATE scan_runs SET status='done',phase='done',backend='pscan',size_mode=?,"
+                "UPDATE scan_runs SET status=?,phase=?,backend='pscan',size_mode=?,"
                 "updated_at=?,finished_at=?,total_dirs=?,processed_dirs=?,discovered_dirs=?,"
-                "scanned_bytes=?,total_files=?,workers=?,hostname=?,app_version=? WHERE id=?",
-                (size_mode, now, now, total_dirs, len(per_top), total_dirs, total_bytes,
+                "scanned_bytes=?,total_files=?,workers=?,hostname=?,app_version=?,error=? WHERE id=?",
+                (status, status, size_mode, now, now, total_dirs, len(per_top), total_dirs, total_bytes,
                  total_files, int(result.get("processes", 0)), socket.gethostname(),
-                 __version__, run_id))
+                 __version__, err_text, run_id))
             conn.execute("DELETE FROM directories WHERE run_id=?", (run_id,))
         conn.execute(
             "INSERT INTO directories (%s) VALUES (%s)" % (_dcols, _ph),
@@ -381,11 +507,13 @@ def write_run_db(db_path: str, root: str, result: dict, *,
         ).fetchone()[0]
         for c in per_top:
             cp = c.get("path", "")
+            nfail = int(c.get("failed_units", 0) or 0)
             conn.execute(
-                "INSERT INTO directories (%s) VALUES (%s)" % (_dcols, _ph),
+                "INSERT INTO directories (%s,error) VALUES (%s,?)" % (_dcols, _ph),
                 (run_id, root_id, cp, os.path.basename(cp.rstrip("/")) or cp, 1, "done",
                  int(c.get("files", 0)), max(0, int(c.get("dirs", 0)) - 1),
-                 int(c.get("bytes", 0)), int(c.get("bytes", 0)), int(c.get("files", 0)), now))
+                 int(c.get("bytes", 0)), int(c.get("bytes", 0)), int(c.get("files", 0)), now,
+                 ("워커 실패 %d개 — 부분 집계(이 아래 일부 미포함)" % nfail) if nfail else None))
         conn.commit()
         return run_id
     finally:

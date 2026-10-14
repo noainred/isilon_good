@@ -622,8 +622,109 @@ def _check_duplicate_scan_guard() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _check_troubleshoot_live() -> None:
+    """진단 신뢰성(R9): 실행 중 스캔의 진단에 '실측' 블록이 붙는지 — 계측 락(대기/보유), 체크포인트 통계,
+    마지막 전진 시각, 청크 나눔, 워커 구간에 'lock' 카테고리. pscan 은 진행 중에 파일 수/현재 경로가
+    작업 단위 완료 전에도 올라오는지(주기 배치 보고) 확인한다.
+    """
+    import shutil
+    import time as _t
+
+    from isilon_usage import db as dbmod
+    from isilon_usage import manager as mgrmod
+    from isilon_usage import pscan as pscanmod
+    from isilon_usage import scanner as scanmod
+    from isilon_usage.server import ScanController
+
+    def _wait_status(data, sid, want, timeout=60):
+        row = None
+        for _ in range(int(timeout / 0.1)):
+            mc = dbmod.connect(mgrmod.manager_db_path(data))
+            row = mgrmod.get_scan(mc, sid); mc.close()
+            if row and row["status"] in want:
+                return row
+            _t.sleep(0.1)
+        return row
+
+    d = tempfile.mkdtemp(prefix="isilon_ts_live_")
+    orig_stat = scanmod.Scanner._safe_stat
+    orig_eb = pscanmod._entry_bytes
+    try:
+        tree = os.path.join(d, "tree")
+        for a in range(6):
+            sub = os.path.join(tree, "d%d" % a)
+            os.makedirs(sub)
+            for i in range(400):
+                with open(os.path.join(sub, "f%03d.bin" % i), "wb") as fh:
+                    fh.write(b"x" * 64)
+        data = os.path.join(d, "data")
+        ctl = ScanController(data)
+
+        # 1) threads: stat 을 0.5ms 늦춰 스캔이 진단 표본보다 오래 돌게 한다
+        def slow_stat(self, entry):
+            _t.sleep(0.0005)
+            return orig_stat(self, entry)
+        scanmod.Scanner._safe_stat = slow_stat
+        sid = ctl.start_scan(tree, engine="threads")["scan_id"]
+        got = None
+        for _ in range(100):
+            j = ctl.troubleshoot(sample_sec=0.3)
+            if j.get("running") and (j.get("scanner") or {}).get("lock"):
+                got = j
+                break
+            _t.sleep(0.05)
+        assert got is not None, "실행 중 진단에 스캐너 실측 블록이 없음"
+        sc = got["scanner"]
+        assert "acquisitions" in sc["lock"] and "hold_max_s" in sc["lock"], sc["lock"]
+        assert "count" in sc["checkpoint"] and "busy_streak" in sc["checkpoint"], sc["checkpoint"]
+        assert "sharing" in sc and "stat_us_ema" in sc, sc
+        assert "lock" in got["workers"] and got["engine"] == "threads", (got["workers"], got["engine"])
+        assert got.get("advance_age") is not None, got.get("advance_age")
+        assert "lock_waiting_idents" not in sc, "JSON 직렬화 불가 필드가 남음"
+        json.dumps(got)                                       # 전체가 JSON 으로 나가야 함
+        row = _wait_status(data, sid, ("done", "error"))
+        assert row["status"] == "done", row["status"]
+        scanmod.Scanner._safe_stat = orig_stat
+
+        # 2) pscan: 큰 디렉터리 하나(작업 단위 1개, 파일당 0.5ms → 약 3초)에서 단위가 끝나기 전에
+        #    파일 수가 올라오는지(4,096파일 시점 보고 → ≥1초 간격 on_progress → 관리 DB).
+        tree2 = os.path.join(d, "tree2", "big")
+        os.makedirs(tree2)
+        for i in range(6000):
+            with open(os.path.join(tree2, "g%04d.bin" % i), "wb") as fh:
+                fh.write(b"y" * 8)
+
+        def slow_eb(st, size_mode):
+            _t.sleep(0.0005)
+            return orig_eb(st, size_mode)
+        pscanmod._entry_bytes = slow_eb
+        sid2 = ctl.start_scan(os.path.join(d, "tree2"), engine="pscan")["scan_id"]
+        seen_partial = False
+        for _ in range(300):
+            mc = dbmod.connect(mgrmod.manager_db_path(data))
+            row = mgrmod.get_scan(mc, sid2); mc.close()
+            if row and row["status"] in ("done", "error"):
+                break
+            if row and row["status"] == "sizing" and (row["total_files"] or 0) > 0 \
+                    and (row["processed_dirs"] or 0) < (row["total_dirs"] or 1):
+                seen_partial = True
+                break
+            _t.sleep(0.05)
+        row2 = _wait_status(data, sid2, ("done", "error"))
+        assert row2["status"] == "done", (row2["status"], row2["error"])
+        assert row2["total_files"] == 6000, row2["total_files"]
+        assert seen_partial, "pscan 진행 중에 파일 수가 작업 단위 완료 전에 올라오지 않음"
+        print("[troubleshoot-live] OK  threads 진단에 실측(락 %d회·체크포인트·전진·나눔) · pscan 진행 중 파일 수 배치 보고"
+              % sc["lock"]["acquisitions"])
+    finally:
+        scanmod.Scanner._safe_stat = orig_stat
+        pscanmod._entry_bytes = orig_eb
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     _check_insecure_warning()
+    _check_troubleshoot_live()
     _check_duplicate_scan_guard()
     _check_resume_after_upgrade()
     _check_resume_real()

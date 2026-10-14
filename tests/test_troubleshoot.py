@@ -109,9 +109,21 @@ def run_throughput() -> None:
 def run_verdict() -> None:
     from isilon_usage.troubleshoot import _verdict
     busy = {"readdir": 1, "stat": 5, "fold": 0, "db": 2, "claim": 0, "idle": 0, "other": 0, "total": 8}
-    # dirs/s≈0 + 대기 많음 + 파일 stat 도는 중 → '정상' 아니라 '정체(롱테일)'
+    # dirs/s≈0 + 대기 많음인데 '파일 수가 늘고 있으면'(큰 디렉터리 처리 중) 정체가 아니다 —
+    # 디렉터리 완료/초 0 만으로 정체 판정하지 않는다(1.99.33: 하위가 파일뿐인 행을 처리할 땐 정상).
     lvl, title, _d, _r = _verdict(busy, 0.0, 5000, 2, 229086, 0, 10 ** 11)
-    assert lvl == "warn" and "정체" in title, (lvl, title)
+    assert lvl == "ok" and "진행 중" in title, (lvl, title)
+    # 전진이 없으면(advanced_at 기준 30초 이상 멈춤) 정체
+    lvl1, title1, _, _ = _verdict(busy, 0.0, 5000, 2, 229086, 0, 10 ** 11, advance_age=45.0)
+    assert lvl1 == "warn" and "정체" in title1, (lvl1, title1)
+    lvl1b, title1b, _, _ = _verdict(busy, 0.0, 0, 2, 229086, 0, 10 ** 11)   # 속도 표본도 0
+    assert lvl1b == "warn" and "정체" in title1b, (lvl1b, title1b)
+    # 공유 락 대기 집중(실측) → 그 사실을 제목에
+    lockw = {"lock": 6, "readdir": 1, "stat": 1, "fold": 0, "db": 0, "claim": 0, "idle": 0, "other": 0, "total": 8}
+    lvl1c, title1c, desc1c, _ = _verdict(lockw, 0.0, 100, 2, 229086, 0, 10 ** 11,
+                                         lock={"hold_max_s": 4.0, "wait_max_s": 3.9},
+                                         ckpt={"last_ms": 4000, "busy_streak": 3, "wal_mb": 0.1})
+    assert lvl1c == "warn" and "공유 락 대기" in title1c and "busy 연속 3회" in desc1c, (lvl1c, title1c, desc1c)
     # dirs/s 가 실제로 진행되면 정상
     lvl2, title2, _, _ = _verdict(busy, 50, 8000, 1, 229000, 0, 10 ** 11)
     assert lvl2 == "ok" and "정상" in title2, (lvl2, title2)
@@ -122,7 +134,7 @@ def run_verdict() -> None:
     # 대기 적음 + 유휴 → 거의 끝남(info)
     lvl4, _t, _, _ = _verdict(idlew, 0, 0, 2, 200, 0, 10 ** 11)
     assert lvl4 == "info", lvl4
-    print("[verdict] OK  dirs/s≈0+대기많음=정체(warn), 진행=정상, 유휴+대기=굶주림, 대기적음=거의끝남")
+    print("[verdict] OK  파일 전진 중=정상(진행 중), 전진 없음=정체, 락 대기 집중=실측 경고, 유휴+대기=굶주림, 대기적음=거의끝남")
 
 
 if __name__ == "__main__":

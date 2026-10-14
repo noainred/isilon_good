@@ -36,6 +36,7 @@ from typing import List, Optional, Tuple
 import heapq
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
@@ -61,6 +62,19 @@ STAT_CHUNK = 2000
 # 끝나지 않았다. 넘긴 행(깊이 > fold_depth)은 집계 후 정리돼 결과 DB 는 순수 접기와 같은 모양이다.
 FOLD_BUDGET_ENTRIES = 200_000
 FOLD_BUDGET_SECS = 300.0
+
+# WAL 체크포인트: 공유 락(_dlock) 안에서 '기다리지 않고' 시도한다. 예전엔 busy_timeout(30초)만큼
+# 읽기 트랜잭션이 끝나기를 락을 쥔 채 기다려 워커 전체가 멈췄다(재현: 읽기 4초 유지 → 스캔 정체 +4.1초,
+# 현장은 대시보드 읽기가 계속돼 최대 30초씩 반복). 주기는 '완료 시각' 기준이고 busy 가 이어지면 2배씩
+# 늘린다(최대 WAL_CKPT_MAX) — 대기 직후 또 실행되는 일이 없다.
+WAL_CKPT_EVERY = 30.0
+WAL_CKPT_MAX = 600.0
+# 디스크 여유/DB 크기 가드 점검 주기(초) — 체크포인트 backoff 와 무관하게 유지
+GUARD_EVERY = 30.0
+# 청크 작업 나눔은 stat 이 I/O 대기형(파일당 이 µs 이상)일 때만 켠다. 로컬 SSD 처럼 stat 이 수 µs 면
+# 나눠 봐야 GIL 경쟁만 늘어 되레 느리다(측정: 평면 3만 파일 로컬 — 워커 8 이 1보다 5배 느림).
+# NFS 는 파일당 수십 µs~수백 ms 라 나눔이 켜져 거대 평면 폴더도 워커 수만큼 병렬이 된다.
+SHARE_MIN_STAT_US = 25.0
 
 # 파일 나이(mtime) 버킷 — (상한 일수, 라벨). 마지막은 상한 None(그 이상 전부).
 AGE_BUCKETS = [
@@ -131,23 +145,149 @@ def _local_top(h: list, path: str, eb: int, st) -> None:
 
 
 def _local_accum(ref: float, l_age: dict, l_atime: dict, l_uid: dict, l_ext: dict,
-                 l_size: dict, name: str, st, eb: int) -> None:
-    """한 파일을 로컬 나이/접근나이/소유자/확장자/크기 dict 에 더한다(캡 없음 — 청크라 작음)."""
+                 l_size: dict, name: str, st, eb: int, cb: Optional[int] = None) -> None:
+    """한 파일을 로컬 나이/접근나이/소유자/확장자/크기 dict 에 더한다(캡 없음 — 청크라 작음).
+
+    eb=파일 원본 크기(크기 버킷 키), cb=실제로 더할 용량(하드링크 중복이면 0, 기본 eb).
+    """
+    counted = eb if cb is None else cb
+
     def bump(d, k):
         e = d.get(k)
         if e is None:
-            d[k] = [eb, 1]
+            d[k] = [counted, 1]
         else:
-            e[0] += eb
+            e[0] += counted
             e[1] += 1
     bump(l_age, _age_bucket(ref, st.st_mtime))
     bump(l_atime, _age_bucket(ref, st.st_atime))
     bump(l_uid, str(st.st_uid))
-    bump(l_size, _size_bucket(eb))     # eb=이 파일 크기(비-하드링크는 원본=counted)
+    bump(l_size, _size_bucket(eb))     # 키는 원본 크기, 값은 counted
     ext = os.path.splitext(name)[1].lower() or "(없음)"
     if len(ext) > 24:
         ext = ext[:24]
     bump(l_ext, ext)
+
+
+def _merge_counts(dst: dict, src: dict) -> None:
+    """[bytes, files] dict 병합(캡 없음 — 공유 집계로 갈 때 _accum_merge 가 캡 적용)."""
+    for k, v in src.items():
+        e = dst.get(k)
+        if e is None:
+            dst[k] = [v[0], v[1]]
+        else:
+            e[0] += v[0]
+            e[1] += v[1]
+
+
+def _top_merge_into(h: list, items: list) -> None:
+    """Top-N 후보 힙 items 를 힙 h 에 병합(크기 TOP_FILES_N 유지)."""
+    for it in items:
+        if len(h) < TOP_FILES_N:
+            heapq.heappush(h, it)
+        elif it[0] > h[0][0]:
+            heapq.heapreplace(h, it)
+
+
+class _TimedLock:
+    """진단 계측이 붙은 재진입 락(_dlock 전용).
+
+    with/acquire/release 는 RLock 과 같고, 바깥쪽 획득마다 '대기 시간'과 '보유 시간'을 누적한다
+    (합·최대·횟수). 통계 갱신은 락을 쥔 채 하므로 별도 동기화가 필요 없다. 지금 기다리는 스레드
+    집합(waiting)·보유 여부는 진단 스냅샷용 — 콜스택 함수 이름으로 추측하지 않고 '락 대기 중'을
+    정확히 센다(락 대기는 C 레벨이라 프레임에 안 보인다).
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._owner = None
+        self._depth = 0
+        self._t_acq = 0.0
+        self.waiting: set = set()
+        self.count = 0
+        self.wait_total = 0.0
+        self.wait_max = 0.0
+        self.hold_total = 0.0
+        self.hold_max = 0.0
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        me = threading.get_ident()
+        if self._owner == me:                      # 재진입(소유자만 _owner 를 자기로 둘 수 있다)
+            ok = self._lock.acquire(blocking, timeout)
+            if ok:
+                self._depth += 1
+            return ok
+        self.waiting.add(me)
+        t0 = time.monotonic()
+        try:
+            ok = self._lock.acquire(blocking, timeout)
+        finally:
+            self.waiting.discard(me)
+        if ok:
+            now = time.monotonic()
+            w = now - t0
+            self.count += 1
+            self.wait_total += w
+            if w > self.wait_max:
+                self.wait_max = w
+            self._owner = me
+            self._depth = 1
+            self._t_acq = now
+        return ok
+
+    def release(self) -> None:
+        self._depth -= 1
+        if self._depth == 0:
+            h = time.monotonic() - self._t_acq
+            self.hold_total += h
+            if h > self.hold_max:
+                self.hold_max = h
+            self._owner = None
+        self._lock.release()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.release()
+
+    def held(self) -> bool:
+        return self._owner is not None
+
+    def snapshot(self) -> dict:
+        return {
+            "acquisitions": self.count,
+            "wait_total_s": round(self.wait_total, 3), "wait_max_s": round(self.wait_max, 3),
+            "hold_total_s": round(self.hold_total, 3), "hold_max_s": round(self.hold_max, 3),
+            "waiting_now": len(self.waiting), "held_now": self._owner is not None,
+        }
+
+
+class _DirAcc:
+    """디렉터리(fold 루트 포함) 하나를 처리하는 동안의 누적분 — 완료 확정 시에만 공유 집계에 병합한다.
+
+    파일별 통계(나이/소유자/확장자/크기)·Top-N·새 하드링크 inode·용량/파일 수를 여기 모아 두고,
+    디렉터리 완료 트랜잭션과 함께 공유 집계·DB 에 반영한다. 중단으로 버려지면 통계도 같이
+    버려져, 재개 후 그 디렉터리를 다시 훑어도 통계가 중복되지 않는다(예전엔 청크마다 공유
+    집계에 바로 더해, 중단 시점의 부분 통계가 저장되고 재개 후 또 더해졌다 — 파일 25개가
+    age 통계에선 26~50개). 청크를 다른 워커가 대신 처리할 수 있어 갱신은 _dlock 안에서 한다.
+    """
+    __slots__ = ("bytes", "files", "age", "atime", "uid", "ext", "size", "top",
+                 "new_inodes", "pending", "abandoned")
+
+    def __init__(self) -> None:
+        self.bytes = 0
+        self.files = 0
+        self.age: dict = {}
+        self.atime: dict = {}
+        self.uid: dict = {}
+        self.ext: dict = {}
+        self.size: dict = {}
+        self.top: list = []
+        self.new_inodes: list = []
+        self.pending = 0          # 다른 워커가 대신 처리 중인 청크 수
+        self.abandoned = False    # 중단 등으로 버려짐 — 늦게 끝난 청크는 반영하지 않음
 
 
 class Scanner:
@@ -207,12 +347,31 @@ class Scanner:
         self._seen_inodes: set = set()   # 하드링크(st_nlink>1) 중복 제거용
         # 디렉터리 단위 병렬 탐색용: 단일 RLock 으로 DB(공유 conn)+카운터만 보호하고
         # scandir/stat(느린 NFS I/O)는 락 밖에서 병렬 실행해 데드락 없이 가속.
-        self._dlock = threading.RLock()
+        self._dlock = _TimedLock()   # 대기/보유 시간 계측(진단) 포함
         self._disc_conn = None
         self._disc_active = 0
         self._worker_dirs = {}   # 워커 인덱스 → 현재 보고 있는 디렉터리(병렬 표시용)
         self._last_progress = 0.0
-        self._last_wal_ckpt = 0.0
+        # WAL 체크포인트/가드 스케줄(완료 시각 기준) + 체크포인트 통계(진단 노출)
+        self.wal_ckpt_every = WAL_CKPT_EVERY
+        self.wal_ckpt_max = WAL_CKPT_MAX
+        self.guard_every = GUARD_EVERY
+        self._next_ckpt_at = 0.0
+        self._next_guard_at = 0.0
+        self._ckpt = {"count": 0, "busy_count": 0, "busy_streak": 0, "last_ms": 0.0,
+                      "max_ms": 0.0, "last_busy": 0, "last_at": 0.0, "wal_mb": 0.0, "next_at": 0.0}
+        self._advanced_at = 0.0        # 마지막으로 파일/디렉터리 수가 실제로 늘어난 시각
+        self._adv_col = False          # scan_runs.advanced_at 컬럼 존재 여부(구버전 DB 호환)
+        # 워커 예외 전달: 한 워커가 죽으면 전체를 멈추고 run() 이 status=error 로 끝낸다.
+        self._worker_exc: list = []
+        self._abort = False
+        # 청크 작업 나눔: 거대 평면 폴더(파일 수십만)를 한 워커가 혼자 훑지 않도록, 유휴 워커가
+        # 파일 청크의 stat/집계를 대신한다. 큐는 메모리 제한(워커 수×2 청크).
+        self._chunk_q: Optional["queue.Queue"] = None
+        self._q_cv = threading.Condition()
+        self._idle_workers = 0
+        self._helping = 0
+        self._stat_us_ema = 0.0        # 최근 파일당 stat 소요(µs, EMA) — 나눔 on/off 판단
         # 집계 리포트: 파일 나이/소유자(uid)/확장자별 [bytes, files]. 메모리 누적 후 DB 저장.
         self._stat_age: dict = {}
         self._stat_atime_age: dict = {}   # 마지막 접근(atime) 기준 나이 분포
@@ -245,7 +404,7 @@ class Scanner:
 
     # ------------------------------------------------------------------ utils
     def _stopped(self) -> bool:
-        return self.stop_event.is_set()
+        return self._abort or self.stop_event.is_set()
 
     def _wal_mb(self) -> float:
         """per-run DB 의 현재 WAL 파일 크기(MB). 없으면 0."""
@@ -318,9 +477,11 @@ class Scanner:
             "scanned_bytes": self._scanned_bytes,
             "total_files": self._total_files,
             "error_dirs": self._error_dirs,
-            "active_workers": self._disc_active,   # 지금 동시에 처리 중인 워커 수
+            "active_workers": self._disc_active + self._helping,   # 처리 중(청크 도움 포함) 워커 수
             "elapsed_accum": self._elapsed_accum,
         }
+        if self._adv_col and self._advanced_at:
+            fields["advanced_at"] = self._advanced_at
         try:   # 워커별 현재 디렉터리(병렬 표시용). 탐색 단계에서만 채워짐.
             fields["worker_dirs"] = json.dumps(
                 [p for p in list(self._worker_dirs.values()) if p], ensure_ascii=False)
@@ -354,49 +515,115 @@ class Scanner:
         if (now - self._last_stats_write) > 20.0:
             self._last_stats_write = now
             self._write_stats(conn)
-        # WAL 이 무한정 커지지 않도록 주기적으로 체크포인트(읽기 락이 없을 때 잘림).
-        # 느린 대시보드 조회가 긴 읽기 락을 잡으면 WAL 이 수 GB 까지 부푸는 것을 막는다.
-        if (now - self._last_wal_ckpt) > 30.0:
-            self._last_wal_ckpt = now
+        # WAL 체크포인트: 기다리지 않고 시도(busy 면 다음 주기에 backoff). 아래 참고.
+        if now >= self._next_ckpt_at:
+            self._checkpoint_locked(conn)
+        # 디스크 여유/DB 크기 가드 — 체크포인트 결과와 무관하게 주기적으로
+        if now >= self._next_guard_at:
+            self._next_guard_at = now + float(self.guard_every)
+            self._check_guards()
+        self._update_manager()
+
+    def _checkpoint_locked(self, conn) -> None:
+        """WAL 체크포인트(TRUNCATE)를 '기다리지 않고' 시도한다(_dlock 안, 공유 연결).
+
+        읽기 스냅샷이 남아 있으면 즉시 busy=1 로 돌아오되 가능한 프레임은 백필한다(PASSIVE 와
+        같은 양 — 실측). busy_timeout 은 이 호출 동안만 0 으로 두고 finally 에서 복구한다(일반
+        쓰기의 대기 시간은 그대로). 다음 시각은 '완료 시각' 기준이며 busy 가 이어지면 2배씩
+        늘려(최대 wal_ckpt_max) 직후 재실행·헛시도를 막는다. 읽기가 풀리면 다음 시도에서 WAL 이
+        회수된다(회수 시 로그). 소요·busy·WAL 크기를 통계(_ckpt)와 진단 로그에 남긴다.
+        """
+        st = self._ckpt
+        wal0 = self._wal_mb()
+        t0 = time.monotonic()
+        busy = 1
+        frames = (0, 0)
+        err = None
+        try:
+            conn.execute("PRAGMA busy_timeout=0")
             try:
                 r = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-                # 반환 (busy, WAL 프레임, 백필 프레임). busy=1 이 반복되면 긴 읽기
-                # 스냅샷(대시보드 조회/열린 커서)이 WAL 잘라내기를 막고 있는 것 —
-                # 622MB WAL 사태의 범인을 로그로 특정할 수 있게 남긴다.
-                if r is not None and int(r[0]):
-                    self._log("wal_checkpoint busy: %d/%d 프레임만 백필 — 긴 읽기가 "
-                              "WAL 잘라내기를 막음 (WAL %.1fMB)"
-                              % (int(r[2]), int(r[1]), self._wal_mb()), conn)
-            except Exception:
+                if r is not None:
+                    busy = int(r[0])
+                    frames = (int(r[1]), int(r[2]))
+            finally:
+                conn.execute("PRAGMA busy_timeout=%d" % dbmod.BUSY_TIMEOUT_MS)
+        except Exception as exc:  # noqa: BLE001 — 체크포인트 실패는 스캔을 막지 않는다
+            err = str(exc)
+        dt_ms = (time.monotonic() - t0) * 1000.0
+        wal1 = self._wal_mb()
+        st["count"] += 1
+        st["last_ms"] = round(dt_ms, 1)
+        st["max_ms"] = max(st["max_ms"], round(dt_ms, 1))
+        st["last_busy"] = busy
+        st["last_at"] = time.time()
+        st["wal_mb"] = round(wal1, 2)
+        prev_streak = st["busy_streak"]
+        if busy:
+            st["busy_count"] += 1
+            st["busy_streak"] += 1
+        else:
+            st["busy_streak"] = 0
+        interval = min(float(self.wal_ckpt_max),
+                       float(self.wal_ckpt_every) * (2 ** min(st["busy_streak"], 5)))
+        self._next_ckpt_at = time.time() + interval   # 완료 시각 기준 — 직후 재실행 없음
+        st["next_at"] = self._next_ckpt_at
+        if err is not None:
+            if prev_streak == 0:
+                self._log("wal_checkpoint 실패: %s (WAL %.1fMB)" % (err, wal1), conn)
+        elif busy:
+            if st["busy_streak"] in (1, 4, 16, 64):   # 반복 busy 는 드문드문만 기록
+                self._log("wal_checkpoint busy: %d/%d 프레임만 백필 — 긴 읽기(대시보드 조회 등)가 "
+                          "WAL 잘라내기를 막음 (WAL %.1fMB, %.0fms, 연속 %d회, 다음 %.0f초 뒤)"
+                          % (frames[1], frames[0], wal1, dt_ms, st["busy_streak"], interval), conn)
+        elif prev_streak:
+            self._log("wal_checkpoint 회수: 읽기 해제 후 WAL %.1fMB → %.1fMB (%.0fms, busy %d회 뒤)"
+                      % (wal0, wal1, dt_ms, prev_streak), conn)
+        elif dt_ms > 1000.0:
+            self._log("wal_checkpoint 느림: %.0fms (WAL %.1fMB → %.1fMB)" % (dt_ms, wal0, wal1), conn)
+
+    def _check_guards(self) -> None:
+        """디스크 여유/DB 크기 가드(주기 점검) — 부족하면 깨지기 전에 자동 일시정지."""
+        if self.min_free_bytes and not self.stop_event.is_set():
+            try:
+                v = os.statvfs(os.path.dirname(self.db_path) or ".")
+                free = v.f_bavail * v.f_frsize
+                if free < self.min_free_bytes:
+                    self._stop_reason = (
+                        "디스크 공간 부족(여유 %d < 기준 %d) — 자동 일시정지"
+                        % (free, self.min_free_bytes))
+                    self.stop_event.set()
+            except OSError:
                 pass
-            # 디스크 여유 가드: 데이터 디스크가 부족하면 깨지기 전에 자동 일시정지(체크포인트 직후 확인)
-            if self.min_free_bytes and not self.stop_event.is_set():
-                try:
-                    v = os.statvfs(os.path.dirname(self.db_path) or ".")
-                    free = v.f_bavail * v.f_frsize
-                    if free < self.min_free_bytes:
-                        self._stop_reason = (
-                            "디스크 공간 부족(여유 %d < 기준 %d) — 자동 일시정지"
-                            % (free, self.min_free_bytes))
-                        self.stop_event.set()
-                except OSError:
-                    pass
-            # DB 크기 가드: per-run DB(.db + -wal)가 한도를 넘으면 자동 일시정지.
-            # 체크포인트 직후라 -wal 이 작아져 '실제 영속 크기'에 가깝게 측정된다.
-            if self.db_max_bytes and not self.stop_event.is_set():
-                try:
-                    sz = os.path.getsize(self.db_path)
-                    wal = self.db_path + "-wal"
-                    if os.path.exists(wal):
-                        sz += os.path.getsize(wal)
-                    if sz > self.db_max_bytes:
-                        self._stop_reason = (
-                            "DB 크기 초과(%d > 기준 %d) — 자동 일시정지(깊이 접기 권장)"
-                            % (sz, self.db_max_bytes))
-                        self.stop_event.set()
-                except OSError:
-                    pass
-        self._update_manager()
+        if self.db_max_bytes and not self.stop_event.is_set():
+            try:
+                sz = os.path.getsize(self.db_path)
+                wal = self.db_path + "-wal"
+                if os.path.exists(wal):
+                    sz += os.path.getsize(wal)
+                if sz > self.db_max_bytes:
+                    self._stop_reason = (
+                        "DB 크기 초과(%d > 기준 %d) — 자동 일시정지(깊이 접기 권장)"
+                        % (sz, self.db_max_bytes))
+                    self.stop_event.set()
+            except OSError:
+                pass
+
+    def diag_snapshot(self) -> dict:
+        """진단용 실측 스냅샷: 락 대기/보유, 체크포인트, 마지막 전진 시각, 청크 나눔 상태."""
+        lk = self._dlock
+        q = self._chunk_q
+        return {
+            "lock": lk.snapshot() if isinstance(lk, _TimedLock) else {},
+            "checkpoint": dict(self._ckpt),
+            "advanced_at": self._advanced_at,
+            "idle_helpers": self._idle_workers, "helping": self._helping,
+            "chunk_queue": (q.qsize() if q is not None else 0),
+            "stat_us_ema": round(self._stat_us_ema, 1),
+            "sharing": bool(self._stat_us_ema >= SHARE_MIN_STAT_US),
+            "worker_errors": list(self._worker_exc),
+            "lock_waiting_idents": (set(lk.waiting) if isinstance(lk, _TimedLock) else set()),
+        }
 
     def _update_manager(self, *, force: bool = False, finished: bool = False) -> None:
         """관리(매니저) DB 의 이 스캔 요약 행을 갱신한다(파일이 달라 락 경합 없음)."""
@@ -435,6 +662,11 @@ class Scanner:
         try:
             total, used, free = self._statvfs()
             self._fs_total, self._fs_used, self._fs_free = total, used, free
+            try:   # 구버전 DB(컬럼 없음)에서도 진행 flush 가 실패하지 않게
+                self._adv_col = "advanced_at" in {
+                    r[1] for r in conn.execute("PRAGMA table_info(scan_runs)")}
+            except Exception:  # noqa: BLE001
+                self._adv_col = False
 
             existing = dbmod.latest_run_id(conn) if self.resume else None
             if existing:
@@ -572,39 +804,6 @@ class Scanner:
         e[0] += eb
         e[1] += fcount
 
-    def _accum_stats(self, name: str, st, eb: int, fcount: int) -> None:
-        """파일 하나를 나이/소유자/확장자 집계에 더한다(_dlock 안에서 호출)."""
-        self._stat_bump(self._stat_age, _age_bucket(self._stats_ref, st.st_mtime), eb, fcount)
-        # 마지막 접근(atime) 기준 나이 — stat 결과에 이미 들어있어 추가 I/O 없음.
-        # (단, noatime 마운트면 atime이 갱신되지 않아 값이 무의미할 수 있다.)
-        self._stat_bump(self._stat_atime_age,
-                        _age_bucket(self._stats_ref, st.st_atime), eb, fcount)
-        self._stat_bump(self._stat_uid, str(st.st_uid), eb, fcount, cap=50000)
-        ext = os.path.splitext(name)[1].lower() or "(없음)"
-        if len(ext) > 24:
-            ext = ext[:24]
-        self._stat_bump(self._stat_ext, ext, eb, fcount)
-        # 크기 버킷: 키는 파일 '원본 크기'(하드링크 dedup 무관), bytes 는 counted.
-        self._stat_bump(self._stat_size,
-                        _size_bucket(_entry_bytes(st, self.size_mode)), eb, fcount)
-
-    def _top_push(self, path: str, eb: int, st) -> None:
-        """최대 파일 Top-N 힙 갱신(_dlock 안에서 호출)."""
-        h = self._top_files
-        if len(h) < TOP_FILES_N:
-            heapq.heappush(h, (eb, path, st.st_mtime, st.st_uid, st.st_atime))
-        elif eb > h[0][0]:
-            heapq.heapreplace(h, (eb, path, st.st_mtime, st.st_uid, st.st_atime))
-
-    def _top_merge(self, items: list) -> None:
-        """로컬 Top-N 후보 힙을 공유 Top-N 힙에 병합(_dlock 안에서 호출)."""
-        h = self._top_files
-        for it in items:
-            if len(h) < TOP_FILES_N:
-                heapq.heappush(h, it)
-            elif it[0] > h[0][0]:
-                heapq.heapreplace(h, it)
-
     def _accum_merge(self, l_age: dict, l_atime: dict, l_uid: dict, l_ext: dict,
                      l_size: dict) -> None:
         """스레드 로컬 집계 dict 들을 공유 집계에 병합(_dlock 안에서 호출, 캡은 여기서 적용)."""
@@ -730,8 +929,14 @@ class Scanner:
 
         self._disc_conn = dbmod.connect(self.db_path)
         self._disc_active = 0
+        self._worker_exc = []
+        self._abort = False
         n = max(1, int(self.workers))
         self._worker_dirs = {i: None for i in range(n)}   # 워커별 현재 디렉터리
+        # 청크 작업 나눔 큐(워커 2개 이상일 때) — 메모리 제한: 워커 수×2 청크(청크=최대 STAT_CHUNK 항목)
+        self._chunk_q = queue.Queue(maxsize=max(2, 2 * n)) if n > 1 else None
+        self._idle_workers = 0
+        self._helping = 0
         try:
             if n == 1:
                 self._discover_worker(0)          # 현재 스레드에서 단독 실행
@@ -752,6 +957,17 @@ class Scanner:
                     pass
                 self._disc_conn = None
             self._worker_dirs = {}   # 탐색 종료 → 비움(집계 단계는 단일 current_dir)
+            self._chunk_q = None
+
+        # 워커 예외는 '완료'로 덮지 않는다 — run() 이 status=error 로 기록하고 예외를 올린다.
+        if self._worker_exc:
+            raise RuntimeError("탐색 워커 예외: " + "; ".join(self._worker_exc[:3]))
+        if not self._stopped():
+            left = conn.execute(
+                "SELECT COUNT(*) FROM directories WHERE run_id=? AND status IN ('pending','claimed')",
+                (self.run_id,)).fetchone()[0]
+            if left:
+                raise RuntimeError("탐색이 끝났는데 미완료 디렉터리 %d개가 남음(내부 오류)" % int(left))
 
         self._flush_progress(conn, force=True)
         dbmod.update_run(conn, self.run_id, total_dirs=self._discovered)
@@ -797,97 +1013,52 @@ class Scanner:
         return rows[:max(1, -(-len(rows) // n))]
 
     def _discover_worker(self, widx: int = 0) -> None:
-        while not self._stopped():
-            batch = self._claim_batch()
-            if batch is None:
-                break
-            if not batch:
-                self.stop_event.wait(0.02)
-                continue
-            try:
-                for row in batch:
-                    if self._stopped():
-                        break
-                    self._worker_dirs[widx] = row["path"]   # 이 워커가 지금 보는 디렉터리
-                    self._discover_one(row["id"], row["path"], row["depth"])
-            finally:
-                self._worker_dirs[widx] = None
-                with self._dlock:
-                    self._disc_active -= 1
+        try:
+            while not self._stopped():
+                batch = self._claim_batch()
+                if batch is None:
+                    break
+                if not batch:
+                    # 지금은 맡을 디렉터리가 없다(다른 워커 작업 중) → 그 워커의 파일 청크를 돕는다
+                    self._help_chunks(widx, 0.02)
+                    continue
+                try:
+                    for row in batch:
+                        if self._stopped():
+                            break
+                        self._worker_dirs[widx] = row["path"]   # 이 워커가 지금 보는 디렉터리
+                        self._discover_one(row["id"], row["path"], row["depth"])
+                finally:
+                    self._worker_dirs[widx] = None
+                    with self._dlock:
+                        self._disc_active -= 1
+        except Exception as exc:  # noqa: BLE001 — 워커 예외를 삼키면 미완료 행이 '완료'로 둔갑한다
+            msg = "disc-%d: %s: %s" % (widx, type(exc).__name__, exc)
+            with self._dlock:
+                self._worker_exc.append(msg)
+                self._abort = True        # 다른 워커도 멈춘다(_stopped) — 부분 결과는 완료 처리 안 됨
+            self._log("워커 예외로 탐색 중단: " + msg)
 
     def _discover_one(self, dir_id: int, path: str, depth: int) -> None:
         """디렉터리 하나를 훑는다(병렬 워커가 호출).
 
-        scandir/stat(느린 I/O)은 락 밖에서 하고, DB 쓰기와 공유 카운터/하드링크
-        집합은 _dlock 안에서만 건드린다(데드락 없이 병렬 처리).
+        scandir/stat(느린 I/O)은 락 밖에서 하고, DB 쓰기와 공유 카운터/하드링크 집합은 _dlock
+        안에서만 건드린다(데드락 없이 병렬 처리). 파일별 통계·Top-N 은 디렉터리 누적(_DirAcc)에
+        모았다가 완료 확정 시 한 번에 병합한다 — 중단으로 버려지면 통계도 버려져 재개 중복이 없다.
+        파일 청크는 유휴 워커가 있으면 그쪽에 넘겨(작업 나눔) 거대 평면 폴더도 병렬로 stat 된다.
         """
-        own_bytes = 0
-        file_count = 0
+        acc = _DirAcc()
         subdir_count = 0
         children: List[tuple] = []
         err: Optional[str] = None
         file_chunk: list = []
+        fold_dir_bytes = 0
         # fold 넘김 행(깊이 > fold_depth) = fold walk 의 연속. fold 는 max_depth 와 무관하게 끝까지 세므로
         # 이 행들엔 max_depth 컷을 적용하지 않는다(예전 인라인 fold 와 같은 결과).
         over_fold = bool(self.fold_depth) and depth > self.fold_depth
         # 이 디렉터리 한 번의 처리에서 인라인 fold 로 걸을 예산(넘치면 남은 하위를 행으로 넘김)
         fold_left = int(self.fold_budget)
         fold_deadline = time.time() + float(self.fold_budget_secs)
-        # 이 디렉터리 처리 중 '처음' 센 하드링크 inode — 완료 확정 시 같은 트랜잭션으로 DB 에 기록해
-        # 재개 후에도 중복 방지가 유지되게 한다(중단으로 버려지면 기록 안 됨 → 다시 셀 때 누락 없음).
-        new_inodes: list = []
-
-        def flush_files():
-            # 직렬 구간 축소: stat + 파일당 파이썬 집계(나이/확장자/Top-N)를 _dlock '밖'에서
-            # 스레드 로컬로 모으고, 락 안에서는 짧게 병합만 한다(하드링크 dedup 은 공유라 락 안).
-            nonlocal own_bytes, file_count
-            if not file_chunk:
-                return
-            chunk = file_chunk[:]
-            file_chunk.clear()
-            stats = [self._safe_stat(e) for e in chunk]   # I/O — 락 밖
-            ref = self._stats_ref
-            l_bytes = 0
-            l_files = 0
-            l_top: list = []
-            l_age: dict = {}
-            l_atime: dict = {}
-            l_uid: dict = {}
-            l_ext: dict = {}
-            l_size: dict = {}
-            deferred: list = []   # nlink>1: dedup 이 공유라 락 안에서 판정
-            for entry, st in zip(chunk, stats):     # 락 밖 — 파일당 작업
-                if st is None:
-                    continue
-                l_files += 1
-                eb = _entry_bytes(st, self.size_mode)
-                if self.hardlink_dedup and st.st_nlink > 1:
-                    deferred.append((entry.path, entry.name, eb, st))
-                    continue
-                l_bytes += eb
-                _local_top(l_top, entry.path, eb, st)
-                _local_accum(ref, l_age, l_atime, l_uid, l_ext, l_size, entry.name, st, eb)
-            with self._dlock:                       # 락 안 — 짧게 병합
-                for p, name, eb, st in deferred:    # 하드링크 dedup(드묾)
-                    key = (st.st_dev, st.st_ino)
-                    if key in self._seen_inodes:
-                        cb = 0                       # 용량은 한 번만(개수는 셈)
-                    else:
-                        self._seen_inodes.add(key)
-                        new_inodes.append(key)
-                        cb = eb
-                    if cb:
-                        l_bytes += cb
-                        self._top_push(p, cb, st)
-                    self._accum_stats(name, st, cb, 1)
-                self._top_merge(l_top)
-                self._accum_merge(l_age, l_atime, l_uid, l_ext, l_size)
-                own_bytes += l_bytes
-                file_count += l_files
-                self._scanned_bytes += l_bytes
-                self._total_files += l_files
-                self._flush_progress_locked(self._disc_conn,
-                                            current_dir=path, current_depth=depth)
 
         try:
             with os.scandir(path) as it:                  # I/O — 락 밖
@@ -919,11 +1090,10 @@ class Scanner:
                         # (체크포인트 — 중단돼도 그 조각만 다시). 넘긴 행은 집계 후 정리된다.
                         if self.fold_depth and (depth + 1) > self.fold_depth:
                             if fold_left > 0 and time.time() < fold_deadline:
-                                fb, ff, over, used = self._fold_subtree(
-                                    entry.path, fold_left, fold_deadline, new_inodes)
+                                fdb, over, used = self._fold_subtree(
+                                    entry.path, fold_left, fold_deadline, acc)
                                 fold_left -= used
-                                own_bytes += fb
-                                file_count += ff
+                                fold_dir_bytes += fdb
                                 for op in over:
                                     children.append((self.run_id, dir_id, op,
                                                      os.path.basename(op) or op, depth + 1))
@@ -936,26 +1106,34 @@ class Scanner:
                     else:
                         file_chunk.append(entry)
                         if len(file_chunk) >= STAT_CHUNK:
-                            flush_files()
-            flush_files()
+                            chunk, file_chunk = file_chunk, []
+                            self._dispatch_chunk(acc, chunk, path)
+            if file_chunk:
+                chunk, file_chunk = file_chunk, []
+                self._dispatch_chunk(acc, chunk, path)
         except OSError as exc:
             err = "%s: %s" % (type(exc).__name__, exc)
             with self._dlock:
                 self._error_dirs += 1
 
-        # 디렉터리 자기 inode 분(du 와 동일). 파일 분은 flush_files 에서 이미 반영됨.
+        # 다른 워커에게 넘긴 청크가 끝날 때까지(그동안 큐를 직접 돕는다 — 교착 없음)
+        self._wait_chunks(acc)
+        # 디렉터리 자기 inode 분(du 와 동일). 파일 분은 청크 처리에서 이미 acc 에 반영됨.
         dstat = self._safe_stat_path(path)                # I/O — 락 밖
         dir_bytes = _entry_bytes(dstat, self.size_mode) if dstat is not None else 0
 
         with self._dlock:
-            # 중단(stop_event)됐으면 이 디렉터리를 완료('discovered')로 확정하지 않는다.
+            # 중단(stop_event/워커 예외)됐으면 이 디렉터리를 완료('discovered')로 확정하지 않는다.
             # scandir 루프가 중간에 break 됐을 수 있어(아직 못 본 파일/하위 존재) 부분값으로 완료
             # 처리하면 재개 시 이 디렉터리를 다시 안 훑어 그 파일/서브트리가 영구 누락된다.
             # 'claimed' 상태로 남기면 재개 시 pending 으로 복원돼 처음부터 다시 훑는다(kill -9 안전성과 동일).
+            # 누적분(acc)도 같이 버린다 — 재개 후 다시 훑을 때 통계가 중복되지 않는다.
             if self._stopped():
+                acc.abandoned = True
                 return
-            own_bytes += dir_bytes
-            self._scanned_bytes += dir_bytes
+            own_bytes = acc.bytes + fold_dir_bytes + dir_bytes
+            file_count = acc.files
+            self._scanned_bytes += dir_bytes + fold_dir_bytes
             if children:
                 self._disc_conn.executemany(
                     """INSERT OR IGNORE INTO directories
@@ -969,35 +1147,42 @@ class Scanner:
                    WHERE id=?""",
                 (own_bytes, file_count, subdir_count, err, dir_id),
             )
-            if new_inodes:   # 완료 확정과 같은 트랜잭션 — 재개 후에도 하드링크 1회 계산 유지
+            if acc.new_inodes:   # 완료 확정과 같은 트랜잭션 — 재개 후에도 하드링크 1회 계산 유지
                 self._disc_conn.executemany(
                     "INSERT OR IGNORE INTO seen_inodes (run_id, dev, ino) VALUES (?, ?, ?)",
-                    [(self.run_id, dv, ino) for dv, ino in new_inodes])
+                    [(self.run_id, dv, ino) for dv, ino in acc.new_inodes])
+            # 파일별 통계/Top-N 은 완료 확정과 함께 공유 집계로(같은 커밋에 실린다)
+            _top_merge_into(self._top_files, acc.top)
+            self._accum_merge(acc.age, acc.atime, acc.uid, acc.ext, acc.size)
             # 커밋 배칭: 디렉터리마다 fsync 하던 것을 제거하고, 아래 진행 flush(최대
             # 0.4s 스로틀)에서 한 번에 커밋한다. 같은 커넥션이라 미커밋 쓰기도 다른 워커의
             # claim 쿼리엔 보인다(정합성 유지). 종료 시 _discover 의 마지막 커밋이 꼬리를
             # 비우고, kill -9 면 claimed→pending 으로 되돌아 재스캔되어 안전하다.
             self._discovered += 1
+            self._advanced_at = time.time()
             if depth > 0 and not over_fold:   # 넘김 행의 깊이는 논리값이라 최대 깊이 표시엔 반영 안 함
                 self._maybe_update_depth(self._disc_conn, depth)
             self._flush_progress_locked(self._disc_conn,
                                         current_dir=path, current_depth=depth)
 
     def _fold_subtree(self, root: str, budget: int = 0, deadline: float = 0.0,
-                      new_inodes=None):
-        """fold_depth 초과 하위 트리를 '행 없이' walk 하여 (bytes, files, overflow, used) 를 반환.
+                      acc: Optional[_DirAcc] = None):
+        """fold_depth 초과 하위 트리를 '행 없이' walk 하여 (dir_bytes, overflow, used) 를 반환.
 
-        디렉터리 행을 만들지 않으므로 DB 가 커지지 않으면서, 용량/개수는 모두
-        세어 상위(깊이 N) own_bytes 에 합산된다 → 합계가 정확하다. scandir/stat 는
-        락 밖에서 하고, 공유 카운터/하드링크집합/진행 갱신만 _dlock 안에서 한다.
+        디렉터리 행을 만들지 않으므로 DB 가 커지지 않으면서, 용량/개수는 모두 세어 상위(깊이 N)
+        own_bytes 에 합산된다 → 합계가 정확하다. 파일 청크는 호출 디렉터리의 누적(acc)으로
+        처리되고(stat 은 락 밖, 유휴 워커가 대신 처리 가능), 여기선 디렉터리 자기 inode 분만 더한다.
 
         budget(파일+디렉터리 수)·deadline(시각)을 넘기면 디렉터리 경계에서 멈추고, 아직 안 훑은
         하위 디렉터리 경로 목록(overflow)을 돌려준다 — 호출부가 이를 프론티어 행으로 넘겨 다른
         워커가 병렬로 이어받는다(체크포인트). 각 디렉터리는 정확히 한 번만 세어진다: 훑은 쪽은 여기서,
         넘긴 쪽은 행으로 처리될 때. budget<=0 이면 제한 없음. used 는 소비한 예산(최소 1 — 루트는 항상 처리).
+        예산은 디렉터리 경계에서만 적용되므로 거대 평면 디렉터리 하나는 끝까지 한 번에 훑는다
+        (NFS 디렉터리 열거 위치는 재시작 후 유효하지 않아 중간 저장이 불가능하다).
         """
-        total_b = 0
-        total_f = 0
+        if acc is None:
+            acc = _DirAcc()
+        dir_bytes = 0
         used = 0
         stack = [root]
         while stack:
@@ -1006,12 +1191,12 @@ class Scanner:
             # 예산 초과 → 남은(미방문) 디렉터리를 넘긴다. 루트는 항상 먼저 처리(진행 보장).
             if used > 0 and ((budget > 0 and used >= budget)
                              or (deadline and time.time() >= deadline)):
-                return total_b, total_f, stack, used
+                return dir_bytes, stack, used
             d = stack.pop()
             used += 1
             ds = self._safe_stat_path(d)            # 디렉터리 자기 inode 분(du 동일)
             if ds is not None:
-                total_b += _entry_bytes(ds, self.size_mode)
+                dir_bytes += _entry_bytes(ds, self.size_mode)
             files_chunk: list = []
             try:
                 with os.scandir(d) as it:           # I/O — 락 밖
@@ -1033,49 +1218,149 @@ class Scanner:
                         else:
                             files_chunk.append(entry)
                             if len(files_chunk) >= STAT_CHUNK:
-                                b, f = self._fold_flush(files_chunk, d, new_inodes)
-                                total_b += b
-                                total_f += f
                                 used += len(files_chunk)
+                                self._dispatch_chunk(acc, files_chunk, d)
                                 files_chunk = []
                 if files_chunk:
-                    b, f = self._fold_flush(files_chunk, d, new_inodes)
-                    total_b += b
-                    total_f += f
                     used += len(files_chunk)
+                    self._dispatch_chunk(acc, files_chunk, d)
             except OSError:
                 with self._dlock:
                     self._error_dirs += 1
-        return total_b, total_f, [], used
+        return dir_bytes, [], used
 
-    def _fold_flush(self, entries: list, cur_dir: str, new_inodes=None):
-        """접기 walk 의 파일 청크: stat(락 밖) 후 _dlock 안에서 용량/하드링크/진행 갱신."""
+    # ----- 파일 청크 처리(공통) + 작업 나눔 -----
+    def _dispatch_chunk(self, acc: _DirAcc, chunk: list, cur_dir: str) -> None:
+        """파일 청크를 유휴 워커가 있으면 큐에 넘기고, 없거나 큐가 차면 직접 처리한다."""
+        q = self._chunk_q
+        if (q is not None and self._idle_workers > 0 and not acc.abandoned
+                and self._stat_us_ema >= SHARE_MIN_STAT_US):
+            with self._q_cv:
+                acc.pending += 1
+            try:
+                q.put_nowait((acc, chunk, cur_dir))
+                return
+            except queue.Full:
+                with self._q_cv:
+                    acc.pending -= 1
+        self._stat_chunk(acc, chunk, cur_dir)
+
+    def _process_chunk(self, acc: _DirAcc, chunk: list, cur_dir: str) -> None:
+        """큐에서 받은 청크 처리(도우미/소유자 공통). 버려진 디렉터리의 청크는 건너뛴다."""
+        try:
+            if not acc.abandoned:
+                self._stat_chunk(acc, chunk, cur_dir)
+        finally:
+            with self._q_cv:
+                acc.pending -= 1
+                self._q_cv.notify_all()
+
+    def _wait_chunks(self, acc: _DirAcc) -> None:
+        """이 디렉터리의 청크 중 다른 워커가 처리 중인 것이 끝날 때까지 — 기다리는 동안 큐를 직접
+        돕는다(도우미가 사라져도 교착 없음). 중단이면 기다리지 않는다(acc 는 버려진다)."""
+        q = self._chunk_q
+        if q is None:
+            return
+        while not self._stopped():
+            with self._q_cv:
+                if acc.pending <= 0:
+                    return
+            try:
+                job = q.get_nowait()
+            except queue.Empty:
+                with self._q_cv:
+                    if acc.pending > 0:
+                        self._q_cv.wait(0.05)
+                continue
+            self._process_chunk(*job)
+
+    def _help_chunks(self, widx: int, timeout: float) -> None:
+        """맡을 디렉터리가 없는 워커가 다른 워커의 파일 청크를 대신 처리한다(없으면 잠시 대기)."""
+        q = self._chunk_q
+        if q is None:
+            self.stop_event.wait(timeout)
+            return
+        with self._q_cv:
+            self._idle_workers += 1
+        try:
+            try:
+                job = q.get(timeout=timeout)
+            except queue.Empty:
+                return
+            with self._q_cv:
+                self._helping += 1
+            try:
+                self._worker_dirs[widx] = job[2]
+                self._process_chunk(*job)
+            finally:
+                self._worker_dirs[widx] = None
+                with self._q_cv:
+                    self._helping -= 1
+        finally:
+            with self._q_cv:
+                self._idle_workers -= 1
+
+    def _stat_chunk(self, acc: _DirAcc, entries: list, cur_dir: str) -> Tuple[int, int]:
+        """파일 청크를 stat(락 밖)하고 파일별 집계를 디렉터리 누적(acc)에 더한다. 반환 (bytes, files).
+
+        - stat·나이/확장자/크기/Top-N 계산: 락 밖(스레드 로컬) — 락 안에서 파일별 작업을 하지 않는다.
+        - 하드링크(nlink>1) 판정: 공유 집합이라 락 안. 용량은 한 번만, 개수는 셈.
+        - acc 병합·공유 진행 카운터·진행 flush: 락 안, 짧게(청크당 dict 몇십 개).
+        (락 축소는 GIL 을 없애지 않는다 — 효과는 워커가 I/O 대기에 있을 때 나타난다.)
+        """
+        t0 = time.monotonic()
         stats = [self._safe_stat(e) for e in entries]   # I/O — 락 밖
-        cb = 0
-        cf = 0
-        with self._dlock:
-            for entry, st in zip(entries, stats):
-                if st is None:
-                    continue
-                cf += 1
-                eb = _entry_bytes(st, self.size_mode)
-                counted = True
-                if self.hardlink_dedup and st.st_nlink > 1:
-                    key = (st.st_dev, st.st_ino)
-                    if key in self._seen_inodes:
-                        counted = False
-                    else:
-                        self._seen_inodes.add(key)
-                        if new_inodes is not None:   # 호출 디렉터리 완료 시 DB 에 기록(재개 후 중복 방지)
-                            new_inodes.append(key)
-                if counted:
-                    cb += eb
-                    self._top_push(entry.path, eb, st)   # 최대 파일 Top-N
-                self._accum_stats(entry.name, st, eb if counted else 0, 1)
-            self._scanned_bytes += cb
-            self._total_files += cf
+        if entries:   # 파일당 stat 소요(EMA) — 청크 나눔을 I/O 대기형에서만 켜기 위한 측정
+            us = (time.monotonic() - t0) * 1e6 / len(entries)
+            self._stat_us_ema = us if not self._stat_us_ema else (0.7 * self._stat_us_ema + 0.3 * us)
+        ref = self._stats_ref
+        l_bytes = 0
+        l_files = 0
+        l_top: list = []
+        l_age: dict = {}
+        l_atime: dict = {}
+        l_uid: dict = {}
+        l_ext: dict = {}
+        l_size: dict = {}
+        deferred: list = []   # nlink>1: dedup 이 공유라 락 안에서 판정
+        for entry, st in zip(entries, stats):     # 락 밖 — 파일당 작업
+            if st is None:
+                continue
+            l_files += 1
+            eb = _entry_bytes(st, self.size_mode)
+            if self.hardlink_dedup and st.st_nlink > 1:
+                deferred.append((entry.path, entry.name, eb, st))
+                continue
+            l_bytes += eb
+            _local_top(l_top, entry.path, eb, st)
+            _local_accum(ref, l_age, l_atime, l_uid, l_ext, l_size, entry.name, st, eb)
+        with self._dlock:                       # 락 안 — 짧게 병합
+            for p, name, eb, st in deferred:    # 하드링크 dedup(드묾)
+                key = (st.st_dev, st.st_ino)
+                if key in self._seen_inodes:
+                    cb = 0                       # 용량은 한 번만(개수는 셈)
+                else:
+                    self._seen_inodes.add(key)
+                    acc.new_inodes.append(key)
+                    cb = eb
+                if cb:
+                    l_bytes += cb
+                    _local_top(l_top, p, cb, st)
+                _local_accum(ref, l_age, l_atime, l_uid, l_ext, l_size, name, st, eb, cb)
+            _top_merge_into(acc.top, l_top)
+            _merge_counts(acc.age, l_age)
+            _merge_counts(acc.atime, l_atime)
+            _merge_counts(acc.uid, l_uid)
+            _merge_counts(acc.ext, l_ext)
+            _merge_counts(acc.size, l_size)
+            acc.bytes += l_bytes
+            acc.files += l_files
+            self._scanned_bytes += l_bytes
+            self._total_files += l_files
+            if l_files:
+                self._advanced_at = time.time()
             self._flush_progress_locked(self._disc_conn, current_dir=cur_dir)
-        return cb, cf
+        return l_bytes, l_files
 
     def _prune_fold_overflow(self, conn) -> None:
         """집계를 다 마친 뒤 fold 넘김 행(깊이 > fold_depth)을 지운다.
@@ -1342,8 +1627,11 @@ def run_scan(
     with_monitor: bool = True,
     manager_db: Optional[str] = None,
     manager_scan_id: Optional[int] = None,
+    on_scanner=None,
 ) -> int:
     """편의 함수: DB 초기화 → 모니터 시작 → 스캔(탐색+집계) 실행 → 모니터 정리.
+
+    on_scanner(scanner) 를 주면 생성된 Scanner 인스턴스를 넘긴다(서버가 진단 스냅샷을 읽기 위함).
 
     스캔과 자원 모니터링을 한 프로세스 안에서 함께 돌린다. 모니터는 스캔의
     run_id 가 만들어지기 전에는 기록을 보류하다가(run_id 가드), Scanner.run()
@@ -1372,6 +1660,11 @@ def run_scan(
         manager_db=manager_db, manager_scan_id=manager_scan_id,
     )
 
+    if on_scanner is not None:
+        try:
+            on_scanner(scanner)
+        except Exception:  # noqa: BLE001 — 진단 훅 실패가 스캔을 막지 않는다
+            pass
     if monitor is not None:
         monitor.start()
     try:

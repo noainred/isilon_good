@@ -18,22 +18,28 @@ from . import db as dbmod
 from . import manager as mgrmod
 from . import monitor as monmod
 
-# 워커 콜스택에 나타나는 함수 → 구간 분류(안쪽 프레임부터 먼저 매칭)
-_STAT = {"_safe_stat", "_safe_stat_path", "_entry_bytes"}      # 파일 stat(NAS)
-_FOLD = {"_fold_subtree"}                                       # 깊은 하위 용량 합산(NAS)
-_DB = {"_flush_progress_locked", "_flush_progress", "_write_stats"}  # DB 쓰기/커밋
-_FLUSH = {"flush_files"}                                        # 락 보호 누적 구간(DB/락)
+# 워커 콜스택에 나타나는 함수 → 구간 분류(안쪽 프레임부터 먼저 매칭).
+# 한계(정직하게): 파이썬 프레임만 보이므로 'stat/readdir' 는 시스템콜 중일 수도, 그 직후 GIL 을 다시
+# 기다리는 중일 수도 있다. 공유 락(_dlock) 대기는 C 레벨이라 프레임에 안 보여 — 스캐너의 계측 락이
+# 알려주는 '지금 기다리는 스레드' 집합으로 먼저 판정한다('lock'). 이 분류만으로 원인을 확정하지 않는다.
+_STAT = {"_safe_stat", "_safe_stat_path"}                       # stat 시스템콜(NAS) 또는 직후 GIL 대기
+_READDIR = {"_discover_one", "_fold_subtree"}                   # scandir 루프(NAS readdir) 또는 GIL 대기
+_COMPUTE = {"_stat_chunk", "_process_chunk", "_dispatch_chunk", "_entry_bytes", "_local_accum",
+            "_local_top", "_merge_counts", "_top_merge_into", "_age_bucket", "_size_bucket",
+            "bump", "flush_files"}                              # 파일별 집계 계산(파이썬·GIL)
+_DB = {"_flush_progress_locked", "_flush_progress", "_write_stats", "_checkpoint_locked",
+       "_update_manager", "_check_guards", "_maybe_update_depth"}   # DB 쓰기/커밋/체크포인트
 _CLAIM = {"_claim_batch"}                                       # 일감 가져오기
-_READDIR = {"_discover_one"}                                    # scandir 루프(NAS readdir)
-_IDLE = {"wait", "_discover_worker"}                            # 유휴 대기
+_IDLE = {"wait", "_discover_worker", "_help_chunks", "_wait_chunks"}   # 유휴/청크 대기
 
 _CAT_LABEL = {
-    "readdir": "디렉터리 읽기(scandir·NAS)",
-    "stat": "파일 stat(용량 측정·NAS)",
-    "fold": "하위 용량 합산(fold·NAS)",
-    "db": "DB 쓰기/커밋",
+    "lock": "공유 락(_dlock) 대기 — 실측",
+    "readdir": "디렉터리 읽기(scandir — NAS 호출 또는 직후 GIL 대기)",
+    "stat": "파일 stat(NAS 호출 또는 직후 GIL 대기)",
+    "compute": "파일별 집계 계산(파이썬·GIL)",
+    "db": "DB 쓰기/커밋/체크포인트",
     "claim": "일감 가져오기",
-    "idle": "유휴(대기)",
+    "idle": "유휴/청크 대기",
     "other": "기타",
 }
 
@@ -45,9 +51,9 @@ def _classify(frame) -> str:
         n = f.f_code.co_name
         if n in _STAT:
             return "stat"
-        if n in _FOLD:
-            return "fold"
-        if n in _DB or n in _FLUSH:
+        if n in _COMPUTE:
+            return "compute"
+        if n in _DB:
             return "db"
         if n in _CLAIM:
             return "claim"
@@ -59,16 +65,26 @@ def _classify(frame) -> str:
     return "other"
 
 
-def worker_snapshot():
-    """현재 스캔 워커(disc-*) 스레드들이 어느 구간에 있는지 스냅샷."""
+_CATS = ("lock", "readdir", "stat", "compute", "db", "claim", "idle", "other")
+
+
+def worker_snapshot(lock_waiting=None):
+    """현재 스캔 워커(disc-*) 스레드들이 어느 구간에 있는지 스냅샷.
+
+    lock_waiting: 스캐너 계측 락이 알려주는 '지금 _dlock 을 기다리는 스레드 ident' 집합 — 있으면
+    프레임 추정보다 우선해 'lock' 으로 센다.
+    """
     frames = sys._current_frames()
-    cats = {k: 0 for k in ("readdir", "stat", "fold", "db", "claim", "idle", "other")}
+    cats = {k: 0 for k in _CATS}
     detail = []
     for t in threading.enumerate():
         if not t.name.startswith("disc-"):
             continue
         fr = frames.get(t.ident)
-        cat = _classify(fr) if fr is not None else "other"
+        if lock_waiting and t.ident in lock_waiting:
+            cat = "lock"
+        else:
+            cat = _classify(fr) if fr is not None else "other"
         cats[cat] += 1
         detail.append({"name": t.name, "cat": cat, "label": _CAT_LABEL[cat],
                        "fn": (fr.f_code.co_name if fr is not None else "?")})
@@ -142,6 +158,39 @@ def _probe_nas_latency(path, timeout=3.0):
     if th.is_alive():
         return None, True                 # 타임아웃 — 응답 없음(행 의심)
     return result["ms"], False
+
+
+def _children_stats(pid: int):
+    """pid 의 자식 프로세스(pscan 워커) 합산: (개수, CPU 누적초, RSS 바이트) — /proc 만 사용."""
+    n = 0
+    cpu = 0.0
+    rss = 0
+    try:
+        tck = os.sysconf("SC_CLK_TCK")
+        page = os.sysconf("SC_PAGE_SIZE")
+    except (ValueError, OSError, AttributeError):
+        return 0, 0.0, 0
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return 0, 0.0, 0
+    for e in entries:
+        if not e.isdigit():
+            continue
+        try:
+            with open("/proc/%s/stat" % e) as fh:
+                st = fh.read()
+            rp = st.rfind(")")
+            parts = st[rp + 2:].split()
+            if int(parts[1]) != pid:          # ppid
+                continue
+            n += 1
+            cpu += (float(parts[11]) + float(parts[12])) / tck   # utime+stime
+            with open("/proc/%s/statm" % e) as fh:
+                rss += int(fh.read().split()[1]) * page
+        except (OSError, ValueError, IndexError):
+            continue
+    return n, cpu, rss
 
 
 def _lvl_worse(a, b):
@@ -219,7 +268,8 @@ def _build_resources(*, proc_cpu, sys_cpu, ncpu, load1, mem_percent, mem_avail,
 
 
 def _verdict(w, rate_dirs, rate_files, hb_age, pending, db_bytes, disk_free,
-             *, phase=None, agg_done=0, agg_total=0, rate_agg=0):
+             *, phase=None, agg_done=0, agg_total=0, rate_agg=0,
+             advance_age=None, lock=None, ckpt=None):
     """구간 분포 + 처리량 + 하트비트 + 프론티어로 병목 구간과 처방을 낸다.
 
     핵심: 파일 stat 이 돌아도(files/s>0) **디렉터리 완료가 안 되면(dirs/s≈0) 정체**다.
@@ -230,6 +280,15 @@ def _verdict(w, rate_dirs, rate_files, hb_age, pending, db_bytes, disk_free,
     idle = w.get("idle", 0) + w.get("claim", 0)
     nas = w.get("readdir", 0) + w.get("stat", 0) + w.get("fold", 0)
     db = w.get("db", 0)
+    lockw = w.get("lock", 0)
+    lock = lock or {}
+    ckpt = ckpt or {}
+    # '전진' 여부: 마지막 전진 시각이 있으면 그것으로, 없으면 표본 속도로 판단한다.
+    # (디렉터리 완료/초는 하위가 파일뿐인 큰 디렉터리를 처리할 땐 진행돼도 0 — 그것만으로 정체 판정 금지)
+    if advance_age is not None:
+        advancing = advance_age < 30.0
+    else:
+        advancing = (rate_files >= 5 or rate_dirs >= 1)
     # '디렉터리 진행 정체' 임계값: 완료가 1/초 미만이고 대기가 1만 초과.
     STALL_DIRS, STALL_PENDING = 1.0, 10000
     recs = []
@@ -258,12 +317,34 @@ def _verdict(w, rate_dirs, rate_files, hb_age, pending, db_bytes, disk_free,
                 "워커가 디렉터리 읽기/stat 구간에 있는데 진행 갱신이 %d초째 없습니다. "
                 "NAS 응답 지연 또는 행(hang)으로 보입니다." % int(hb_age), recs)
 
-    # 2) ★디렉터리 진행 정체 — dirs/s≈0 인데 대기 일감이 많다(롱테일/직렬화/굶주림).
-    #    파일 stat 이 돌아도(files/s>0) 디렉터리 완료가 안 되면 사실상 정체로 본다.
+    # 1b) 공유 락 대기 집중(실측) — 워커 절반 이상이 _dlock 을 기다린다.
+    #     체크포인트가 읽기 때문에 busy 를 반복하거나 보유 시간이 길면 그 원인을 같이 적는다.
+    if lockw >= max(2, total * 0.5):
+        bs = int(ckpt.get("busy_streak") or 0)
+        recs = ["락 보유자가 무엇을 하는지: 체크포인트 소요(ms)·busy·WAL 크기는 아래 '스캐너 실측'과 scan_log",
+                "체크포인트 busy 가 이어지면 대시보드/트러블슈팅 자동 새로고침(긴 읽기)을 잠시 끄고 비교",
+                "그래도 같으면 파일별 계산(GIL) 한계 — 워커를 늘려도 안 빨라짐"]
+        return ("warn", "🟠 공유 락 대기 집중 — 워커 %d/%d (실측)" % (lockw, total),
+                "워커 %d/%d 가 공유 락(_dlock)을 기다립니다. 보유 최대 %.2fs · 대기 최대 %.2fs · "
+                "체크포인트 최근 %.0fms(busy 연속 %d회, WAL %.1fMB)." % (
+                    lockw, total, float(lock.get("hold_max_s") or 0), float(lock.get("wait_max_s") or 0),
+                    float(ckpt.get("last_ms") or 0), bs, float(ckpt.get("wal_mb") or 0)), recs)
+
+    # 2) ★디렉터리 진행 정체 — 전진이 없는데 대기 일감이 많다(롱테일/직렬화/굶주림).
+    #    파일 수가 늘고 있으면(큰 디렉터리 처리 중) 정체가 아니다 — 아래 2b.
+    if rate_dirs < STALL_DIRS and pending > STALL_PENDING and advancing:
+        return ("ok", "🟢 진행 중 — 큰 디렉터리 처리(디렉터리 완료/초 0 은 정상)",
+                "파일 %.0f/초로 전진 중%s. 하위가 파일뿐인 큰 디렉터리를 처리할 땐 디렉터리 완료 수가 "
+                "한동안 늘지 않습니다 · 대기 %s개." % (
+                    rate_files,
+                    (" (마지막 전진 %.0f초 전)" % advance_age) if advance_age is not None else "",
+                    f"{pending:,}"),
+                ["거대 평면 폴더는 유휴 워커가 파일 청크를 나눠 stat 합니다(NAS 지연형일 때 자동)"])
     if rate_dirs < STALL_DIRS and pending > STALL_PENDING:
         recs = ["▶ '대상 분석'으로 추천 fold-depth 를 구해 거대 트리를 묶기(즉효)",
                 "원인은 단일 락+GIL 직렬화 — DB 엔진/저장형식 교체로는 해결 안 됨",
-                "장기: 멀티프로세스 병렬(pscan)로 직렬화 자체를 제거",
+                "장기: 멀티프로세스 병렬(pscan)로 직렬화 자체를 제거 — 단 pscan 은 하드링크 중복 제거·"
+                "파일시스템 경계(-x) 정책이 native 와 달라 결과가 다를 수 있음(정확성 필요 시 native)",
                 "--min-free-gb / --db-max-gb 안전망 설정"]
         if idle >= total * 0.5:
             return ("warn", "🟠 디렉터리 진행 정체 — 굶주림(일감 못 빼감)",
@@ -342,29 +423,66 @@ def diagnose(controller, *, sample_sec: float = 1.2) -> dict:
     pid = os.getpid()                 # serve 모드: 스캔은 이 프로세스의 스레드
     sample = max(0.2, float(sample_sec))
     conn = dbmod.connect(db_path)
+    # 실행 중 Scanner 의 실측 스냅샷(계측 락·체크포인트·마지막 전진) — threads 엔진일 때만 있다
+    scanner = None
+    engine = None
+    try:
+        scanner = controller.live_scanner(sid) if hasattr(controller, "live_scanner") else None
+        engine = controller.scan_engine(sid) if hasattr(controller, "scan_engine") else None
+    except Exception:  # noqa: BLE001
+        scanner = None
+    snap = {}
+    if scanner is not None:
+        try:
+            snap = scanner.diag_snapshot()
+        except Exception:  # noqa: BLE001
+            snap = {}
     try:
         r1 = _row(conn)
         if r1 is None:
             return {"ok": True, "running": False, "msg": "스캔 행이 아직 없습니다."}
         total_known = _max_id(conn)
-        workers, detail = worker_snapshot()
-        # ── 자원 샘플(같은 창에서): 프로세스 CPU·시스템 iowait·메모리·NAS 지연 ──
+        # 워커 구간은 표본 창 안에서 3번 찍어 합산(한 순간의 우연을 줄인다)
+        workers, detail = worker_snapshot(snap.get("lock_waiting_idents"))
+        # ── 자원 샘플(같은 창에서): 프로세스 CPU·시스템 iowait·메모리·NAS 지연·자식 프로세스 ──
         cpu_s1 = monmod._proc_cputime_seconds(pid)
         cpu_t1, io_t1 = _cpu_times()
+        ch_n1, ch_cpu1, ch_rss1 = _children_stats(pid)
         memsamp = monmod.collect(pid)
         nas_root = r1.get("current_dir") or r1["root_path"]
         nas_ms, nas_timeout = _probe_nas_latency(nas_root, timeout=3.0)
-        time.sleep(sample)
+        for _i in range(2):
+            time.sleep(sample / 3.0)
+            w2, _d2 = worker_snapshot(
+                scanner.diag_snapshot().get("lock_waiting_idents") if scanner is not None else None)
+            for k in _CATS:
+                workers[k] = workers.get(k, 0) + w2.get(k, 0)
+            workers["total"] = workers.get("total", 0) + w2.get("total", 0)
+        time.sleep(sample / 3.0)
         r2 = _row(conn) or r1
         cpu_s2 = monmod._proc_cputime_seconds(pid)
         cpu_t2, io_t2 = _cpu_times()
+        ch_n2, ch_cpu2, ch_rss2 = _children_stats(pid)
     finally:
         conn.close()
+    if scanner is not None:
+        try:
+            snap = scanner.diag_snapshot()   # 표본 끝 시점 값으로 갱신
+        except Exception:  # noqa: BLE001
+            pass
+    snap.pop("lock_waiting_idents", None)   # JSON 직렬화 불가(set) — 분류에만 쓴다
 
     now = time.time()
     rate_dirs = max(0, (r2["discovered_dirs"] or 0) - (r1["discovered_dirs"] or 0)) / sample
     rate_files = max(0, (r2["total_files"] or 0) - (r1["total_files"] or 0)) / sample
     hb_age = max(0.0, now - (r2["updated_at"] or now))
+    # 마지막 '전진'(파일/디렉터리 수가 실제로 는 시각) — 진행 갱신(하트비트)과 구분한다.
+    adv = snap.get("advanced_at") or 0.0
+    try:
+        adv = max(float(adv), float(r2.get("advanced_at") or 0.0))
+    except (TypeError, ValueError, KeyError, IndexError):
+        pass
+    advance_age = (max(0.0, now - adv) if adv else None)
     discovered = r2["discovered_dirs"] or 0
     pending_est = max(0, total_known - discovered - (r2["active_workers"] or 0))
 
@@ -401,10 +519,20 @@ def diagnose(controller, *, sample_sec: float = 1.2) -> dict:
         mem_avail=((memsamp.mem_total - memsamp.mem_used) if memsamp else 0),
         swap_used=(memsamp.swap_used if memsamp else 0),
         disk_free=disk_free, nas_ms=nas_ms, nas_timeout=nas_timeout, iowait_pct=iowait_pct)
+    # 자식 프로세스(pscan 워커) 부하 — 부모만 보면 pscan 은 한가해 보인다
+    children = None
+    if ch_n2 or ch_n1:
+        ch_cpu = max(0.0, (ch_cpu2 - ch_cpu1) / sample * 100.0)
+        children = {"count": ch_n2, "cpu_pct": round(ch_cpu, 1), "rss": ch_rss2, "engine": engine}
+        resources.append({
+            "name": "자식 프로세스(pscan 워커)", "level": "ok",
+            "value": "%d개 · CPU %.0f%% (1코어 기준 합) · RSS %.1f GB" % (ch_n2, ch_cpu, ch_rss2 / 1e9),
+            "note": "멀티프로세스 엔진의 실제 부하는 여기 — 부모 프로세스 CPU 만 보면 안 됨"})
 
     level, title, desc, recs = _verdict(
         workers, rate_dirs, rate_files, hb_age, pending_est, db_bytes, disk_free,
-        phase=phase, agg_done=agg_done, agg_total=agg_total, rate_agg=rate_agg)
+        phase=phase, agg_done=agg_done, agg_total=agg_total, rate_agg=rate_agg,
+        advance_age=advance_age, lock=snap.get("lock"), ckpt=snap.get("checkpoint"))
 
     # 워커별 현재 경로(병렬 표시용 JSON) 파싱
     worker_dirs = []
@@ -425,6 +553,8 @@ def diagnose(controller, *, sample_sec: float = 1.2) -> dict:
         "active_workers": r2.get("active_workers") or 0, "configured_workers": r2.get("workers") or 0,
         "db_bytes": db_bytes, "wal_bytes": wal_bytes, "disk_free": disk_free,
         "current_dir": r2.get("current_dir"), "worker_dirs": worker_dirs,
+        "advance_age": advance_age, "engine": engine, "children": children,
+        "scanner": snap,       # lock(대기/보유 실측)·checkpoint(소요/busy/WAL)·sharing·worker_errors
         "verdict": {"level": level, "title": title, "desc": desc},
         "recommendations": recs,
         "resources": resources, "resource_bottleneck": resource_bottleneck,
