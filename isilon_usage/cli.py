@@ -26,7 +26,7 @@ from . import db as dbmod
 from . import monitor as monmod
 from . import manager as mgrmod
 from . import settings as setmod
-from .scanner import run_scan
+from .scanner import run_scan, partial_aggregate
 from .server import serve, build_status
 
 
@@ -253,6 +253,37 @@ def cmd_prune(args: argparse.Namespace) -> int:
     res = mgrmod.prune_scans(data_dir, keep_per_root=args.keep_per_root,
                              older_than_days=args.older_than_days)
     print(f"삭제된 스캔 {res['count']}개: {res['deleted']}")
+    return 0
+
+
+def cmd_partial(args: argparse.Namespace) -> int:
+    """멈춘 자료 집계(부분 집계) — 일시정지/오류 스캔의 현재 행으로 재귀 합계(하한값)를 계산한다."""
+    data_dir = os.path.abspath(args.data_dir)
+    mconn = dbmod.connect(mgrmod.manager_db_path(data_dir))
+    try:
+        row = mgrmod.get_scan(mconn, args.scan)
+    finally:
+        mconn.close()
+    if row is None:
+        print(f"scan #{args.scan} 없음", file=sys.stderr)
+        return 2
+    if not os.path.exists(row["db_path"]):
+        print("per-run DB 가 없습니다.", file=sys.stderr)
+        return 2
+    print(f"부분 집계(멈춘 자료): scan #{args.scan}  {row['root_path']}  (상태 {row['status']})")
+    last = [0.0]
+
+    def _prog(p):
+        if time.time() - last[0] >= 2.0:
+            last[0] = time.time()
+            print("  depth %s · %s/%s행 · %.0f초" % (p.get("depth"), f"{p['rows']:,}", f"{p['total_rows']:,}", p["elapsed"]))
+    res = partial_aggregate(row["db_path"], on_progress=_prog,
+                            manager_db=mgrmod.manager_db_path(data_dir), manager_scan_id=args.scan)
+    if not res.get("ok"):
+        print("실패: %s" % res.get("reason"), file=sys.stderr)
+        return 1
+    print("완료: %s행 %.1f초 (%s행/초) — 하한값. 대시보드에서 이 스캔을 고르면 '부분 집계 값'으로 표시됩니다."
+          % (f"{res['rows']:,}", res["elapsed"], f"{int(res['rows_per_sec']):,}"))
     return 0
 
 
@@ -830,6 +861,12 @@ def build_parser() -> argparse.ArgumentParser:
     ppr.add_argument("--older-than-days", type=float, default=None,
                      help="N일보다 오래된 완료/오류 스캔 삭제")
     ppr.set_defaults(func=cmd_prune)
+
+    ppa = sub.add_parser("partial", help="멈춘(일시정지/오류) 스캔의 지금까지 자료로 재귀 합계(하한값) 계산"
+                                          "(행 status 는 바꾸지 않아 재개하면 완전 집계가 다시 계산)")
+    ppa.add_argument("scan", type=int, help="부분 집계할 scan id(일시정지/오류 상태)")
+    ppa.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
+    ppa.set_defaults(func=cmd_partial)
 
     prs = sub.add_parser("resume", help="중단된 스캔 이어하기")
     prs.add_argument("scan", type=int, help="재개할 scan id")

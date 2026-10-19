@@ -123,6 +123,7 @@ def init_manager(data_dir: str) -> str:
     try:
         conn.executescript(MANAGER_SCHEMA)
         dbmod.ensure_column(conn, "scans", "app_version", "TEXT")
+        dbmod.ensure_column(conn, "scans", "partial_agg_at", "REAL")   # 멈춘 자료 부분 집계 시각
         conn.execute(f"PRAGMA user_version={int(SCHEMA_VERSION)}")
         conn.commit()
     finally:

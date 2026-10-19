@@ -199,6 +199,8 @@ def init_db(db_path: str) -> None:
         ensure_column(conn, "scan_runs", "agg_rate", "REAL NOT NULL DEFAULT 0")
         # 마지막으로 파일/디렉터리 수가 실제로 늘어난 시각(진행 갱신 시각과 구분 — 정체 판정용)
         ensure_column(conn, "scan_runs", "advanced_at", "REAL")
+        # '멈춘 자료 집계'(부분 집계) 완료 시각 — total_bytes 가 하한값(재개 전)임을 화면에 표시
+        ensure_column(conn, "scan_runs", "partial_agg_at", "REAL")
         conn.execute(f"PRAGMA user_version={int(SCHEMA_VERSION)}")
         conn.commit()
     finally:

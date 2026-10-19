@@ -908,8 +908,85 @@ def run_synthetic_pb_case() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def run_partial_aggregate_case() -> None:
+    """멈춘 자료 집계(부분 집계): 탐색 도중 멈춘 스캔의 행으로 재귀 합계(하한값)를 계산하되 행 status 는
+    바꾸지 않고, 재개하면 완전 집계가 정확한 값으로 덮어쓰며 '부분 집계' 표시가 지워지는지."""
+    from isilon_usage.scanner import partial_aggregate
+    d = tempfile.mkdtemp(prefix="iu_partial_")
+    try:
+        tree = os.path.join(d, "tree")
+        for a_ in range(6):
+            for b_ in range(6):
+                pth = os.path.join(tree, "d%d" % a_, "s%d" % b_)
+                os.makedirs(pth)
+                for f in range(5):
+                    _write(os.path.join(pth, "f%d.bin" % f), 1000)
+
+        def _totals(dbp):
+            c = dbmod.connect(dbp)
+            try:
+                return {r["path"]: (r["total_bytes"], r["total_files"], r["status"])
+                        for r in c.execute("SELECT path, total_bytes, total_files, status FROM directories")}
+            finally:
+                c.close()
+        db_full = os.path.join(d, "full.db")
+        run_scan(db_full, tree, workers=1, with_monitor=False)
+        full = _totals(db_full)
+        exp_root = full[tree]
+        # 실행 중 스캔은 거부
+        db_r = os.path.join(d, "r.db")
+        run_scan(db_r, tree, workers=1, with_monitor=False, stop_event=_TripAfter(300))
+        c = dbmod.connect(db_r)
+        try:
+            c.execute("UPDATE scan_runs SET status='discovering'")
+            c.commit()
+        finally:
+            c.close()
+        assert not partial_aggregate(db_r)["ok"], "실행 중 스캔을 거부해야 함"
+        c = dbmod.connect(db_r)
+        try:
+            c.execute("UPDATE scan_runs SET status='paused', phase='paused'")
+            c.commit()
+        finally:
+            c.close()
+        before = _totals(db_r)
+        assert all(v[0] == 0 for v in before.values()), "멈춘 스캔은 집계 전(total 0)이어야"
+        res = partial_aggregate(db_r)
+        assert res["ok"] and res["rows"] == len(before) and res["rows_per_sec"] > 0, res
+        part = _totals(db_r)
+        root_b, root_f, _ = part[tree]
+        assert 0 < root_b <= exp_root[0] and 0 < root_f <= exp_root[1], (part[tree], exp_root)
+        for pth, (b, f, st) in part.items():          # 모든 행이 하한값이고 status 는 그대로(done 없음)
+            assert st != "done", pth
+            fb, ff, _ = full.get(pth, (b, f, None))
+            assert b <= fb and f <= ff, (pth, (b, f), (fb, ff))
+        c = dbmod.connect(db_r)
+        try:
+            flag = c.execute("SELECT partial_agg_at FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()[0]
+            log = c.execute("SELECT COUNT(*) FROM scan_log WHERE message LIKE '부분 집계%'").fetchone()[0]
+        finally:
+            c.close()
+        assert flag and log >= 1, (flag, log)
+        # 재개 → 완전 집계가 덮어써 전체 스캔과 동일, 플래그 해제
+        run_scan(db_r, tree, workers=2, with_monitor=False, resume=True)
+        after = _totals(db_r)
+        assert after[tree][:2] == exp_root[:2], (after[tree], exp_root)
+        assert all(after[k][:2] == full[k][:2] for k in full), "재개 후 일부 행이 전체 스캔과 다름"
+        c = dbmod.connect(db_r)
+        try:
+            flag2 = c.execute("SELECT partial_agg_at FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()[0]
+        finally:
+            c.close()
+        assert flag2 is None, flag2
+        print("[partial-aggregate] OK  멈춘 스캔 %d행 부분 집계(루트 %d/%d B 하한값, status 불변) → 재개 후 전체와 동일·표시 해제"
+              % (res["rows"], root_b, exp_root[0]))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     run_checkpoint_nonblocking_case()
+    run_partial_aggregate_case()
     run_resume_stats_dedup_case()
     run_worker_exception_case()
     run_chunk_sharing_case()

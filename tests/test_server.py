@@ -722,9 +722,115 @@ def _check_troubleshoot_live() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _check_partial_aggregate_api() -> None:
+    """멈춘 자료 집계 API: 중지된 스캔 → POST /api/scan/partial-aggregate → 진행/완료 상태 → /api/status 에
+    partial_agg_at·하한값 노출, /api/scans 에 표시, 진행 중엔 재개/삭제 거부, 재개 완료 후 표시 해제."""
+    import shutil
+    import time as _t
+
+    from isilon_usage import db as dbmod
+    from isilon_usage import manager as mgrmod
+    from isilon_usage import scanner as scanmod
+    from isilon_usage import server as srvmod
+    from isilon_usage.server import ScanController
+
+    def _row(data, sid):
+        mc = dbmod.connect(mgrmod.manager_db_path(data))
+        try:
+            return mgrmod.get_scan(mc, sid)
+        finally:
+            mc.close()
+
+    def _wait(data, sid, want, timeout=60):
+        row = None
+        for _ in range(int(timeout / 0.1)):
+            row = _row(data, sid)
+            if row and row["status"] in want:
+                return row
+            _t.sleep(0.1)
+        return row
+
+    d = tempfile.mkdtemp(prefix="isilon_partial_api_")
+    orig_stat = scanmod.Scanner._safe_stat
+    orig_pa = srvmod.partial_aggregate
+    try:
+        tree = os.path.join(d, "tree")
+        for a_ in range(8):
+            sub = os.path.join(tree, "d%d" % a_)
+            os.makedirs(sub)
+            for i in range(300):
+                with open(os.path.join(sub, "f%03d.bin" % i), "wb") as fh:
+                    fh.write(b"x" * 64)
+        data = os.path.join(d, "data")
+        ctl = ScanController(data)
+
+        def slow_stat(self, entry):
+            _t.sleep(0.002)
+            return orig_stat(self, entry)
+        scanmod.Scanner._safe_stat = slow_stat                  # 중지할 틈을 만든다
+        sid = ctl.start_scan(tree, engine="threads")["scan_id"]
+        _t.sleep(0.8)
+        assert not ctl.partial_aggregate_scan(sid)["ok"], "실행 중엔 거부"
+        assert ctl.stop_scan(sid)["ok"]
+        row = _wait(data, sid, ("paused",))
+        assert row["status"] == "paused", row["status"]
+        scanmod.Scanner._safe_stat = orig_stat
+
+        # 진행 중 재개/삭제 거부 — 집계 함수를 1초 지연시켜 창을 만든다
+        def slow_pa(*a, **k):
+            _t.sleep(1.0)
+            return orig_pa(*a, **k)
+        srvmod.partial_aggregate = slow_pa
+        r = ctl.partial_aggregate_scan(sid)
+        assert r["ok"], r
+        assert not ctl.partial_aggregate_scan(sid)["ok"], "중복 실행 거부"
+        assert not ctl.resume_scan(sid)["ok"] and not ctl.delete_scan(sid)["ok"], "진행 중 재개/삭제 거부"
+        st = ctl.partial_aggregate_status(sid)
+        assert st["running"], st
+        for _ in range(100):
+            st = ctl.partial_aggregate_status(sid)
+            if not st["running"]:
+                break
+            _t.sleep(0.1)
+        assert not st["running"] and st["result"]["ok"] and st["result"]["rows"] >= 1, st
+        srvmod.partial_aggregate = orig_pa
+        # per-run DB: 부분 집계 값·플래그, 관리 DB: 플래그
+        pc = dbmod.connect(row["db_path"])
+        try:
+            from isilon_usage.server import build_status
+            bs = build_status(pc, None, top=0)
+            root = pc.execute("SELECT total_bytes, total_files FROM directories WHERE depth=0").fetchone()
+        finally:
+            pc.close()
+        assert bs["run"]["partial_agg_at"] and root["total_bytes"] > 0, (bs["run"].get("partial_agg_at"), tuple(root))
+        assert _row(data, sid)["partial_agg_at"], "관리 DB 에 부분 집계 시각 없음"
+        # 재개 → 완료 → 플래그 해제(관리 DB·per-run DB)
+        assert ctl.resume_scan(sid)["ok"]
+        row2 = _wait(data, sid, ("done", "error"))
+        assert row2["status"] == "done", (row2["status"], row2["error"])
+        for _ in range(50):                                   # _on_scan_finished 가 비동기로 지움
+            if not _row(data, sid)["partial_agg_at"]:
+                break
+            _t.sleep(0.1)
+        assert not _row(data, sid)["partial_agg_at"], "완료 후 관리 DB 표시 미해제"
+        pc = dbmod.connect(row["db_path"])
+        try:
+            flag = pc.execute("SELECT partial_agg_at FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()[0]
+            root2 = pc.execute("SELECT total_files FROM directories WHERE depth=0").fetchone()[0]
+        finally:
+            pc.close()
+        assert flag is None and root2 == 2400, (flag, root2)
+        print("[partial-aggregate-api] OK  중지→부분 집계(하한값·표시)→진행 중 재개/삭제 거부→재개 완료 후 표시 해제")
+    finally:
+        scanmod.Scanner._safe_stat = orig_stat
+        srvmod.partial_aggregate = orig_pa
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     _check_insecure_warning()
     _check_troubleshoot_live()
+    _check_partial_aggregate_api()
     _check_duplicate_scan_guard()
     _check_resume_after_upgrade()
     _check_resume_real()

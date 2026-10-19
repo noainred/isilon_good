@@ -362,6 +362,7 @@ class Scanner:
                       "max_ms": 0.0, "last_busy": 0, "last_at": 0.0, "wal_mb": 0.0, "next_at": 0.0}
         self._advanced_at = 0.0        # 마지막으로 파일/디렉터리 수가 실제로 늘어난 시각
         self._adv_col = False          # scan_runs.advanced_at 컬럼 존재 여부(구버전 DB 호환)
+        self._pagg_col = False         # scan_runs.partial_agg_at 컬럼 존재 여부
         # 워커 예외 전달: 한 워커가 죽으면 전체를 멈추고 run() 이 status=error 로 끝낸다.
         self._worker_exc: list = []
         self._abort = False
@@ -663,10 +664,12 @@ class Scanner:
             total, used, free = self._statvfs()
             self._fs_total, self._fs_used, self._fs_free = total, used, free
             try:   # 구버전 DB(컬럼 없음)에서도 진행 flush 가 실패하지 않게
-                self._adv_col = "advanced_at" in {
-                    r[1] for r in conn.execute("PRAGMA table_info(scan_runs)")}
+                _cols = {r[1] for r in conn.execute("PRAGMA table_info(scan_runs)")}
+                self._adv_col = "advanced_at" in _cols
+                self._pagg_col = "partial_agg_at" in _cols
             except Exception:  # noqa: BLE001
                 self._adv_col = False
+                self._pagg_col = False
 
             existing = dbmod.latest_run_id(conn) if self.resume else None
             if existing:
@@ -887,6 +890,10 @@ class Scanner:
             finished_at=now,
             discovered_dirs=self._discovered,
             total_dirs=self._discovered,
+        )
+        if status == "done" and self._pagg_col:
+            fields["partial_agg_at"] = None   # 완전 집계가 끝났으니 '부분 집계 값' 표시를 지운다
+        fields.update(
             processed_dirs=self._processed,
             scanned_bytes=self._scanned_bytes,
             total_files=self._total_files,
@@ -1604,6 +1611,122 @@ class Scanner:
             return int(out.split("\t", 1)[0].split()[0])
         except (ValueError, IndexError):
             return -1
+
+
+def partial_aggregate(db_path: str, run_id: Optional[int] = None, *, stop_event=None,
+                      on_progress=None, window: int = AGG_WINDOW,
+                      manager_db: Optional[str] = None, manager_scan_id: Optional[int] = None) -> dict:
+    """'멈춘 자료 집계' — 일시정지/오류로 멈춘 스캔의 '지금까지 발견된 행'으로 재귀 합계(하한값)를 계산한다.
+
+    total_bytes/total_files 만 쓰고 행 status 는 바꾸지 않는다: 재개하면 탐색이 이어지고 완전 집계가
+    같은 행을 다시 계산해 덮어쓴다. 아직 안 훑은(pending/claimed) 행은 0 으로 들어가므로 결과는
+    **하한값**이다. 완료 시 scan_runs.partial_agg_at(+관리 DB)에 시각을 기록해 화면이 '부분 집계 값'임을
+    표시하고, 완전 집계(status=done)가 끝나면 스캐너가 지운다. fold 넘김 행은 정리하지 않는다(재개에 필요).
+    비용은 행 수에 비례한다(레벨별 일괄 UPDATE, 윈도우마다 커밋 → 중단 가능).
+    반환: {ok, run_id, rows, total_rows, max_depth, elapsed, rows_per_sec, partial_agg_at} 또는 {ok: False, reason}.
+    """
+    t0 = time.time()
+    conn = dbmod.connect(db_path)
+    try:
+        dbmod.ensure_column(conn, "scan_runs", "partial_agg_at", "REAL")
+        if run_id is None:
+            run_id = dbmod.latest_run_id(conn)
+        if run_id is None:
+            return {"ok": False, "reason": "스캔 run 이 없습니다."}
+        run = dbmod.get_run(conn, run_id)
+        if run is None:
+            return {"ok": False, "reason": "없는 run 입니다."}
+        if run["status"] in ("discovering", "sizing"):
+            return {"ok": False, "reason": "실행 중인 스캔입니다(먼저 중지하세요)."}
+        phase = run["phase"] or run["status"] or "paused"
+        try:   # 집계 튜닝(이 연결에만): 페이지 캐시 상향 + 자동 체크포인트 간격 상향(완전 집계와 동일)
+            conn.execute("PRAGMA cache_size=-%d" % AGG_CACHE_KB)
+            conn.execute("PRAGMA wal_autocheckpoint=%d" % AGG_AUTOCKPT_PAGES)
+        except Exception:  # noqa: BLE001
+            pass
+        row = conn.execute("SELECT COALESCE(MAX(depth),0) AS d, COUNT(*) AS n FROM directories WHERE run_id=?",
+                           (run_id,)).fetchone()
+        max_depth = int(row["d"])
+        total_rows = int(row["n"])
+        # status 조건·status 변경 없음 — 그 외는 _aggregate_native 와 같은 레벨별 일괄 UPDATE
+        sql = """UPDATE directories INDEXED BY idx_dir_run_depth
+                 SET total_bytes = own_bytes + COALESCE((
+                         SELECT SUM(c.total_bytes) FROM directories c
+                         WHERE c.run_id=directories.run_id AND c.parent_id=directories.id), 0),
+                     total_files = file_count + COALESCE((
+                         SELECT SUM(c.total_files) FROM directories c
+                         WHERE c.run_id=directories.run_id AND c.parent_id=directories.id), 0)
+                 WHERE run_id=? AND depth=? AND id>=? AND id<?"""
+        done_rows = 0
+        stopped = False
+
+        def _stopped():
+            return stop_event is not None and stop_event.is_set()
+        for depth in range(max_depth, -1, -1):
+            if _stopped():
+                stopped = True
+                break
+            bound = conn.execute("SELECT MIN(id) AS lo, MAX(id) AS hi FROM directories "
+                                 "WHERE run_id=? AND depth=?", (run_id, depth)).fetchone()
+            if bound["lo"] is None:
+                continue
+            w, hi = int(bound["lo"]), int(bound["hi"])
+            while w <= hi:
+                if _stopped():
+                    stopped = True
+                    break
+                try:
+                    cur = conn.execute(sql, (run_id, depth, w, w + int(window)))
+                except Exception:  # noqa: BLE001 — 인덱스 없는 비정상 DB 는 힌트 없이 폴백
+                    sql = sql.replace(" INDEXED BY idx_dir_run_depth", "")
+                    cur = conn.execute(sql, (run_id, depth, w, w + int(window)))
+                done_rows += cur.rowcount
+                w += int(window)
+                conn.commit()   # 윈도우마다 커밋 → 중단해도 DB 는 일관(값만 부분 갱신)
+                if on_progress is not None:
+                    try:
+                        on_progress({"depth": depth, "rows": done_rows, "total_rows": total_rows,
+                                     "elapsed": time.time() - t0})
+                    except Exception:  # noqa: BLE001
+                        pass
+            if stopped:
+                break
+        el = time.time() - t0
+        if stopped:
+            try:
+                dbmod.add_scan_log(conn, run_id, phase,
+                                   "부분 집계 중단: %s행 %.1fs — 값은 일부만 갱신됨(다시 실행하거나 재개)"
+                                   % (f"{done_rows:,}", el))
+                conn.commit()
+            except Exception:  # noqa: BLE001
+                pass
+            return {"ok": False, "reason": "중단됨", "stopped": True, "rows": done_rows,
+                    "total_rows": total_rows, "elapsed": el}
+        now = time.time()
+        dbmod.update_run(conn, run_id, partial_agg_at=now)
+        try:
+            dbmod.add_scan_log(conn, run_id, phase,
+                               "부분 집계(멈춘 자료): %s행 %.1fs (%s행/초) — 하한값, 재개하면 완전 집계가 다시 계산"
+                               % (f"{done_rows:,}", el, f"{int(done_rows / el):,}" if el > 0 else "-"))
+        except Exception:  # noqa: BLE001
+            pass
+        conn.commit()
+    finally:
+        conn.close()
+    if manager_db and manager_scan_id:
+        try:   # 관리 DB(스캔 목록) 에도 표시 — 컬럼은 init_manager 가 보강
+            from . import manager as mgr
+            mc = dbmod.connect(manager_db)
+            try:
+                mgr.update_scan(mc, manager_scan_id, partial_agg_at=now)
+                mc.commit()
+            finally:
+                mc.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return {"ok": True, "run_id": run_id, "rows": done_rows, "total_rows": total_rows,
+            "max_depth": max_depth, "elapsed": el,
+            "rows_per_sec": (done_rows / el) if el > 0 else 0.0, "partial_agg_at": now}
 
 
 def run_scan(

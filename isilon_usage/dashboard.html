@@ -3727,6 +3727,10 @@ function renderOverview(j) {
         if (running) act += ` <button class="stopbtn" data-stop="${r.scan_id}">중지</button>`;
         else {
           if (r.status === "paused") act += ` <button data-resume="${r.scan_id}" style="padding:2px 8px; font-size:11.5px;">재개</button>`;
+          // 멈춘 자료 집계(부분 집계): 일시정지/오류 스캔의 지금까지 행으로 재귀 합계(하한값)를 계산
+          if (r.status === "paused" || r.status === "error") act += r.partial_agg_running
+            ? ` <span class="sub">⏳ 부분 집계 중…</span>`
+            : ` <button data-partial="${r.scan_id}" style="padding:2px 8px; font-size:11.5px;" title="멈춘 자료로 재귀 합계(하한값)를 계산해 보여줍니다. 행 수에 비례해 시간이 걸리고, 그동안 재개/삭제는 막힙니다. 재개하면 완전 집계가 다시 계산합니다.">부분 집계</button>`;
           act += ` <button class="stopbtn" data-del="${r.scan_id}" style="white-space:nowrap;" title="이 스캔의 완료 데이터(per-run DB)를 삭제 — 되돌릴 수 없음">완료데이터 삭제</button>`;
         }
       }
@@ -3737,7 +3741,7 @@ function renderOverview(j) {
         <td class="num">${fmtBytes(r.fs_used_bytes)}</td>
         <td class="num">${pct.toFixed(1)}%</td>
         <td class="num">${el == null ? "—" : fmtDur(el)}</td>
-        <td>${running && (r.status === "paused" || r.status === "done") ? "실행 중" : (statusKo[r.status] || r.status)}${loopBadge}</td>
+        <td>${running && (r.status === "paused" || r.status === "done") ? "실행 중" : (statusKo[r.status] || r.status)}${loopBadge}${(!running && r.partial_agg_at && r.status !== "done") ? ' <span class="badge paused" title="지금까지 발견된 행으로 계산한 하한값(재개 전). 재개해 완료하면 정확한 값으로 바뀝니다.">부분 집계 ' + new Date(r.partial_agg_at * 1000).toLocaleString("ko-KR") + '</span>' : ''}</td>
         <td>${act}</td>
       </tr>`;
     }).join("");
@@ -3752,6 +3756,11 @@ function renderOverview(j) {
       b.addEventListener("click", () => stopScan(parseInt(b.dataset.stop))));
     body.querySelectorAll("button[data-resume]").forEach(b =>
       b.addEventListener("click", () => scanAction("resume", parseInt(b.dataset.resume))));
+    body.querySelectorAll("button[data-partial]").forEach(b =>
+      b.addEventListener("click", () => {
+        if (!confirm("스캔 #" + b.dataset.partial + " — 멈춘 자료로 재귀 합계(하한값)를 계산할까요?\n행 수에 비례해 시간이 걸리며, 그동안 재개/삭제는 막힙니다.")) return;
+        scanAction("partial-aggregate", parseInt(b.dataset.partial));
+      }));
     body.querySelectorAll("button[data-del]").forEach(b =>
       b.addEventListener("click", () => {
         const id = b.dataset.del;
@@ -4034,9 +4043,26 @@ function render(d) {
   badge.textContent = phaseKo[r.status] || phaseKo[r.phase] || r.status;
   $("phaseTxt").textContent = phaseKo[r.phase] || r.phase;
 
-  // 분석 화면: 스캔 진행 중(탐색/집계)에는 정확한 데이터가 아니므로 안내 배너 표시
+  // 분석 화면 안내 배너(하나를 공유): 진행 중 → 임시값 안내 / 부분 집계 중 → 진행 / 부분 집계 값 → 하한값 안내
   const _an = $("analysisNotice");
-  if (_an) _an.style.display = (r.status === "discovering" || r.status === "sizing") ? "block" : "none";
+  if (_an) {
+    if (!window._anRunningHtml) window._anRunningHtml = _an.innerHTML;   // 원래(진행 중) 문구 보관
+    const _pa = d.partial_agg;
+    const _running = (r.status === "discovering" || r.status === "sizing");
+    if (_running) { _an.style.display = "block"; _an.innerHTML = window._anRunningHtml; }
+    else if (_pa && _pa.running) {
+      const pg = _pa.progress || {};
+      _an.style.display = "block";
+      _an.innerHTML = '⏳ <b>멈춘 자료 집계(부분 집계) 중</b> — depth ' + (pg.depth == null ? "—" : pg.depth) + ' · '
+        + fmtNum(pg.rows || 0) + ' / ' + fmtNum(pg.total_rows || 0) + '행 · ' + fmtDur(pg.elapsed || 0)
+        + ' <span class="sub">(행 수에 비례해 걸립니다. 끝나면 이 화면 값이 하한값으로 바뀝니다.)</span>';
+    } else if (r.partial_agg_at) {
+      _an.style.display = "block";
+      _an.innerHTML = '⚠ <b>부분 집계 값(재개 전 · 하한값)</b> — ' + new Date(r.partial_agg_at * 1000).toLocaleString("ko-KR")
+        + ' 기준으로 <b>지금까지 발견된 디렉터리만</b> 합산했습니다. 아직 안 훑은 하위는 0 으로 들어가 실제보다 작을 수 있습니다. '
+        + '스캔을 <b>재개해 완료</b>하면 정확한 값으로 바뀝니다.';
+    } else { _an.style.display = "none"; }
+  }
   // Summary 진행 카드: 탐색 단계 안내(집계 시작 전)
   const _pn = $("progNotice");
   if (_pn) _pn.style.display = (r.phase === "discovering") ? "block" : "none";

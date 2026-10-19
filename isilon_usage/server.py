@@ -48,7 +48,7 @@ from . import audit as auditmod
 from . import upgrade as upgrademod
 from . import ask as askmod
 from . import atimes as atimemod
-from .scanner import run_scan
+from .scanner import run_scan, partial_aggregate
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -77,6 +77,14 @@ def _path_readonly(path: str) -> bool:
         return bool(os.statvfs(path).f_flag & getattr(os, "ST_RDONLY", 1))
     except OSError:
         return False
+
+
+def _scans_with_partial(scans, ctrl):
+    """/api/scans 행에 '부분 집계 진행 중' 표시를 붙인다(부분 집계 시각은 관리 DB 컬럼에 있음)."""
+    prun = ctrl.partial_running_ids() if ctrl is not None else set()
+    for s_ in scans:
+        s_["partial_agg_running"] = s_.get("id") in prun
+    return scans
 
 
 def _parse_worker_dirs(s):
@@ -341,6 +349,8 @@ def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 
             "fs_free_bytes": r.get("fs_free_bytes") or 0,
             "scanner_pid": r.get("scanner_pid"),
             "error": r.get("error"),
+            # 멈춘 자료 집계(부분 집계) 시각 — 있으면 total_bytes 는 재개 전 하한값(완전 집계가 끝나면 지워짐)
+            "partial_agg_at": r.get("partial_agg_at"),
         },
         "progress": {
             "dir_progress_pct": dir_progress,
@@ -652,6 +662,7 @@ class ScanController:
         self.lock_settings = lock_settings
         self.settings = setmod.load(data_dir)
         self._scans: Dict[int, dict] = {}   # manager scan_id -> {stop, thread}
+        self._partial_jobs: Dict[int, dict] = {}   # scan_id -> 멈춘 자료 집계(부분 집계) 작업
         self._lock = threading.Lock()
         # '중복 검사 → 등록 → 실행' 임계 구역(start_scan·resume_scan). 동시 요청(더블클릭·포탈 중복 등록 노드·
         # 예약 동시 발화)이 같은 루트를 두 번 등록하지 못하게 한다. _lock 과 별개(내부에서 _lock 을 잡음).
@@ -932,7 +943,7 @@ class ScanController:
             try:
                 secs = int(self.settings.get("upgrade_check_secs", 60) or 60)
                 with self._lock:
-                    busy = bool(self._scans)   # 스캔 중이면 업그레이드 보류
+                    busy = bool(self._scans) or bool(self._partial_running_nolock())   # 스캔 중이면 업그레이드 보류
                 # ① 로컬 감시 폴더
                 wd = (self.settings.get("upgrade_watch_dir") or "").strip()
                 if wd and not busy:
@@ -986,7 +997,7 @@ class ScanController:
     def upgrade_status(self) -> dict:
         with self._lock:
             st = dict(self._upg_state)
-            busy = bool(self._scans)   # 스캔 중이면 자동 업그레이드는 보류됨
+            busy = bool(self._scans) or bool(self._partial_running_nolock())   # 스캔 중이면 자동 업그레이드는 보류됨
         st["current"] = __version__
         st["source_mode"] = self.settings.get("upgrade_source", "off")
         st["auto"] = bool(self.settings.get("upgrade_auto"))
@@ -1945,6 +1956,13 @@ class ScanController:
                 mconn.close()
             if row is None:
                 return
+            if row["status"] == "done":
+                try:   # 완전 집계가 끝났으면 관리 DB 의 '부분 집계 값' 표시도 지운다
+                    mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+                    mgrmod.update_scan(mc, scan_id, partial_agg_at=None)
+                    mc.commit(); mc.close()
+                except Exception:  # noqa: BLE001
+                    pass
             human = _human_bytes(row["scanned_bytes"])
             self._log("scan #%d %s: %s (dirs=%s files=%s, %s)" % (
                 scan_id, row["status"], row["root_path"],
@@ -2054,6 +2072,8 @@ class ScanController:
     def _resume_scan_locked(self, scan_id: int) -> dict:
         if scan_id in self.running_ids():
             return {"ok": False, "reason": "이미 실행 중입니다."}
+        if scan_id in self.partial_running_ids():
+            return {"ok": False, "reason": "부분 집계가 진행 중입니다 — 끝난 뒤(또는 중단 후) 재개하세요."}
         mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
         try:
             row = mgrmod.get_scan(mconn, scan_id)
@@ -2092,9 +2112,81 @@ class ScanController:
         return {"ok": True, "scan_id": scan_id}
 
     # ----- 삭제 / 정리 -----
+    # ----- 멈춘 자료 집계(부분 집계) — 일시정지/오류 스캔의 현재 행으로 재귀 합계(하한값) -----
+    def _partial_running_nolock(self) -> set:
+        """self._lock 을 이미 쥔 곳에서 쓰는 변형(_lock 은 재진입 불가 — 중첩 획득하면 교착)."""
+        return {sid for sid, j in list(self._partial_jobs.items())
+                if j.get("thread") is not None and j["thread"].is_alive()}
+
+    def partial_running_ids(self) -> set:
+        with self._lock:
+            return self._partial_running_nolock()
+
+    def partial_aggregate_scan(self, scan_id: int) -> dict:
+        """일시정지/오류 스캔의 per-run DB 에 지금까지 행으로 total_bytes/total_files(하한값)를 채운다.
+
+        행 status 는 바꾸지 않아 재개하면 완전 집계가 다시 계산한다. 진행 중엔 재개/삭제/자동 업그레이드를
+        막는다(같은 DB 를 쓰는 중). 비용은 행 수에 비례(레벨별 일괄 UPDATE).
+        """
+        if scan_id in self.running_ids():
+            return {"ok": False, "reason": "실행 중인 스캔입니다(먼저 중지하세요)."}
+        if scan_id in self.partial_running_ids():
+            return {"ok": False, "reason": "이미 부분 집계가 진행 중입니다."}
+        mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+        try:
+            row = mgrmod.get_scan(mconn, scan_id)
+        finally:
+            mconn.close()
+        if row is None:
+            return {"ok": False, "reason": "없는 scan"}
+        if row["status"] not in ("paused", "error"):
+            return {"ok": False, "reason": "일시정지/오류 상태의 스캔만 부분 집계할 수 있습니다(현재 %s)."
+                    % row["status"]}
+        if not os.path.exists(row["db_path"]):
+            return {"ok": False, "reason": "per-run DB 가 없습니다."}
+        stop = threading.Event()
+        prog = {"depth": None, "rows": 0, "total_rows": 0, "elapsed": 0.0}
+        job = {"stop": stop, "progress": prog, "started": time.time(), "result": None, "thread": None}
+        db_path = row["db_path"]
+
+        def _run():
+            try:
+                res = partial_aggregate(db_path, stop_event=stop, on_progress=prog.update,
+                                        manager_db=mgrmod.manager_db_path(self.data_dir),
+                                        manager_scan_id=scan_id)
+            except Exception as exc:  # noqa: BLE001
+                res = {"ok": False, "reason": "%s: %s" % (type(exc).__name__, exc)}
+            job["result"] = res
+            self._log("partial-agg #%d: %s" % (scan_id, res.get("reason") or (
+                "%s행 %.1fs" % (res.get("rows"), res.get("elapsed") or 0))))
+        t = threading.Thread(target=_run, name="partial-agg-%d" % scan_id, daemon=True)
+        job["thread"] = t
+        with self._lock:
+            self._partial_jobs[scan_id] = job
+        t.start()
+        return {"ok": True, "scan_id": scan_id}
+
+    def partial_aggregate_status(self, scan_id) -> dict:
+        with self._lock:
+            job = self._partial_jobs.get(scan_id) if scan_id is not None else None
+        if job is None:
+            return {"ok": True, "scan_id": scan_id, "running": False, "result": None}
+        return {"ok": True, "scan_id": scan_id, "running": bool(job["thread"] and job["thread"].is_alive()),
+                "progress": dict(job["progress"]), "started": job["started"], "result": job["result"]}
+
+    def partial_aggregate_stop(self, scan_id: int) -> dict:
+        with self._lock:
+            job = self._partial_jobs.get(scan_id)
+        if job is None or not (job["thread"] and job["thread"].is_alive()):
+            return {"ok": False, "reason": "진행 중인 부분 집계가 없습니다."}
+        job["stop"].set()
+        return {"ok": True, "scan_id": scan_id}
+
     def delete_scan(self, scan_id: int) -> dict:
         if scan_id in self.running_ids():
             return {"ok": False, "reason": "실행 중인 스캔은 삭제할 수 없습니다(먼저 중지)."}
+        if scan_id in self.partial_running_ids():
+            return {"ok": False, "reason": "부분 집계가 진행 중인 스캔은 삭제할 수 없습니다(먼저 중단)."}
         return mgrmod.delete_scan(self.data_dir, scan_id)
 
     def prune(self, *, keep_per_root=None, older_than_days=None) -> dict:
@@ -2493,7 +2585,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "ok": True,
                     "version": __version__,
                     "overall": mgrmod.overall_capacity(mconn),
-                    "scans": mgrmod.list_scans(mconn),
+                    "scans": _scans_with_partial(mgrmod.list_scans(mconn), ctrl),
                     "running": ctrl.running_ids() if ctrl else [],
                     "auto_restart": ctrl.auto_restart_ids() if ctrl else [],
                     "mount_bases": ctrl.mount_bases if ctrl else [],
@@ -2574,6 +2666,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     return
                 self._send_json(self.controller.systune_check(
                     scan_root=qs.get("path", [None])[0]))
+                return
+
+            if path == "/api/scan/partial-aggregate/status":
+                self._send_json(self.controller.partial_aggregate_status(self._query_int(qs, "scan"))
+                                if self.controller else {"ok": False, "reason": "웹 스캔 비활성"})
                 return
 
             if path == "/api/troubleshoot/history":
@@ -2713,6 +2810,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     pconn.close()
                 payload["scan_id"] = scan_id
                 payload["scan_meta"] = scan_meta
+                if self.controller is not None:   # 멈춘 자료 집계(부분 집계) 진행/결과 — 있을 때만
+                    _pa = self.controller.partial_aggregate_status(scan_id)
+                    if _pa.get("running") or _pa.get("result") is not None:
+                        payload["partial_agg"] = _pa
                 # DB 디스크 사용량 + 한도 — 'DB 살아있는지' 지표로 요약에 표시
                 payload["db_usage"] = _db_disk_usage(db_path)
                 _st = self._current_settings() or {}
@@ -3371,7 +3472,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(self.controller.troubleshoot_history_clear())
                 return
 
-            if path in ("/api/scan/stop", "/api/scan/resume", "/api/scan/delete"):
+            if path in ("/api/scan/stop", "/api/scan/resume", "/api/scan/delete",
+                        "/api/scan/partial-aggregate"):
                 try:
                     scan_id = int(body.get("scan_id"))
                 except (TypeError, ValueError):
@@ -3381,6 +3483,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     res = self.controller.stop_scan(scan_id)
                 elif path == "/api/scan/resume":
                     res = self.controller.resume_scan(scan_id)
+                elif path == "/api/scan/partial-aggregate":
+                    res = (self.controller.partial_aggregate_stop(scan_id) if body.get("stop")
+                           else self.controller.partial_aggregate_scan(scan_id))
                 else:
                     res = self.controller.delete_scan(scan_id)
                 self._send_json(res, status=200 if res.get("ok") else 400)
