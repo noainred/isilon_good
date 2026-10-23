@@ -62,6 +62,7 @@ def _make_tree(root: str) -> None:
 class Client:
     def __init__(self, base):
         self.base = base
+        self.op_token = ""      # 로그인 토큰(설정·되돌릴 수 없는 작업용) — 있으면 POST 에 자동으로 붙인다
 
     def get(self, path):
         try:
@@ -74,6 +75,8 @@ class Client:
 
     def post(self, path, data, headers=None, want_status=False):
         h = {"Content-Type": "application/json"}
+        if self.op_token:
+            h["X-Op-Token"] = self.op_token
         h.update(headers or {})
         req = urllib.request.Request(
             self.base + path, data=json.dumps(data).encode(),
@@ -1042,6 +1045,25 @@ def main() -> int:
         csv = c.get_raw(f"/api/export?scan={s1}&format=csv").decode("utf-8")
         assert "path,depth" in csv and root in csv
 
+        # 인증 정책: 일반 작업(스캔 시작 등)은 자유, '설정'·되돌릴 수 없는 작업만 인증.
+        # 비밀번호가 아직 없으면 설정은 need_setup(401) → 처음 들어갈 때 비밀번호를 만든다(/api/op-setup).
+        assert c.get("/api/scans")["op_required"] is False
+        ns, st = c.post("/api/settings", {"settings": {"top_n": 9}}, want_status=True)
+        assert st == 401 and ns.get("need_setup"), (st, ns)
+        for pth in ("/api/scan/delete", "/api/prune", "/api/upgrade/install"):
+            _r, st = c.post(pth, {}, want_status=True)
+            assert st == 401, (pth, st, _r)
+        # CSRF: 다른 사이트 폼은 JSON Content-Type 을 못 보낸다 → text/plain 최초 설정 거부
+        _r, st = c.post("/api/op-setup", {"password": "pw1234"},
+                        headers={"Content-Type": "text/plain"}, want_status=True)
+        assert st == 415 and c.get("/api/scans")["op_required"] is False, (st, _r)
+        assert not c.post("/api/op-setup", {"password": "ab"})["ok"]          # 너무 짧음
+        su = c.post("/api/op-setup", {"password": "pw1234"})
+        assert su["ok"] and su["token"], su
+        assert c.get("/api/scans")["op_required"] is True
+        assert not c.post("/api/op-setup", {"password": "other99"})["ok"]     # 이미 있으면 덮어쓰기 금지
+        c.op_token = su["token"]
+
         # 글로벌 포탈 복제용 DB export (토큰 보호 + tar.gz 번들)
         c.post("/api/settings", {"settings": {"api_token": "secret123"}})
         try:
@@ -1117,14 +1139,15 @@ def main() -> int:
         gbad = c.post("/api/gentest/start", {"path": "/etc", "n_dirs": 1})
         assert not gbad["ok"], gbad
 
-        # 작업 보호(비밀번호): 미설정이면 op_required 거짓
-        assert c.get("/api/scans")["op_required"] is False
-        sp = c.post("/api/settings", {"settings": {"op_lock": True, "op_password": "pw1234"}})
-        assert sp["ok"] and sp["settings"]["op_password"] == "" and sp["settings"]["op_password_set"] is True, sp
+        # 작업 보호(비밀번호): 위에서 만든 비밀번호 — 응답엔 값 대신 설정 여부만
         assert c.get("/api/scans")["op_required"] is True
-        # 토큰 없이 POST → 401 잠김 (보기 GET 은 여전히 동작)
-        lk, st = c.post("/api/settings", {"settings": {"top_n": 9}}, want_status=True)
+        assert c.get("/api/settings")["settings"]["op_password"] == ""
+        # 토큰 없이: 설정 POST → 401 잠김, 일반 작업(스캔 중지 요청)은 인증 없이 처리, 보기 GET 은 자유
+        lk, st = c.post("/api/settings", {"settings": {"top_n": 9}},
+                        headers={"X-Op-Token": ""}, want_status=True)
         assert st == 401 and lk.get("op_required"), (st, lk)
+        _r, st = c.post("/api/scan/stop", {"scan_id": 999999}, headers={"X-Op-Token": ""}, want_status=True)
+        assert st != 401, (st, _r)
         assert c.get("/api/scans")["ok"] is True   # 보기는 자유
         # 틀린 비번 → 실패, 맞는 비번 → 토큰
         assert c.post("/api/unlock", {"password": "nope"}).get("ok") is False
@@ -1134,10 +1157,15 @@ def main() -> int:
         okp = c.post("/api/settings", {"settings": {"top_n": 9}},
                      headers={"X-Op-Token": tok["token"]})
         assert okp["ok"] and okp["settings"]["top_n"] == 9, okp
-        # 보호 해제(op_lock False) — 토큰 필요
+        # 보호 해제(op_lock False) — 토큰 필요. 해제되면 설정은 다시 '처음 비밀번호 만들기' 상태
         c.post("/api/settings", {"settings": {"op_lock": False}},
                headers={"X-Op-Token": tok["token"]})
         assert c.get("/api/scans")["op_required"] is False
+        _r, st = c.post("/api/settings", {"settings": {"top_n": 9}}, want_status=True)
+        assert st == 401 and _r.get("need_setup"), (st, _r)
+        su2 = c.post("/api/op-setup", {"password": "pw5678"})
+        assert su2["ok"], su2
+        c.op_token = su2["token"]                    # 이후 정리·삭제 테스트용
 
         # 스캔 2 → diff
         r2 = c.post("/api/scan/start", {"path": root})

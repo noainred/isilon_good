@@ -492,10 +492,10 @@ pre.changelog{ background:rgba(13,19,33,.75); }
     <div class="sub" id="tmNote" style="margin-top:8px;">색상은 디렉터리 구분용입니다. (디렉터리 단위 ‘나이’ 집계가 DB에 없어, 나이별 색상은 현재 데이터로 제공하지 않습니다.)</div>
   </div>
 
-  <!-- 읽기 전용 안내(로그인 전) -->
+  <!-- 설정 잠김 안내(설정 화면에서 로그인 세션이 없을 때) -->
   <div id="roBanner" class="card" style="display:none; margin-bottom:14px; border-color:var(--warn); background:#2a2410;">
-    <b>🔒 읽기 전용 모드</b> — 지금은 조회만 가능합니다. 스캔 시작·설정 변경 등 모든 작업은
-    <b>로그인</b> 후 사용할 수 있습니다.
+    <b>🔒 설정 잠김</b> — 설정 변경은 <b>로그인</b> 후 사용할 수 있습니다(세션 만료).
+    스캔 시작·중지 등 일반 작업은 로그인 없이 됩니다.
     <button id="roLoginBtn" style="margin-left:8px; border-color:var(--accent2);">🔑 로그인</button>
   </div>
 
@@ -722,7 +722,7 @@ pre.changelog{ background:rgba(13,19,33,.75); }
         <label style="display:flex; align-items:center; gap:8px; margin-top:6px;">
           <input id="setOpEncrypt" type="checkbox" /> 비밀번호 암호화 저장(PBKDF2 해시 — 파일에 평문 미저장·복구 불가)
         </label>
-        <div class="sub" style="margin-top:4px;">비밀번호를 설정하면 접속 시 <b>읽기 전용</b>이 되고, 우상단 <b>🔑 로그인</b> 후 모든 기능을 쓸 수 있습니다. 로그인 실패가 잦으면 잠시 잠깁니다(무차별 대입 방지).</div>
+        <div class="sub" style="margin-top:4px;">이 비밀번호는 <b>설정</b>과 되돌릴 수 없는 작업(완료데이터 삭제·보존 정리·업그레이드 설치 등)에만 필요합니다 — 스캔 시작·중지·재개 등은 로그인 없이 됩니다. 비밀번호가 없으면 설정에 처음 들어갈 때 만들게 됩니다. 보호를 해제하면 다음 설정 진입 때 다시 만들어야 합니다. 로그인 실패가 잦으면 잠시 잠깁니다(무차별 대입 방지).</div>
         <label style="display:block; margin-top:10px;">⏱ 로그인 유지 시간(분) — 한 번 로그인하면 이 시간 동안 다시 묻지 않음
           <input id="setOpTtl" type="number" min="1" max="10080" step="1" class="setinput mono" style="width:140px;" placeholder="30" />
           <span class="sub">1~10080(7일). 기본 30분.</span>
@@ -1614,8 +1614,9 @@ pre.changelog{ background:rgba(13,19,33,.75); }
 const $ = (id) => document.getElementById(id);
 
 // ===== 작업 보호(비밀번호) =====
-// 모든 POST(작업)에 X-Op-Token 을 붙이고, 잠겨 있으면(401) 비밀번호를 물어 자동 해제 후 1회 재시도.
-// GET(보기)은 토큰 없이 자유. fetch 를 감싸 기존 코드를 거의 손대지 않는다.
+// 인증은 '설정'과 되돌릴 수 없는 작업(삭제·정리·업그레이드 설치 등 — 서버 OP_PROTECTED_POSTS)에만 필요하다.
+// 스캔 시작·중지·재개 등 일반 작업과 GET(보기)은 자유. 모든 POST 에 X-Op-Token 을 붙이고, 401 이면
+// 비밀번호가 있으면 로그인, 아직 없으면(need_setup) '처음 비밀번호 만들기'를 띄운 뒤 1회 재시도한다.
 let _opRequired = false;
 let _opExpiry = 0;            // 토큰 만료 시각(ms). 입력 후 TTL 초.
 let _opCountTimer = null;
@@ -1636,11 +1637,14 @@ function showToast(msg, ms) {
   clearTimeout(t._tmr); t._tmr = setTimeout(() => { t.style.display = "none"; }, ms || 3000);
   return t;
 }
-// 로그인(세션 토큰 보유) 상태에서만 변경 작업 허용. 비밀번호 미설정이면 항상 허용.
-function canMutate() { return !_opRequired || (!!_opToken() && _opLeft() > 0); }
+// 일반 작업(스캔 시작·중지·재개 등)은 인증 없이 허용 — 보호 대상은 서버가 401 로 알려 주면 로그인/생성 후 재시도.
+function canMutate() { return true; }
+function _opLoggedIn() { return !!_opToken() && _opLeft() > 0; }
 function applyReadOnlyUI() {
-  const ro = _opRequired && !canMutate();
-  const b = $("roBanner"); if (b) b.style.display = ro ? "" : "none";
+  // 설정 화면에 있는데 로그인이 안 됐으면(세션 만료 등) 설정 버튼을 잠그고 안내 배너를 띄운다.
+  const inSettings = $("view-settings") && $("view-settings").style.display !== "none";
+  const ro = !_opLoggedIn();
+  const b = $("roBanner"); if (b) b.style.display = (ro && inSettings) ? "" : "none";
   ["saveSettingsBtn", "staggerBtn", "schAdd", "auditBtn"].forEach(id => {
     const el = $(id); if (el) el.disabled = ro;
   });
@@ -1655,7 +1659,7 @@ function updateLockBadge() {
     el.title = "관리자로 로그인됨 — 클릭하면 로그아웃";
   } else {
     el.textContent = "🔑 로그인";
-    el.title = "로그인하면 스캔 시작·설정 등 모든 기능을 사용할 수 있습니다";
+    el.title = "로그인하면 설정·완료데이터 삭제·업그레이드 설치를 할 수 있습니다(스캔 작업은 로그인 없이 가능)";
   }
   applyReadOnlyUI();
 }
@@ -1664,7 +1668,7 @@ function _opTick() {                 // 1초 카운트다운 본체 — 만료�
     if (_opCountTimer) { clearInterval(_opCountTimer); _opCountTimer = null; }
     try { sessionStorage.removeItem("opToken"); sessionStorage.removeItem("opExpiry"); } catch (e) {}
     updateLockBadge();
-    showToast("🔒 세션이 만료되어 다시 읽기 전용입니다 — 필요 시 다시 로그인하세요", 3000);
+    showToast("🔒 세션이 만료됐습니다 — 설정을 바꾸려면 다시 로그인하세요", 3000);
   } else { updateLockBadge(); }
 }
 function _opStartTimer() {
@@ -1723,6 +1727,35 @@ function passwordPrompt(msg) {
     ov.addEventListener("mousedown", e => { if (e.target === ov) done(null); });
   });
 }
+// 비밀번호가 아직 없을 때: 처음 비밀번호 만들기(2회 입력 확인) → 바로 로그인 토큰.
+async function promptSetup() {
+  const pw = await passwordPrompt("설정을 쓰려면 먼저 관리자 비밀번호를 만드세요(4자 이상):");
+  if (pw == null) return false;
+  const pw2 = await passwordPrompt("확인을 위해 같은 비밀번호를 한 번 더 입력하세요:");
+  if (pw2 == null) return false;
+  if (pw !== pw2) { window.alert("두 비밀번호가 다릅니다."); return false; }
+  try {
+    const r = await _origFetch("/api/op-setup", {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify({password: pw})});
+    const j = await r.json();
+    if (j.ok && j.token) {
+      try { sessionStorage.setItem("opToken", j.token); } catch (e) {}
+      _opRequired = true;
+      startOpCountdown(j.ttl || 10);
+      return true;
+    }
+    if (j.op_required) { _opRequired = true; return await promptUnlock(); }   // 그 사이 다른 사람이 만듦
+    window.alert("비밀번호를 만들지 못했습니다: " + (j.reason || ""));
+  } catch (e) { window.alert("비밀번호를 만들지 못했습니다: " + e); }
+  return false;
+}
+// 설정 화면 진입 인증: 로그인돼 있으면 통과, 비밀번호가 있으면 로그인, 없으면 처음 만들기.
+async function ensureSettingsAuth() {
+  if (_opLoggedIn()) return true;
+  const ok = _opRequired ? await promptUnlock() : await promptSetup();
+  updateLockBadge();
+  return ok;
+}
 async function promptUnlock() {
   const pw = await passwordPrompt("로그인 — 비밀번호를 입력하세요:");
   if (pw == null) return false;
@@ -1746,9 +1779,12 @@ window.fetch = async function (url, opts) {
   if (method === "POST" && u.indexOf("/api/unlock") < 0) {
     opts.headers = Object.assign({}, opts.headers || {}, {"X-Op-Token": _opToken()});
     let res = await _origFetch(url, opts);
-    if (res.status === 401) {                 // 잠김 → 비밀번호 받고 1회 재시도
-      _opRequired = true; updateLockBadge();
-      if (await promptUnlock()) {
+    if (res.status === 401) {                 // 보호 대상 → 로그인(또는 처음 비밀번호 만들기) 후 1회 재시도
+      let j401 = {};
+      try { j401 = await res.clone().json(); } catch (e) {}
+      const ok = j401.need_setup ? await promptSetup()
+        : (_opRequired = true, updateLockBadge(), await promptUnlock());
+      if (ok) {
         opts.headers["X-Op-Token"] = _opToken();
         res = await _origFetch(url, opts);
       }
@@ -4583,7 +4619,8 @@ $("lockPill").addEventListener("click", async () => {
   applyReadOnlyUI(); poll();
 });
 if ($("roLoginBtn")) $("roLoginBtn").addEventListener("click", async () => {
-  await promptUnlock(); applyReadOnlyUI(); poll();
+  if (await ensureSettingsAuth()) loadSettings();
+  applyReadOnlyUI(); poll();
 });
 // 워커별 디렉터리 표시(모두/N개) — 즉시 반영
 $("showAllWorkers").addEventListener("change", renderCurrentDir);
@@ -4765,6 +4802,13 @@ function showView(name) {
   document.querySelectorAll(".navbtn").forEach(b => b.classList.toggle("active", b.dataset.view === name));
   try { history.replaceState(null, "", "#" + name); } catch (e) { location.hash = name; }
   if (name === "extra" && $("atPath")) setTimeout(() => $("atPath").focus(), 20);
+  if (name === "settings" && !_opLoggedIn()) {   // 설정 진입 = 인증(없으면 처음 비밀번호 만들기)
+    ensureSettingsAuth().then(ok => {
+      if (!ok) { showView("summary"); showToast("🔒 설정은 로그인 후 사용할 수 있습니다", 2500); }
+      else { loadSettings(); applyReadOnlyUI(); }
+    });
+  }
+  applyReadOnlyUI();
   if (name === "analysis" || name === "report") mountScanControls(name);
   if (name === "report") loadReport(true);
   if (name === "trouble") { if (typeof tsRun === "function") tsRun(); if (typeof tsHistLoad === "function") tsHistLoad(); }

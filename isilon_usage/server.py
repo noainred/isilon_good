@@ -159,6 +159,15 @@ def _dir_disk_free(path: str) -> Optional[dict]:
         return None
 
 
+# 인증이 필요한 POST — '설정'(설정 저장·예약 시차 배치·감사 로그 조회)과 되돌릴 수 없는 작업
+# (완료데이터 삭제·보존 정리·업그레이드 설치·진단 이력 삭제·테스트 데이터 생성). 그 외 작업은 인증 없이 허용.
+OP_PROTECTED_POSTS = frozenset({
+    "/api/settings", "/api/schedules/stagger", "/api/audit",
+    "/api/scan/delete", "/api/prune", "/api/upgrade/install",
+    "/api/troubleshoot/history/clear", "/api/gentest/start",
+})
+
+
 def _public_settings(s: dict) -> dict:
     """화면/응답용 설정 — 비밀번호는 노출하지 않고 설정 여부만 알린다."""
     out = dict(s)
@@ -670,6 +679,7 @@ class ScanController:
         # '중복 검사 → 등록 → 실행' 임계 구역(start_scan·resume_scan). 동시 요청(더블클릭·포탈 중복 등록 노드·
         # 예약 동시 발화)이 같은 루트를 두 번 등록하지 못하게 한다. _lock 과 별개(내부에서 _lock 을 잡음).
         self._start_lock = threading.RLock()
+        self._op_setup_lock = threading.Lock()
         self._pause_watch: Dict[int, dict] = {}   # 중단 후 N분 미재시작 감시: scan_id -> {due, root}
         self._auto_restart: Dict[int, dict] = {}  # 완료 후 자동 재시작(반복): scan_id -> {경로·설정}
         self._storage_cache = None          # 스토리지 어레이(아이실론/PowerStore) 상태 캐시
@@ -1126,6 +1136,24 @@ class ScanController:
         if op_changed and not bool(self.settings.get("op_password_encrypted")):
             self._write_info_md(op_changed)
         return {"ok": True, "settings": _public_settings(self.settings)}
+
+    def setup_op_password(self, password: str) -> dict:
+        """최초 비밀번호 설정(아직 비밀번호가 없을 때만) → 성공하면 바로 로그인 토큰 발급.
+
+        '설정'·되돌릴 수 없는 작업은 비밀번호가 있어야 쓸 수 있어, 처음 들어갈 때 여기서 만든다.
+        이미 비밀번호가 있으면 거부(덮어쓰기 금지 — 변경은 로그인 후 설정에서).
+        """
+        pw = str(password or "")
+        if len(pw.strip()) < 4:
+            return {"ok": False, "reason": "비밀번호는 4자 이상이어야 합니다."}
+        with self._op_setup_lock:          # 동시 최초 설정 요청 중 하나만(나중 것이 덮어쓰지 않게)
+            if self.op_required():
+                return {"ok": False, "reason": "이미 비밀번호가 설정돼 있습니다 — 로그인하세요.",
+                        "op_required": True}
+            res = self.set_op_password(pw)
+            if not res.get("ok"):
+                return res
+        return self.unlock(pw)
 
     def set_op_password(self, password: str, *, clear: bool = False) -> dict:
         """작업 보호 비밀번호를 설정/변경/해제한다(포탈이 api_token 으로 푸시).
@@ -3404,19 +3432,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             "" if res.get("ok") else (res.get("reason") or ""))
                 self._send_json(res, status=200 if res.get("ok") else 401)
                 return
-            # 작업(POST) 보호: 비밀번호가 설정돼 있으면 유효한 토큰이 필요(보기=GET 은 자유)
-            if self.controller.op_required() and not self.controller.op_token_valid(
-                    self.headers.get("X-Op-Token")):
-                self._audit(path, False, "locked")
-                self._send_json({"ok": False, "reason": "locked", "op_required": True,
-                                 "error": "작업하려면 비밀번호로 잠금을 해제하세요."},
-                                status=401)
+            # 최초 비밀번호 설정(비밀번호가 없을 때만). JSON 본문만 받는다 — 다른 사이트의 폼(CSRF)으로는
+            # Content-Type: application/json 을 보낼 수 없다.
+            if path == "/api/op-setup":
+                if "application/json" not in (self.headers.get("Content-Type") or ""):
+                    self._send_json({"ok": False, "reason": "JSON 요청만 허용"}, status=415)
+                    return
+                res = self.controller.setup_op_password(body.get("password") or "")
+                self._audit("op_setup", bool(res.get("ok")), res.get("reason") or "")
+                self._send_json(res, status=200 if res.get("ok") else 400)
                 return
+            # 인증은 '설정'과 되돌릴 수 없는 작업(삭제·정리·업그레이드 설치 등)에만 — 스캔 시작·중지·재개 등
+            # 일반 작업은 자유. 비밀번호가 아직 없으면 need_setup 으로 '처음 비밀번호 만들기'를 유도한다.
+            # 토큰은 커스텀 헤더(X-Op-Token)로만 받으므로 다른 사이트(CSRF)가 위조할 수 없다.
+            if path in OP_PROTECTED_POSTS:
+                if not self.controller.op_required():
+                    self._audit(path, False, "need_setup")
+                    self._send_json({"ok": False, "reason": "need_setup", "need_setup": True,
+                                     "error": "설정을 쓰려면 먼저 비밀번호를 만드세요."}, status=401)
+                    return
+                if not self.controller.op_token_valid(self.headers.get("X-Op-Token")):
+                    self._audit(path, False, "locked")
+                    self._send_json({"ok": False, "reason": "locked", "op_required": True,
+                                     "error": "설정을 쓰려면 비밀번호로 로그인하세요."},
+                                    status=401)
+                    return
 
             if path == "/api/audit":            # 감사 로그 조회(로그인 필요)
                 self._send_json({"ok": True, "events": auditmod.tail(self.data_dir, 300)})
                 return
-            self._audit(path, True)             # 인증 통과한 변경 작업 기록
+            self._audit(path, True)             # 변경 작업 기록(보호 대상은 인증 통과분)
 
             if path == "/api/scan/start":
                 target = (body.get("path") or "").strip()
@@ -3581,7 +3626,8 @@ def _warn_if_insecure(host: str, controller: "ScanController") -> None:
     lines = [
         "",
         "  ⚠  보안 경고: 비루프백 주소(%s)에 '작업 보호 비밀번호 없이' 기동합니다." % host,
-        "     네트워크에서 접근 가능한 누구나 스캔 시작·설정 변경을 할 수 있습니다.",
+        "     네트워크에서 접근 가능한 누구나 스캔을 시작·중지할 수 있고, 설정은 '처음 들어온 사람'이",
+        "     비밀번호를 정하게 됩니다 — 설치 직후 대시보드 '설정'에서 먼저 비밀번호를 만드세요.",
         "     공개망/비신뢰망이라면 다음을 권장합니다:",
         "       - --host 127.0.0.1 로 묶고 리버스 프록시(HTTPS/인증)나 SSH 터널 사용",
         "       - 대시보드 '설정'에서 작업 보호 비밀번호 지정",
