@@ -1144,4 +1144,13 @@
      12·관리 DB)로 '부분 집계 값(재개 전)' 배너/배지, 완료 시 해제. 이력 [부분 집계] 버튼·API(start/stop/status)·CLI partial,
      진행 중 재개/삭제/자동 업그레이드 차단. 합성 99만 행 4.4초(26만 행/초). 회귀 테스트(scanner·server API). v1.99.34.
 
+295. (버그 잡고 개선사항 찾아줘) 영역별 5개(스캐너·DB / 엣지 서버 / 포탈 / 대시보드 JS / 도구·스크립트) 병렬 리뷰 후 각 결함을 코드·재현으로
+     직접 확인하고 수정: 예약 스캔 last_run·체인 미저장(start_scan 의 설정 교체 — 가짜 start_scan 을 실제처럼 바꿔 옛 코드 실패 재현),
+     재개 시 claimed 이중 계수(51 vs 43 재현), 부분 집계 done 행 덮어쓰기·시작 경합·prune 삭제, pscan 실패 per-run sizing 잔류,
+     analyze truncated 누락(재현), upgrade_token 평문 노출, 이력 표 부분 집계 배지 미표시(overall.roots 필드 누락), 분석 화면이 실행 중
+     스캔을 따라감, XSS 2곳, 리포트 폴링 중첩, 포탈 delete '..' 로 data_dir 삭제·enroll 토큰 유출·복제 비원자 쓰기·처리량 공백 몰아넣기·
+     노드 루프 중단, 콜드 이동 DRY_RUN fail-open, 설치 rsync --delete·고정 /tmp. 부분 집계 API 테스트의 고정 대기(0.8초) 간헐 실패도 안정화.
+     미수정(판단 필요)으로 남긴 것: 무인증 기본값의 POST/CSRF, 재개 시 one_file_system·fold_depth 미복원, Python 3.6 표기, systune 하향 적용 등.
+     17/17·ruff·JS 문법 통과. v1.99.35.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

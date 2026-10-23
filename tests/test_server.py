@@ -246,9 +246,14 @@ def _check_sequential_schedule() -> None:
         started = []
         ids = iter([101, 102, 103])
 
+        from isilon_usage import settings as setmod
+
         def fake_start(path, **_kw):
             sid = next(ids)
             started.append((sid, path))
+            # 실제 start_scan 처럼 last_scan 을 저장하며 self.settings 를 새 dict 로 교체한다
+            # (예약 틱이 옛 객체에만 last_run/체인 상태를 쓰던 회귀 재현용)
+            c.settings = setmod.save(c.data_dir, dict(c.settings, last_scan={"path": path}))
             return {"ok": True, "scan_id": sid}
 
         run = {"ids": set(), "status": {}}
@@ -769,7 +774,22 @@ def _check_partial_aggregate_api() -> None:
             return orig_stat(self, entry)
         scanmod.Scanner._safe_stat = slow_stat                  # 중지할 틈을 만든다
         sid = ctl.start_scan(tree, engine="threads")["scan_id"]
-        _t.sleep(0.8)
+        # 고정 대기 대신 '하위 폴더 1개 이상 완료'까지 기다린다(부하가 크면 0.8초 안에 하나도 안 끝나
+        # 부분 집계 하한값이 0 이 되는 간헐 실패가 있었다)
+        _db = _row(data, sid)["db_path"]
+        for _ in range(200):
+            try:
+                _c = dbmod.connect(_db)
+                try:
+                    _n = _c.execute("SELECT COUNT(*) FROM directories WHERE depth=1 "
+                                    "AND status='discovered' AND file_count>0").fetchone()[0]
+                finally:
+                    _c.close()
+            except Exception:  # noqa: BLE001 — DB 생성 전
+                _n = 0
+            if _n:
+                break
+            _t.sleep(0.05)
         assert not ctl.partial_aggregate_scan(sid)["ok"], "실행 중엔 거부"
         assert ctl.stop_scan(sid)["ok"]
         row = _wait(data, sid, ("paused",))
@@ -804,6 +824,13 @@ def _check_partial_aggregate_api() -> None:
             pc.close()
         assert bs["run"]["partial_agg_at"] and root["total_bytes"] > 0, (bs["run"].get("partial_agg_at"), tuple(root))
         assert _row(data, sid)["partial_agg_at"], "관리 DB 에 부분 집계 시각 없음"
+        # 이력 표는 overall.roots 를 그린다 — 같은 필드가 roots 에도 실려야 배지가 보인다(단일 소스)
+        mc = dbmod.connect(mgrmod.manager_db_path(data))
+        try:
+            ov = mgrmod.overall_capacity(mc)
+        finally:
+            mc.close()
+        assert any(x["scan_id"] == sid and x.get("partial_agg_at") for x in ov["roots"]), ov["roots"]
         # 재개 → 완료 → 플래그 해제(관리 DB·per-run DB)
         assert ctl.resume_scan(sid)["ok"]
         row2 = _wait(data, sid, ("done", "error"))

@@ -71,13 +71,23 @@ def throughput_history_path(data_dir: str) -> str:
     return os.path.join(data_dir, "throughput_history.db")
 
 
+def safe_node_id(nid) -> bool:
+    """노드 id 가 복제본 폴더 이름으로 안전한지(경로 구분자·'.'/'..'·NUL 금지).
+
+    id 는 replicas/<id> 폴더 이름으로 쓰인다 — "..", "a/b" 같은 값은 rmtree·복제 쓰기가
+    replicas 밖(포탈 data_dir 전체)으로 탈출한다. 한글 등 일반 문자는 허용(기존 노드 호환).
+    """
+    nid = str(nid or "")
+    return bool(nid) and nid not in (".", "..") and not any(c in nid for c in ("/", "\\", "\x00"))
+
+
 def sanitize_node(raw: dict) -> Optional[dict]:
     """노드 1건을 보정한다(필수: id, url). 잘못되면 None."""
     if not isinstance(raw, dict):
         return None
     nid = str(raw.get("id") or "").strip()
     url = str(raw.get("url") or "").strip().rstrip("/")
-    if not nid or not url:
+    if not nid or not url or not safe_node_id(nid):
         return None
     if not re.match(r"^https?://", url):
         url = "http://" + url
@@ -429,6 +439,7 @@ class PortalController:
         self.replicas_dir = (str(self.settings.get("replica_dir") or "").strip()
                              or os.path.join(self.data_dir, "replicas"))
         os.makedirs(self.replicas_dir, exist_ok=True)
+        self._clean_replica_temps()
         self._auth = authmod.AuthGuard(
             lambda: self.settings.get("op_password"),
             ttl=lambda: float(self.settings.get("op_ttl_minutes", 30) or 30) * 60)
@@ -1345,15 +1356,17 @@ class PortalController:
             nodes = [_public_node(n, cache, self._rep_err) for n in self.nodes]
         return {"ok": True, "nodes": nodes}
 
-    def upsert_node(self, raw: dict) -> dict:
+    def upsert_node(self, raw: dict, *, keep_token_on_url_change: bool = True) -> dict:
         n = sanitize_node(raw)
         if not n:
-            return {"ok": False, "reason": "id 와 url 은 필수입니다."}
+            return {"ok": False, "reason": "id 와 url 은 필수입니다(id 에 '/'·'..' 불가)."}
         with self._lock:
             cur = self._get(n["id"])
             if cur is not None:
-                # 토큰이 비어 오면 기존 토큰 유지(마스킹)
-                if not n["token"]:
+                # 토큰이 비어 오면 기존 토큰 유지(마스킹). 단 자기 등록(enroll)으로 URL 이 바뀌면
+                # 기존 토큰을 승계하지 않는다 — 승계하면 다음 폴링이 그 토큰을 새 URL 로 보낸다(토큰 유출).
+                url_changed = (cur.get("url") or "").rstrip("/") != n["url"]
+                if not n["token"] and (keep_token_on_url_change or not url_changed):
                     n["token"] = cur.get("token", "")
                 n["last_sync"] = cur.get("last_sync", 0)
                 n["last_poll"] = cur.get("last_poll", 0)
@@ -1419,7 +1432,7 @@ class PortalController:
             "url": url, "token": (raw.get("token") or "").strip(),
             "alias_local": path, "alias_logical": path,
             "unit": "minute", "every": 30, "mode": "both", "enabled": True,
-        })
+        }, keep_token_on_url_change=False)
         if res.get("ok"):
             res["enrolled"] = nid
         return res
@@ -1482,14 +1495,27 @@ class PortalController:
         return {"ok": True, "added": added, "updated": updated,
                 "errors": errors, "total": len(data)}
 
+    def _clean_replica_temps(self) -> None:
+        """기동 시 지난 프로세스가 남긴 복제 임시 파일 정리(재시작·execv 업그레이드는 finally 를 안 거친다).
+        replicas/tmp*.tar.gz(받던 묶음) · replicas/<노드>/scans/*.part(풀던 DB)."""
+        import glob
+        for f in (glob.glob(os.path.join(self.replicas_dir, "tmp*.tar.gz"))
+                  + glob.glob(os.path.join(self.replicas_dir, "*", "scans", "*.db.part"))):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+
     def delete_node(self, nid: str) -> dict:
         with self._lock:
             before = len(self.nodes)
             self.nodes = [x for x in self.nodes if x["id"] != nid]
             self._cache.pop(nid, None)
             self._save()
-        # 복제본·핑 이력도 정리(베스트 에포트)
-        shutil.rmtree(os.path.join(self.replicas_dir, nid), ignore_errors=True)
+        # 복제본·핑 이력도 정리(베스트 에포트). 실제 있던 노드 + 안전한 id 일 때만 지운다
+        # (id=".." 같은 요청이 replicas 밖 data_dir 전체를 rmtree 하던 문제).
+        if len(self.nodes) < before and safe_node_id(nid):
+            shutil.rmtree(os.path.join(self.replicas_dir, nid), ignore_errors=True)
         try:
             conn = dbmod.connect(ping_history_path(self.data_dir))
             try:
@@ -1564,7 +1590,10 @@ class PortalController:
                         start_poll = due_poll and nid not in self._inflight
                         if start_poll:
                             self._inflight.add(nid)
-                        start_rep = nid not in self._rep_inflight and self._rep_due(n, now)
+                        try:   # 노드 하나의 비정상 상태가 뒤 노드들의 폴링·복제를 막지 않게(노드별 격리)
+                            start_rep = nid not in self._rep_inflight and self._rep_due(n, now)
+                        except Exception:  # noqa: BLE001
+                            start_rep = False
                         if start_rep:
                             self._rep_inflight.add(nid)
                             self._rep_at[nid] = now
@@ -1606,8 +1635,19 @@ class PortalController:
     def _has_unreplicated(self, nid: str, wm: float) -> bool:
         """폴링 캐시에 워터마크(wm) 이후 완료된 스캔이 보이는가(호출자가 self._lock 보유)."""
         c = self._cache.get(nid) or {}
-        return any(rt.get("status") in _TERMINAL and float(rt.get("finished_at") or 0) > wm
-                   for rt in ((c.get("overall") or {}).get("roots") or []))
+        ov = c.get("overall")
+        roots = ov.get("roots") if isinstance(ov, dict) else None
+        for rt in (roots if isinstance(roots, list) else []):
+            # 엣지가 보낸 값이 비정상이어도 예외 없이 건너뛴다 — 여기서 예외가 나면 스케줄러 틱의
+            # 노드 루프 전체가 멈춰 그 뒤 노드들의 폴링·복제가 영구히 정지했다.
+            if not isinstance(rt, dict) or rt.get("status") not in _TERMINAL:
+                continue
+            try:
+                if float(rt.get("finished_at") or 0) > wm:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
 
     def sync_now(self, nid: Optional[str] = None) -> dict:
         targets = [nid] if nid else [n["id"] for n in self.nodes if n.get("enabled")]
@@ -1772,8 +1812,23 @@ class PortalController:
                     src = tf.extractfile(m)
                     if src is None:
                         continue
-                    with open(outp, "wb") as w:
-                        shutil.copyfileobj(src, w)
+                    # 임시 파일에 다 받은 뒤 교체(원자적) — 스트림이 끊겨 tar 가 EOF 로 깨져도 기존 정상
+                    # 복제본(같은 이름 재전송: paused→done)이 잘린 파일로 남지 않는다.
+                    part = outp + ".part"
+                    try:
+                        with open(part, "wb") as w:
+                            shutil.copyfileobj(src, w)
+                        for sfx in ("-wal", "-shm"):   # 옛 DB 의 WAL 이 새 파일에 재생되지 않게
+                            try:
+                                os.remove(outp + sfx)
+                            except OSError:
+                                pass
+                        os.replace(part, outp)
+                    finally:
+                        try:
+                            os.remove(part)
+                        except OSError:
+                            pass
             finally:
                 tf.close()
             # 증분 복제: 엣지가 보내는 meta.json 의 scans 는 'since 이후 완료분'만 담겨온다.
@@ -2127,11 +2182,15 @@ class PortalController:
                 db = df = 0
                 for i in range(1, len(samples)):
                     (t1, b1, f1), (t2, b2, f2) = samples[i - 1], samples[i]
-                    if t2 >= cutoff:                 # 구간 내 증가분만(리셋=음수는 제외)
+                    if t2 >= cutoff and t2 > t1:     # 구간 내 증가분만(리셋=음수는 제외)
+                        # 윈도우와 겹치는 비율만큼만 — 공백(포탈 재시작·엣지 오프라인) 뒤 첫 샘플이
+                        # 공백 동안의 증가분 전체를 짧은 윈도우에 몰아 넣어 처리량이 폭증하던 문제.
+                        frac = (t2 - max(t1, cutoff)) / float(t2 - t1)
                         if b2 > b1:
-                            db += b2 - b1
+                            db += (b2 - b1) * frac
                         if f2 > f1:
-                            df += f2 - f1
+                            df += (f2 - f1) * frac
+                db, df = int(db), int(df)
                 wins[str(w)] = {"bytes": db, "files": df,
                                 "bph": db / w * 3600.0, "fph": df / w * 3600.0}
             ss = None
@@ -2591,6 +2650,8 @@ class PortalController:
 
     def _replica_db_for(self, node_id: str, path: str):
         """노드 복제본에서 path 를 포함하는(root 가 prefix) 최신 완료 스캔 DB 경로."""
+        if not safe_node_id(node_id):
+            return None
         rep = os.path.join(self.replicas_dir, node_id)
         try:
             with open(os.path.join(rep, "meta.json"), "r", encoding="utf-8") as fh:

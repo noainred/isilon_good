@@ -78,6 +78,21 @@ def run_suggest() -> None:
         shutil.rmtree(base, ignore_errors=True)
 
 
+def run_budget_truncated() -> None:
+    # 예산(dir_limit)으로 잘리면 스택이 비어도 truncated=참이어야 한다(부분 결과를 완전한 결과로 오인 방지).
+    # 마지막으로 도는 폴더가 예산을 넘기는 모양: base/a/{b0..b9}/c  (a 를 훑는 순간 5 초과, 스택은 빔)
+    base = tempfile.mkdtemp(prefix="iu_ana_")
+    try:
+        for j in range(10):
+            os.makedirs(os.path.join(base, "a", "b%d" % j, "c"))
+        for w in (1, 4):
+            r = analyze_depth(base, workers=w, dir_limit=5)
+            assert r["truncated"], (w, r)
+        print("[budget] OK  dir_limit 초과 → truncated=True (워커 1/4)")
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
 def run_bad_path() -> None:
     r = analyze_depth("/nonexistent/path/xyz123", workers=2)
     assert not r["ok"], r
@@ -88,5 +103,6 @@ if __name__ == "__main__":
     run_basic()
     run_maxdepth_cap()
     run_suggest()
+    run_budget_truncated()
     run_bad_path()
     print("모든 테스트 통과 ✅")

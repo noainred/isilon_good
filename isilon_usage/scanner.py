@@ -764,7 +764,8 @@ class Scanner:
         """재개 시 기존 per-run DB 에서 진행 카운터를 복원한다."""
         row = conn.execute(
             """SELECT
-                 COALESCE(SUM(CASE WHEN status!='pending' THEN 1 ELSE 0 END),0) AS disc,
+                 -- claimed 는 _discover 가 pending 으로 되돌려 다시 세므로 제외(재개 때 이중 계수 방지)
+                 COALESCE(SUM(CASE WHEN status NOT IN ('pending','claimed') THEN 1 ELSE 0 END),0) AS disc,
                  COALESCE(SUM(CASE WHEN status='done' THEN 1 ELSE 0 END),0)     AS done,
                  COALESCE(SUM(own_bytes),0)  AS b,
                  COALESCE(SUM(file_count),0) AS f,
@@ -1648,7 +1649,9 @@ def partial_aggregate(db_path: str, run_id: Optional[int] = None, *, stop_event=
                            (run_id,)).fetchone()
         max_depth = int(row["d"])
         total_rows = int(row["n"])
-        # status 조건·status 변경 없음 — 그 외는 _aggregate_native 와 같은 레벨별 일괄 UPDATE
+        # status 변경 없음 — 그 외는 _aggregate_native 와 같은 레벨별 일괄 UPDATE.
+        # 'done' 행(완전 집계·du 로 확정된 값)은 건드리지 않는다 — 재개 후 완전 집계도 done 은
+        # 다시 계산하지 않으므로, 덮어쓰면 하한값이 확정값처럼 굳는다.
         sql = """UPDATE directories INDEXED BY idx_dir_run_depth
                  SET total_bytes = own_bytes + COALESCE((
                          SELECT SUM(c.total_bytes) FROM directories c
@@ -1656,7 +1659,7 @@ def partial_aggregate(db_path: str, run_id: Optional[int] = None, *, stop_event=
                      total_files = file_count + COALESCE((
                          SELECT SUM(c.total_files) FROM directories c
                          WHERE c.run_id=directories.run_id AND c.parent_id=directories.id), 0)
-                 WHERE run_id=? AND depth=? AND id>=? AND id<?"""
+                 WHERE run_id=? AND depth=? AND id>=? AND id<? AND status!='done'"""
         done_rows = 0
         stopped = False
 

@@ -26,7 +26,7 @@ DL_DIR="/opt"                            # 다운로드(압축본) 저장 경로
 PORT="8765"                              # 대시보드 포트
 MOUNT_BASE=""                            # 스캔 허용 경로(예: /mnt/isilon). 비우면 전체 허용
 SERVICE="isilon-edge"                    # systemd 서비스 이름
-TMP_DIR="/tmp/isilon_edge"               # 임시 작업(압축 해제·검증) 디렉터리
+TMP_DIR=""                               # 임시 작업 디렉터리(빈값=mktemp -d 로 안전 생성)
 API_TOKEN=""                             # 포탈 연동/업그레이드 푸시 인증 토큰(비우면 자동 생성·유지)
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"         # (선택) GitHub 비공개 저장소 토큰 — 미러를 쓰면 불필요
 REPO="noainred/isilon_good"              # 저장소 이름(미러 경로/토큰 모드에 사용)
@@ -144,7 +144,10 @@ fi
 
 # ----- 3) 임시 디렉터리에 압축 해제 + 검증(최상위 isilon_usage-<버전>/ 제거) -----
 echo "→ 임시 작업: $TMP_DIR"
-rm -rf "$TMP_DIR"; mkdir -p "$TMP_DIR"
+# 기본은 mktemp -d(예측 불가 이름·0700) — 고정 /tmp 경로를 rm 후 mkdir 하면 그 사이 다른 사용자가
+# 같은 이름을 선점해 압축 해제물(.py)을 바꿔치기할 수 있다(root 로 설치·실행됨).
+if [ -z "$TMP_DIR" ]; then TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/isilon_edge.XXXXXX")"
+else rm -rf "$TMP_DIR"; mkdir -p "$TMP_DIR"; fi
 tar xzf "$DEST" -C "$TMP_DIR" --strip-components=1
 echo -n "→ 패키지 검증: "
 ( cd "$TMP_DIR" && python3 -m isilon_usage --version ) \
@@ -166,9 +169,14 @@ if pgrep -f 'isilon_usage serve' >/dev/null 2>&1; then
   pkill -f 'isilon_usage serve' >/dev/null 2>&1 || true
   sleep 1
 fi
+# 데이터 폴더가 설치 폴더 안이면 rsync --delete 가 DB·설정을 통째로 지운다 → 거부.
+case "${DATA_DIR%/}/" in
+  "${INSTALL_DIR%/}"/*) echo "✗ --data-dir($DATA_DIR)이 설치 폴더($INSTALL_DIR) 안에 있습니다 — 업그레이드 때 삭제됩니다. 다른 경로를 지정하세요."; rm -rf "$TMP_DIR"; exit 1;;
+esac
 mkdir -p "$INSTALL_DIR" "$DATA_DIR"
 if command -v rsync >/dev/null 2>&1; then
-  rsync -a --delete "$TMP_DIR"/ "$INSTALL_DIR"/
+  # --delete 는 설치 폴더(서비스 WorkingDirectory)에 앱이 쓰는 런타임 파일까지 지운다 → 보호.
+  rsync -a --delete --exclude info.MD --exclude .iu_data_persist.json "$TMP_DIR"/ "$INSTALL_DIR"/
 else
   cp -a "$TMP_DIR"/. "$INSTALL_DIR"/
 fi

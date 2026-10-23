@@ -79,11 +79,12 @@ def _path_readonly(path: str) -> bool:
         return False
 
 
-def _scans_with_partial(scans, ctrl):
-    """/api/scans 행에 '부분 집계 진행 중' 표시를 붙인다(부분 집계 시각은 관리 DB 컬럼에 있음)."""
+def _scans_with_partial(scans, ctrl, key="id"):
+    """/api/scans 행에 '부분 집계 진행 중' 표시를 붙인다(부분 집계 시각은 관리 DB 컬럼에 있음).
+    scans 목록은 key="id", overall.roots(이력 표가 쓰는 행)는 key="scan_id"."""
     prun = ctrl.partial_running_ids() if ctrl is not None else set()
     for s_ in scans:
-        s_["partial_agg_running"] = s_.get("id") in prun
+        s_["partial_agg_running"] = s_.get(key) in prun
     return scans
 
 
@@ -173,6 +174,8 @@ def _public_settings(s: dict) -> dict:
     out["powerstore_password_set"] = bool((s or {}).get("powerstore_password"))
     out["ask_llm_key"] = ""
     out["ask_llm_key_set"] = bool((s or {}).get("ask_llm_key"))
+    out["upgrade_token"] = ""
+    out["upgrade_token_set"] = bool((s or {}).get("upgrade_token"))
     sa = []
     for a in ((s or {}).get("storage_arrays") or []):
         b = dict(a)
@@ -1837,6 +1840,7 @@ class ScanController:
         def worker():
             started = time.time()
             mon_stop = None
+            run_id = None
             try:
                 mc = dbmod.connect(mdb)
                 mgrmod.update_scan(mc, scan_id, status="sizing", phase="sizing")
@@ -1929,6 +1933,14 @@ class ScanController:
                     c.commit(); c.close()
                 except Exception:  # noqa: BLE001
                     pass
+                if run_id is not None:   # 미리 만든 per-run run 도 error 로(‘sizing’ 잔류 → 부분 집계·상세가 실행 중으로 오판)
+                    try:
+                        pc = dbmod.connect(db_path)
+                        dbmod.update_run(pc, run_id, status="error", phase="error",
+                                         finished_at=time.time())
+                        pc.commit(); pc.close()
+                    except Exception:  # noqa: BLE001
+                        pass
             finally:
                 if mon_stop:
                     mon_stop.set()
@@ -2012,7 +2024,7 @@ class ScanController:
             keep = int(self.settings.get("retention_per_root", 0))
             if keep > 0 and row["status"] in ("done", "error"):
                 mgrmod.prune_scans(self.data_dir, keep_per_root=keep,
-                                   running_ids=self.running_ids())
+                                   running_ids=self._busy_ids())
         except Exception:
             pass
 
@@ -2128,6 +2140,11 @@ class ScanController:
         행 status 는 바꾸지 않아 재개하면 완전 집계가 다시 계산한다. 진행 중엔 재개/삭제/자동 업그레이드를
         막는다(같은 DB 를 쓰는 중). 비용은 행 수에 비례(레벨별 일괄 UPDATE).
         """
+        # 재개와 같은 임계 구역 — 검사·등록·스레드 시작을 원자적으로(동시 요청 중복 실행·재개와의 경합 방지)
+        with self._start_lock:
+            return self._partial_aggregate_locked(scan_id)
+
+    def _partial_aggregate_locked(self, scan_id: int) -> dict:
         if scan_id in self.running_ids():
             return {"ok": False, "reason": "실행 중인 스캔입니다(먼저 중지하세요)."}
         if scan_id in self.partial_running_ids():
@@ -2192,7 +2209,11 @@ class ScanController:
     def prune(self, *, keep_per_root=None, older_than_days=None) -> dict:
         return mgrmod.prune_scans(
             self.data_dir, keep_per_root=keep_per_root,
-            older_than_days=older_than_days, running_ids=self.running_ids())
+            older_than_days=older_than_days, running_ids=self._busy_ids())
+
+    def _busy_ids(self) -> set:
+        """보존 정리에서 제외할 스캔 — 실행 중 + 부분 집계 중(같은 per-run DB 를 쓰는 중)."""
+        return set(self.running_ids()) | self.partial_running_ids()
 
     # ----- 중지 -----
     def stop_scan(self, scan_id: int) -> dict:
@@ -2283,8 +2304,18 @@ class ScanController:
                 sc["last_run"] = now
                 changed = True
         if changed:
-            # last_run / 체인 진행 상태를 settings.json 에 반영
-            self.settings = setmod.save(self.data_dir, self.settings)
+            # last_run / 체인 진행 상태를 settings.json 에 반영.
+            # start_scan 이 틱 도중 self.settings 를 새 dict 로 교체(last_scan 저장)하므로, 위에서 갱신한
+            # sc 는 옛 객체다 — 런타임 필드를 '최신' 설정의 같은 위치 예약에 옮겨 담아 저장한다.
+            merged = dict(self.settings)
+            cur = [dict(x) for x in (merged.get("schedules") or [])]
+            if len(cur) == len(schedules):
+                for dst, src in zip(cur, schedules):
+                    for k in ("last_run", "chain_i", "chain_scan_id"):
+                        dst[k] = src.get(k)
+                merged["schedules"] = cur
+            # (틱 도중 예약 목록 자체가 바뀌었으면(드묾) 사용자 편집을 우선 — 런타임 필드는 버린다)
+            self.settings = setmod.save(self.data_dir, merged)
 
     def _chain_start(self, sc, path, running, running_paths):
         """예약 체인의 한 단계를 시작한다. 성공 시 scan_id, 실패 시 None."""
@@ -2581,10 +2612,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         try:
             if path == "/api/scans":
                 ctrl = self.controller
+                overall = mgrmod.overall_capacity(mconn)
+                _scans_with_partial(overall["roots"], ctrl, key="scan_id")
                 self._send_json({
                     "ok": True,
                     "version": __version__,
-                    "overall": mgrmod.overall_capacity(mconn),
+                    "overall": overall,
                     "scans": _scans_with_partial(mgrmod.list_scans(mconn), ctrl),
                     "running": ctrl.running_ids() if ctrl else [],
                     "auto_restart": ctrl.auto_restart_ids() if ctrl else [],

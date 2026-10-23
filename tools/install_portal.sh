@@ -19,7 +19,7 @@ BRANCH="claude/upbeat-bell-cXX8f"          # 다운로드할 git 브랜치
 INSTALL_DIR="/opt/isilon_portal"           # 프로그램 설치 경로
 DATA_DIR="/data/isilon_portal_data"        # 데이터(노드 레지스트리/복제본/설정)
 DL_DIR="/opt"                              # 다운로드(압축본) 저장 경로
-TMP_DIR="/tmp/isilon_portal"               # 임시 작업(압축 해제·검증) 디렉터리
+TMP_DIR=""                               # 임시 작업 디렉터리(빈값=mktemp -d 로 안전 생성)
 PORT="8800"                                # 포탈 포트
 SERVICE="isilon-portal"                    # systemd 서비스 이름
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"           # (선택) GitHub 비공개 저장소 토큰 — 미러를 쓰면 불필요
@@ -53,7 +53,7 @@ echo " isilon_portal(HQ) 설치/업그레이드"
 echo "   설치 경로 : $INSTALL_DIR"
 echo "   데이터    : $DATA_DIR"
 echo "   소스      : $RAW_BASE"
-echo "   브랜치    : $BRANCH   포트: $PORT   임시: $TMP_DIR"
+echo "   브랜치    : $BRANCH   포트: $PORT   임시: ${TMP_DIR:-자동(mktemp)}"
 echo "============================================================"
 
 # ----- 사전 점검 -----
@@ -122,7 +122,10 @@ fi
 
 # ----- 3) 임시 디렉터리에 압축 해제 + 검증(최상위 isilon_usage-<버전>/ 제거) -----
 echo "→ 임시 작업: $TMP_DIR"
-rm -rf "$TMP_DIR"; mkdir -p "$TMP_DIR"
+# 기본은 mktemp -d(예측 불가 이름·0700) — 고정 /tmp 경로를 rm 후 mkdir 하면 그 사이 다른 사용자가
+# 같은 이름을 선점해 압축 해제물(.py)을 바꿔치기할 수 있다(root 로 설치·실행됨).
+if [ -z "$TMP_DIR" ]; then TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/isilon_portal.XXXXXX")"
+else rm -rf "$TMP_DIR"; mkdir -p "$TMP_DIR"; fi
 tar xzf "$DEST" -C "$TMP_DIR" --strip-components=1
 echo -n "→ 패키지 검증: "
 ( cd "$TMP_DIR" && python3 -m isilon_usage --version ) \
@@ -131,9 +134,14 @@ echo -n "→ 패키지 검증: "
 # ----- 4) 검증 통과분만 설치 경로로 반영 -----
 echo "→ 설치: $INSTALL_DIR"
 systemctl stop "$SERVICE" >/dev/null 2>&1 || true     # 파일 교체 안정화
+# 데이터 폴더가 설치 폴더 안이면 rsync --delete 가 DB·설정을 통째로 지운다 → 거부.
+case "${DATA_DIR%/}/" in
+  "${INSTALL_DIR%/}"/*) echo "✗ --data-dir($DATA_DIR)이 설치 폴더($INSTALL_DIR) 안에 있습니다 — 업그레이드 때 삭제됩니다. 다른 경로를 지정하세요."; rm -rf "$TMP_DIR"; exit 1;;
+esac
 mkdir -p "$INSTALL_DIR" "$DATA_DIR"
 if command -v rsync >/dev/null 2>&1; then
-  rsync -a --delete "$TMP_DIR"/ "$INSTALL_DIR"/
+  # --delete 는 설치 폴더(서비스 WorkingDirectory)에 앱이 쓰는 런타임 파일까지 지운다 → 보호.
+  rsync -a --delete --exclude info.MD --exclude .iu_data_persist.json "$TMP_DIR"/ "$INSTALL_DIR"/
 else
   cp -a "$TMP_DIR"/. "$INSTALL_DIR"/
 fi

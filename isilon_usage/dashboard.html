@@ -3067,8 +3067,8 @@ function renderPie(j) {
     legend.innerHTML = slices.map((s, i) => {
       const pct = (s.bytes / denom * 100).toFixed(1);
       const name = s.drill
-        ? `<a href="#" class="piecell" data-i="${i}" style="flex:1;" title="클릭하면 더 깊이: ${s.label}">${s.label}</a>`
-        : `<span style="flex:1; color:var(--muted);" title="${s.label}">${s.label}</span>`;
+        ? `<a href="#" class="piecell" data-i="${i}" style="flex:1;" title="클릭하면 더 깊이: ${escHtml(s.label)}">${escHtml(s.label)}</a>`
+        : `<span style="flex:1; color:var(--muted);" title="${escHtml(s.label)}">${escHtml(s.label)}</span>`;
       return `<div style="display:flex; align-items:center; gap:8px; padding:2px 0;">
         <span class="dot" style="background:${s.color}"></span>
         ${name}
@@ -3370,7 +3370,17 @@ function renderRepTopFiles() {
   if ($("repTopLess")) $("repTopLess").addEventListener("click",
     () => { repTopShown = 30; renderRepTopFiles(); });
 }
-async function loadReport() {
+// 리포트 갱신 가드: 폴링(1.5초)마다 무거운 /api/growers(두 DB ATTACH·GROUP BY)를 겹쳐 부르지 않도록
+// 진행 중이면 건너뛰고, 같은 스캔이면 30초에 한 번만(스캔 선택이 바뀌거나 화면을 열 때는 즉시).
+let _repInflight = false, _repLastScan, _repLastTs = 0;
+async function loadReport(force) {
+  if (_repInflight) return;
+  const now = Date.now();
+  if (!force && _repLastScan === selectedScan && now - _repLastTs < 30000) return;
+  _repInflight = true; _repLastScan = selectedScan; _repLastTs = now;
+  try { await _loadReportNow(); } finally { _repInflight = false; }
+}
+async function _loadReportNow() {
   const q = (selectedScan != null ? ("?scan=" + selectedScan) : "");
   try {
     const j = await (await fetch("/api/stats" + q, {cache: "no-store"})).json();
@@ -3435,7 +3445,7 @@ async function loadReport() {
         el.innerHTML = '<span class="sub">' + (gw.reason || "비교할 이전 완료 스캔이 없습니다.") + '</span>';
       } else {
         const row = (r, col) => '<div style="display:flex; justify-content:space-between; gap:8px; margin:3px 0; font-size:0.92em;">'
-          + '<span class="mono" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + r.path + '">' + r.path + '</span>'
+          + '<span class="mono" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + escHtml(r.path) + '">' + escHtml(r.path) + '</span>'
           + '<b style="color:' + col + '; white-space:nowrap;">' + (r.delta >= 0 ? "+" : "−") + fmtBytes(Math.abs(r.delta))
           + ((r.files_delta !== undefined && r.files_delta !== 0) ? ' <span class="sub">(' + (r.files_delta > 0 ? "+" : "−") + fmtNum(Math.abs(r.files_delta)) + '개)</span>' : '')
           + '</b></div>';
@@ -3444,9 +3454,9 @@ async function loadReport() {
         html += (gw.growers || []).slice(0, 8).map(r => row(r, "var(--warn)")).join("");
         html += (gw.shrinkers || []).slice(0, 5).map(r => row(r, "var(--ok)")).join("");
         if ((gw.added || []).length)
-          html += '<div class="sub" style="margin-top:6px;">신규: ' + gw.added.slice(0, 5).map(r => r.path.split("/").pop()).join(", ") + '</div>';
+          html += '<div class="sub" style="margin-top:6px;">신규: ' + gw.added.slice(0, 5).map(r => escHtml(r.path.split("/").pop())).join(", ") + '</div>';
         if ((gw.removed || []).length)
-          html += '<div class="sub">삭제: ' + gw.removed.slice(0, 5).map(r => r.path.split("/").pop()).join(", ") + '</div>';
+          html += '<div class="sub">삭제: ' + gw.removed.slice(0, 5).map(r => escHtml(r.path.split("/").pop())).join(", ") + '</div>';
         el.innerHTML = html || '<span class="sub">변화 없음</span>';
       }
     }
@@ -4030,6 +4040,10 @@ async function staggerSchedules() {
 
 function render(d) {
   const r = d.run, p = d.progress, rs = d.resources;
+  // 다른 스캔이 실행 중이면 /api/status 는 '실행 중 스캔'(진행 패널용)을 돌려준다. 분석 화면(배너·드릴
+  // 초기화·트리·오류·비교)은 사용자가 고른 스캔을 따라야 하므로, 그 스캔의 /api/scans 행(단일 소스)을 쓴다.
+  const _sel = (selectedScan != null && selectedScan !== d.scan_id)
+    ? (allScans.find(s => s.id === selectedScan) || null) : null;
 
   $("rootPath").textContent = r.root_path;
   $("backendPill").textContent = "backend: " + r.backend + " · " +
@@ -4047,8 +4061,10 @@ function render(d) {
   const _an = $("analysisNotice");
   if (_an) {
     if (!window._anRunningHtml) window._anRunningHtml = _an.innerHTML;   // 원래(진행 중) 문구 보관
-    const _pa = d.partial_agg;
-    const _running = (r.status === "discovering" || r.status === "sizing");
+    const _pa = _sel ? (_sel.partial_agg_running ? {running: true, progress: {}} : null) : d.partial_agg;
+    const _st = _sel ? _sel.status : r.status;
+    const _paAt = _sel ? _sel.partial_agg_at : r.partial_agg_at;
+    const _running = (_st === "discovering" || _st === "sizing");
     if (_running) { _an.style.display = "block"; _an.innerHTML = window._anRunningHtml; }
     else if (_pa && _pa.running) {
       const pg = _pa.progress || {};
@@ -4056,9 +4072,9 @@ function render(d) {
       _an.innerHTML = '⏳ <b>멈춘 자료 집계(부분 집계) 중</b> — depth ' + (pg.depth == null ? "—" : pg.depth) + ' · '
         + fmtNum(pg.rows || 0) + ' / ' + fmtNum(pg.total_rows || 0) + '행 · ' + fmtDur(pg.elapsed || 0)
         + ' <span class="sub">(행 수에 비례해 걸립니다. 끝나면 이 화면 값이 하한값으로 바뀝니다.)</span>';
-    } else if (r.partial_agg_at) {
+    } else if (_paAt) {
       _an.style.display = "block";
-      _an.innerHTML = '⚠ <b>부분 집계 값(재개 전 · 하한값)</b> — ' + new Date(r.partial_agg_at * 1000).toLocaleString("ko-KR")
+      _an.innerHTML = '⚠ <b>부분 집계 값(재개 전 · 하한값)</b> — ' + new Date(_paAt * 1000).toLocaleString("ko-KR")
         + ' 기준으로 <b>지금까지 발견된 디렉터리만</b> 합산했습니다. 아직 안 훑은 하위는 0 으로 들어가 실제보다 작을 수 있습니다. '
         + '스캔을 <b>재개해 완료</b>하면 정확한 값으로 바뀝니다.';
     } else { _an.style.display = "none"; }
@@ -4274,7 +4290,7 @@ function render(d) {
     ]});
 
   // 상위 디렉터리(깊이 선택·클릭 드릴다운·정렬은 loadTopDirs 가 담당)
-  topMaxDepth = r.max_depth || 0;
+  topMaxDepth = _sel ? 20 : (r.max_depth || 0);   // 선택 스캔의 최대 깊이는 이 응답에 없음 → 셀렉트 상한(20)
   loadTopDirs();
   loadPie();   // 디스크 사용량 파이도 매 폴링마다 갱신(현재 드릴 위치 유지)
   $("topNote").textContent = (r.phase === "discovering")
@@ -4282,10 +4298,11 @@ function render(d) {
     : "'깊이'로 검색 루트 기준 몇 번째 자식을 볼지 고르고, 경로 클릭으로 하위로 들어가며, 표 머리글로 정렬합니다.";
 
   // 드릴다운/추세/오류: 선택 스캔이 바뀌면 새로 로드, 추세는 매번 갱신
-  currentRoot = r.root_path;
+  currentRoot = _sel ? _sel.root_path : r.root_path;
   drawTrend(currentRoot);
-  if (d.scan_id !== lastDetailScan) {
-    lastDetailScan = d.scan_id;
+  const _anaScan = _sel ? _sel.id : d.scan_id;
+  if (_anaScan !== lastDetailScan) {
+    lastDetailScan = _anaScan;
     topPath = []; topRel = 1; _topDepthSig = "";   // 스캔이 바뀌면 드릴다운 초기화
     piePath = [];                                  // 파이 드릴다운도 초기화
     treeStack = [];
@@ -4749,7 +4766,7 @@ function showView(name) {
   try { history.replaceState(null, "", "#" + name); } catch (e) { location.hash = name; }
   if (name === "extra" && $("atPath")) setTimeout(() => $("atPath").focus(), 20);
   if (name === "analysis" || name === "report") mountScanControls(name);
-  if (name === "report") loadReport();
+  if (name === "report") loadReport(true);
   if (name === "trouble") { if (typeof tsRun === "function") tsRun(); if (typeof tsHistLoad === "function") tsHistLoad(); }
   if (name === "tune") { if (typeof tuneRun === "function" && $("tuneResult") && $("tuneResult").style.display === "none") tuneRun(); }
   // 자동(체크 시)은 뷰를 떠나도 멈추지 않고 백그라운드에서 계속 갱신·저장한다.

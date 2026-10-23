@@ -69,6 +69,7 @@ DST={dst_q}
 DAYS={int(days)}
 DRY_RUN="${{DRY_RUN:-1}}"                 # 1=미리보기(아무것도 안 옮김), 0=실제 이동
 MANIFEST="${{MANIFEST:-{mf}}}"            # 플랜별 고유 경로(여러 플랜 충돌 방지)
+case "$DRY_RUN" in 0|1) ;; *) echo "DRY_RUN 은 0(실제) 또는 1(미리보기)만 허용: '$DRY_RUN'" >&2; exit 2;; esac   # 오타(true/yes)로 실제 이동 방지
 
 [ -d "$SRC" ] || {{ echo "SRC 디렉터리 없음: $SRC" >&2; exit 1; }}
 command -v rsync >/dev/null 2>&1 || {{ echo "rsync 필요(설치 후 재실행)" >&2; exit 1; }}
@@ -83,10 +84,13 @@ else
   [ -e "$MANIFEST" ] && {{ echo "기존 매니페스트 있음: $MANIFEST (이전 기록 보호). 지우거나 MANIFEST=... 지정 후 재실행." >&2; exit 1; }}
   WORK="$MANIFEST"
 fi
-find "$SRC" -xdev -type f {_find_flag(field)} +"$DAYS"{size_clause} -printf '%P\\0' > "$WORK"
+# 읽을 수 없는 하위 폴더(Permission denied)가 있어도 중단하지 않는다(set -e 로 매니페스트만 남고 재실행이 막히던 문제) —
+# 찾은 파일만 옮기고 경고한다.
+find "$SRC" -xdev -type f {_find_flag(field)} +"$DAYS"{size_clause} -printf '%P\\0' > "$WORK" \
+  || echo "경고: 일부 하위 폴더를 읽지 못했다(find 종료코드 $?). 찾은 파일만 처리한다." >&2
 COUNT=$(tr -cd '\\0' < "$WORK" | wc -c | tr -d ' ')
 echo "콜드 파일 ${{COUNT}}개 (기준 {field} > ${{DAYS}}일).  매니페스트: $WORK"
-[ "$COUNT" -gt 0 ] || {{ echo "옮길 콜드 파일 없음. 종료."; [ "$DRY_RUN" = "1" ] && rm -f -- "$WORK"; exit 0; }}
+[ "$COUNT" -gt 0 ] || {{ echo "옮길 콜드 파일 없음. 종료."; rm -f -- "$WORK"; exit 0; }}   # 빈 매니페스트가 다음 실행을 막지 않게
 
 # 2) rsync 로 이동(하드링크/메타/트리 보존). --ignore-existing: 대상에 이미 있는 경로는
 #    건드리지도 삭제하지도 않는다(다른 내용 덮어쓰기·원본 유실 방지). --remove-source-files 는
@@ -122,6 +126,7 @@ SRC={src_q}
 DST={dst_q}
 DRY_RUN="${{DRY_RUN:-1}}"
 MANIFEST="${{MANIFEST:-{mf}}}"
+case "$DRY_RUN" in 0|1) ;; *) echo "DRY_RUN 은 0(실제) 또는 1(미리보기)만 허용: '$DRY_RUN'" >&2; exit 2;; esac   # 오타(true/yes)로 실제 이동 방지
 
 [ -f "$MANIFEST" ] || {{ echo "매니페스트 없음: $MANIFEST (이동 때 만든 파일 필요)" >&2; exit 1; }}
 command -v rsync >/dev/null 2>&1 || {{ echo "rsync 필요" >&2; exit 1; }}

@@ -103,6 +103,8 @@ def analyze_depth(path: str, *, max_depth: int = 0, dir_limit: int = 0,
             with os.scandir(dpath) as it:
                 for entry in it:
                     if over_budget():
+                        with cnt_lock:
+                            st["truncated"] = True   # 예산 초과로 이 폴더를 다 못 훑음
                         break
                     try:
                         if entry.is_dir(follow_symlinks=False):
@@ -131,7 +133,11 @@ def analyze_depth(path: str, *, max_depth: int = 0, dir_limit: int = 0,
             emit_progress()
 
         # 더 내려갈지: max_depth 안 넘을 때만 자식을 스택에 추가
-        if subdirs and ((not max_depth) or (child_depth < max_depth)) and not over_budget():
+        if subdirs and ((not max_depth) or (child_depth < max_depth)):
+            if over_budget():   # 자식을 못 넣고 끝나면 스택이 비어도 부분 결과다
+                with cnt_lock:
+                    st["truncated"] = True
+                return
             with cv:
                 for c in subdirs:
                     stack.append((c, child_depth))

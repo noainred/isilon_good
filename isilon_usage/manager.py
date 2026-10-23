@@ -315,6 +315,7 @@ def overall_capacity(conn) -> dict:
             "started_at": s.get("started_at"),
             "finished_at": s.get("finished_at"),
             "updated_at": s.get("updated_at"),
+            "partial_agg_at": s.get("partial_agg_at"),   # 멈춘 자료 부분 집계 시각(이력 표 배지)
         })
     roots.sort(key=lambda x: x["scanned_bytes"], reverse=True)
 

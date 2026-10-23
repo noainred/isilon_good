@@ -492,7 +492,51 @@ def _test_rep_due_policy() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _test_node_id_safety_and_enroll_token() -> None:
+    """노드 id 경로 탈출 차단(delete '..' 가 data_dir 을 지우던 문제) + enroll 로 URL 바꿔치기 시 토큰 미승계
+    + 처리량 윈도우가 공백 구간 증가분을 몰아넣지 않음."""
+    from isilon_usage import db as dbmod
+    d = tempfile.mkdtemp(prefix="portal_safe_")
+    try:
+        pc = portalmod.PortalController(d)
+        assert not pc.upsert_node({"id": "..", "url": "http://x"})["ok"]
+        assert not pc.upsert_node({"id": "a/b", "url": "http://x"})["ok"]
+        assert pc.upsert_node({"id": "서울-1", "url": "http://10.0.0.9:8765"})["ok"]   # 한글 id 는 허용
+        marker = os.path.join(d, "keep.txt")
+        with open(marker, "w") as fh:
+            fh.write("x")
+        pc.delete_node("..")
+        assert os.path.exists(marker) and os.path.isdir(pc.replicas_dir), "delete '..' 가 data_dir 을 지움"
+        # enroll: 같은 id 로 URL 을 바꾸면 기존 토큰을 승계하지 않는다(토큰이 새 URL 로 새는 것 방지)
+        pc.upsert_node({"id": "gm2", "url": "http://10.0.0.2:8765", "token": "SECRET"})
+        r = pc.enroll_node({"id": "gm2", "url": "http://attacker:1"})
+        assert r["ok"], r
+        n = next(x for x in pc.nodes if x["id"] == "gm2")
+        assert n["token"] == "", n
+        # 같은 URL 재-enroll(토큰 없이)은 기존 토큰 유지
+        pc.upsert_node({"id": "gm3", "url": "http://10.0.0.3:8765", "token": "T3"})
+        pc.enroll_node({"id": "gm3", "url": "http://10.0.0.3:8765"})
+        assert next(x for x in pc.nodes if x["id"] == "gm3")["token"] == "T3"
+        # 처리량: 5시간 공백 뒤 첫 샘플(10 TiB 증가)이 1분 윈도우에 통째로 들어가지 않는다
+        now = time.time()
+        tconn = dbmod.connect(portalmod.throughput_history_path(d))
+        try:
+            tconn.executemany(
+                "INSERT INTO throughput_samples(ts,node_id,scanned_bytes,files) VALUES(?,?,?,?)",
+                [(int(now) - 5 * 3600, "gm3", 0, 0), (int(now), "gm3", 10 * 1024 ** 4, 0)])
+            tconn.commit()
+        finally:
+            tconn.close()
+        tw = {x["id"]: x for x in pc.throughput_windows()["nodes"]}
+        one_min = tw["gm3"]["win"]["60"]["bytes"]
+        assert one_min <= 10 * 1024 ** 4 / (5 * 60) * 1.1, one_min   # 겹친 1분 비율만큼만
+        print("[portal] 노드 id 경로탈출 차단·enroll 토큰 미승계·처리량 공백 비례 OK")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
+    _test_node_id_safety_and_enroll_token()
     _test_merge_scan_lists()
     _test_rep_due_policy()
     _test_poll_not_blocked_by_replication()
@@ -590,10 +634,17 @@ def main() -> int:
         assert tw["ok"], tw
         row = next((x for x in tw["nodes"] if x["id"] == nid), None)
         assert row is not None, tw["nodes"]
-        assert row["win"]["60"]["bytes"] == 1000, row["win"]["60"]      # 최근 1분: +1000
-        assert row["win"]["600"]["bytes"] == 3000, row["win"]["600"]    # 최근 10분: +3000
-        assert row["win"]["1800"]["bytes"] == 5000, row["win"]["1800"]  # 최근 30분: +5000
-        assert row["win"]["3600"]["bytes"] == 5000, row["win"]["3600"]  # 최근 1시간: +5000
+        # 구간이 윈도우에 걸치면 겹친 비율만큼만 센다(공백 뒤 첫 샘플이 증가분을 몰아넣지 않게).
+        #   1분: (−90→−20, +1000) 중 40/70            ≈ 571
+        #   10분: (−1700→−90, +2000) 중 510/1610 + 1000 ≈ 1634
+        #   30분: (−7000→−1700, +2000) 중 100/5300 + 3000 ≈ 3038
+        #   1시간: 같은 구간 중 1900/5300 + 3000       ≈ 3717
+        def _near(got, want):
+            return abs(got - want) <= 15   # now 정수화·실행 지연 허용
+        assert _near(row["win"]["60"]["bytes"], 571), row["win"]["60"]
+        assert _near(row["win"]["600"]["bytes"], 1634), row["win"]["600"]
+        assert _near(row["win"]["1800"]["bytes"], 3038), row["win"]["1800"]
+        assert _near(row["win"]["3600"]["bytes"], 3717), row["win"]["3600"]
         print("[throughput] OK  법인별 윈도우(1분/10분/30분/1시간) 처리량 합산")
 
         # 6c) 노드 응답시간(핑) — 로컬 엣지라 빠르게 응답

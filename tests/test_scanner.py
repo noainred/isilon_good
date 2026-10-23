@@ -319,10 +319,26 @@ def run_stop_resume_case() -> None:
 
         db_r = os.path.join(d, "resume.db")
         run_scan(db_r, tree, workers=1, with_monitor=False, stop_event=TripAfter(40))
+        # 강제 종료(kill) 흉내: 남은 pending 일부를 'claimed' 로 — 재개가 이를 pending 으로 되돌려 다시 세므로
+        # 진행 카운터 복원에서 이중으로 세면 discovered 가 실제 행 수보다 커진다(완료인데 100% 미만).
+        c = dbmod.connect(db_r)
+        try:
+            c.execute("UPDATE directories SET status='claimed' WHERE id IN "
+                      "(SELECT id FROM directories WHERE status='pending' LIMIT 5)")
+            c.commit()
+        finally:
+            c.close()
         run_scan(db_r, tree, workers=1, with_monitor=False, resume=True)  # 재개 → 완성
         got_b, got_f = _root_total(db_r)
         assert (got_b, got_f) == (exp_b, exp_f), \
             ("중단→재개 후 누락!", (got_b, got_f), "expected", (exp_b, exp_f))
+        c = dbmod.connect(db_r)
+        try:
+            nrows = c.execute("SELECT COUNT(*) FROM directories").fetchone()[0]
+            run = c.execute("SELECT discovered_dirs, processed_dirs FROM scan_runs").fetchone()
+        finally:
+            c.close()
+        assert run["discovered_dirs"] == nrows, ("재개 후 디렉터리 이중 계수", dict(run), nrows)
         print("[stop-resume] OK  중단→재개 후 누락 없음 (total_bytes=%d files=%d)" % (exp_b, exp_f))
     finally:
         shutil.rmtree(d, ignore_errors=True)
