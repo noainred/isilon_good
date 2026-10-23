@@ -13,6 +13,32 @@ DB 스키마 버전은 각 DB 의 `PRAGMA user_version` 에 기록되며, 현재
 
 ---
 
+## [1.99.36] - 2026-10-24
+
+### 수정 (Fixed) — 2차 점검: 지난 리뷰에서 남긴 항목 처리
+
+- **보안: 리다이렉트 시 인증 헤더 유출.** 표준 urllib 은 다른 호스트로 리다이렉트돼도 `Authorization` 등을 그대로 넘긴다(재현:
+  다른 포트로 302 → `Bearer` 가 그대로 전달). 공용 `netutil.urlopen`(단일 소스)을 만들어 모든 외부/노드 호출 12곳이 쓰게 하고,
+  다른 origin 으로 넘어갈 때 `Authorization`·`X-Auth-Token`·`X-Op-Token`·`DELL-EMC-TOKEN`·`Cookie` 를 뗀다(같은 origin 은 유지).
+  대상: 엣지 토큰(포탈→엣지), 스토리지 Basic 인증(Isilon/PowerStore/Unity), GitHub PAT(업그레이드), LLM 키(ask).
+- **재개 시 시작 옵션 손실:** 재개가 `one_file_system` 을 항상 False 로(→ 재개분이 하위 마운트로 넘어가 과대 계상), `fold_depth`·
+  `max_depth` 는 그때 설정값으로 돌렸다. 시작 때 적용값을 관리 DB(`opt_one_fs`·`opt_fold_depth`·`opt_max_depth`)에 기록하고 재개 때
+  그대로 쓴다(옛 스캔은 기존 동작).
+- **Python 3.6 표기와 실제 불일치:** 문서·setup 은 3.6+(RHEL/CentOS 7)인데 8개 모듈의 `from __future__ import annotations`(3.7+)로
+  3.6 에선 기동조차 안 됐다. 제거하고 런타임 평가되는 `dict | None` 주석(3.10+)을 `Optional` 로. vermin 정적 검사로 남은 3.7+ 사용은
+  pscan `mp_context`(이미 3.6 폴백 있음) 뿐. CI 에 `python:3.6-slim` 컨테이너 컴파일·import·CLI 작업 추가(로컬엔 3.6 실행 환경이 없어
+  실제 3.6 실행은 CI 에서 처음 확인됨).
+- **`systune --apply` 가 이미 더 좋은 값을 낮춤**(예: rmem_max 128MB→16MB): 현재값을 읽어 권장 방향보다 나쁠 때만 적용(직접 지정한 값은 적용).
+- **CLI `resume` 이 실행 중 스캔에 두 번째 writer 를 붙임:** per-run DB 의 스캐너 pid 가 살아 있으면 거부, pscan 스캔은 재개 거부(재스캔 안내).
+- **중복 탐지 `max_files` 가 2단계 walk 를 막지 못함**(재현: 상한 50 인데 lstat 3,050회 → 100회).
+- **ask "6개월 이상"류 과소 집계:** 기준이 나이 버킷 중간이면 걸친 버킷을 빼 놓고 "N 이상"으로 답했다 → 최소값임을 밝히고 범위(최소~최대) 표기.
+- **진단 프로브 스레드 누적:** NAS 가 멈추면 진단 요청마다 scandir 스레드가 D 상태로 쌓였다 → 경로당 1개, 살아 있으면 즉시 '응답 없음'.
+- `atimes`: 심볼릭 링크를 따라가 허용 경로 밖 파일 정보가 보이던 문제(lstat/`follow_symlinks=False`).
+- `autotune`: 첫 후보가 실패하면 배속에 files/s 값이 찍히던 기준값 오류.
+- CI: 테스트 3개 → `tests/test_*.py` 전체, JS 문법 검사에 portal.html 추가.
+
+---
+
 ## [1.99.35] - 2026-10-23
 
 ### 수정 (Fixed) — 전체 코드 리뷰(영역별 5개 병렬)에서 확인된 결함 수정

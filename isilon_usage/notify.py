@@ -12,6 +12,8 @@ import smtplib
 import urllib.request
 from email.message import EmailMessage
 
+from . import netutil
+
 
 def send(webhook_url: str, payload: dict, *, timeout: float = 5.0) -> bool:
     if not webhook_url:
@@ -30,7 +32,7 @@ def send(webhook_url: str, payload: dict, *, timeout: float = 5.0) -> bool:
         headers={"Content-Type": "application/json"}, method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout):
+        with netutil.urlopen(req, timeout=timeout):
             return True
     except Exception:
         return False

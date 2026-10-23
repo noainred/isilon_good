@@ -4,7 +4,6 @@
 했는지, 성공/실패를 한 줄씩 기록한다. 베스트에포트 — 기록 실패가 동작을 막지 않는다.
 """
 
-from __future__ import annotations
 
 import json
 import os

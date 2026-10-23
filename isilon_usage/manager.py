@@ -124,6 +124,10 @@ def init_manager(data_dir: str) -> str:
         conn.executescript(MANAGER_SCHEMA)
         dbmod.ensure_column(conn, "scans", "app_version", "TEXT")
         dbmod.ensure_column(conn, "scans", "partial_agg_at", "REAL")   # 멈춘 자료 부분 집계 시각
+        # 시작 옵션(재개 때 그대로 복원 — 다르면 재개분이 다른 마운트로 넘어가거나 fold 깊이 체계가 어긋남)
+        dbmod.ensure_column(conn, "scans", "opt_one_fs", "INTEGER")
+        dbmod.ensure_column(conn, "scans", "opt_fold_depth", "INTEGER")
+        dbmod.ensure_column(conn, "scans", "opt_max_depth", "INTEGER")
         conn.execute(f"PRAGMA user_version={int(SCHEMA_VERSION)}")
         conn.commit()
     finally:

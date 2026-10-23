@@ -51,6 +51,25 @@ def main() -> int:
         # 디렉터리 아님
         assert not dups.find_duplicates(os.path.join(d, "a.bin"))["ok"]
         print("[dups] 중복 탐지(크기→부분→전체 깔때기·하드링크 제외·부분해시충돌 구분) OK")
+
+        # max_files 상한이 2단계 walk 도 묶는다(예전엔 1단계만 멈추고 2단계가 전체 트리를 다시 lstat)
+        big = os.path.join(d, "big")
+        os.makedirs(big)
+        for i in range(3000):
+            _w(os.path.join(big, "f%04d" % i), b"x" * (i + 1))   # 크기 모두 다름 → 후보 0(해시 상한이 안 걸림)
+        calls = [0]
+        orig = dups.os.lstat
+
+        def _cnt(p_, *a, **k):
+            calls[0] += 1
+            return orig(p_, *a, **k)
+        dups.os.lstat = _cnt
+        try:
+            r3 = dups.find_duplicates(big, min_size=1, max_files=50)
+        finally:
+            dups.os.lstat = orig
+        assert r3["truncated"] and calls[0] <= 200, (calls[0], r3.get("truncated"))
+        print("[dups] max_files=50 → lstat %d회(전체 3000 아님)·truncated OK" % calls[0])
     finally:
         shutil.rmtree(d, ignore_errors=True)
     print("모든 테스트 통과 ✅")

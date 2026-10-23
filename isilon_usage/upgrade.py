@@ -8,7 +8,6 @@
 경로 탈출 방지, 기존 코드 백업(롤백 가능).
 """
 
-from __future__ import annotations
 
 import os
 import re
@@ -18,6 +17,8 @@ import tarfile
 import time
 import zipfile
 from typing import Dict, Optional, Tuple
+
+from . import netutil
 
 _ARCHIVE_RE = re.compile(r"isilon_usage-(\d+)\.(\d+)\.(\d+)\.(?:tar\.gz|tgz|zip)$")
 _INIT_VER_RE = re.compile(r"""__version__\s*=\s*["'](\d+)\.(\d+)\.(\d+)["']""")
@@ -300,7 +301,7 @@ def fetch_remote_versions(base_url: str, *, token: Optional[str] = None, timeout
     import urllib.request
     url = _join_url(base_url, "versions.json")
     try:
-        with urllib.request.urlopen(_auth_request(url, token), timeout=timeout) as r:
+        with netutil.urlopen(_auth_request(url, token), timeout=timeout) as r:
             raw = r.read(4 * 1024 * 1024)
         return json.loads(raw.decode("utf-8")), None
     except Exception as exc:  # noqa: BLE001 — 네트워크/JSON 등 어떤 실패도 '미확인'으로
@@ -350,7 +351,7 @@ def download_archive(url: str, dest_dir: str, *, token: Optional[str] = None,
         return {"ok": False, "reason": "허용되지 않는 아카이브 파일명: %s" % (name or "(없음)")}
     try:
         os.makedirs(dest_dir, exist_ok=True)
-        with urllib.request.urlopen(_auth_request(url, token), timeout=timeout) as r:
+        with netutil.urlopen(_auth_request(url, token), timeout=timeout) as r:
             data = r.read(max_bytes + 1)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "reason": "다운로드 실패: %s" % exc}

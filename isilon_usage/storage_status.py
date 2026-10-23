@@ -21,6 +21,7 @@ import urllib.request
 
 from . import isilon_api
 from . import powerstore_api
+from . import netutil
 
 
 def _ctx(verify):
@@ -41,7 +42,7 @@ def _req(url, user, password, *, verify_ssl=False, headers=None, data=None,
     for k, v in (headers or {}).items():
         req.add_header(k, v)
     ctx = _ctx(verify_ssl) if url.lower().startswith("https") else None
-    resp = urllib.request.urlopen(req, timeout=timeout, context=ctx)
+    resp = netutil.urlopen(req, timeout=timeout, context=ctx)
     try:
         return json.loads(resp.read().decode("utf-8"))
     finally:

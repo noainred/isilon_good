@@ -10,7 +10,6 @@
 표준 라이브러리만 사용한다(무의존 원칙).
 """
 
-from __future__ import annotations
 
 import hashlib
 import hmac

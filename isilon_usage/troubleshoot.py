@@ -137,9 +137,20 @@ def _cpu_times():
         return None, None
 
 
+_PROBES = {}                 # path -> 아직 살아 있는(행 걸린) 프로브 스레드
+_PROBES_LOCK = threading.Lock()
+
+
 def _probe_nas_latency(path, timeout=3.0):
     """대상(NAS) 경로에서 메타데이터 응답 지연(ms)을 잰다 — 스레드+타임아웃으로
-    행(hang) 걸려도 진단이 멈추지 않게 한다. 반환: (ms 또는 None, timed_out)."""
+    행(hang) 걸려도 진단이 멈추지 않게 한다. 반환: (ms 또는 None, timed_out).
+
+    NAS 가 멈추면 scandir 스레드는 D 상태로 영구히 남는다 — 진단은 요청마다 돌므로 경로당 1개만
+    두고, 이전 프로브가 아직 살아 있으면 새로 만들지 않고 바로 '응답 없음'을 돌려준다(스레드 누적 방지)."""
+    with _PROBES_LOCK:
+        prev = _PROBES.get(path)
+        if prev is not None and prev.is_alive():
+            return None, True
     result = {"ms": None}
 
     def _probe():
@@ -153,10 +164,15 @@ def _probe_nas_latency(path, timeout=3.0):
         except OSError:
             result["ms"] = -1.0           # 접근 불가
     th = threading.Thread(target=_probe, daemon=True)
+    with _PROBES_LOCK:
+        _PROBES[path] = th
     th.start()
     th.join(timeout)
     if th.is_alive():
-        return None, True                 # 타임아웃 — 응답 없음(행 의심)
+        return None, True                 # 타임아웃 — 응답 없음(행 의심). 스레드는 _PROBES 에 남겨 재사용 차단
+    with _PROBES_LOCK:
+        if _PROBES.get(path) is th:
+            _PROBES.pop(path, None)
     return result["ms"], False
 
 

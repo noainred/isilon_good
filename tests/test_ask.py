@@ -143,7 +143,14 @@ def run_threshold() -> None:
     # 콜드(atime) 1년 이상 → 40+8 = 48 GB
     r = ask.answer("1년 넘게 접근 안 한 콜드 데이터?", e)
     assert r["intent"] == "cold_data" and ask.fmt_bytes(48 * GB) in r["answer"], r["answer"]
-    print("[threshold] OK  일/개월/년 파싱 + 나이 버킷 이상합산(mtime·atime)")
+    # 6개월(180일)은 '90일~1년' 버킷 중간 → 최소값(1년+ 35 GB)과 범위(~ +30 GB = 65 GB)를 함께 밝힌다
+    r = ask.answer("6개월 넘게 안 바뀐 데이터?", e)
+    assert ask.fmt_bytes(35 * GB) in r["answer"] and ask.fmt_bytes(65 * GB) in r["answer"] \
+        and "최소값" in r["answer"], r["answer"]
+    # 경계(1년)면 범위 문구 없음
+    r = ask.answer("1년 넘게 안 쓴 데이터는?", e)
+    assert "최소값" not in r["answer"], r["answer"]
+    print("[threshold] OK  일/개월/년 파싱 + 나이 버킷 이상합산(mtime·atime) + 경계 밖 기준은 범위 표기")
 
 
 def run_portal_fallback() -> None:

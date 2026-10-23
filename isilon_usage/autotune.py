@@ -9,7 +9,6 @@
 (배속이 다소 부풀려질 수 있음). 그래도 '단일 vs 병렬'의 큰 차이를 가리는 데는 충분하다.
 로컬 빠른 저장소에선 병렬이 이득 없어 단일이 선택될 수 있는데, 그것도 올바른 결론이다.
 """
-from __future__ import annotations
 
 import os
 import time
@@ -70,8 +69,8 @@ def autotune(root: str, *, secs: float = 8.0, size_mode: str = "disk",
         r = pscan.parallel_scan(root, processes=p, threads_per_proc=t,
                                 size_mode=size_mode, max_seconds=secs)
         fps = float(r.get("files_per_sec", 0.0)) if r.get("ok") else 0.0
-        if base is None:
-            base = fps or 1.0
+        if base is None and fps > 0:
+            base = fps   # 기준 = 처음 '성공한' 후보(첫 후보가 실패해 base=1.0 → 배속에 files/s 가 찍히던 문제)
         results.append({
             "procs": p, "threads": t, "label": _label(p, t),
             "files_per_sec": round(fps, 1),

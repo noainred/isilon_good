@@ -36,6 +36,7 @@ from . import audit as auditmod
 from . import settings as setmod
 from . import upgrade as upgrademod
 from . import ask as askmod
+from . import netutil
 from .server import ThreadingHTTPServer, browse_dir  # 3.6 폴백 포함 재사용
 
 
@@ -217,7 +218,7 @@ def _http_get(url: str, token: Optional[str] = None, timeout: float = 8.0):
     req = urllib.request.Request(url)
     if token:
         req.add_header("X-Auth-Token", token)
-    return urllib.request.urlopen(req, timeout=timeout)
+    return netutil.urlopen(req, timeout=timeout)
 
 
 def _probe_meta(url: str, token: Optional[str], timeout: float = 8.0) -> dict:
@@ -979,7 +980,7 @@ class PortalController:
                 req.add_header("Content-Type", "application/gzip")
                 if n.get("token"):
                     req.add_header("X-Auth-Token", n["token"])
-                resp = urllib.request.urlopen(req, timeout=120)
+                resp = netutil.urlopen(req, timeout=120)
                 j = json.loads(resp.read().decode("utf-8"))
                 ok = bool(j.get("ok"))
                 results.append({"id": n["id"], "ok": ok,
@@ -2295,7 +2296,7 @@ class PortalController:
         if node.get("token"):
             req.add_header("X-Auth-Token", node["token"])
         try:
-            resp = urllib.request.urlopen(req, timeout=timeout)
+            resp = netutil.urlopen(req, timeout=timeout)
             return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             reason = (
@@ -2486,7 +2487,7 @@ class PortalController:
             req.add_header("Content-Type", "application/json")
             req.add_header("X-Auth-Token", n["token"])
             try:
-                resp = urllib.request.urlopen(req, timeout=20)
+                resp = netutil.urlopen(req, timeout=20)
                 j = json.loads(resp.read().decode("utf-8"))
                 ok = bool(j.get("ok"))
                 results.append({"id": n["id"], "ok": ok,

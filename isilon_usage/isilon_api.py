@@ -16,6 +16,8 @@ import ssl
 import urllib.error
 import urllib.request
 
+from . import netutil
+
 
 def _ssl_context(verify: bool):
     ctx = ssl.create_default_context()
@@ -91,7 +93,7 @@ class IsilonClient:
                 ("%s:%s" % (self.user, self.password)).encode("utf-8")).decode("ascii")
             req.add_header("Authorization", "Basic " + tok)
         ctx = _ssl_context(self.verify_ssl) if url.lower().startswith("https") else None
-        resp = urllib.request.urlopen(req, timeout=self.timeout, context=ctx)
+        resp = netutil.urlopen(req, timeout=self.timeout, context=ctx)
         try:
             return json.loads(resp.read().decode("utf-8"))
         finally:

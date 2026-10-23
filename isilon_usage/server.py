@@ -1749,13 +1749,23 @@ class ScanController:
                 "mount_readonly": readonly}
 
     def _launch(self, scan_id, db_path, path, backend, size_mode,
-                one_file_system, *, resume: bool, fold_depth=None) -> None:
+                one_file_system, *, resume: bool, fold_depth=None, max_depth=None) -> None:
         """워커 스레드에서 스캔을 실행하고, 끝나면 알림/보존 정리를 수행한다.
 
-        fold_depth: None 이면 설정값(fold_depth)을, 값이 주어지면 이번 스캔만 그 값으로 오버라이드.
+        fold_depth/max_depth: None 이면 설정값을, 값이 주어지면 이번 스캔만 그 값으로 오버라이드.
+        새 스캔은 실제 적용한 값을 관리 DB(opt_*)에 기록해 재개 때 같은 값으로 이어 간다.
         """
         stop = threading.Event()
         eff_fold = int(self.settings.get("fold_depth", 4) or 0) if fold_depth is None else int(fold_depth)
+        eff_max = int(self.settings.get("scan_max_depth", 0) or 0) if max_depth is None else int(max_depth)
+        if not resume:
+            try:
+                mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+                mgrmod.update_scan(mc, scan_id, opt_one_fs=1 if one_file_system else 0,
+                                   opt_fold_depth=eff_fold, opt_max_depth=eff_max)
+                mc.commit(); mc.close()
+            except Exception:  # noqa: BLE001 — 기록 실패가 스캔을 막지 않는다(재개 땐 설정값으로 폴백)
+                pass
 
         def worker():
             try:
@@ -1765,7 +1775,7 @@ class ScanController:
                     one_file_system=one_file_system,
                     batch_size=self.batch_size, workers=self.workers,
                     check_readonly=bool(self.settings.get("check_readonly", True)),
-                    max_depth=int(self.settings.get("scan_max_depth", 0) or 0),
+                    max_depth=eff_max,
                     fold_depth=eff_fold,
                     db_max_bytes=int(self.settings.get("db_max_gb", 0) or 0) * (1024 ** 3),
                     hardlink_dedup=bool(self.settings.get("hardlink_dedup", True)),
@@ -2119,8 +2129,13 @@ class ScanController:
                 pass
             self._launch_pscan(scan_id, row["db_path"], row["root_path"], row["size_mode"])
         else:
-            self._launch(scan_id, row["db_path"], row["root_path"], row["backend"],
-                         row["size_mode"], False, resume=True)
+            # 시작 때 옵션으로 이어 간다(예전엔 one_file_system 이 항상 False → 재개분이 하위 마운트로 넘어가
+            # 과대 계상, fold/max_depth 는 현재 설정값). 옛 스캔(opt_* 없음)은 기존처럼 설정값.
+            _r = dict(row)
+            _ofs = _r.get("opt_one_fs")
+            self._launch(scan_id, _r["db_path"], _r["root_path"], _r["backend"],
+                         _r["size_mode"], bool(_ofs) if _ofs is not None else False, resume=True,
+                         fold_depth=_r.get("opt_fold_depth"), max_depth=_r.get("opt_max_depth"))
         return {"ok": True, "scan_id": scan_id}
 
     # ----- 삭제 / 정리 -----

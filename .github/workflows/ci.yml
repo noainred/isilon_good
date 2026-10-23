@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 문서상 지원 하한(3.8)부터 최신까지 검증
+        # 테스트 실행 하한(3.8)부터 최신까지 검증(제품 코드의 3.6 호환은 py36 작업이 따로 확인)
         python-version: ['3.8', '3.11', '3.13']
     steps:
       - name: 체크아웃
@@ -34,11 +34,32 @@ jobs:
       - name: CLI 동작 확인
         run: python -m isilon_usage --version
 
-      - name: 단위/통합 테스트
+      - name: 단위/통합 테스트(tests/test_*.py 전체)
         run: |
-          python tests/test_scanner.py
-          python tests/test_manager.py
-          python tests/test_server.py
+          rc=0
+          for t in tests/test_*.py; do
+            echo "::group::$t"
+            python "$t" || { echo "::error::$t 실패"; rc=1; }
+            echo "::endgroup::"
+          done
+          exit $rc
+
+  py36:
+    name: Python 3.6 호환(RHEL/CentOS 7 — 문서상 지원 하한)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+
+      # setup-python 은 3.6 을 제공하지 않아 공식 이미지로 돌린다. 테스트 파일은 3.7+ 문법을 써서
+      # 제품 코드(isilon_usage/)의 컴파일·import·CLI 만 검증한다.
+      - name: 컴파일 + import + CLI (python:3.6-slim)
+        run: |
+          docker run --rm -e PYTHONDONTWRITEBYTECODE=1 -v "$PWD":/src:ro -w /src python:3.6-slim sh -c '
+            python --version &&
+            python -c "import glob; [compile(open(f, encoding=\"utf-8\").read(), f, \"exec\") for f in glob.glob(\"isilon_usage/*.py\")]; print(\"compile OK\")" &&
+            python -c "import isilon_usage.server, isilon_usage.portal, isilon_usage.cli, isilon_usage.pscan, isilon_usage.ask; print(\"import OK\")" &&
+            python -m isilon_usage --version'
 
   lint:
     name: 린트 (ruff)
@@ -62,8 +83,10 @@ jobs:
         run: |
           python3 - <<'PY'
           import re
-          html = open("isilon_usage/dashboard.html", encoding="utf-8").read()
-          m = re.search(r"<script>(.*)</script>", html, re.S)
-          open("dash.js", "w").write(m.group(1))
+          for name in ("dashboard", "portal"):   # 엣지 대시보드 + 중앙 포탈
+              html = open("isilon_usage/%s.html" % name, encoding="utf-8").read()
+              js = "\n".join(re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", html, re.S))
+              open("%s.js" % name, "w").write(js)
           PY
-          node --check dash.js
+          node --check dashboard.js
+          node --check portal.js

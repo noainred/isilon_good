@@ -287,6 +287,30 @@ def cmd_partial(args: argparse.Namespace) -> int:
     return 0
 
 
+def _scan_writer_alive(db_path: str) -> int:
+    """per-run DB 의 최근 run 이 진행 중이고 그 스캐너 프로세스가 살아 있으면 pid, 아니면 0."""
+    try:
+        c = dbmod.connect(db_path)
+        try:
+            r = c.execute("SELECT status, scanner_pid FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()
+        finally:
+            c.close()
+    except Exception:  # noqa: BLE001
+        return 0
+    if r is None or r["status"] not in ("discovering", "sizing") or not r["scanner_pid"]:
+        return 0
+    pid = int(r["scanner_pid"])
+    if pid == os.getpid():
+        return 0
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return 0
+    except OSError:   # 권한 없음 = 다른 사용자의 살아 있는 프로세스
+        return pid
+    return pid
+
+
 def cmd_resume(args: argparse.Namespace) -> int:
     data_dir = os.path.abspath(args.data_dir)
     mconn = dbmod.connect(mgrmod.manager_db_path(data_dir))
@@ -299,6 +323,14 @@ def cmd_resume(args: argparse.Namespace) -> int:
         return 2
     if not os.path.exists(row["db_path"]):
         print("per-run DB 가 없어 재개할 수 없습니다.", file=sys.stderr)
+        return 2
+    if row["backend"] == "pscan":   # pscan 은 행 단위 재개 상태가 없다(서버도 재스캔으로 처리)
+        print("pscan 스캔은 재개할 수 없습니다 — 새로 스캔하세요.", file=sys.stderr)
+        return 2
+    busy = _scan_writer_alive(row["db_path"])
+    if busy:   # 서버(또는 다른 CLI)가 같은 per-run DB 에 쓰는 중 — 두 번째 writer 금지
+        print("scan #%d 은 이미 실행 중입니다(pid %d). 서버 화면에서 재개/중지하세요."
+              % (args.scan, busy), file=sys.stderr)
         return 2
     s = setmod.load(data_dir)
     stop = threading.Event()
@@ -519,6 +551,8 @@ def cmd_tunecheck(args: argparse.Namespace) -> int:
         for a in res["applied"]:
             mark = "·" if a["ok"] is None else ("🟢" if a["ok"] else "🔴")
             line = "  %s %s" % (mark, a["cmd"])
+            if a.get("skipped"):
+                line = "  ✓ %s   (건너뜀: %s)" % (a["key"], a["skipped"])
             if a.get("error"):
                 line += "   (%s)" % a["error"]
             print(line)

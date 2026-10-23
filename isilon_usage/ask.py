@@ -29,12 +29,14 @@ data 형태(호출자가 가진 것만 채운다):
     },
   }
 """
-from __future__ import annotations
 
 import json
 import re
 import time
 import urllib.request
+from typing import Optional
+
+from . import netutil
 
 # 파일 나이 버킷(오래된 순). server.py 의 _AGE_ORDER 와 같은 라벨을 쓴다(통일).
 _AGE_ORDER = ["30일 이내", "30~90일", "90일~1년", "1~2년", "2~5년", "5년+"]
@@ -86,16 +88,37 @@ def _has(q: str, *words: str) -> bool:
 
 
 def _sum_age_over(buckets, threshold_days):
-    """나이 버킷에서 threshold_days '이상'인 것 합산 → (bytes, files, 포함된 라벨들)."""
+    """나이 버킷에서 threshold_days '이상'인 것 합산 → (bytes, files, 포함된 라벨들, 걸친 버킷).
+
+    기준이 버킷 경계가 아니면(예: 6개월=180일 → '90일~1년' 버킷 중간) 그 버킷은 나눌 수 없다.
+    합계에는 넣지 않고(=하한) 걸친 버킷을 따로 돌려줘 답변이 '최소~최대' 범위를 밝히게 한다.
+    """
     tot_b = tot_f = 0
     labels = []
+    straddle = None
+    lows = sorted(v for v in _AGE_LOWER_DAYS.values())
     for b in buckets or []:
         low = _AGE_LOWER_DAYS.get(b.get("key"), -1)
-        if low >= 0 and low >= threshold_days - 1:   # -1: 30일→'30~90일'부터 포함
+        if low < 0:
+            continue
+        if low >= threshold_days - 1:   # -1: 30일→'30~90일'부터 포함
             tot_b += int(b.get("bytes") or 0)
             tot_f += int(b.get("files") or 0)
             labels.append(b.get("key"))
-    return tot_b, tot_f, labels
+        else:
+            nxt = next((x for x in lows if x > low), None)   # 이 버킷의 상한(다음 버킷 하한)
+            if nxt is not None and nxt > threshold_days:
+                straddle = b
+    return tot_b, tot_f, labels, straddle
+
+
+def _range_note(b, straddle) -> str:
+    """기준이 버킷 중간에 걸쳤을 때 '최소~최대' 안내 문구(없으면 빈 문자열)."""
+    if not straddle or not int(straddle.get("bytes") or 0):
+        return ""
+    hi = b + int(straddle.get("bytes") or 0)
+    return (f" ※ 기준이 ‘{straddle.get('key')}’ 버킷 중간이라 나눌 수 없어 **최소값**입니다 — "
+            f"실제는 {fmt_bytes(b)} ~ {fmt_bytes(hi)} 사이.")
 
 
 # ────────────────────────────── 규칙 기반 핸들러 ──────────────────────────────
@@ -249,14 +272,14 @@ def _h_old_data(q, data):
     if not d or not d.get("age"):
         return {"answer": _detail_unavailable(data), "facts": {}}
     thr = parse_threshold_days(q) or 365     # 기본: 1년 이상 = 아카이브 후보
-    b, f, labels = _sum_age_over(d["age"], thr)
+    b, f, labels, strad = _sum_age_over(d["age"], thr)
     human_thr = (f"{thr // 365}년" if thr % 365 == 0 and thr >= 365
                  else (f"{thr // 30}개월" if thr % 30 == 0 and thr >= 30 else f"{thr}일"))
     facts = {"기준": f"{human_thr} 이상 미수정", "용량": fmt_bytes(b), "bytes": b,
              "파일수": f, "버킷": labels}
     return {"answer": f"마지막 수정(mtime) 기준 **{human_thr} 이상** 안 바뀐 데이터는 "
                       f"**{fmt_bytes(b)}** ({fmt_num(f)}개) 입니다 — 아카이브/정리 후보. "
-                      f"(버킷: {', '.join(labels) or '—'})", "facts": facts}
+                      f"(버킷: {', '.join(labels) or '—'})" + _range_note(b, strad), "facts": facts}
 
 
 def _h_cold_data(q, data):
@@ -266,12 +289,13 @@ def _h_cold_data(q, data):
     if not d or not d.get("atime_age"):
         return {"answer": _detail_unavailable(data), "facts": {}}
     thr = parse_threshold_days(q) or 365
-    b, f, labels = _sum_age_over(d["atime_age"], thr)
+    b, f, labels, strad = _sum_age_over(d["atime_age"], thr)
     human_thr = (f"{thr // 365}년" if thr % 365 == 0 and thr >= 365 else f"{thr}일")
     facts = {"기준": f"{human_thr} 이상 미접근", "용량": fmt_bytes(b), "파일수": f, "버킷": labels}
     return {"answer": f"마지막 접근(atime) 기준 **{human_thr} 이상** 안 열어본 콜드 데이터는 "
                       f"**{fmt_bytes(b)}** ({fmt_num(f)}개) 입니다. "
-                      f"(atime 정책이 noatime 이면 값이 무의미할 수 있음)", "facts": facts}
+                      f"(atime 정책이 noatime 이면 값이 무의미할 수 있음)" + _range_note(b, strad),
+            "facts": facts}
 
 
 def _h_owners(q, data):
@@ -411,7 +435,7 @@ def llm_phrase(question: str, facts: dict, cfg: dict):
         headers["Authorization"] = "Bearer " + cfg["key"]
     try:
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=float(cfg.get("timeout") or 20)) as resp:
+        with netutil.urlopen(req, timeout=float(cfg.get("timeout") or 20)) as resp:
             j = json.loads(resp.read().decode("utf-8"))
         txt = (j.get("choices") or [{}])[0].get("message", {}).get("content")
         return txt.strip() if txt else None
@@ -419,7 +443,7 @@ def llm_phrase(question: str, facts: dict, cfg: dict):
         return None
 
 
-def respond(question: str, data: dict, llm_cfg: dict | None = None) -> dict:
+def respond(question: str, data: dict, llm_cfg: Optional[dict] = None) -> dict:
     """규칙 기반 답을 만들고, 로컬 LLM 이 켜져 있으면 문장만 다듬는다(숫자는 규칙 값 유지)."""
     base = answer(question, data)
     if llm_cfg and llm_cfg.get("enabled") and (base.get("facts") or base.get("intent") != "help"):

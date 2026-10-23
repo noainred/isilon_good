@@ -13,7 +13,6 @@ GIL+단일 _dlock 병목을 직격). 호출측이 '옵션(기본 off)'으로만 
 
 표준 라이브러리만 사용(blake2b). noatime 무관(내용 해시).
 """
-from __future__ import annotations
 
 import hashlib
 import os
@@ -95,22 +94,32 @@ def find_duplicates(root: str, *, min_size: int = 4096, partial_bytes: int = 409
     seen2: set = set()
     hashed = 0
     cap2 = False
+    # 1단계가 상한(max_files)에서 잘렸으면 2단계도 같은 순서로 '1단계가 본 파일 수'까지만 걷는다
+    # (안 그러면 상한과 무관하게 전체 트리를 다시 lstat 한다 — 6PB 에서 상한이 무의미).
+    limit2 = scanned if truncated else None
+    visited2 = 0
     for dp, dirs, files in os.walk(root):
         if _stopped() or cap2:
             break
         dirs.sort()
         for nm in sorted(files):
+            if limit2 is not None and visited2 >= limit2:
+                cap2 = True
+                break
             fp = os.path.join(dp, nm)
             try:
                 st = os.lstat(fp)
             except OSError:
                 continue
-            if not _stat.S_ISREG(st.st_mode) or st.st_size not in cand:
+            if not _stat.S_ISREG(st.st_mode) or st.st_size < min_size:
                 continue
             key = (st.st_dev, st.st_ino)
             if key in seen2:
                 continue
             seen2.add(key)
+            visited2 += 1                # 1단계와 같은 기준(정규·min_size 이상·하드링크 1회)으로 센다
+            if st.st_size not in cand:
+                continue
             if hashed >= max_files:      # 해시한 후보 수 상한(2·3단계 I/O 폭주 방지)
                 cap2 = True
                 truncated = True

@@ -6,7 +6,6 @@
 - 스캔 락/커넥션을 잡지 않으므로, ThreadingHTTPServer 위에서 진행 중인 용량 스캔과 **동시에** 돌 수 있다.
 - noatime 마운트면 atime 이 무의미하므로, 호출측이 systune.atime_policy 로 신뢰도를 함께 안내한다.
 """
-from __future__ import annotations
 
 import os
 
@@ -45,7 +44,7 @@ def list_access_times(path: str, *, recursive: bool = False,
             for nm in sorted(files):
                 fp = os.path.join(root, nm)
                 try:
-                    st = os.stat(fp)
+                    st = os.lstat(fp)   # 링크 자체 — 따라가면 허용 경로 밖 파일의 크기·atime·uid 가 노출된다
                 except OSError:
                     continue
                 entries.append(_row(fp, st, False))
@@ -59,7 +58,7 @@ def list_access_times(path: str, *, recursive: bool = False,
             with os.scandir(path) as it:
                 for de in it:
                     try:
-                        st = de.stat()
+                        st = de.stat(follow_symlinks=False)   # 링크는 따라가지 않는다(허용 경로 이탈 방지)
                     except OSError:
                         continue
                     entries.append(_row(de.path, st, de.is_dir(follow_symlinks=False)))

@@ -19,6 +19,8 @@ import ssl
 import urllib.error
 import urllib.request
 
+from . import netutil
+
 
 def _ssl_context(verify: bool):
     ctx = ssl.create_default_context()
@@ -54,7 +56,7 @@ class PowerStoreClient:
         req = urllib.request.Request(self.api + path)
         req.add_header("Authorization", self._auth())
         req.add_header("Accept", "application/json")
-        resp = urllib.request.urlopen(req, timeout=self.timeout, context=self._ctx())
+        resp = netutil.urlopen(req, timeout=self.timeout, context=self._ctx())
         try:
             tok = resp.headers.get("DELL-EMC-TOKEN")
             if tok:
@@ -70,7 +72,7 @@ class PowerStoreClient:
         req.add_header("Content-Type", "application/json")
         if self._token:
             req.add_header("DELL-EMC-TOKEN", self._token)
-        resp = urllib.request.urlopen(req, timeout=self.timeout, context=self._ctx())
+        resp = netutil.urlopen(req, timeout=self.timeout, context=self._ctx())
         try:
             return json.loads(resp.read().decode("utf-8"))
         finally:

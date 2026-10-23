@@ -346,6 +346,25 @@ _RUNTIME_SYSCTLS = {
 }
 
 
+# 권장 방향: +1 = 클수록 좋음(현재값이 권장 이상이면 그대로 둔다), -1 = 작을수록 좋음.
+# 이미 더 좋게 튜닝된 값(예: rmem_max 128MB)을 권장값(16MB)으로 '낮추는' 후퇴를 막는다.
+_SYSCTL_BETTER = {
+    "sunrpc.tcp_slot_table_entries": +1,
+    "vm.swappiness": -1,
+    "vm.vfs_cache_pressure": -1,
+    "net.core.rmem_max": +1,
+}
+
+
+def _read_sysctl(key: str) -> Optional[int]:
+    """현재 sysctl 값(정수). 읽을 수 없으면 None(→ 비교 없이 적용 대상)."""
+    try:
+        with open("/proc/sys/" + key.replace(".", "/"), "r") as fh:
+            return int(fh.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 def apply_sysctls(values: Optional[dict] = None, *, dry_run: bool = True) -> dict:
     """런타임 sysctl 권장값을 적용한다(메타데이터 스캔 가속 — 옵트인, root 필요).
 
@@ -357,13 +376,24 @@ def apply_sysctls(values: Optional[dict] = None, *, dry_run: bool = True) -> dic
     import subprocess
 
     targets = dict(_RUNTIME_SYSCTLS)
+    explicit = set()
     if values:        # 화이트리스트 키만 덮어쓴다(임의 sysctl 주입 방지)
-        targets.update({k: str(v) for k, v in values.items() if k in _RUNTIME_SYSCTLS})
+        ov = {k: str(v) for k, v in values.items() if k in _RUNTIME_SYSCTLS}
+        targets.update(ov)
+        explicit = set(ov)
     is_root = (os.geteuid() == 0) if hasattr(os, "geteuid") else False
     applied = []
     for key, val in targets.items():
         cmd = ["sysctl", "-w", "%s=%s" % (key, val)]
         rec = {"key": key, "value": val, "cmd": " ".join(cmd), "ok": None, "error": None}
+        cur = _read_sysctl(key)
+        rec["current"] = cur
+        better = _SYSCTL_BETTER.get(key, 0)
+        if key not in explicit and cur is not None and better and val.isdigit() \
+                and (cur - int(val)) * better >= 0:
+            rec["skipped"] = "현재값 %d 이 권장값 %s 이상으로 좋음 — 낮추지 않음" % (cur, val)
+            applied.append(rec)
+            continue
         if dry_run:
             pass                          # 미실행 — 명령만 표시(ok=None)
         elif not is_root:

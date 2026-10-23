@@ -727,6 +727,62 @@ def _check_troubleshoot_live() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _check_resume_keeps_start_options() -> None:
+    """재개가 시작 옵션(one_file_system·fold_depth·max_depth)을 그대로 이어 쓴다
+    (예전엔 one_file_system 이 항상 False, fold/max_depth 는 현재 설정값)."""
+    import shutil
+    import time as _t
+
+    from isilon_usage import db as dbmod
+    from isilon_usage import manager as mgrmod
+    from isilon_usage import scanner as scanmod
+    from isilon_usage.server import ScanController
+    d = tempfile.mkdtemp(prefix="isilon_resume_opts_")
+    orig_stat = scanmod.Scanner._safe_stat
+    try:
+        tree = os.path.join(d, "tree")
+        for a_ in range(4):
+            sub = os.path.join(tree, "d%d" % a_)
+            os.makedirs(sub)
+            for i in range(200):
+                with open(os.path.join(sub, "f%03d" % i), "wb") as fh:
+                    fh.write(b"x")
+        data = os.path.join(d, "data")
+        ctl = ScanController(data)
+
+        def slow_stat(self, entry):
+            _t.sleep(0.002)
+            return orig_stat(self, entry)
+        scanmod.Scanner._safe_stat = slow_stat
+        sid = ctl.start_scan(tree, engine="threads", one_file_system=True, fold_depth=1)["scan_id"]
+        _t.sleep(0.3)
+        assert ctl.stop_scan(sid)["ok"]
+        for _ in range(100):
+            if sid not in ctl.running_ids():
+                break
+            _t.sleep(0.1)
+        scanmod.Scanner._safe_stat = orig_stat
+        ctl.settings["fold_depth"] = 7                  # 그 사이 설정이 바뀌어도 시작 값으로 재개해야 한다
+        seen = {}
+
+        def fake_launch(scan_id, db_path, path, backend, size_mode, one_file_system, **kw):
+            seen.update(one_file_system=one_file_system, **kw)
+        ctl._launch = fake_launch                       # type: ignore[assignment]
+        mc = dbmod.connect(mgrmod.manager_db_path(data))
+        try:
+            st = mgrmod.get_scan(mc, sid)["status"]
+        finally:
+            mc.close()
+        assert st == "paused", st
+        assert ctl.resume_scan(sid)["ok"]
+        assert seen.get("one_file_system") is True and seen.get("fold_depth") == 1 \
+            and seen.get("max_depth") == 0, seen
+        print("[resume-opts] OK  재개가 시작 옵션(one_file_system·fold_depth·max_depth) 유지")
+    finally:
+        scanmod.Scanner._safe_stat = orig_stat
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def _check_partial_aggregate_api() -> None:
     """멈춘 자료 집계 API: 중지된 스캔 → POST /api/scan/partial-aggregate → 진행/완료 상태 → /api/status 에
     partial_agg_at·하한값 노출, /api/scans 에 표시, 진행 중엔 재개/삭제 거부, 재개 완료 후 표시 해제."""
@@ -858,6 +914,7 @@ def main() -> int:
     _check_insecure_warning()
     _check_troubleshoot_live()
     _check_partial_aggregate_api()
+    _check_resume_keeps_start_options()
     _check_duplicate_scan_guard()
     _check_resume_after_upgrade()
     _check_resume_real()

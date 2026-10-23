@@ -1153,4 +1153,11 @@
      미수정(판단 필요)으로 남긴 것: 무인증 기본값의 POST/CSRF, 재개 시 one_file_system·fold_depth 미복원, Python 3.6 표기, systune 하향 적용 등.
      17/17·ruff·JS 문법 통과. v1.99.35.
 
+296. (버그 수정, 개선점 한번 더) 사용량 지적(서브에이전트 62%)을 반영해 이번엔 서브에이전트 없이 직접 처리. 지난 리뷰의 미수정 항목 중
+     판단이 필요 없는 것: 리다이렉트 인증 헤더 유출(공용 netutil.urlopen, 표준 urlopen 은 실제로 샘 — 테스트로 확인), 재개 시작 옵션
+     복원(opt_* 컬럼), Python 3.6 실제 호환(future annotations 제거 + vermin + CI py36 컨테이너; 로컬 3.6 실행은 Docker 데몬이 꺼져
+     미확인), systune 하향 방지, CLI resume 중복 writer 거부, dups 2단계 상한(3,050→100 lstat 재현), ask 버킷 범위 표기, 진단 프로브
+     스레드 1개 제한, atimes 링크 미추적, autotune 기준값, CI 전체 테스트. 남김: 무인증 기본값 POST/CSRF(정책 결정), 포탈 _fs_capacity
+     (엣지가 fsid 를 보내야 함 — 엣지·포탈 동시 변경). v1.99.36.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->
