@@ -1,0 +1,22 @@
+# The Davinci NAS Management — docker compose (가장 간단한 실행)
+#   docker compose up -d      # 시작(백그라운드)
+#   docker compose logs -f    # 로그
+#   docker compose down       # 중지
+services:
+  isilon-usage:
+    build:
+      context: .
+      # 사내 베이스 이미지가 있으면 아래 주석 해제:
+      # args: { BASE: "<사내레지스트리>/python:3.12-slim" }
+    image: isilon-usage:latest
+    container_name: isilon-usage
+    ports:
+      - "8765:8765"
+    volumes:
+      - iu-data:/data                     # 설정·DB 영속 볼륨(업그레이드에도 보존)
+      - /mnt/isilon:/mnt/isilon:ro        # 스캔 대상 NAS(읽기전용) — 실제 경로로 바꾸세요
+    command: ["serve", "--data-dir", "/data", "--host", "0.0.0.0", "--port", "8765", "--mount-base", "/mnt/isilon"]
+    restart: unless-stopped
+
+volumes:
+  iu-data:

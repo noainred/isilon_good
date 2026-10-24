@@ -12,11 +12,12 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from isilon_usage import db as dbmod  # noqa: E402
-from isilon_usage.scanner import Scanner, BLOCK_UNIT  # noqa: E402
+from isilon_usage.scanner import Scanner, BLOCK_UNIT, run_scan  # noqa: E402
 
 
 def _make_tree(root: str) -> None:
@@ -37,6 +38,11 @@ def _make_tree(root: str) -> None:
     d2 = os.path.join(root, "sub2")
     os.makedirs(d2, exist_ok=True)
     _write(os.path.join(d2, "f.bin"), 100)
+    # 하드링크: sub1/c.bin 을 sub2/c_link.bin 에 하드링크(용량은 1번만 세야 함)
+    try:
+        os.link(os.path.join(d1, "c.bin"), os.path.join(d2, "c_link.bin"))
+    except OSError:
+        pass
 
 
 def _write(path: str, size: int) -> None:
@@ -45,9 +51,14 @@ def _write(path: str, size: int) -> None:
 
 
 def _expected_disk_bytes(root: str) -> tuple[int, int]:
-    """os.walk 로 (총 디스크바이트, 총 파일수) 계산. 디렉터리 inode 블록 포함."""
+    """os.walk 로 (총 디스크바이트, 총 파일수) 계산.
+
+    du 와 동일하게 하드링크(st_nlink>1)는 (st_dev,st_ino)로 1회만 용량 계산.
+    파일 수는 디렉터리 엔트리(이름) 기준으로 모두 센다.
+    """
     total = 0
     files = 0
+    seen = set()
     for dirpath, dirnames, filenames in os.walk(root):
         st = os.stat(dirpath)
         total += st.st_blocks * BLOCK_UNIT
@@ -57,12 +68,17 @@ def _expected_disk_bytes(root: str) -> tuple[int, int]:
                 fst = os.lstat(fp)
             except OSError:
                 continue
-            total += fst.st_blocks * BLOCK_UNIT
             files += 1
+            if fst.st_nlink > 1:
+                key = (fst.st_dev, fst.st_ino)
+                if key in seen:
+                    continue
+                seen.add(key)
+            total += fst.st_blocks * BLOCK_UNIT
     return total, files
 
 
-def run_case(backend: str) -> None:
+def run_case(backend: str, workers: int = 1) -> None:
     tmp = tempfile.mkdtemp(prefix="isilon_test_")
     try:
         root = os.path.join(tmp, "data")
@@ -70,7 +86,7 @@ def run_case(backend: str) -> None:
         db_path = os.path.join(tmp, "scan.db")
         dbmod.init_db(db_path)
 
-        scanner = Scanner(db_path, root, backend=backend, batch_size=2)
+        scanner = Scanner(db_path, root, backend=backend, batch_size=2, workers=workers)
         run_id = scanner.run()
 
         conn = dbmod.connect(db_path)
@@ -110,7 +126,7 @@ def run_case(backend: str) -> None:
             ).fetchone()["c"]
             assert pending == 0, f"미완료 디렉터리 {pending}개"
 
-            print(f"[{backend}] OK  total_bytes={root_row['total_bytes']} "
+            print(f"[{backend} workers={workers}] OK  total_bytes={root_row['total_bytes']} "
                   f"files={root_row['total_files']} dirs={ndirs}")
         finally:
             conn.close()
@@ -118,12 +134,894 @@ def run_case(backend: str) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def run_hardlink_concurrency() -> None:
+    """하드링크가 여러 디렉터리에 흩어져 있어도 dedup 이 워커 수와 무관하게 정확한지.
+
+    직렬 구간 축소 리팩터(하드링크는 락 안에서 dedup)의 회귀 가드 — 워커 1 vs 8 의
+    루트 합계가 서로 같고, os.walk dedup 레퍼런스와도 같아야 한다.
+    """
+    tmp = tempfile.mkdtemp(prefix="isilon_hl_")
+    try:
+        root = os.path.join(tmp, "data")
+        src = os.path.join(root, "src")
+        os.makedirs(src, exist_ok=True)
+        originals = []
+        for i in range(5):                       # 원본 5개(각 8KB)
+            p = os.path.join(src, "orig%d.bin" % i)
+            _write(p, 8000)
+            originals.append(p)
+        linked = 0
+        for s in range(10):                      # 10개 디렉터리에 흩뿌려 하드링크
+            d = os.path.join(root, "sub%d" % s)
+            os.makedirs(d, exist_ok=True)
+            for i, op in enumerate(originals):
+                try:
+                    os.link(op, os.path.join(d, "link%d.bin" % i))
+                    linked += 1
+                except OSError:
+                    pass
+            _write(os.path.join(d, "uniq%d.bin" % s), 1000)   # 디렉터리별 고유 파일
+        if linked == 0:
+            print("[hardlink-concurrency] 건너뜀 (os.link 미지원)")
+            return
+        exp_bytes, exp_files = _expected_disk_bytes(root)
+        results = {}
+        for w in (1, 8):
+            db_path = os.path.join(tmp, "hl%d.db" % w)
+            dbmod.init_db(db_path)
+            rid = Scanner(db_path, root, backend="native", batch_size=1, workers=w).run()
+            conn = dbmod.connect(db_path)
+            try:
+                rr = conn.execute(
+                    "SELECT total_bytes, total_files FROM directories "
+                    "WHERE run_id=? AND parent_id IS NULL", (rid,)).fetchone()
+                results[w] = (rr["total_bytes"], rr["total_files"])
+            finally:
+                conn.close()
+        assert results[1] == results[8], ("워커 수에 따라 결과 다름", results)
+        assert results[8] == (exp_bytes, exp_files), (results[8], (exp_bytes, exp_files))
+        print("[hardlink-concurrency] OK  워커 1/8 동일·dedup 정확 (bytes=%d files=%d)"
+              % (exp_bytes, exp_files))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_permission_case() -> None:
+    """접근 불가 디렉터리가 있어도 스캔이 멈추지 않고 오류로 집계되는지."""
+    tmp = tempfile.mkdtemp(prefix="isilon_perm_")
+    try:
+        root = os.path.join(tmp, "data")
+        os.makedirs(os.path.join(root, "ok"), exist_ok=True)
+        _write(os.path.join(root, "ok", "f.bin"), 1000)
+        denied = os.path.join(root, "denied")
+        os.makedirs(denied, exist_ok=True)
+        _write(os.path.join(denied, "secret.bin"), 1000)
+        os.chmod(denied, 0o000)
+
+        db_path = os.path.join(tmp, "scan.db")
+        dbmod.init_db(db_path)
+        run_id = Scanner(db_path, root, batch_size=2).run()
+
+        conn = dbmod.connect(db_path)
+        try:
+            run = dbmod.get_run(conn, run_id)
+            assert run["status"] == "done", run["status"]  # 멈추지 않고 완료
+            err = run["error_dirs"]
+            if os.geteuid() == 0:
+                print(f"[permission] OK (root — 권한 우회, error_dirs={err}, 크래시 없음)")
+            else:
+                assert err >= 1, f"오류 디렉터리가 잡히지 않음 (error_dirs={err})"
+                print(f"[permission] OK  error_dirs={err}")
+        finally:
+            conn.close()
+            os.chmod(denied, 0o755)  # 정리 위해 권한 복구
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_fold_case(workers: int = 2) -> None:
+    """깊이 접기(fold_depth): N까지만 행 저장하되 합계는 무제한과 '정확히 동일'.
+
+    또 DB 크기 가드(db_max_bytes)가 자동 일시정지하는지도 확인한다.
+    """
+    tmp = tempfile.mkdtemp(prefix="isilon_fold_")
+    try:
+        root = os.path.join(tmp, "data")
+        _make_tree(root)   # root(0) → sub1(1) → deep(2), sub2(1)
+        exp_bytes, exp_files = _expected_disk_bytes(root)
+
+        # fold_depth=1: 행은 깊이 0·1 만, deep(2)은 sub1 own_bytes 로 접힘
+        db_path = os.path.join(tmp, "fold.db")
+        dbmod.init_db(db_path)
+        sc = Scanner(db_path, root, backend="native", batch_size=2,
+                     workers=workers, fold_depth=1)
+        run_id = sc.run()
+        conn = dbmod.connect(db_path)
+        try:
+            run = dbmod.get_run(conn, run_id)
+            assert run["status"] == "done", run["status"]
+            rr = conn.execute(
+                "SELECT total_bytes, total_files FROM directories "
+                "WHERE run_id=? AND parent_id IS NULL", (run_id,)).fetchone()
+            # 핵심: 접어도 합계는 무제한(정확값)과 같아야 한다
+            assert rr["total_bytes"] == exp_bytes, \
+                "접기 합계 불일치: %d != %d" % (rr["total_bytes"], exp_bytes)
+            assert rr["total_files"] == exp_files, \
+                "접기 파일수 불일치: %d != %d" % (rr["total_files"], exp_files)
+            ndirs = conn.execute(
+                "SELECT COUNT(*) c FROM directories WHERE run_id=?", (run_id,)).fetchone()["c"]
+            maxd = conn.execute(
+                "SELECT COALESCE(MAX(depth),0) d FROM directories WHERE run_id=?",
+                (run_id,)).fetchone()["d"]
+            assert ndirs == 3, "접기 후 디렉터리 수 %d != 3(root,sub1,sub2)" % ndirs
+            assert maxd == 1, "접기 후 최대 깊이 %d != 1" % maxd
+            print("[fold] OK  합계=%d(무제한과 동일) 파일=%d 행=%d 깊이=%d"
+                  % (rr["total_bytes"], rr["total_files"], ndirs, maxd))
+        finally:
+            conn.close()
+
+        # DB 크기 가드: 1바이트 한도 → 자동 일시정지 + 사유 기록
+        g_path = os.path.join(tmp, "guard.db")
+        dbmod.init_db(g_path)
+        scg = Scanner(g_path, root, backend="native", batch_size=2,
+                      workers=workers, db_max_bytes=1)
+        gid = scg.run()
+        gconn = dbmod.connect(g_path)
+        try:
+            grun = dbmod.get_run(gconn, gid)
+            assert grun["status"] == "paused", grun["status"]
+            assert grun["error"] and "DB 크기 초과" in grun["error"], grun["error"]
+            print("[db-guard] OK  자동 일시정지: %s" % grun["error"])
+        finally:
+            gconn.close()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_stop_resume_case() -> None:
+    """중단(stop)된 스캔을 재개하면 데이터 누락 없이 완성되는지(R7 회귀).
+
+    가짜 stop_event(is_set 이 N번 호출 뒤 True)로 탐색 도중 멈춘 뒤 resume=True 로
+    이어서 돌려, 루트 재귀 용량/파일 수가 '전체 스캔'과 정확히 같은지 확인한다.
+    (중단된 디렉터리를 완료 처리하면 미방문분이 영구 누락되던 버그 방지 검증.)
+    """
+    d = tempfile.mkdtemp(prefix="iu_stopresume_")
+    try:
+        tree = os.path.join(d, "tree")
+        for a in range(6):
+            for b in range(6):
+                p = os.path.join(tree, "d%d" % a, "s%d" % b)
+                os.makedirs(p)
+                for f in range(5):
+                    with open(os.path.join(p, "f%d.bin" % f), "wb") as fh:
+                        fh.write(b"x" * 1000)
+
+        def _root_total(dbp):
+            c = dbmod.connect(dbp)
+            try:
+                r = c.execute("SELECT total_bytes, total_files FROM directories "
+                              "WHERE depth=0").fetchone()
+                return (r["total_bytes"], r["total_files"]) if r else (None, None)
+            finally:
+                c.close()
+
+        db_full = os.path.join(d, "full.db")
+        run_scan(db_full, tree, workers=1, with_monitor=False)
+        exp_b, exp_f = _root_total(db_full)
+        assert exp_b and exp_f, ("전체 스캔 총량 이상", exp_b, exp_f)
+
+        class TripAfter:                      # is_set() 이 n번 뒤 True — 탐색 중간 결정적 중단
+            def __init__(self, n): self.n = n; self.c = 0
+            def is_set(self): self.c += 1; return self.c > self.n
+            def set(self): self.n = -1
+            def clear(self): self.n = 10 ** 9
+            def wait(self, t=None): return False
+
+        db_r = os.path.join(d, "resume.db")
+        run_scan(db_r, tree, workers=1, with_monitor=False, stop_event=TripAfter(40))
+        # 강제 종료(kill) 흉내: 남은 pending 일부를 'claimed' 로 — 재개가 이를 pending 으로 되돌려 다시 세므로
+        # 진행 카운터 복원에서 이중으로 세면 discovered 가 실제 행 수보다 커진다(완료인데 100% 미만).
+        c = dbmod.connect(db_r)
+        try:
+            c.execute("UPDATE directories SET status='claimed' WHERE id IN "
+                      "(SELECT id FROM directories WHERE status='pending' LIMIT 5)")
+            c.commit()
+        finally:
+            c.close()
+        run_scan(db_r, tree, workers=1, with_monitor=False, resume=True)  # 재개 → 완성
+        got_b, got_f = _root_total(db_r)
+        assert (got_b, got_f) == (exp_b, exp_f), \
+            ("중단→재개 후 누락!", (got_b, got_f), "expected", (exp_b, exp_f))
+        c = dbmod.connect(db_r)
+        try:
+            nrows = c.execute("SELECT COUNT(*) FROM directories").fetchone()[0]
+            run = c.execute("SELECT discovered_dirs, processed_dirs FROM scan_runs").fetchone()
+        finally:
+            c.close()
+        assert run["discovered_dirs"] == nrows, ("재개 후 디렉터리 이중 계수", dict(run), nrows)
+        print("[stop-resume] OK  중단→재개 후 누락 없음 (total_bytes=%d files=%d)" % (exp_b, exp_f))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def run_sizing_window_case() -> None:
+    """집계 '레벨별 일괄 UPDATE(id 윈도우)' 회귀 가드.
+
+    행 루프 → 일괄 UPDATE 교체(1.99.25) 후에도 ① 윈도우 경계와 무관하게 모든
+    디렉터리의 재귀 합이 os.walk 참조와 정확히 같고, ② 집계 도중 중단돼도
+    status='done' 규약으로 재개·완주하고, ③ scan_log 진단 로그가 남아야 한다.
+    """
+    from isilon_usage import scanner as scmod
+    d = tempfile.mkdtemp(prefix="iu_aggwin_")
+    old_window = scmod.AGG_WINDOW
+    try:
+        tree = os.path.join(d, "tree")
+        for a in range(4):                     # 3레벨 + 빈/중간 디렉터리 혼합
+            for b in range(3):
+                p = os.path.join(tree, "d%d" % a, "s%d" % b)
+                os.makedirs(p)
+                for f in range(b + 1):
+                    _write(os.path.join(p, "f%d.bin" % f), 700 * (f + 1) + a)
+            os.makedirs(os.path.join(tree, "d%d" % a, "empty"))
+        _write(os.path.join(tree, "r.bin"), 1234)
+
+        def _blocks(st):
+            # 스캐너 _entry_bytes(disk 모드)와 동일 규칙: st_blocks 미지원이면 st_size
+            b = getattr(st, "st_blocks", None)
+            return st.st_size if b is None else b * BLOCK_UNIT
+
+        def _ref_recursive(root):
+            """디렉터리별 (재귀 disk bytes, 재귀 파일 수) — 디렉터리 자체 블록 포함."""
+            ref = {}
+            for cur, dirs, files in os.walk(root):
+                b = _blocks(os.stat(cur))
+                for f in files:
+                    b += _blocks(os.lstat(os.path.join(cur, f)))
+                ref[os.path.abspath(cur)] = [b, len(files)]
+            for p in sorted(ref, key=lambda x: -x.count(os.sep)):
+                parent = os.path.dirname(p)
+                if parent != p and parent in ref:
+                    ref[parent][0] += ref[p][0]
+                    ref[parent][1] += ref[p][1]
+            return {p: tuple(v) for p, v in ref.items()}
+
+        def _check_all(dbp, ref, tag):
+            c = dbmod.connect(dbp)
+            try:
+                rid = c.execute("SELECT MAX(id) m FROM scan_runs").fetchone()["m"]
+                bad = []
+                for r in c.execute("SELECT path, status, total_bytes, total_files "
+                                   "FROM directories WHERE run_id=?", (rid,)):
+                    assert r["status"] == "done", (tag, r["path"], r["status"])
+                    got = (r["total_bytes"], r["total_files"])
+                    if got != ref[os.path.abspath(r["path"])]:
+                        bad.append((r["path"], got, ref[os.path.abspath(r["path"])]))
+                assert not bad, (tag, "불일치", bad[:5])
+                logs = [r["message"] for r in c.execute(
+                    "SELECT message FROM scan_log WHERE run_id=?", (rid,))]
+                assert any("집계 시작" in m for m in logs), (tag, logs)
+                assert any(m.startswith("집계 depth") for m in logs), (tag, logs)
+                return rid
+            finally:
+                c.close()
+
+        ref = _ref_recursive(tree)
+        scmod.AGG_WINDOW = 3   # 레벨당 여러 윈도우/커밋 경계를 강제
+        dbp = os.path.join(d, "win.db")
+        run_scan(dbp, tree, workers=2, with_monitor=False)
+        rid = _check_all(dbp, ref, "윈도우=3")
+
+        # 집계 도중 중단 흉내: 가장 깊은 레벨 절반 + 상위 전 레벨을 미완료로 되돌림
+        c = dbmod.connect(dbp)
+        maxd = c.execute("SELECT MAX(depth) m FROM directories WHERE run_id=?",
+                         (rid,)).fetchone()["m"]
+        deep = [r["id"] for r in c.execute(
+            "SELECT id FROM directories WHERE run_id=? AND depth=? ORDER BY id",
+            (rid, maxd))]
+        half = deep[: max(1, len(deep) // 2)]
+        c.execute("UPDATE directories SET status='discovered', total_bytes=0, "
+                  "total_files=0 WHERE id IN (%s)" % ",".join("?" * len(half)), half)
+        c.execute("UPDATE directories SET status='discovered', total_bytes=0, "
+                  "total_files=0 WHERE run_id=? AND depth<?", (rid, maxd))
+        c.execute("UPDATE scan_runs SET status='sizing', phase='sizing', "
+                  "finished_at=NULL WHERE id=?", (rid,))
+        c.commit()
+        c.close()
+        run_scan(dbp, tree, workers=1, with_monitor=False, resume=True)
+        _check_all(dbp, ref, "집계 중단→재개")
+        print("[sizing-window] OK  윈도우 분할·중단 재개 모두 참조값 일치 (%d 디렉터리)"
+              % len(ref))
+    finally:
+        scmod.AGG_WINDOW = old_window
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def _make_deep_tree(root: str) -> None:
+    """fold 넘김 검증용: 깊고 넓은 트리(깊이 5) + 빈 디렉터리 + 서로 다른 조각에 걸친 하드링크."""
+    first = None
+    for a in range(4):
+        for b in range(3):
+            for c in range(3):
+                p = os.path.join(root, "a%d" % a, "b%d" % b, "c%d" % c, "d")
+                os.makedirs(p, exist_ok=True)
+                for f in range(3):
+                    fp = os.path.join(p, "f%d.bin" % f)
+                    _write(fp, 1000 + 7 * f + a)
+                    if first is None:
+                        first = fp
+        os.makedirs(os.path.join(root, "a%d" % a, "empty", "deeper"), exist_ok=True)
+    # 서로 다른 fold 루트/넘김 조각에 걸친 하드링크 — 용량은 한 번만 세어야 한다
+    os.link(first, os.path.join(root, "a3", "b2", "c2", "d", "hl.bin"))
+    os.link(first, os.path.join(root, "a0", "hl_top.bin"))
+
+
+def _root_totals(db_path: str):
+    conn = dbmod.connect(db_path)
+    try:
+        r = conn.execute("SELECT total_bytes, total_files FROM directories "
+                         "WHERE parent_id IS NULL").fetchone()
+        md = conn.execute("SELECT COALESCE(MAX(depth),0) d FROM directories").fetchone()["d"]
+        n = conn.execute("SELECT COUNT(*) c FROM directories").fetchone()["c"]
+        return (r["total_bytes"], r["total_files"]), md, n
+    finally:
+        conn.close()
+
+
+def run_fold_overflow_case() -> None:
+    """fold 예산 초과 → 남은 하위를 행으로 넘김(병렬·체크포인트) → 집계 후 정리.
+
+    예전엔 fold 루트 하나의 하위 전체를 한 스레드가 통째로 걸어(수억 파일이면 수일) 병렬성이 사라지고
+    중단 시 처음부터 다시 했다. 넘김 방식이 어떤 예산·워커 수·fold 깊이에서도 합계를 정답(os.walk,
+    하드링크 1회)과 '정확히' 같게 유지하는지, 결과 행이 fold 깊이 이하로 정리되는지 확인한다.
+    max_depth 와 함께 쓸 때도 예산과 무관하게 결과가 같아야 한다(넘김 행은 fold walk 의 연속).
+    """
+    tmp = tempfile.mkdtemp(prefix="isilon_foldov_")
+    try:
+        root = os.path.join(tmp, "data")
+        _make_deep_tree(root)
+        exp = _expected_disk_bytes(root)
+        n = 0
+        for fold in (1, 2, 3):
+            for workers in (1, 4):
+                for budget in (1, 3, 10, 10 ** 9):
+                    dbp = os.path.join(tmp, "f%d_w%d_b%d.db" % (fold, workers, budget))
+                    dbmod.init_db(dbp)
+                    sc = Scanner(dbp, root, backend="native", batch_size=500,
+                                 workers=workers, fold_depth=fold)
+                    sc.fold_budget = budget
+                    sc.run()
+                    got, md, rows = _root_totals(dbp)
+                    assert got == exp, ("fold 넘김 합계 불일치", fold, workers, budget, got, exp)
+                    assert md <= fold, ("넘김 행이 정리되지 않음", fold, budget, md)
+                    # 넘김은 '미방문 하위 디렉터리'가 있을 때만 생긴다: fold 3 이면 fold 루트(c*)의
+                    # 유일한 자식 d 가 잎이라 넘길 게 없다 → 넘김 발생 단정은 다층 서브트리(fold 1·2)에만.
+                    if budget <= 3 and fold <= 2:
+                        assert sc._discovered > rows, ("예산 초과 넘김이 일어나지 않음", fold, budget)
+                    elif budget >= 10 ** 9:
+                        assert sc._discovered == rows, ("무제한 예산인데 넘김 발생", fold, budget)
+                    n += 1
+        # max_depth 상호작용: 넘김 여부(예산)와 무관하게 결과가 같아야 한다
+        for fold, mdepth in ((1, 1), (1, 2), (2, 3), (2, 1)):
+            res = []
+            for budget in (1, 10 ** 9):
+                dbp = os.path.join(tmp, "md_f%d_m%d_b%d.db" % (fold, mdepth, budget))
+                dbmod.init_db(dbp)
+                sc = Scanner(dbp, root, backend="native", batch_size=500, workers=3,
+                             fold_depth=fold, max_depth=mdepth)
+                sc.fold_budget = budget
+                sc.run()
+                res.append(_root_totals(dbp)[0])
+            assert res[0] == res[1], ("max_depth+fold: 예산에 따라 결과가 달라짐", fold, mdepth, res)
+            if mdepth > fold:
+                assert res[0] == exp, ("fold 는 max_depth 와 무관하게 끝까지 세야 함", fold, mdepth, res)
+            n += 1
+        print("[fold-overflow] OK  %d조합 합계 정답과 동일(bytes=%d files=%d)·결과 행 ≤ fold 깊이·"
+              "max_depth 상호작용 불변" % (n, exp[0], exp[1]))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_fold_overflow_resume_case() -> None:
+    """fold 넘김 도중 여러 지점에서 중단 → 재개해도 합계가 정확(누락·중복 0) — 체크포인트 경계 검증."""
+    from isilon_usage import scanner as scmod
+
+    class TripAfter:                      # is_set() 이 n번 뒤 True — 탐색 중간 결정적 중단
+        def __init__(self, n): self.n = n; self.c = 0
+        def is_set(self): self.c += 1; return self.c > self.n
+        def set(self): self.n = -1
+        def clear(self): self.n = 10 ** 9
+        def wait(self, t=None): return False
+
+    tmp = tempfile.mkdtemp(prefix="isilon_foldres_")
+    old = scmod.FOLD_BUDGET_ENTRIES
+    scmod.FOLD_BUDGET_ENTRIES = 3         # run_scan 이 만드는 Scanner 의 기본 예산을 작게 → 넘김 다발
+    try:
+        root = os.path.join(tmp, "data")
+        _make_deep_tree(root)
+        exp = _expected_disk_bytes(root)
+        trips = (5, 20, 60, 150, 400, 900)
+        # fold 0 도 포함: 하드링크 중복 방지 집합이 재개 때 비워져 중단 전·후에 걸친 하드링크를 두 번
+        # 세던 기존 버그(측정: k=60·150 에서 +4096B)가 fold 와 무관하게 났다 — 트리에 하드링크 포함.
+        for fold in (0, 1):
+            for k in trips:
+                for workers in (1, 3):
+                    dbp = os.path.join(tmp, "r%d_k%d_w%d.db" % (fold, k, workers))
+                    run_scan(dbp, root, workers=workers, with_monitor=False, fold_depth=fold,
+                             stop_event=TripAfter(k))
+                    run_scan(dbp, root, workers=workers, with_monitor=False, fold_depth=fold,
+                             resume=True)
+                    got, md, _ = _root_totals(dbp)
+                    assert got == exp, ("중단(fold=%d, k=%d, w=%d)→재개 후 합계 불일치"
+                                        % (fold, k, workers), got, exp)
+                    if fold:
+                        assert md <= fold, ("재개 후 넘김 행 미정리", k, md)
+        print("[fold-overflow-resume] OK  fold 0·1 × 중단 지점 %d곳 × 워커 2종 → 재개 후 합계 정확"
+              "(누락·중복 0, 하드링크 1회)" % len(trips))
+    finally:
+        scmod.FOLD_BUDGET_ENTRIES = old
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_claim_fairness_case() -> None:
+    """fold 경계에서 워커 간 균등 분배 — 예전엔 한 워커가 최대 500개를 선점해 나머지가 놀았다
+    (재현: fold 루트 40개를 8워커 중 1개가 전부 처리)."""
+    import collections
+    import threading as _th
+    tmp = tempfile.mkdtemp(prefix="isilon_fair_")
+    try:
+        root = os.path.join(tmp, "t")
+        for a in range(40):
+            p = os.path.join(root, "d%d" % a, "s", "x")
+            os.makedirs(p)
+            for f in range(15):
+                _write(os.path.join(p, "f%d" % f), 100)
+        dbp = os.path.join(tmp, "s.db")
+        dbmod.init_db(dbp)
+        sc = Scanner(dbp, root, workers=8, batch_size=500, fold_depth=1)
+        per = collections.Counter()
+        orig = sc._discover_one
+
+        def spy(dir_id, path, depth):
+            if depth == 1:                    # fold 루트
+                per[_th.current_thread().name] += 1
+                time.sleep(0.01)              # 무거운 fold 루트 흉내(워커가 겹치게)
+            return orig(dir_id, path, depth)
+        sc._discover_one = spy
+        sc.run()
+        assert sum(per.values()) == 40, per
+        assert len(per) >= 6, ("fold 루트가 소수 워커에 몰림(분배 실패)", dict(per))
+        assert max(per.values()) <= 12, ("한 워커가 fold 루트를 독점", dict(per))
+        print("[claim-fairness] OK  fold 루트 40개 → 워커 %d/8 이 나눠 처리(최대 %d개)"
+              % (len(per), max(per.values())))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_claim_cost_case() -> None:
+    """claim 비용 회귀 방지.
+
+    1.99.30 에서 fold 깊이 이상 행을 1개씩 claim 하게 바꾸자 claim 이 행 수만큼 늘었고, claim 쿼리가
+    (전용 인덱스 없이) 이미 발견된 행을 전부 훑고 지나가 1회 비용이 행 수에 비례했다 → 깊이 4 디렉터리가
+    많은 NAS 에서 10배+ 느려짐(측정: 1.6만 디렉터리 2.7초 → 26.4초, 현장 13대 17시간째 미완료).
+    ① claim 쿼리가 전용 인덱스를 쓰는지(실행계획) ② 가벼운 fold 루트가 많을 때 claim 횟수가
+    행 수에 비례해 폭증하지 않는지 — 시간이 아니라 결정적 지표로 확인한다.
+    """
+    tmp = tempfile.mkdtemp(prefix="isilon_claimcost_")
+    try:
+        dbp = os.path.join(tmp, "plan.db")
+        dbmod.init_db(dbp)
+        c = dbmod.connect(dbp)
+        try:
+            plan = " ".join(str(tuple(r)) for r in c.execute(
+                "EXPLAIN QUERY PLAN SELECT id, path, depth FROM directories "
+                "WHERE run_id=? AND status='pending' ORDER BY depth ASC, id ASC LIMIT ?", (1, 500)))
+        finally:
+            c.close()
+        assert "idx_dir_run_pending" in plan, ("claim 쿼리가 전용 인덱스를 안 씀", plan)
+
+        root = os.path.join(tmp, "t")
+        for a in range(5):
+            for b in range(4):
+                for cc in range(10):
+                    for d in range(10):          # 깊이 4 = fold 루트 2,000개(각 1파일, 가벼움)
+                        p = os.path.join(root, "a%d" % a, "b%d" % b, "c%d" % cc, "d%d" % d)
+                        os.makedirs(p)
+                        _write(os.path.join(p, "f"), 100)
+        exp = _expected_disk_bytes(root)
+        dbp2 = os.path.join(tmp, "s.db")
+        dbmod.init_db(dbp2)
+        sc = Scanner(dbp2, root, workers=8, batch_size=500, fold_depth=4)
+        n = [0]
+        orig = sc._claim_batch
+
+        def counted():
+            r = orig()
+            if r:
+                n[0] += 1
+            return r
+        sc._claim_batch = counted
+        sc.run()
+        got, _, rows = _root_totals(dbp2)
+        assert got == exp, ("합계 불일치", got, exp)
+        # 1개씩 claim 하면 ≈ 행 수(2,226)회. 공정 분배(보이는 목록의 1/워커수)면 수백 회 이하.
+        assert n[0] < rows / 4, ("claim 횟수 폭증(행마다 claim?)", n[0], rows)
+        print("[claim-cost] OK  claim 쿼리 전용 인덱스 사용 · 디렉터리 %d개에 claim %d회(행당 아님) · 합계 정확"
+              % (rows, n[0]))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+class _TripAfter:
+    """is_set() 이 n번 호출된 뒤 True — 탐색 도중 결정적 중단(재개 테스트용 가짜 stop_event)."""
+
+    def __init__(self, n):
+        self.n = n
+        self.c = 0
+
+    def is_set(self):
+        self.c += 1
+        return self.c > self.n
+
+    def set(self):
+        self.n = -1
+
+    def clear(self):
+        self.n = 10 ** 9
+
+    def wait(self, t=None):
+        return False
+
+
+def _make_flat(base: str, dirs: int, files: int, size: int = 100) -> None:
+    for a in range(dirs):
+        d = os.path.join(base, "d%03d" % a) if dirs > 1 else base
+        os.makedirs(d, exist_ok=True)
+        for f in range(files):
+            _write(os.path.join(d, "f%05d.bin" % f), size)
+
+
+def run_checkpoint_nonblocking_case() -> None:
+    """R1 회귀: 오래된 스냅샷을 쥔 읽기 트랜잭션(대시보드 조회 흉내)이 있어도 WAL 체크포인트가
+    공유 락(_dlock) 안에서 기다리지 않는다(예전: busy_timeout 30초까지 워커 전체 정체).
+
+    ① 읽기를 스캔 내내 유지해도 스캔 시간·락 최대 대기가 늘지 않는다.
+    ② busy 면 다음 시도는 '완료 시각' 기준 + backoff(직후 재실행 없음), 읽기 해제 후 WAL 회수.
+    ③ 디스크 여유 가드는 체크포인트와 무관하게 동작(자동 일시정지 사유 기록).
+    """
+    d = tempfile.mkdtemp(prefix="iu_ckpt_")
+    try:
+        tree = os.path.join(d, "tree")
+        _make_flat(tree, 12, 120)
+        db = os.path.join(d, "s.db")
+        dbmod.init_db(db)
+        # ① 읽기 스냅샷 고정(BEGIN + SELECT → 해제 전까지 WAL 프레임이 남는다)
+        rd = dbmod.connect(db)
+        rd.execute("BEGIN")
+        rd.execute("SELECT count(*) FROM directories").fetchall()
+        sc = Scanner(db, tree, workers=4)
+        t0 = time.time()
+        sc.run()
+        wall = time.time() - t0
+        lk = sc._dlock.snapshot()
+        ck = sc._ckpt
+        assert wall < 2.0, "읽기 트랜잭션 때문에 스캔이 정체(%.2fs)" % wall
+        assert lk["wait_max_s"] < 1.0, lk
+        assert ck["count"] >= 1 and ck["busy_count"] >= 1 and ck["last_ms"] < 1000, ck
+        # ② 완료 기준 주기 + backoff + 회수
+        conn = dbmod.connect(db)
+        try:
+            dbmod.add_scan_log(conn, sc.run_id, "test", "새 프레임")   # 스냅샷보다 새 커밋
+            conn.commit()
+            sc.wal_ckpt_every = 5.0
+            n0 = ck["busy_streak"]
+            sc._checkpoint_locked(conn)
+            assert ck["last_busy"] == 1 and ck["busy_streak"] == n0 + 1, ck
+            gap1 = sc._next_ckpt_at - time.time()
+            assert gap1 >= 5.0 * 0.9, ("직후 재실행 방지(완료 기준 주기)", gap1)
+            sc._checkpoint_locked(conn)
+            gap2 = sc._next_ckpt_at - time.time()
+            assert gap2 > gap1 * 1.5, ("busy 연속 시 backoff", gap1, gap2)
+            rd.rollback()                               # 읽기 해제
+            sc._checkpoint_locked(conn)                 # 회수(로그 한 줄이 새 WAL 프레임이 된다)
+            conn.commit()
+            assert ck["last_busy"] == 0 and ck["busy_streak"] == 0, ck
+            sc._checkpoint_locked(conn)                 # 한 번 더 — 쓰기 없음 → WAL 0
+            assert ck["last_busy"] == 0 and _size(db + "-wal") == 0, ("읽기 해제 후 WAL 미회수", ck)
+            msgs = [r[0] for r in conn.execute(
+                "SELECT message FROM scan_log WHERE run_id=? AND message LIKE 'wal_checkpoint%'",
+                (sc.run_id,))]
+            assert any("busy" in m for m in msgs) and any("회수" in m for m in msgs), msgs
+            # busy_timeout 은 체크포인트 뒤 원래 값으로 복구돼 있어야 한다
+            assert int(conn.execute("PRAGMA busy_timeout").fetchone()[0]) == dbmod.BUSY_TIMEOUT_MS
+        finally:
+            conn.close()
+            rd.close()
+        # ③ 디스크 여유 가드(체크포인트 결과와 무관하게 주기 점검)
+        db2 = os.path.join(d, "g.db")
+        dbmod.init_db(db2)
+        sc2 = Scanner(db2, tree, workers=2, min_free_bytes=10 ** 18)
+        sc2.run()
+        c2 = dbmod.connect(db2)
+        try:
+            st = dbmod.get_run(c2, sc2.run_id)["status"]
+        finally:
+            c2.close()
+        assert st == "paused" and "디스크 공간 부족" in (sc2._stop_reason or ""), (st, sc2._stop_reason)
+        print("[ckpt-nonblocking] OK  읽기 유지 중 스캔 %.2fs(락 최대대기 %.3fs) · busy→backoff(%.0f→%.0f초) · "
+              "해제 후 WAL 회수 · 디스크 가드 유지" % (wall, lk["wait_max_s"], gap1, gap2))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def _size(p: str) -> int:
+    try:
+        return os.path.getsize(p)
+    except OSError:
+        return 0
+
+
+def run_resume_stats_dedup_case() -> None:
+    """R3 회귀: 중단→재개 후 집계 리포트(나이/소유자)·Top-N 이 중복되지 않는다.
+
+    예전엔 청크마다 공유 집계에 바로 더해, 중단 시점의 부분 통계가 저장되고 재개 후 그 디렉터리를
+    다시 훑어 또 더해졌다(파일 25개 → age 통계 26~50개, 루트 합계는 정상). 중단 지점 44가지 전부 검사.
+    """
+    d = tempfile.mkdtemp(prefix="iu_statsdup_")
+    try:
+        tree = os.path.join(d, "tree")
+        _make_flat(tree, 1, 25)
+        bad = []
+        for n in range(1, 45):
+            db = os.path.join(d, "r%d.db" % n)
+            run_scan(db, tree, workers=1, with_monitor=False, stop_event=_TripAfter(n))
+            run_scan(db, tree, workers=1, with_monitor=False, resume=True)
+            c = dbmod.connect(db)
+            try:
+                root = c.execute("SELECT total_files FROM directories WHERE depth=0").fetchone()[0]
+                age = c.execute("SELECT COALESCE(SUM(files),0) FROM scan_stats WHERE kind='age'").fetchone()[0]
+                own = c.execute("SELECT COALESCE(SUM(files),0) FROM scan_stats WHERE kind='owner'").fetchone()[0]
+                tp = c.execute("SELECT COUNT(*), COUNT(DISTINCT path) FROM top_files").fetchone()
+            finally:
+                c.close()
+            if not (root == 25 and age == 25 and own == 25 and tp[0] == tp[1] == 25):
+                bad.append((n, root, age, own, tuple(tp)))
+        assert not bad, ("재개 후 통계 중복/누락", bad[:5])
+        print("[resume-stats-dedup] OK  중단 지점 44가지 모두 age/owner/Top-N = 25 (중복 0)")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def run_worker_exception_case() -> None:
+    """R4 회귀: 워커 스레드의 예외(OSError 아님)가 '정상 완료'로 덮이지 않는다.
+
+    예전엔 워커가 죽어도 나머지가 끝나면 집계로 넘어가 status=done 이 됐고, 죽은 워커가 맡은
+    디렉터리(claimed)는 0바이트로 '완료'돼 파일이 조용히 빠졌다(재현: 240개 중 40개 누락).
+    """
+    d = tempfile.mkdtemp(prefix="iu_wexc_")
+    orig = Scanner._safe_stat
+    try:
+        tree = os.path.join(d, "tree")
+        _make_flat(tree, 12, 20)
+        db = os.path.join(d, "s.db")
+        dbmod.init_db(db)
+
+        def boom(self, entry):
+            if "d005" in entry.path:
+                raise RuntimeError("주입: 워커 내부 예외")
+            return orig(self, entry)
+        Scanner._safe_stat = boom
+        sc = Scanner(db, tree, workers=4)
+        raised = None
+        try:
+            sc.run()
+        except RuntimeError as exc:
+            raised = str(exc)
+        assert raised and "워커 예외" in raised, raised
+        c = dbmod.connect(db)
+        try:
+            run = dbmod.get_run(c, sc.run_id)
+            done_rows = c.execute("SELECT COUNT(*) FROM directories WHERE status='done'").fetchone()[0]
+            left = c.execute("SELECT COUNT(*) FROM directories WHERE status IN ('pending','claimed')").fetchone()[0]
+        finally:
+            c.close()
+        assert run["status"] == "error" and "워커 예외" in (run["error"] or ""), (run["status"], run["error"])
+        assert done_rows == 0 and left >= 1, ("미완료 행이 완료로 둔갑", done_rows, left)
+        print("[worker-exception] OK  워커 예외 → status=error(사유 기록), 미완료 행 %d개 보존(done 0)" % left)
+    finally:
+        Scanner._safe_stat = orig
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def run_chunk_sharing_case() -> None:
+    """R3b: 거대 평면 폴더(파일 수천~수십만) 하나도 유휴 워커가 파일 청크를 나눠 stat 한다.
+
+    stat 지연(NAS 흉내 0.3ms)이 있을 때 워커 8 이 1 보다 뚜렷이 빠르고 합계는 같아야 한다.
+    지연이 없으면(로컬 SSD) 나눔이 켜지지 않는다(GIL 경쟁만 늘어 되레 느림 — 측정으로 확정).
+    """
+    d = tempfile.mkdtemp(prefix="iu_share_")
+    orig = Scanner._safe_stat
+    try:
+        tree = os.path.join(d, "tree")
+        _make_flat(os.path.join(tree, "flat"), 1, 12000, size=10)
+        ref = None
+        times = {}
+
+        def slow(self, e):
+            time.sleep(0.0003)
+            return orig(self, e)
+        for w in (1, 8):
+            Scanner._safe_stat = slow
+            db = os.path.join(d, "w%d.db" % w)
+            dbmod.init_db(db)
+            sc = Scanner(db, tree, workers=w)
+            t0 = time.time()
+            sc.run()
+            times[w] = time.time() - t0
+            c = dbmod.connect(db)
+            try:
+                tot = tuple(c.execute("SELECT total_bytes, total_files FROM directories WHERE depth=0").fetchone())
+            finally:
+                c.close()
+            if ref is None:
+                ref = tot
+            assert tot == ref and tot[1] == 12000, (w, tot, ref)
+            if w == 8:
+                assert sc.diag_snapshot()["sharing"], sc.diag_snapshot()
+        assert times[8] < times[1] / 2.5, ("평면 폴더 병렬화 효과 없음", times)
+        Scanner._safe_stat = orig                    # 지연 없음 → 나눔 꺼짐
+        db = os.path.join(d, "local.db")
+        dbmod.init_db(db)
+        sc = Scanner(db, tree, workers=8)
+        sc.run()
+        snap = sc.diag_snapshot()
+        assert not snap["sharing"] and snap["lock"]["acquisitions"] > 0 and snap["advanced_at"] > 0, snap
+        print("[chunk-sharing] OK  평면 12,000파일(stat 0.3ms) 워커 1: %.2fs → 8: %.2fs · 합계 동일 · 로컬(지연 없음)은 나눔 꺼짐"
+              % (times[1], times[8]))
+    finally:
+        Scanner._safe_stat = orig
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def run_synthetic_pb_case() -> None:
+    """R8: 합성 메타데이터(수 PiB own_bytes)로 실제 집계 경로를 돌려 합계 계산·DB 저장이 정확한지.
+
+    실제 PB급 NAS 성능 검증이 아니다 — 정수 범위/집계 SQL/JSON 직렬화만 확인한다.
+    (SQLite INTEGER 64비트 = 최대 약 9.2EB. JS Number 는 2^53(약 9PiB) 초과 시 끝자리 정밀도를 잃는다.)
+    """
+    d = tempfile.mkdtemp(prefix="iu_pb_")
+    try:
+        PIB = 1024 ** 5
+        for own in (2 * PIB, 6 * PIB):              # 자식 3개 × own → 합계 6PiB / 18PiB (+루트 1PiB)
+            db = os.path.join(d, "pb%d.db" % (own // PIB))
+            dbmod.init_db(db)
+            conn = dbmod.connect(db)
+            try:
+                rid = dbmod.create_run(conn, "/synthetic", backend="native", size_mode="disk", scanner_pid=os.getpid())
+                conn.execute("INSERT INTO directories(run_id,parent_id,path,name,depth,status,own_bytes,file_count)"
+                             " VALUES(?,NULL,'/synthetic','synthetic',0,'discovered',?,1000)", (rid, PIB))
+                root_id = conn.execute("SELECT id FROM directories WHERE run_id=?", (rid,)).fetchone()[0]
+                for i in range(3):
+                    conn.execute("INSERT INTO directories(run_id,parent_id,path,name,depth,status,own_bytes,file_count)"
+                                 " VALUES(?,?,?,?,1,'discovered',?,?)",
+                                 (rid, root_id, "/synthetic/c%d" % i, "c%d" % i, own, 10 ** 9))
+                conn.commit()
+                sc = Scanner(db, "/synthetic", resume=True)
+                sc.run_id = rid
+                sc._aggregate(conn)
+                conn.commit()
+                row = conn.execute("SELECT total_bytes, total_files, status FROM directories WHERE id=?",
+                                   (root_id,)).fetchone()
+                exp = PIB + 3 * own
+                assert row["total_bytes"] == exp and row["total_files"] == 1000 + 3 * 10 ** 9, tuple(row)
+                import json as _json
+                from isilon_usage.server import build_status
+                st = build_status(conn, None, top=0)
+                assert int(_json.loads(_json.dumps(st))["run"]["processed_dirs"]) == 4, st["run"]
+            finally:
+                conn.close()
+        print("[synthetic-pb] OK  합성 7PiB·19PiB 집계 합계 정확(정수) · DB 저장 · JSON 직렬화 (실제 NAS 검증 아님)")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def run_partial_aggregate_case() -> None:
+    """멈춘 자료 집계(부분 집계): 탐색 도중 멈춘 스캔의 행으로 재귀 합계(하한값)를 계산하되 행 status 는
+    바꾸지 않고, 재개하면 완전 집계가 정확한 값으로 덮어쓰며 '부분 집계' 표시가 지워지는지."""
+    from isilon_usage.scanner import partial_aggregate
+    d = tempfile.mkdtemp(prefix="iu_partial_")
+    try:
+        tree = os.path.join(d, "tree")
+        for a_ in range(6):
+            for b_ in range(6):
+                pth = os.path.join(tree, "d%d" % a_, "s%d" % b_)
+                os.makedirs(pth)
+                for f in range(5):
+                    _write(os.path.join(pth, "f%d.bin" % f), 1000)
+
+        def _totals(dbp):
+            c = dbmod.connect(dbp)
+            try:
+                return {r["path"]: (r["total_bytes"], r["total_files"], r["status"])
+                        for r in c.execute("SELECT path, total_bytes, total_files, status FROM directories")}
+            finally:
+                c.close()
+        db_full = os.path.join(d, "full.db")
+        run_scan(db_full, tree, workers=1, with_monitor=False)
+        full = _totals(db_full)
+        exp_root = full[tree]
+        # 실행 중 스캔은 거부
+        db_r = os.path.join(d, "r.db")
+        run_scan(db_r, tree, workers=1, with_monitor=False, stop_event=_TripAfter(300))
+        c = dbmod.connect(db_r)
+        try:
+            c.execute("UPDATE scan_runs SET status='discovering'")
+            c.commit()
+        finally:
+            c.close()
+        assert not partial_aggregate(db_r)["ok"], "실행 중 스캔을 거부해야 함"
+        c = dbmod.connect(db_r)
+        try:
+            c.execute("UPDATE scan_runs SET status='paused', phase='paused'")
+            c.commit()
+        finally:
+            c.close()
+        before = _totals(db_r)
+        assert all(v[0] == 0 for v in before.values()), "멈춘 스캔은 집계 전(total 0)이어야"
+        res = partial_aggregate(db_r)
+        assert res["ok"] and res["rows"] == len(before) and res["rows_per_sec"] > 0, res
+        part = _totals(db_r)
+        root_b, root_f, _ = part[tree]
+        assert 0 < root_b <= exp_root[0] and 0 < root_f <= exp_root[1], (part[tree], exp_root)
+        for pth, (b, f, st) in part.items():          # 모든 행이 하한값이고 status 는 그대로(done 없음)
+            assert st != "done", pth
+            fb, ff, _ = full.get(pth, (b, f, None))
+            assert b <= fb and f <= ff, (pth, (b, f), (fb, ff))
+        c = dbmod.connect(db_r)
+        try:
+            flag = c.execute("SELECT partial_agg_at FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()[0]
+            log = c.execute("SELECT COUNT(*) FROM scan_log WHERE message LIKE '부분 집계%'").fetchone()[0]
+        finally:
+            c.close()
+        assert flag and log >= 1, (flag, log)
+        # 재개 → 완전 집계가 덮어써 전체 스캔과 동일, 플래그 해제
+        run_scan(db_r, tree, workers=2, with_monitor=False, resume=True)
+        after = _totals(db_r)
+        assert after[tree][:2] == exp_root[:2], (after[tree], exp_root)
+        assert all(after[k][:2] == full[k][:2] for k in full), "재개 후 일부 행이 전체 스캔과 다름"
+        c = dbmod.connect(db_r)
+        try:
+            flag2 = c.execute("SELECT partial_agg_at FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()[0]
+        finally:
+            c.close()
+        assert flag2 is None, flag2
+        print("[partial-aggregate] OK  멈춘 스캔 %d행 부분 집계(루트 %d/%d B 하한값, status 불변) → 재개 후 전체와 동일·표시 해제"
+              % (res["rows"], root_b, exp_root[0]))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
+    run_checkpoint_nonblocking_case()
+    run_partial_aggregate_case()
+    run_resume_stats_dedup_case()
+    run_worker_exception_case()
+    run_chunk_sharing_case()
+    run_synthetic_pb_case()
+    run_claim_cost_case()
+    run_fold_overflow_case()
+    run_fold_overflow_resume_case()
+    run_claim_fairness_case()
+    run_stop_resume_case()
+    run_sizing_window_case()
     run_case("native")
+    run_case("native", workers=4)   # stat 동시 처리해도 결과 동일해야 함
     if shutil.which("du"):
         run_case("du")
     else:
         print("[du] 건너뜀 (du 명령 없음)")
+    run_fold_case()
+    run_hardlink_concurrency()
+    run_permission_case()
     print("모든 테스트 통과 ✅")
     return 0
 
