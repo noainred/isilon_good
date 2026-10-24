@@ -713,7 +713,7 @@ pre.changelog{ background:rgba(13,19,33,.75); }
       <div data-scat="security" style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
         <div class="sub" style="margin-bottom:6px;">🔒 작업 보호 — 보기는 자유, 버튼·설정 변경 등 작업에 비밀번호 요구</div>
         <label style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
-          <input id="setOpLock" type="checkbox" /> 비밀번호 보호 사용(체크 해제 후 저장하면 보호 끔)
+          <input id="setOpLock" type="checkbox" /> 비밀번호 보호 사용(체크 해제 후 저장하면 새 임시 비밀번호로 초기화 — 실행 폴더 info.MD)
         </label>
         <label style="display:block;">작업 비밀번호(변경 시에만 입력)
           <input id="setOpPassword" type="password" class="setinput mono" style="width:100%;"
@@ -722,7 +722,7 @@ pre.changelog{ background:rgba(13,19,33,.75); }
         <label style="display:flex; align-items:center; gap:8px; margin-top:6px;">
           <input id="setOpEncrypt" type="checkbox" /> 비밀번호 암호화 저장(PBKDF2 해시 — 파일에 평문 미저장·복구 불가)
         </label>
-        <div class="sub" style="margin-top:4px;">이 비밀번호는 <b>설정</b>과 되돌릴 수 없는 작업(완료데이터 삭제·보존 정리·업그레이드 설치 등)에만 필요합니다 — 스캔 시작·중지·재개 등은 로그인 없이 됩니다. 비밀번호가 없으면 설정에 처음 들어갈 때 만들게 됩니다. 보호를 해제하면 다음 설정 진입 때 다시 만들어야 합니다. 로그인 실패가 잦으면 잠시 잠깁니다(무차별 대입 방지).</div>
+        <div class="sub" style="margin-top:4px;">이 비밀번호는 <b>설정</b>과 되돌릴 수 없는 작업(완료데이터 삭제·보존 정리·업그레이드 설치 등)에만 필요합니다 — 스캔 시작·중지·재개 등은 로그인 없이 됩니다. 비밀번호가 없으면 서버가 임시 비밀번호를 실행 폴더 <code>info.MD</code> 에 만듭니다(보호를 해제해도 다시 임시로 초기화). 잊었을 때는 서버에서 <code>python3 -m isilon_usage reset-password --data-dir &lt;데이터 폴더&gt;</code>. 로그인 실패가 잦으면 잠시 잠깁니다(무차별 대입 방지).</div>
         <label style="display:block; margin-top:10px;">⏱ 로그인 유지 시간(분) — 한 번 로그인하면 이 시간 동안 다시 묻지 않음
           <input id="setOpTtl" type="number" min="1" max="10080" step="1" class="setinput mono" style="width:140px;" placeholder="30" />
           <span class="sub">1~10080(7일). 기본 30분.</span>
@@ -1618,6 +1618,7 @@ const $ = (id) => document.getElementById(id);
 // 스캔 시작·중지·재개 등 일반 작업과 GET(보기)은 자유. 모든 POST 에 X-Op-Token 을 붙이고, 401 이면
 // 비밀번호가 있으면 로그인, 아직 없으면(need_setup) '처음 비밀번호 만들기'를 띄운 뒤 1회 재시도한다.
 let _opRequired = false;
+let _opTemp = false, _opInfoPath = "";   // 임시 비밀번호(서버 자동 생성) 안내 — 비밀번호 자체는 화면에 오지 않는다
 let _opExpiry = 0;            // 토큰 만료 시각(ms). 입력 후 TTL 초.
 let _opCountTimer = null;
 const _origFetch = window.fetch.bind(window);
@@ -1756,8 +1757,32 @@ async function ensureSettingsAuth() {
   updateLockBadge();
   return ok;
 }
+// 임시 비밀번호 안내 팝업(브라우저 세션당 1회, 로그인 화면에서는 문구로 항상). 경로만 보여 준다.
+function _tempPwText() {
+  return "임시 관리자 비밀번호가 서버의 " + (_opInfoPath || "실행 폴더의 info.MD") + " 파일에 있습니다.";
+}
+function showTempPasswordNotice(force) {
+  try { if (!force && sessionStorage.getItem("opTempNoticeShown")) return; sessionStorage.setItem("opTempNoticeShown", "1"); } catch (e) {}
+  if (document.getElementById("opTempNotice")) return;
+  const ov = document.createElement("div");
+  ov.id = "opTempNotice";
+  ov.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99998;display:flex;align-items:center;justify-content:center;";
+  ov.innerHTML = '<div style="background:#16202c;border:1px solid #f5b942;border-radius:10px;padding:18px 20px;max-width:560px;box-shadow:0 12px 40px rgba(0,0,0,.55);color:#dfe8f3;">'
+    + '<div style="font-weight:700;font-size:15px;margin-bottom:8px;">🔑 임시 관리자 비밀번호가 만들어졌습니다</div>'
+    + '<div style="font-size:13.5px;line-height:1.6;">설정과 되돌릴 수 없는 작업(삭제·정리·업그레이드 설치)에는 비밀번호가 필요합니다.<br>'
+    + '서버의 아래 파일에서 임시 비밀번호를 확인하세요:<br>'
+    + '<code style="display:inline-block;margin:6px 0;padding:4px 8px;background:#0e1620;border-radius:6px;word-break:break-all;">' + escHtml(_opInfoPath || "실행 폴더/info.MD") + '</code><br>'
+    + '로그인 후 <b>설정 → 작업 보호</b>에서 새 비밀번호로 바꾸면 이 안내가 사라집니다.<br>'
+    + '<span class="sub">잊었을 때(서버에서): <code>python3 -m isilon_usage reset-password --data-dir &lt;데이터 폴더&gt;</code></span></div>'
+    + '<div style="margin-top:12px;text-align:right;"><button type="button" id="opTempNoticeOk">확인</button></div></div>';
+  document.body.appendChild(ov);
+  const close = () => { try { document.body.removeChild(ov); } catch (e) {} };
+  document.getElementById("opTempNoticeOk").onclick = close;
+  ov.addEventListener("mousedown", e => { if (e.target === ov) close(); });
+}
 async function promptUnlock() {
-  const pw = await passwordPrompt("로그인 — 비밀번호를 입력하세요:");
+  const pw = await passwordPrompt(_opTemp ? ("로그인 — " + _tempPwText() + " 비밀번호를 입력하세요:")
+                                          : "로그인 — 비밀번호를 입력하세요:");
   if (pw == null) return false;
   try {
     const r = await _origFetch("/api/unlock", {method: "POST",
@@ -1909,7 +1934,8 @@ async function loadSettings() {
     $("setApiToken").placeholder = s.api_token_set ? "(설정됨 — 변경 시에만 입력)" : "(미설정 — 공개)";
     $("setOpLock").checked = !!s.op_password_set;
     $("setOpPassword").value = "";
-    $("setOpPassword").placeholder = s.op_password_set ? "(설정됨 — 변경 시에만 입력)" : "(미설정)";
+    $("setOpPassword").placeholder = s.op_password_temp ? "(임시 비밀번호 사용 중 — 새 비밀번호를 입력해 바꾸세요)"
+      : (s.op_password_set ? "(설정됨 — 변경 시에만 입력)" : "(미설정)");
     if ($("setOpEncrypt")) $("setOpEncrypt").checked = !!s.op_password_encrypted;
     if ($("setOpTtl") && document.activeElement !== $("setOpTtl")) $("setOpTtl").value = s.op_ttl_minutes || 30;
     if ($("setShowUpdatePopup")) $("setShowUpdatePopup").checked = !!s.show_update_popup;
@@ -3750,6 +3776,8 @@ function renderOverview(j) {
   }
   canScan = !!j.can_scan;
   _opRequired = !!j.op_required;   // 작업 보호 비밀번호 설정 여부
+  _opTemp = !!j.op_temp; _opInfoPath = j.op_info_path || "";   // 서버가 만든 임시 비밀번호 사용 중인가(+ info.MD 경로)
+  if (_opTemp) showTempPasswordNotice();
   updateLockBadge();
   mountBases = j.mount_bases || [];
   $("scanDisabledMsg").style.display = canScan ? "none" : "block";

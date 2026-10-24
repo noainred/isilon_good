@@ -45,6 +45,8 @@ DEFAULTS: dict = {
     "api_token": "",                    # 글로벌 포탈 복제용 토큰(설정 시 /api/dbexport 인증 필요)
     "op_password": "",                  # 작업(버튼·설정변경) 보호 비밀번호(빈값=잠금 없음)
     "op_password_encrypted": False,     # 참이면 op_password 를 PBKDF2 해시로 저장(평문 미저장)
+    "op_password_temp": False,          # 참이면 서버가 자동 생성한 임시 비밀번호(info.MD) — 사용자가 바꾸면 거짓
+    "op_info_path": "",                 # 비밀번호를 기록한 info.MD 경로(임시 비밀번호 안내 팝업·서버 명령 초기화용)
     "op_ttl_minutes": 30,               # 로그인 세션 유지 시간(분) — 사용자가 지정
     "show_update_popup": False,         # 업그레이드 후 첫 접속 시 변경내용 팝업(기본 끔)
     "default_engine": "threads",        # 새 스캔 기본 엔진: threads(상세) | pscan(빠른 용량)
@@ -77,7 +79,8 @@ DEFAULTS: dict = {
     "ask_llm_timeout": 20,              # LLM 응답 대기(초)
 }
 
-EDITABLE_KEYS = set(DEFAULTS.keys())
+# 웹 설정 저장으로 직접 바꾸지 않는 키(서버가 관리 — 임시 비밀번호 상태)
+EDITABLE_KEYS = set(DEFAULTS.keys()) - {"op_password_temp", "op_info_path"}
 
 
 def settings_path(data_dir: str) -> str:
@@ -144,6 +147,8 @@ def sanitize(raw: dict) -> dict:
     s["ask_llm_timeout"] = _int(s.get("ask_llm_timeout", 20), 1, 600, 20)
     s["op_password"] = str(s.get("op_password") or "")
     s["op_password_encrypted"] = bool(s.get("op_password_encrypted", False))
+    s["op_password_temp"] = bool(s.get("op_password_temp", False)) and bool(s["op_password"])
+    s["op_info_path"] = str(s.get("op_info_path") or "")
     s["op_ttl_minutes"] = _int(s.get("op_ttl_minutes", 30), 1, 10080, 30)   # 1분~7일
     s["show_update_popup"] = bool(s.get("show_update_popup", False))
     s["default_engine"] = (s.get("default_engine")

@@ -143,6 +143,11 @@ class AuthGuard:
                 return False
             return True
 
+    def revoke_all(self) -> None:
+        """모든 로그인 세션 폐기(비밀번호가 서버 명령 등으로 바뀌었을 때)."""
+        with self._lock:
+            self._tokens = {}
+
     def logout(self, token) -> None:
         token = str(token or "")
         with self._lock:

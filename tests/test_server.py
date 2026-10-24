@@ -403,6 +403,7 @@ def _check_op_password() -> None:
     d = tempfile.mkdtemp(prefix="isilon_oppw_")
     try:
         c = ScanController(os.path.join(d, "data"))
+        c._launch_cwd = d                                        # info.MD 를 저장소 폴더가 아닌 임시 폴더에
         os.makedirs(c.data_dir, exist_ok=True)
         assert not c.op_required()
         assert c.set_op_password("secret")["ok"]
@@ -786,6 +787,91 @@ def _check_resume_keeps_start_options() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _check_temp_password_and_reset() -> None:
+    """관리 비밀번호: 기동 시 없으면 임시 비밀번호를 info.MD 에 생성 · 서버 명령(reset-password)으로 초기화하면
+    실행 중 서버가 바로 반영(기존 로그인 만료) · 다른 저장이 옛 비밀번호로 되돌리지 않음 · 사용자 비밀번호로 바꾸면
+    임시 해제 · 보호 해제는 다시 임시로 · info.MD 를 못 쓰면 비밀번호를 바꾸지 않음."""
+    import re as _re
+    import shutil
+    import subprocess
+
+    from isilon_usage import settings as setmod
+    from isilon_usage.server import ScanController, reset_op_password
+
+    def _pw_in(path):
+        with open(path, encoding="utf-8") as fh:
+            return _re.search(r"\| (?:임시 비밀번호\(서버가 자동 생성\)|작업 비밀번호) \| `([^`]+)` \|", fh.read()).group(1)
+
+    d = tempfile.mkdtemp(prefix="isilon_tmppw_")
+    try:
+        data = os.path.join(d, "data")
+        run_dir = os.path.join(d, "run")
+        os.makedirs(run_dir)
+        c = ScanController(data)
+        c._launch_cwd = run_dir                       # 테스트가 저장소 폴더에 info.MD 를 남기지 않게
+        assert not c.op_required()
+        made = c.ensure_op_password()
+        info = os.path.join(run_dir, "info.MD")
+        assert made and made["info_path"] == info and os.path.exists(info), made
+        assert oct(os.stat(info).st_mode & 0o777) == "0o600"
+        pw1 = _pw_in(info)
+        assert pw1 == made["password"] and c.op_required()
+        ti = c.op_temp_info()
+        assert ti == {"op_temp": True, "op_info_path": info}, ti
+        assert c.ensure_op_password() is None         # 이미 있으면 다시 만들지 않는다
+        tok1 = c.unlock(pw1)["token"]
+        assert c.op_token_valid(tok1)
+
+        # 서버 명령(별도 프로세스) 초기화 → 실행 중 컨트롤러가 다음 인증부터 반영, 기존 세션 만료
+        stale = dict(c.settings)                      # (초기화 전 메모리 설정 — 아래 저장 회귀용)
+        _t0 = os.stat(setmod.settings_path(data)).st_mtime_ns
+        while os.stat(setmod.settings_path(data)).st_mtime_ns == _t0:   # mtime 해상도가 거친 FS 대비
+            out = subprocess.run([sys.executable, "-m", "isilon_usage", "reset-password", "--data-dir", data],
+                                 cwd=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."),
+                                 capture_output=True, text=True, timeout=60)
+            assert out.returncode == 0, out.stderr
+        assert info in out.stdout and "임시 비밀번호:" not in out.stdout, out.stdout   # 비대화형이면 비밀번호 미출력
+        pw2 = _pw_in(info)
+        assert pw2 != pw1
+        assert not c.op_token_valid(tok1), "초기화 후 기존 세션이 살아 있음"   # 토큰 검사만으로도 반영
+        assert c.unlock(pw1).get("ok") is False and c.unlock(pw2).get("ok") is True
+        # 다른 저장(예: 스캔 시작의 last_scan 기억)이 옛 메모리 값으로 비밀번호를 되돌리지 않는다
+        c._save_settings(dict(stale, top_n=7))
+        disk = setmod.load(data)
+        assert disk["top_n"] == 7 and disk["op_password"] == pw2, (disk["top_n"], disk["op_password"] == pw1)
+
+        # 사용자가 정한 비밀번호로 변경 → 임시 해제, info.MD 는 새 비밀번호(평문 저장 기본)
+        r = c.update_settings({"op_lock": True, "op_password": "mine-1234"})
+        assert r["ok"] and not c.op_temp_info()["op_temp"] and _pw_in(info) == "mine-1234"
+        # 보호 해제 → 비밀번호 없는 상태로 두지 않고 새 임시 비밀번호
+        c.update_settings({"op_lock": False})
+        assert c.op_required() and c.op_temp_info()["op_temp"] and c.unlock(_pw_in(info)).get("ok")
+        # 암호화 저장으로 사용자 비밀번호 → 남은 임시 info.MD 삭제(무의미한 비밀번호 파일 정리)
+        c.update_settings({"op_password_encrypted": True, "op_lock": True, "op_password": "enc-5678"})
+        assert not os.path.exists(info) and c.unlock("enc-5678").get("ok")
+        assert setmod.load(data)["op_password"].startswith("pbkdf2")
+
+        # info.MD 를 쓸 수 없으면 비밀번호를 바꾸지 않는다(아무도 모르는 비밀번호 방지)
+        before = setmod.load(data)["op_password"]
+        ro = os.path.join(d, "ro")
+        os.makedirs(ro)
+        os.chmod(ro, 0o500)
+        os.chmod(data, 0o500)
+        try:
+            if os.access(ro, os.W_OK):                # root 로 실행하면 권한 검사가 무의미 — 건너뜀
+                print("[temp-password] (root: 쓰기 실패 경우 건너뜀)")
+            else:
+                assert reset_op_password(data, ro) is None
+        finally:
+            os.chmod(data, 0o700)
+            os.chmod(ro, 0o700)
+        assert setmod.load(data)["op_password"] == before
+        print("[temp-password] OK  기동 시 임시 비밀번호(info.MD 600)·서버 명령 초기화 즉시 반영·세션 만료·"
+              "저장 회귀 없음·사용자 변경·해제→재생성·암호화 시 정리·쓰기 실패 시 미변경")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def _check_partial_aggregate_api() -> None:
     """멈춘 자료 집계 API: 중지된 스캔 → POST /api/scan/partial-aggregate → 진행/완료 상태 → /api/status 에
     partial_agg_at·하한값 노출, /api/scans 에 표시, 진행 중엔 재개/삭제 거부, 재개 완료 후 표시 해제."""
@@ -917,6 +1003,7 @@ def main() -> int:
     _check_insecure_warning()
     _check_troubleshoot_live()
     _check_partial_aggregate_api()
+    _check_temp_password_and_reset()
     _check_resume_keeps_start_options()
     _check_duplicate_scan_guard()
     _check_resume_after_upgrade()

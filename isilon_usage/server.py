@@ -18,6 +18,7 @@ import hmac
 import io
 import json
 import os
+import secrets
 import socket
 import sqlite3
 import sys
@@ -166,6 +167,82 @@ OP_PROTECTED_POSTS = frozenset({
     "/api/scan/delete", "/api/prune", "/api/upgrade/install",
     "/api/troubleshoot/history/clear", "/api/gentest/start",
 })
+
+
+# 서버가 관리하는 작업 비밀번호 상태 키(외부 — 서버 명령 reset-password — 변경을 실행 중 서버가 받아들인다)
+OP_RUNTIME_KEYS = ("op_password", "op_password_temp", "op_info_path")
+
+
+def write_info_md(info_dir: str, data_dir: str, password: str, *, temp: bool = False) -> Optional[str]:
+    """비밀번호를 info_dir/info.MD 에 기록(권한 600). 반환: 쓴 경로, 실패하면 None."""
+    path = os.path.join(info_dir, "info.MD")
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    kind = ("임시 비밀번호(서버가 자동 생성)" if temp else "작업 비밀번호")
+    body = (
+        "# isilon_usage 운영 정보\n\n"
+        "이 파일은 관리자 비밀번호를 기록합니다. **민감 정보이므로 공유하지 마세요.**\n\n"
+        "| 항목 | 값 |\n|---|---|\n"
+        "| 버전 | %s |\n| 데이터 폴더 | %s |\n| 기록 폴더 | %s |\n"
+        "| %s | `%s` |\n| 갱신 시각 | %s |\n\n"
+        "> 보기·스캔 작업은 비밀번호 없이 되고, **설정**과 되돌릴 수 없는 작업(삭제·정리·업그레이드 설치)에\n"
+        "> 위 비밀번호가 필요합니다.%s\n"
+        "> 잊었다면 서버에서: `python3 -m isilon_usage reset-password --data-dir %s`\n"
+        "> (새 임시 비밀번호를 만들어 이 파일에 다시 기록합니다.)\n"
+    ) % (__version__, os.path.abspath(data_dir), os.path.abspath(info_dir), kind, password, ts,
+         ("\n> 임시 비밀번호입니다 — 로그인 후 **설정 → 작업 보호**에서 새 비밀번호로 바꾸세요." if temp else ""),
+         os.path.abspath(data_dir))
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # 처음부터 600(잠깐도 남에게 안 보이게)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        os.chmod(path, 0o600)
+    except OSError:
+        return None
+    return os.path.abspath(path)
+
+
+def _keep_owner(path: str, owner) -> None:
+    """root 로 실행한 서버 명령이 서비스 계정 파일의 소유자를 root 로 바꾸지 않게 되돌린다."""
+    if owner is None or not hasattr(os, "chown"):
+        return
+    try:
+        st = os.stat(path)
+        if (st.st_uid, st.st_gid) != owner:
+            os.chown(path, owner[0], owner[1])
+    except OSError:
+        pass
+
+
+def reset_op_password(data_dir: str, info_dir: Optional[str] = None) -> Optional[dict]:
+    """새 임시 작업 비밀번호를 만들어 info.MD 에 쓰고 settings.json 에 저장한다(서버 기동·서버 명령 공용).
+
+    info.MD 를 먼저 쓴다 — 못 쓰면(권한 등) 비밀번호를 바꾸지 않는다(아무도 모르는 비밀번호가 생기지 않게).
+    info_dir 에 못 쓰면 data_dir 에 쓴다. 반환: {password, info_path, settings} 또는 None.
+    """
+    cur = setmod.load(data_dir)
+    sp = setmod.settings_path(data_dir)
+    try:
+        st = os.stat(sp)
+        owner = (st.st_uid, st.st_gid)
+    except OSError:
+        owner = None
+    pw = secrets.token_urlsafe(9)                   # 12자(영문 대소문자·숫자·-_)
+    path = None
+    for d in (info_dir, data_dir):
+        if d and os.path.isdir(d):
+            path = write_info_md(d, data_dir, pw, temp=True)
+            if path:
+                break
+    if not path:
+        return None
+    merged = dict(cur)
+    merged["op_password"] = authmod.store_password(pw, encrypt=bool(cur.get("op_password_encrypted")))
+    merged["op_password_temp"] = True
+    merged["op_info_path"] = path
+    saved = setmod.save(data_dir, merged)
+    _keep_owner(sp, owner)
+    _keep_owner(path, owner)
+    return {"password": pw, "info_path": path, "settings": saved}
 
 
 def _public_settings(s: dict) -> dict:
@@ -707,8 +784,14 @@ class ScanController:
         self._upgrade_thread = threading.Thread(
             target=self._upgrade_watch_loop, name="upgrade-watch", daemon=True)
         self._upgrade_thread.start()
+        self._op_sync_lock = threading.Lock()
+        self._op_auto = False               # 서버 기동(ensure_op_password) 후엔 '비밀번호 없음'을 두지 않는다
+        try:
+            self._settings_mtime = os.stat(setmod.settings_path(self.data_dir)).st_mtime_ns
+        except OSError:
+            self._settings_mtime = None
         self._auth = authmod.AuthGuard(
-            lambda: self.settings.get("op_password"),
+            self._op_password_now,          # 서버 명령(reset-password)이 바꾼 비밀번호도 바로 반영
             ttl=lambda: float(self.settings.get("op_ttl_minutes", 30) or 30) * 60)
         self._launch_cwd = os.getcwd()      # info.MD 를 저장할 '실행한 디렉터리'
         self._reconcile_orphans()           # 이전 프로세스가 남긴 고아 스캔 정리
@@ -940,6 +1023,7 @@ class ScanController:
         return self._auth.login(password)
 
     def op_token_valid(self, token) -> bool:
+        self._sync_op_from_disk()          # 서버 명령으로 초기화됐으면 옛 세션을 먼저 폐기
         return self._auth.token_valid(token)
 
     def _upgrade_watch_loop(self) -> None:
@@ -1064,30 +1148,99 @@ class ScanController:
         return {"ok": False, "error": res.get("reason"),
                 "up_to_date": bool(res.get("up_to_date"))}
 
-    def _write_info_md(self, password: str) -> None:
-        """설정한 비밀번호를 실행한 디렉터리의 info.MD 로 저장(권한 600)."""
-        from . import __version__
+    def _write_info_md(self, password: str) -> Optional[str]:
+        """사용자가 정한 비밀번호를 실행한 디렉터리의 info.MD 로 저장(권한 600). 반환: 경로 또는 None."""
+        return write_info_md(self._launch_cwd, self.data_dir, password)
+
+    # ----- 작업 비밀번호: 디스크 동기화·저장·임시 비밀번호 -----
+    def _op_password_now(self):
+        """AuthGuard 가 쓰는 현재 비밀번호 — 서버 명령(reset-password)이 바꾼 settings.json 을 반영."""
+        self._sync_op_from_disk()
+        return self.settings.get("op_password")
+
+    def _sync_op_from_disk(self) -> None:
+        """settings.json 이 바뀌었고 비밀번호가 다르면(다른 프로세스가 초기화) 비밀번호 상태만 받아들인다.
+        바뀐 비밀번호로는 기존 로그인 세션이 무의미하므로 모두 폐기한다. 비용: 평소 stat 1회."""
         try:
-            path = os.path.join(self._launch_cwd, "info.MD")
-            ts = time.strftime("%Y-%m-%d %H:%M:%S")
-            body = (
-                "# isilon_usage 운영 정보\n\n"
-                "이 파일은 작업 보호 비밀번호를 기록합니다. **민감 정보이므로 공유하지 마세요.**\n\n"
-                "| 항목 | 값 |\n|---|---|\n"
-                "| 버전 | %s |\n| 데이터 폴더 | %s |\n| 실행 폴더 | %s |\n"
-                "| 작업 비밀번호 | `%s` |\n| 갱신 시각 | %s |\n\n"
-                "> 보기는 비밀번호 없이 가능하고, 버튼/설정 변경 등 작업에는 위 비밀번호가 필요합니다.\n"
-                "> 비밀번호를 잊었다면 이 파일에서 확인하거나, settings.json 의 op_password 를 비우세요.\n"
-            ) % (__version__, os.path.abspath(self.data_dir), self._launch_cwd,
-                 password, ts)
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(body)
+            mt = os.stat(setmod.settings_path(self.data_dir)).st_mtime_ns
+        except OSError:
+            return
+        with self._op_sync_lock:
+            if mt == self._settings_mtime:
+                return
+            self._settings_mtime = mt
             try:
-                os.chmod(path, 0o600)
-            except OSError:
-                pass
+                disk = setmod.load(self.data_dir)
+            except Exception:  # noqa: BLE001
+                return
+            if disk.get("op_password") == self.settings.get("op_password"):
+                return
+            merged = dict(self.settings)
+            for k in OP_RUNTIME_KEYS:
+                merged[k] = disk.get(k)
+            self.settings = merged
+        self._auth.revoke_all()
+        self._log("작업 비밀번호가 서버 명령으로 바뀜(%s) — 로그인 세션 모두 만료"
+                  % (disk.get("op_info_path") or "info.MD"))
+
+    def _save_settings(self, merged: dict, *, op_owned: bool = False) -> None:
+        """설정 저장의 단일 경로. op_owned=False(비밀번호를 건드리지 않는 저장)면 비밀번호 상태는 '현재 값'
+        (디스크 동기화 후)으로 덮어 — 그 사이 서버 명령이 초기화한 비밀번호를 옛 값으로 되돌리지 않는다."""
+        self._sync_op_from_disk()
+        merged = dict(merged)
+        if not op_owned:
+            for k in OP_RUNTIME_KEYS:
+                merged[k] = self.settings.get(k)
+        self.settings = setmod.save(self.data_dir, merged)
+        try:
+            self._settings_mtime = os.stat(setmod.settings_path(self.data_dir)).st_mtime_ns
         except OSError:
             pass
+
+    def ensure_op_password(self) -> Optional[dict]:
+        """비밀번호가 없으면 임시 비밀번호를 만들어 실행 디렉터리 info.MD 에 기록(서버 기동 시 호출).
+
+        이후 비밀번호를 비우는 저장(보호 해제·포탈 해제 푸시)도 다시 임시 비밀번호로 초기화한다 —
+        '설정'은 항상 비밀번호로 보호된다. 반환: 새로 만들었으면 {info_path, password}, 아니면 None.
+        """
+        self._op_auto = True
+        self._sync_op_from_disk()
+        if self.settings.get("op_password"):
+            return None
+        res = reset_op_password(self.data_dir, self._launch_cwd)
+        if res is None:
+            self._log("임시 비밀번호를 만들지 못함(info.MD 쓰기 실패) — 설정 첫 진입 때 비밀번호를 만들게 됩니다")
+            return None
+        self.settings = res["settings"]
+        try:
+            self._settings_mtime = os.stat(setmod.settings_path(self.data_dir)).st_mtime_ns
+        except OSError:
+            pass
+        self._auth.revoke_all()
+        self._log("임시 작업 비밀번호 생성 → %s" % res["info_path"])
+        return {"info_path": res["info_path"], "password": res["password"]}
+
+    def op_temp_info(self) -> dict:
+        """화면 안내용 — 임시 비밀번호 사용 중이면 info.MD 경로(비밀번호 자체는 내보내지 않는다)."""
+        self._sync_op_from_disk()
+        temp = bool(self.settings.get("op_password_temp")) and bool(self.settings.get("op_password"))
+        return {"op_temp": temp, "op_info_path": (self.settings.get("op_info_path") or "") if temp else ""}
+
+    def _apply_user_password(self, merged: dict, pw: str) -> None:
+        """사용자가 정한(또는 비운) 비밀번호를 merged 에 반영 — 임시 상태 해제, info.MD 갱신/정리."""
+        enc = bool(merged.get("op_password_encrypted"))
+        old_info = self.settings.get("op_info_path") or ""
+        was_temp = bool(self.settings.get("op_password_temp"))
+        merged["op_password"] = authmod.store_password(pw, encrypt=enc)
+        merged["op_password_temp"] = False
+        merged["op_info_path"] = ""
+        if pw and not enc:                 # 평문 저장 → 복구용 info.MD 를 새 비밀번호로
+            merged["op_info_path"] = self._write_info_md(pw) or ""
+        elif was_temp and old_info:        # 암호화/해제 → 남은 임시 비밀번호 파일은 무의미하니 지운다
+            try:
+                os.remove(old_info)
+            except OSError:
+                pass
 
     def update_settings(self, new: dict) -> dict:
         """설정을 저장하고 갱신된 설정을 반환한다(잠겨 있으면 거부)."""
@@ -1126,15 +1279,14 @@ class ScanController:
                     old = cur.get(a.get("id")) or cur.get(a.get("name")) or cur.get(a.get("url"))
                     if old:
                         a["password"] = old.get("password", "")
+        self._sync_op_from_disk()
         merged = dict(self.settings)
         merged.update({k: v for k, v in new.items() if k in setmod.EDITABLE_KEYS})
-        if op_changed is not None:        # 작업 비밀번호 설정/변경/해제
-            enc = bool(merged.get("op_password_encrypted"))
-            merged["op_password"] = authmod.store_password(op_changed, encrypt=enc)
-        self.settings = setmod.save(self.data_dir, merged)
-        # 평문 저장일 때만 복구용 info.MD 기록(암호화 시 평문을 남기지 않는다)
-        if op_changed and not bool(self.settings.get("op_password_encrypted")):
-            self._write_info_md(op_changed)
+        if op_changed is not None:        # 작업 비밀번호 설정/변경/해제(평문 저장일 때만 info.MD 기록)
+            self._apply_user_password(merged, op_changed)
+        self._save_settings(merged, op_owned=op_changed is not None)
+        if op_changed == "" and self._op_auto:   # 보호 해제 → 비밀번호 없는 상태로 두지 않고 임시로 초기화
+            self.ensure_op_password()
         return {"ok": True, "settings": _public_settings(self.settings)}
 
     def setup_op_password(self, password: str) -> dict:
@@ -1166,14 +1318,14 @@ class ScanController:
         pw = "" if clear else str(password or "")
         if not clear and not pw.strip():
             return {"ok": False, "reason": "빈 비밀번호는 설정할 수 없습니다."}
-        enc = bool(self.settings.get("op_password_encrypted"))
+        self._sync_op_from_disk()
         merged = dict(self.settings)
-        merged["op_password"] = authmod.store_password(pw, encrypt=enc)
-        self.settings = setmod.save(self.data_dir, merged)
-        if pw and not enc:                 # 평문 저장 + 새로 설정/변경 → 복구용 info.MD
-            self._write_info_md(pw)
-        return {"ok": True, "cleared": not merged["op_password"],
-                "op_required": bool(merged["op_password"])}
+        self._apply_user_password(merged, pw)
+        self._save_settings(merged, op_owned=True)
+        if not pw and self._op_auto:       # 해제 푸시 → 임시 비밀번호로 초기화(설정은 항상 보호)
+            self.ensure_op_password()
+        return {"ok": True, "cleared": not pw, "reset_to_temp": bool(not pw and self.op_required()),
+                "op_required": self.op_required()}
 
     def _log(self, msg: str) -> None:
         """log_path 가 설정돼 있으면 한 줄 추가한다(베스트 에포트)."""
@@ -1762,7 +1914,7 @@ class ScanController:
                 "check_readonly": bool(self.settings.get("check_readonly", True)),
                 "ts": time.time(),
             }
-            self.settings = setmod.save(self.data_dir, merged)
+            self._save_settings(merged)
         except Exception:  # noqa: BLE001 — 기억 실패가 스캔을 막지 않는다
             pass
         if engine == "pscan":
@@ -2358,7 +2510,7 @@ class ScanController:
                         dst[k] = src.get(k)
                 merged["schedules"] = cur
             # (틱 도중 예약 목록 자체가 바뀌었으면(드묾) 사용자 편집을 우선 — 런타임 필드는 버린다)
-            self.settings = setmod.save(self.data_dir, merged)
+            self._save_settings(merged)
 
     def _chain_start(self, sc, path, running, running_paths):
         """예약 체인의 한 단계를 시작한다. 성공 시 scan_id, 실패 시 None."""
@@ -2668,6 +2820,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "can_scan": ctrl is not None,
                     "have_psutil": monmod.have_psutil(),
                     "op_required": bool(ctrl and ctrl.op_required()),
+                    **(ctrl.op_temp_info() if ctrl else {"op_temp": False, "op_info_path": ""}),
                     "show_update_popup": bool(ctrl and ctrl.settings.get("show_update_popup")),
                 })
                 return
@@ -3626,8 +3779,8 @@ def _warn_if_insecure(host: str, controller: "ScanController") -> None:
     lines = [
         "",
         "  ⚠  보안 경고: 비루프백 주소(%s)에 '작업 보호 비밀번호 없이' 기동합니다." % host,
-        "     네트워크에서 접근 가능한 누구나 스캔을 시작·중지할 수 있고, 설정은 '처음 들어온 사람'이",
-        "     비밀번호를 정하게 됩니다 — 설치 직후 대시보드 '설정'에서 먼저 비밀번호를 만드세요.",
+        "     임시 비밀번호(info.MD)도 만들지 못해, 설정은 '처음 들어온 사람'이 비밀번호를 정하게 됩니다.",
+        "     실행 폴더 쓰기 권한을 확인하거나, 바로 대시보드 '설정'에서 비밀번호를 만드세요.",
         "     공개망/비신뢰망이라면 다음을 권장합니다:",
         "       - --host 127.0.0.1 로 묶고 리버스 프록시(HTTPS/인증)나 SSH 터널 사용",
         "       - 대시보드 '설정'에서 작업 보호 비밀번호 지정",
@@ -3641,7 +3794,7 @@ def _warn_if_insecure(host: str, controller: "ScanController") -> None:
 
 def serve(data_dir: str, host: str = "0.0.0.0", port: int = 8765, *,
           initial_settings=None, enable_scan: bool = True,
-          lock_settings: bool = False) -> ThreadingHTTPServer:
+          lock_settings: bool = False, auto_op_password: bool = False) -> ThreadingHTTPServer:
     """대시보드 HTTP 서버를 만들고 반환한다(호출 측에서 serve_forever).
 
     data_dir 아래의 manager.db(전체 관리)와 scans/ 의 per-run DB(상세)를 읽는다.
@@ -3649,6 +3802,8 @@ def serve(data_dir: str, host: str = "0.0.0.0", port: int = 8765, *,
     initial_settings(CLI 플래그 등)는 settings.json 이 아직 없을 때만 초기값으로
     저장되며, 이후에는 대시보드에서 편집한 settings.json 이 우선한다.
     lock_settings=True 이면 웹에서 설정 편집을 막는다.
+    auto_op_password=True(실서버 기동 — CLI serve/run)면 관리 비밀번호가 없을 때 임시 비밀번호를 실행 디렉터리
+    info.MD 에 만든다(결과는 httpd.op_temp_made). 테스트의 serve() 는 기본 False 라 저장소에 파일을 남기지 않는다.
     httpd.controller 로 컨트롤러에 접근한다.
     """
     # 정체 시 현장 진단용: kill -USR1 <pid> 로 전체 스레드의 파이썬 스택을
@@ -3666,12 +3821,16 @@ def serve(data_dir: str, host: str = "0.0.0.0", port: int = 8765, *,
         setmod.seed_if_absent(data_dir, initial_settings)
     controller = (ScanController(data_dir, lock_settings=lock_settings)
                   if enable_scan else None)
+    op_temp_made = None
     if controller is not None:
         controller.start_scheduler()   # 예약 스캔 스케줄러 시작
+        if auto_op_password:           # 경고보다 먼저 — 임시 비밀번호가 생기면 '비밀번호 없음' 경고는 불필요
+            op_temp_made = controller.ensure_op_password()
         _warn_if_insecure(host, controller)
     handler = type("BoundHandler", (DashboardHandler,),
                    {"data_dir": data_dir, "controller": controller,
                     "bound_host": host, "bound_port": port})
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.controller = controller  # run 모드에서 초기 스캔 시작/정리에 사용
+    httpd.op_temp_made = op_temp_made   # 이번 기동에 임시 비밀번호를 만들었으면 {info_path, password}
     return httpd

@@ -557,6 +557,7 @@ def main() -> int:
     edge_data = os.path.join(tmp, "edge")
     edge = serve(edge_data, host="127.0.0.1", port=0,
                  initial_settings={"mount_bases": [tmp], "api_token": "tok"}, enable_scan=True)
+    edge.controller._launch_cwd = tmp     # 포탈 비밀번호 푸시가 info.MD 를 저장소 폴더에 남기지 않게
     eport = edge.server_address[1]
     threading.Thread(target=edge.serve_forever, daemon=True).start()
     ebase = "http://127.0.0.1:%d" % eport

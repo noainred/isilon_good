@@ -139,6 +139,7 @@ def _run_server(args, *, initial_path: Optional[str]) -> int:
         data_dir, host=args.host, port=args.port,
         initial_settings=initial_settings, enable_scan=True,
         lock_settings=getattr(args, "lock_settings", False),
+        auto_op_password=True,     # 관리 비밀번호가 없으면 임시 비밀번호를 실행 디렉터리 info.MD 에
     )
     cur = httpd.controller.settings
     # 데이터가 실제로 있는(=마운트 정상) 시작에서만 '초기화됨' 표식을 코드 폴더에 갱신한다.
@@ -156,6 +157,15 @@ def _run_server(args, *, initial_path: Optional[str]) -> int:
         print(f"  허용 경로: (제한 없음 — 설정에서 mount_bases 지정 권장)")
     print(f"  설정 편집: {'잠김(--lock-settings)' if getattr(args,'lock_settings',False) else '웹에서 가능'}")
     print(f"  psutil:    {'있음' if monmod.have_psutil() else '없음(/proc 폴백)'}")
+    # 관리 비밀번호가 없으면 임시 비밀번호를 만들어 실행 디렉터리 info.MD 에 기록(비밀번호는 로그에 안 찍는다)
+    _tmp = httpd.op_temp_made
+    _ti = httpd.controller.op_temp_info()
+    if _tmp:
+        print(f"  관리 비밀번호: 임시 비밀번호를 만들었습니다 → {_tmp['info_path']}")
+    elif _ti["op_temp"]:
+        print(f"  관리 비밀번호: 임시 비밀번호 사용 중 → {_ti['op_info_path']} (설정에서 바꾸세요)")
+    elif not httpd.controller.op_required():
+        print("  관리 비밀번호: 없음(info.MD 쓰기 실패) — 설정 첫 진입 때 만들게 됩니다", file=sys.stderr)
 
     if initial_path:
         res = httpd.controller.start_scan(
@@ -239,6 +249,34 @@ def cmd_scan(args: argparse.Namespace) -> int:
     )
     print(f"완료(scan #{scan_id}). 소요 {time.time()-t0:.1f}s. "
           f"대시보드로 보려면: python -m isilon_usage serve --data-dir {data_dir}")
+    return 0
+
+
+def cmd_reset_password(args: argparse.Namespace) -> int:
+    """관리(작업) 비밀번호 초기화 — 새 임시 비밀번호를 만들어 info.MD 에 기록한다(서버에서 실행).
+
+    실행 중인 서버도 다음 요청부터 새 비밀번호를 쓰고(settings.json 변경 감지), 기존 로그인은 모두 만료된다.
+    info.MD 는 서버가 마지막으로 기록한 폴더(없으면 --info-dir, 그것도 없으면 현재 폴더)에 쓴다.
+    """
+    from .server import reset_op_password
+    data_dir = os.path.abspath(args.data_dir)
+    if not os.path.isdir(data_dir):
+        print(f"데이터 폴더가 없습니다: {data_dir}", file=sys.stderr)
+        return 2
+    info_dir = args.info_dir
+    if not info_dir:
+        prev = setmod.load(data_dir).get("op_info_path") or ""
+        info_dir = os.path.dirname(prev) if prev and os.path.isdir(os.path.dirname(prev)) else os.getcwd()
+    res = reset_op_password(data_dir, os.path.abspath(info_dir))
+    if res is None:
+        print(f"✗ info.MD 를 쓸 수 없습니다({info_dir}, {data_dir}) — 권한을 확인하세요. 비밀번호는 바꾸지 않았습니다.",
+              file=sys.stderr)
+        return 1
+    print(f"✓ 관리 비밀번호를 새 임시 비밀번호로 초기화했습니다 → {res['info_path']}")
+    if sys.stdout.isatty():            # 대화형 터미널에서만 화면에 보여 준다(로그·파이프에는 남기지 않음)
+        print(f"  임시 비밀번호: {res['password']}")
+    print("  실행 중인 서버는 다음 요청부터 새 비밀번호를 씁니다(기존 로그인은 만료).")
+    print("  로그인 후 '설정 → 작업 보호'에서 새 비밀번호로 바꾸세요.")
     return 0
 
 
@@ -887,6 +925,12 @@ def build_parser() -> argparse.ArgumentParser:
     pst.add_argument("--scan", type=int, default=None,
                      help="상세를 볼 scan id(기본: 진행중/최신 스캔)")
     pst.set_defaults(func=cmd_status)
+
+    prp = sub.add_parser("reset-password", help="관리 비밀번호 초기화 — 새 임시 비밀번호를 info.MD 에 기록")
+    prp.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
+    prp.add_argument("--info-dir", default=None,
+                     help="info.MD 를 쓸 폴더(기본: 서버가 마지막으로 기록한 폴더, 없으면 현재 폴더)")
+    prp.set_defaults(func=cmd_reset_password)
 
     ppr = sub.add_parser("prune", help="오래된 스캔 정리(per-run DB 삭제)")
     ppr.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
