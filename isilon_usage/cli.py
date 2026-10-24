@@ -258,25 +258,38 @@ def cmd_reset_password(args: argparse.Namespace) -> int:
     실행 중인 서버도 다음 요청부터 새 비밀번호를 쓰고(settings.json 변경 감지), 기존 로그인은 모두 만료된다.
     info.MD 는 서버가 마지막으로 기록한 폴더(없으면 --info-dir, 그것도 없으면 현재 폴더)에 쓴다.
     """
-    from .server import reset_op_password
+    import json as _json
+
+    from .server import reset_op_password_file
     data_dir = os.path.abspath(args.data_dir)
     if not os.path.isdir(data_dir):
         print(f"데이터 폴더가 없습니다: {data_dir}", file=sys.stderr)
         return 2
+    portal = bool(getattr(args, "portal", False))
+    if portal:
+        from .portal import portal_settings_path
+        sfile = portal_settings_path(data_dir)
+    else:
+        sfile = setmod.settings_path(data_dir)
     info_dir = args.info_dir
     if not info_dir:
-        prev = setmod.load(data_dir).get("op_info_path") or ""
+        try:
+            with open(sfile, encoding="utf-8") as fh:
+                prev = str((_json.load(fh) or {}).get("op_info_path") or "")
+        except (OSError, ValueError, AttributeError):
+            prev = ""
         info_dir = os.path.dirname(prev) if prev and os.path.isdir(os.path.dirname(prev)) else os.getcwd()
-    res = reset_op_password(data_dir, os.path.abspath(info_dir))
+    res = reset_op_password_file(sfile, data_dir, os.path.abspath(info_dir), portal=portal)
     if res is None:
         print(f"✗ info.MD 를 쓸 수 없습니다({info_dir}, {data_dir}) — 권한을 확인하세요. 비밀번호는 바꾸지 않았습니다.",
               file=sys.stderr)
         return 1
-    print(f"✓ 관리 비밀번호를 새 임시 비밀번호로 초기화했습니다 → {res['info_path']}")
+    print(f"✓ {'포탈' if portal else '엣지'} 관리 비밀번호를 새 임시 비밀번호로 초기화했습니다 → {res['info_path']}")
     if sys.stdout.isatty():            # 대화형 터미널에서만 화면에 보여 준다(로그·파이프에는 남기지 않음)
         print(f"  임시 비밀번호: {res['password']}")
     print("  실행 중인 서버는 다음 요청부터 새 비밀번호를 씁니다(기존 로그인은 만료).")
-    print("  로그인 후 '설정 → 작업 보호'에서 새 비밀번호로 바꾸세요.")
+    print("  로그인 후 '%s'에서 새 비밀번호로 바꾸세요."
+          % ("설정 → 보안·감사 → 접속 보안" if portal else "설정 → 작업 보호"))
     return 0
 
 
@@ -410,7 +423,8 @@ def cmd_portal(args: argparse.Namespace) -> int:
     if not _ok:
         print("✗ " + _why, file=sys.stderr)
         return 3
-    httpd = serve_portal(data_dir, host=args.host, port=args.port)
+    httpd = serve_portal(data_dir, host=args.host, port=args.port,
+                         auto_op_password=True)   # 관리 비밀번호가 없으면 임시 비밀번호(portal_info.MD)
     setmod.mark_initialized(data_dir, _code_dir, _proxies, {"role": "portal"})
     url = _dashboard_url(args.host, args.port)
     print("=" * 64)
@@ -418,6 +432,13 @@ def cmd_portal(args: argparse.Namespace) -> int:
     print(f"  포탈:    {url}")
     print(f"  데이터:  {data_dir}  (portal_nodes.json + replicas/)")
     print(f"  노드 추가/관리: 포탈의 '노드 설정' 화면에서")
+    _ti = httpd.controller.op_temp_info()
+    if httpd.op_temp_made:
+        print(f"  관리 비밀번호: 임시 비밀번호를 만들었습니다 → {httpd.op_temp_made['info_path']}")
+    elif _ti["op_temp"]:
+        print(f"  관리 비밀번호: 임시 비밀번호 사용 중 → {_ti['op_info_path']} (설정에서 바꾸세요)")
+    elif not httpd.controller.auth_required():
+        print("  관리 비밀번호: 없음(portal_info.MD 쓰기 실패) — 설정 첫 진입 때 만들게 됩니다", file=sys.stderr)
     print("  중지하려면 Ctrl+C")
     print("=" * 64)
 
@@ -930,6 +951,8 @@ def build_parser() -> argparse.ArgumentParser:
     prp.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
     prp.add_argument("--info-dir", default=None,
                      help="info.MD 를 쓸 폴더(기본: 서버가 마지막으로 기록한 폴더, 없으면 현재 폴더)")
+    prp.add_argument("--portal", action="store_true",
+                     help="중앙 포탈의 비밀번호를 초기화(portal_settings.json · portal_info.MD)")
     prp.set_defaults(func=cmd_reset_password)
 
     ppr = sub.add_parser("prune", help="오래된 스캔 정리(per-run DB 삭제)")

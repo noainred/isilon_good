@@ -38,6 +38,7 @@ from . import upgrade as upgrademod
 from . import ask as askmod
 from . import netutil
 from .server import ThreadingHTTPServer, browse_dir  # 3.6 폴백 포함 재사용
+from .server import reset_op_password_file      # 임시 비밀번호(엣지와 같은 규칙·같은 함수)
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -70,6 +71,21 @@ def ping_history_path(data_dir: str) -> str:
 
 def throughput_history_path(data_dir: str) -> str:
     return os.path.join(data_dir, "throughput_history.db")
+
+
+# 인증이 필요한 포탈 POST — 엣지(OP_PROTECTED_POSTS)와 같은 정책: '설정'(노드 등록·수정·삭제·가져오기·토큰,
+# 연결 테스트, 포탈 설정·백업·감사 로그)과 되돌릴 수 없는/원격 구성 작업(업그레이드 설치·전 노드 푸시·SSH 설치·
+# 엣지 비밀번호 푸시). 그 외(동기화·원격 스캔 시작/중지·업그레이드 확인)는 인증 없이 허용.
+PORTAL_PROTECTED_POSTS = frozenset({
+    "/api/portal/audit", "/api/portal/settings",
+    "/api/portal/backup/save", "/api/portal/backup/config", "/api/portal/backup/download",
+    "/api/portal/nodes", "/api/portal/nodes/import", "/api/portal/nodes/delete", "/api/portal/nodes/set-token",
+    "/api/portal/test", "/api/portal/node-password",
+    "/api/portal/provision", "/api/portal/provision/ssh",
+    "/api/portal/upgrade", "/api/portal/upgrade/ssh", "/api/portal/upgrade/net", "/api/portal/upgrade/install",
+    "/api/portal/upgrade-all", "/api/portal/upgrade-all/ssh",
+})
+OP_RUNTIME_KEYS = ("op_password", "op_password_temp", "op_info_path")
 
 
 def safe_node_id(nid) -> bool:
@@ -441,8 +457,16 @@ class PortalController:
                              or os.path.join(self.data_dir, "replicas"))
         os.makedirs(self.replicas_dir, exist_ok=True)
         self._clean_replica_temps()
+        self._launch_cwd = os.getcwd()      # 임시 비밀번호 파일(portal_info.MD)을 둘 '실행한 디렉터리'
+        self._op_auto = False               # 기동(ensure_op_password) 후엔 '비밀번호 없음'을 두지 않는다
+        self._op_sync_lock = threading.Lock()
+        self._op_disk_seen = self.settings.get("op_password")   # 마지막으로 디스크에서 본/쓴 비밀번호
+        try:
+            self._settings_mtime = os.stat(portal_settings_path(self.data_dir)).st_mtime_ns
+        except OSError:
+            self._settings_mtime = None
         self._auth = authmod.AuthGuard(
-            lambda: self.settings.get("op_password"),
+            self._op_password_now,          # 서버 명령(reset-password --portal)이 바꾼 비밀번호도 바로 반영
             ttl=lambda: float(self.settings.get("op_ttl_minutes", 30) or 30) * 60)
         self._last_upgrade_check = 0.0
         self._init_ping_db()
@@ -465,6 +489,7 @@ class PortalController:
     # --- 인증(작업 보호: 보기는 자유, 변경은 로그인) ---
     def _load_settings(self) -> dict:
         out = {"op_password": "", "op_password_encrypted": False,
+               "op_password_temp": False, "op_info_path": "",
                "upgrade_watch_dir": "", "upgrade_check_secs": 60,
                "upgrade_source": "off", "upgrade_url": "", "upgrade_token": "",
                "upgrade_auto": False,
@@ -482,6 +507,8 @@ class PortalController:
             if isinstance(s, dict):
                 out["op_password"] = str(s.get("op_password") or "")
                 out["op_password_encrypted"] = bool(s.get("op_password_encrypted", False))
+                out["op_password_temp"] = bool(s.get("op_password_temp")) and bool(out["op_password"])
+                out["op_info_path"] = str(s.get("op_info_path") or "")
                 out["upgrade_watch_dir"] = str(s.get("upgrade_watch_dir") or "").strip()
                 try:
                     out["upgrade_check_secs"] = max(10, int(s.get("upgrade_check_secs", 60) or 60))
@@ -532,6 +559,7 @@ class PortalController:
         return out
 
     def _save_settings(self) -> None:
+        self._sync_op_from_disk()          # 서버 명령이 바꾼 비밀번호를 옛 메모리 값으로 되돌리지 않게
         os.makedirs(self.data_dir, exist_ok=True)
         path = portal_settings_path(self.data_dir)
         tmp = path + ".tmp"
@@ -543,12 +571,77 @@ class PortalController:
             os.chmod(path, 0o600)
         except OSError:
             pass
+        self._op_disk_seen = self.settings.get("op_password")
+        try:
+            self._settings_mtime = os.stat(path).st_mtime_ns
+        except OSError:
+            pass
+
+    # --- 관리 비밀번호: 디스크 동기화·임시 비밀번호(엣지와 같은 규칙) ---
+    def _op_password_now(self):
+        self._sync_op_from_disk()
+        return self.settings.get("op_password")
+
+    def _sync_op_from_disk(self) -> None:
+        """portal_settings.json 의 비밀번호가 마지막으로 본 값과 다르면(서버 명령 초기화) 받아들이고 세션을 폐기."""
+        path = portal_settings_path(self.data_dir)
+        try:
+            mt = os.stat(path).st_mtime_ns
+        except OSError:
+            return
+        with self._op_sync_lock:
+            if mt == self._settings_mtime:
+                return
+            self._settings_mtime = mt
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    disk = json.load(fh)
+            except (OSError, ValueError):
+                return
+            if not isinstance(disk, dict) or disk.get("op_password", "") == self._op_disk_seen:
+                return
+            for k in OP_RUNTIME_KEYS:
+                self.settings[k] = disk.get(k) if k != "op_password_temp" else bool(disk.get(k))
+            self._op_disk_seen = disk.get("op_password", "")
+        self._auth.revoke_all()
+        auditmod.record(self.data_dir, action="op_password_reset_cli", ok=True,
+                        detail=str(disk.get("op_info_path") or ""))
+
+    def ensure_op_password(self) -> Optional[dict]:
+        """비밀번호가 없으면 임시 비밀번호를 만들어 실행 디렉터리 portal_info.MD 에 기록(포탈 기동 시 호출).
+        이후 비밀번호를 비우는 저장(보호 해제)도 다시 임시로 초기화한다. 반환: {info_path, password} 또는 None."""
+        self._op_auto = True
+        self._sync_op_from_disk()
+        if self.settings.get("op_password"):
+            return None
+        res = reset_op_password_file(portal_settings_path(self.data_dir), self.data_dir,
+                                     self._launch_cwd, portal=True)
+        if res is None:
+            return None
+        fresh = self._load_settings()
+        for k in OP_RUNTIME_KEYS:
+            self.settings[k] = fresh.get(k)
+        self._op_disk_seen = self.settings.get("op_password")
+        try:
+            self._settings_mtime = os.stat(portal_settings_path(self.data_dir)).st_mtime_ns
+        except OSError:
+            pass
+        self._auth.revoke_all()
+        auditmod.record(self.data_dir, action="op_password_temp", ok=True, detail=res["info_path"])
+        return {"info_path": res["info_path"], "password": res["password"]}
+
+    def op_temp_info(self) -> dict:
+        """화면 안내용 — 임시 비밀번호 사용 중이면 portal_info.MD 경로(비밀번호 자체는 내보내지 않는다)."""
+        self._sync_op_from_disk()
+        temp = bool(self.settings.get("op_password_temp")) and bool(self.settings.get("op_password"))
+        return {"op_temp": temp, "op_info_path": (self.settings.get("op_info_path") or "") if temp else ""}
 
     def auth_required(self) -> bool:
         return self._auth.required()
 
     def auth_status(self) -> dict:
         return {"ok": True, "op_required": self._auth.required(),
+                **self.op_temp_info(),
                 "encrypted": bool(self.settings.get("op_password_encrypted")),
                 "version": __version__,
                 "show_update_popup": bool(self.settings.get("show_update_popup")),
@@ -577,17 +670,32 @@ class PortalController:
         return self._auth.login(password)
 
     def token_valid(self, token) -> bool:
+        self._sync_op_from_disk()          # 서버 명령으로 초기화됐으면 옛 세션을 먼저 폐기
         return self._auth.token_valid(token)
 
     def set_password(self, new_password: str, encrypt: bool) -> dict:
-        """비밀번호 설정/변경/해제. 호출 측(핸들러)에서 인증을 확인한다."""
+        """비밀번호 설정/변경/해제. 호출 측(핸들러)에서 인증을 확인한다.
+        해제(빈 비밀번호)는 기동 후엔 '비밀번호 없음'으로 두지 않고 새 임시 비밀번호로 초기화한다."""
         pw = str(new_password or "")
         enc = bool(encrypt)
+        self._sync_op_from_disk()
+        old_info = self.settings.get("op_info_path") or ""
+        was_temp = bool(self.settings.get("op_password_temp"))
         self.settings["op_password"] = authmod.store_password(pw, encrypt=enc) if pw else ""
         self.settings["op_password_encrypted"] = enc if pw else False
+        self.settings["op_password_temp"] = False
+        self.settings["op_info_path"] = ""
         self._save_settings()
-        return {"ok": True, "op_required": bool(self.settings["op_password"]),
-                "encrypted": self.settings["op_password_encrypted"]}
+        if was_temp and old_info:          # 임시 비밀번호 파일은 더 이상 맞지 않으니 지운다
+            try:
+                os.remove(old_info)
+            except OSError:
+                pass
+        if not pw and self._op_auto:
+            self.ensure_op_password()
+        return {"ok": True, "op_required": self._auth.required(),
+                "reset_to_temp": bool(not pw and self.settings.get("op_password_temp")),
+                "encrypted": bool(self.settings.get("op_password_encrypted"))}
 
     def set_enroll_token(self, token: str) -> dict:
         """엣지 자기등록(enroll) 공유 토큰을 설정/해제. 호출 측에서 인증을 확인한다."""
@@ -1420,7 +1528,7 @@ class PortalController:
                 return {"ok": False, "reason": "enroll_token 불일치", "_status": 401}
         elif self._auth.required():
             return {"ok": False, "_status": 401,
-                    "reason": "포탈에 enroll_token 을 설정하거나 로그인 비밀번호를 해제하세요."}
+                    "reason": "포탈 설정(설치·구성)에서 enroll_token 을 정하고, 엣지 설치 때 --enroll <토큰> 으로 넘기세요."}
         url = (raw.get("url") or "").strip()
         if not url:
             return {"ok": False, "reason": "url 필요"}
@@ -2945,12 +3053,16 @@ class PortalHandler(BaseHTTPRequestHandler):
                             "" if res.get("ok") else (res.get("reason") or ""))
                 self._send_json(res)
                 return
-            # 비밀번호 설정/변경/해제 — 이미 설정돼 있으면 로그인 필요(첫 설정은 허용)
+            # 비밀번호 설정/변경/해제 — 이미 설정돼 있으면 로그인 필요. 비밀번호가 없을 때(임시 비밀번호를
+            # 만들지 못한 경우)의 첫 설정은 JSON 요청만 허용(다른 사이트 폼 CSRF 차단).
             if path == "/api/portal/password":
                 if c.auth_required() and not c.token_valid(self.headers.get("X-Op-Token")):
                     self._audit("password", False, "locked")
                     self._send_json({"ok": False, "reason": "locked", "op_required": True},
                                     status=401)
+                    return
+                if not c.auth_required() and "application/json" not in (self.headers.get("Content-Type") or ""):
+                    self._send_json({"ok": False, "reason": "JSON 요청만 허용"}, status=415)
                     return
                 res = c.set_password(body.get("password") or "", bool(body.get("encrypt")))
                 self._audit("password", res.get("ok"))
@@ -2965,16 +3077,23 @@ class PortalHandler(BaseHTTPRequestHandler):
                             "" if res.get("ok") else (res.get("reason") or ""))
                 self._send_json(res, status=st)
                 return
-            # 그 외 변경 작업(노드 등록·삭제·동기화·원격 구성)은 로그인 필요
-            if c.auth_required() and not c.token_valid(self.headers.get("X-Op-Token")):
-                self._audit(path, False, "locked")
-                self._send_json({"ok": False, "reason": "locked", "op_required": True,
-                                 "error": "로그인 후 작업하세요."}, status=401)
-                return
+            # 인증은 설정·되돌릴 수 없는 작업(PORTAL_PROTECTED_POSTS)에만 — 동기화·원격 스캔 등 일반 작업은 자유.
+            # 비밀번호가 없으면 need_setup(화면이 '처음 비밀번호 만들기'). 토큰은 커스텀 헤더로만(CSRF 위조 불가).
+            if path in PORTAL_PROTECTED_POSTS:
+                if not c.auth_required():
+                    self._audit(path, False, "need_setup")
+                    self._send_json({"ok": False, "reason": "need_setup", "need_setup": True,
+                                     "error": "먼저 관리 비밀번호를 만드세요."}, status=401)
+                    return
+                if not c.token_valid(self.headers.get("X-Op-Token")):
+                    self._audit(path, False, "locked")
+                    self._send_json({"ok": False, "reason": "locked", "op_required": True,
+                                     "error": "로그인 후 작업하세요."}, status=401)
+                    return
             if path == "/api/portal/audit":      # 감사 로그 조회(로그인 필요)
                 self._send_json({"ok": True, "events": auditmod.tail(self.data_dir, 300)})
                 return
-            self._audit(path, True)              # 인증 통과한 변경 작업 기록
+            self._audit(path, True)              # 변경 작업 기록(보호 대상은 인증 통과분)
             if path == "/api/portal/backup/save":      # 포탈+노드 백업을 서버 디렉터리에 저장
                 self._send_json(c.save_backup(body.get("dir") or body.get("path") or ""))
                 return
@@ -3094,15 +3213,20 @@ class PortalHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(exc)}, status=500)
 
 
-def serve_portal(data_dir: str, host: str = "0.0.0.0", port: int = 8800):
-    """글로벌 포탈 HTTP 서버를 만들어 반환한다(호출 측에서 serve_forever)."""
+def serve_portal(data_dir: str, host: str = "0.0.0.0", port: int = 8800, *,
+                 auto_op_password: bool = False):
+    """글로벌 포탈 HTTP 서버를 만들어 반환한다(호출 측에서 serve_forever).
+    auto_op_password=True(실서버 기동 — CLI portal)면 관리 비밀번호가 없을 때 임시 비밀번호를 실행 디렉터리
+    portal_info.MD 에 만든다(결과는 httpd.op_temp_made)."""
     data_dir = os.path.abspath(data_dir)
     mgrmod.migrate_legacy_config(data_dir)
     os.makedirs(data_dir, exist_ok=True)
     controller = PortalController(data_dir)
+    op_temp_made = controller.ensure_op_password() if auto_op_password else None
     controller.start()
     handler = type("BoundPortalHandler", (PortalHandler,),
                    {"data_dir": data_dir, "controller": controller})
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.controller = controller
+    httpd.op_temp_made = op_temp_made   # 이번 기동에 임시 비밀번호를 만들었으면 {info_path, password}
     return httpd

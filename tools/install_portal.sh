@@ -141,7 +141,7 @@ esac
 mkdir -p "$INSTALL_DIR" "$DATA_DIR"
 if command -v rsync >/dev/null 2>&1; then
   # --delete 는 설치 폴더(서비스 WorkingDirectory)에 앱이 쓰는 런타임 파일까지 지운다 → 보호.
-  rsync -a --delete --exclude info.MD --exclude .iu_data_persist.json "$TMP_DIR"/ "$INSTALL_DIR"/
+  rsync -a --delete --exclude info.MD --exclude portal_info.MD --exclude .iu_data_persist.json "$TMP_DIR"/ "$INSTALL_DIR"/
 else
   cp -a "$TMP_DIR"/. "$INSTALL_DIR"/
 fi

@@ -173,24 +173,29 @@ OP_PROTECTED_POSTS = frozenset({
 OP_RUNTIME_KEYS = ("op_password", "op_password_temp", "op_info_path")
 
 
-def write_info_md(info_dir: str, data_dir: str, password: str, *, temp: bool = False) -> Optional[str]:
-    """비밀번호를 info_dir/info.MD 에 기록(권한 600). 반환: 쓴 경로, 실패하면 None."""
-    path = os.path.join(info_dir, "info.MD")
+def write_info_md(info_dir: str, data_dir: str, password: str, *, temp: bool = False,
+                  name: str = "info.MD", portal: bool = False) -> Optional[str]:
+    """비밀번호를 info_dir/<name> 에 기록(권한 600). 반환: 쓴 경로, 실패하면 None.
+    portal=True 면 포탈용 안내(파일 이름 portal_info.MD — 엣지와 같은 폴더에서 돌아도 겹치지 않게)."""
+    path = os.path.join(info_dir, name)
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     kind = ("임시 비밀번호(서버가 자동 생성)" if temp else "작업 비밀번호")
     body = (
-        "# isilon_usage 운영 정보\n\n"
+        "# isilon_usage %s 운영 정보\n\n"
         "이 파일은 관리자 비밀번호를 기록합니다. **민감 정보이므로 공유하지 마세요.**\n\n"
         "| 항목 | 값 |\n|---|---|\n"
         "| 버전 | %s |\n| 데이터 폴더 | %s |\n| 기록 폴더 | %s |\n"
         "| %s | `%s` |\n| 갱신 시각 | %s |\n\n"
         "> 보기·스캔 작업은 비밀번호 없이 되고, **설정**과 되돌릴 수 없는 작업(삭제·정리·업그레이드 설치)에\n"
         "> 위 비밀번호가 필요합니다.%s\n"
-        "> 잊었다면 서버에서: `python3 -m isilon_usage reset-password --data-dir %s`\n"
+        "> 잊었다면 서버에서: `python3 -m isilon_usage reset-password %s--data-dir %s`\n"
         "> (새 임시 비밀번호를 만들어 이 파일에 다시 기록합니다.)\n"
-    ) % (__version__, os.path.abspath(data_dir), os.path.abspath(info_dir), kind, password, ts,
-         ("\n> 임시 비밀번호입니다 — 로그인 후 **설정 → 작업 보호**에서 새 비밀번호로 바꾸세요." if temp else ""),
-         os.path.abspath(data_dir))
+    ) % ("포탈" if portal else "엣지",
+         __version__, os.path.abspath(data_dir), os.path.abspath(info_dir), kind, password, ts,
+         (("\n> 임시 비밀번호입니다 — 로그인 후 **설정 → 보안·감사 → 접속 보안**에서 새 비밀번호로 바꾸세요."
+           if portal else "\n> 임시 비밀번호입니다 — 로그인 후 **설정 → 작업 보호**에서 새 비밀번호로 바꾸세요.")
+          if temp else ""),
+         "--portal " if portal else "", os.path.abspath(data_dir))
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # 처음부터 600(잠깐도 남에게 안 보이게)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -213,36 +218,61 @@ def _keep_owner(path: str, owner) -> None:
         pass
 
 
-def reset_op_password(data_dir: str, info_dir: Optional[str] = None) -> Optional[dict]:
-    """새 임시 작업 비밀번호를 만들어 info.MD 에 쓰고 settings.json 에 저장한다(서버 기동·서버 명령 공용).
+def reset_op_password_file(settings_file: str, data_dir: str, info_dir: Optional[str] = None, *,
+                           portal: bool = False) -> Optional[dict]:
+    """새 임시 비밀번호를 만들어 info 파일에 쓰고 설정 JSON(엣지 settings.json · 포탈 portal_settings.json)에
+    op_password·op_password_temp·op_info_path 만 바꿔 저장한다 — 엣지·포탈·서버 명령 공용(단일 소스).
 
-    info.MD 를 먼저 쓴다 — 못 쓰면(권한 등) 비밀번호를 바꾸지 않는다(아무도 모르는 비밀번호가 생기지 않게).
-    info_dir 에 못 쓰면 data_dir 에 쓴다. 반환: {password, info_path, settings} 또는 None.
+    info 파일을 먼저 쓴다 — 못 쓰면(권한 등) 비밀번호를 바꾸지 않는다(아무도 모르는 비밀번호가 생기지 않게).
+    info_dir 에 못 쓰면 data_dir 에 쓴다. root 로 실행해도 파일 소유자는 원래(서비스 계정)대로 둔다.
+    반환: {password, info_path} 또는 None.
     """
-    cur = setmod.load(data_dir)
-    sp = setmod.settings_path(data_dir)
     try:
-        st = os.stat(sp)
+        with open(settings_file, encoding="utf-8") as fh:
+            cur = json.load(fh)
+        if not isinstance(cur, dict):
+            cur = {}
+    except (OSError, ValueError):
+        cur = {}
+    try:
+        st = os.stat(settings_file)
         owner = (st.st_uid, st.st_gid)
     except OSError:
         owner = None
     pw = secrets.token_urlsafe(9)                   # 12자(영문 대소문자·숫자·-_)
+    name = "portal_info.MD" if portal else "info.MD"
     path = None
     for d in (info_dir, data_dir):
         if d and os.path.isdir(d):
-            path = write_info_md(d, data_dir, pw, temp=True)
+            path = write_info_md(d, data_dir, pw, temp=True, name=name, portal=portal)
             if path:
                 break
     if not path:
         return None
-    merged = dict(cur)
-    merged["op_password"] = authmod.store_password(pw, encrypt=bool(cur.get("op_password_encrypted")))
-    merged["op_password_temp"] = True
-    merged["op_info_path"] = path
-    saved = setmod.save(data_dir, merged)
-    _keep_owner(sp, owner)
+    cur["op_password"] = authmod.store_password(pw, encrypt=bool(cur.get("op_password_encrypted")))
+    cur["op_password_temp"] = True
+    cur["op_info_path"] = path
+    os.makedirs(os.path.dirname(settings_file) or ".", exist_ok=True)
+    tmp = settings_file + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(cur, fh, ensure_ascii=False, indent=2)
+    os.replace(tmp, settings_file)
+    try:
+        os.chmod(settings_file, 0o600)
+    except OSError:
+        pass
+    _keep_owner(settings_file, owner)
     _keep_owner(path, owner)
-    return {"password": pw, "info_path": path, "settings": saved}
+    return {"password": pw, "info_path": path}
+
+
+def reset_op_password(data_dir: str, info_dir: Optional[str] = None) -> Optional[dict]:
+    """엣지용: settings.json 의 작업 비밀번호를 새 임시 비밀번호로(info.MD). 반환: {password, info_path, settings}."""
+    res = reset_op_password_file(setmod.settings_path(data_dir), data_dir, info_dir)
+    if res is None:
+        return None
+    res["settings"] = setmod.load(data_dir)
+    return res
 
 
 def _public_settings(s: dict) -> dict:

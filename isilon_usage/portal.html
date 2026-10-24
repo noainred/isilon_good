@@ -373,8 +373,8 @@ th,td{ border-color:rgba(84,110,160,.14); }
 
 <div id="roBanner" class="wrap" style="display:none;">
   <div class="card" style="border-color:#f5a623; background:#2a2410;">
-    <b>🔒 읽기 전용 모드</b> — 조회만 가능합니다. 노드 등록·원격 구성·동기화 등 변경 작업은
-    <b>로그인</b> 후 사용할 수 있습니다.
+    <b>🔒 설정 잠김</b> — 노드 설정(등록·원격 구성·업그레이드 등)은 <b>로그인</b> 후 사용할 수 있습니다(세션 만료).
+    대시보드·동기화·원격 스캔 시작/중지는 로그인 없이 됩니다.
     <button id="roLoginBtn" style="margin-left:8px;">🔑 로그인</button>
   </div>
 </div>
@@ -847,12 +847,12 @@ th,td{ border-color:rgba(84,110,160,.14); }
   </div>
   <div class="card" id="cardLoginSec" style="margin-bottom:14px;">
     <h2>🔒 접속 보안 (로그인 비밀번호)</h2>
-    <div class="sub" style="margin-bottom:8px;">비밀번호를 설정하면 접속 시 <b>읽기 전용</b>이 되고, 우상단 <b>로그인</b> 후 노드 등록·원격 구성 등 변경 작업을 할 수 있습니다. 비우고 저장하면 보호가 해제됩니다.</div>
+    <div class="sub" style="margin-bottom:8px;">이 비밀번호는 <b>노드 설정</b>과 되돌릴 수 없는 작업(노드 등록·삭제·업그레이드 설치·원격 구성 등)에만 필요합니다 — 대시보드·동기화·원격 스캔 시작/중지는 로그인 없이 됩니다. 비밀번호가 없으면 포탈이 기동할 때 임시 비밀번호를 실행 폴더 <code>portal_info.MD</code> 에 만들고, 해제하면 다시 임시로 초기화됩니다. 잊었을 때(포탈 서버에서): <code>python3 -m isilon_usage reset-password --portal --data-dir &lt;포탈 데이터 폴더&gt;</code>.</div>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
       <input id="setPw" type="password" placeholder="새 비밀번호(변경 시에만)" style="flex:1; min-width:220px;" />
       <label class="sub" style="display:flex; align-items:center; gap:6px;"><input id="setPwEnc" type="checkbox" /> 암호화 저장(해시)</label>
       <button id="setPwBtn">비밀번호 저장</button>
-      <button id="setPwClearBtn" title="설정된 비밀번호를 지워 보호를 끕니다(로그인 필요)">🔓 비밀번호 해제</button>
+      <button id="setPwClearBtn" title="새 임시 비밀번호로 초기화합니다(portal_info.MD, 로그인 필요)">♻ 임시 비밀번호로 초기화</button>
       <span class="sub" id="setPwMsg"></span>
     </div>
     <div class="sub" style="margin-top:6px;">비밀번호를 잊었다면: 포탈 서버의 데이터 폴더 <span class="mono">portal_settings.json</span> 에서 <span class="mono">"op_password"</span> 를 <span class="mono">""</span> 로 바꾸고 포탈을 재시작하세요.</div>
@@ -891,7 +891,7 @@ th,td{ border-color:rgba(84,110,160,.14); }
       <select id="npNode" class="inp" style="min-width:200px;" title="대상 노드(전체 또는 개별)"><option value="">전체 노드</option></select>
       <input id="npPass" type="password" class="inp mono" placeholder="새 비밀번호" style="flex:1; min-width:200px;" />
       <button id="npSetBtn" class="primary">설정/변경</button>
-      <button id="npClearBtn" title="선택 노드의 비밀번호를 지워 보호를 끕니다">🔓 해제</button>
+      <button id="npClearBtn" title="선택 노드의 비밀번호를 새 임시 비밀번호로 초기화합니다(각 엣지 실행 폴더의 info.MD)">♻ 초기화</button>
       <span class="sub" id="npMsg"></span>
     </div>
     <div id="npResult" class="sub" style="margin-top:8px;"></div>
@@ -1046,23 +1046,24 @@ th,td{ border-color:rgba(84,110,160,.14); }
 <script>
 const $ = (id) => document.getElementById(id);
 const escAttr = (s) => String(s==null?"":s).replace(/[&"'<>]/g,c=>({"&":"&amp;",'"':"&quot;","'":"&#39;","<":"&lt;",">":"&gt;"}[c]));
-// ---- 인증(로그인): 보기는 자유, 변경(POST)은 토큰 필요 — fetch 래퍼로 자동 처리 ----
+// ---- 인증(로그인): 엣지와 같은 정책 — '설정'(노드 설정 탭)과 되돌릴 수 없는 작업만 로그인(서버 PORTAL_PROTECTED_POSTS).
+// 동기화·원격 스캔 시작/중지 등 일반 작업과 보기는 자유. 401 이면 로그인(비밀번호가 없으면 처음 만들기) 후 1회 재시도.
 let _opRequired=false, _opExpiry=0, _opTimer=null;
+let _opTemp=false, _opInfoPath="";   // 서버가 만든 임시 비밀번호 사용 중(경로만 — 비밀번호는 화면에 오지 않음)
 const _origFetch = window.fetch.bind(window);
 function _opToken(){ try{ return sessionStorage.getItem("pOpToken")||""; }catch(e){ return ""; } }
 function _opLeft(){ return Math.max(0, Math.ceil((_opExpiry-Date.now())/1000)); }
-function canMutate(){ return !_opRequired || (!!_opToken() && _opLeft()>0); }
+function _opLoggedIn(){ return !!_opToken() && _opLeft()>0; }
+function canMutate(){ return true; }   // 일반 작업은 로그인 없이 — 보호 대상은 서버 401 로 로그인 유도
 function updateLoginUI(){
-  const ro=_opRequired && !canMutate();
-  const b=$("roBanner"); if(b) b.style.display=ro?"":"none";
-  // 비밀번호 설정 + 비로그인이면 '설정'(관리) 탭을 아예 숨기고, 그 화면이면 대시보드로
-  const nodesBtn=document.querySelector('.navbtn[data-view="nodes"]');
-  if(nodesBtn) nodesBtn.style.display=ro?"none":"";
-  if(ro && $("view-nodes") && $("view-nodes").classList.contains("active")) show("dash");
+  const ro=!_opLoggedIn();
+  // 설정(노드 설정) 화면에 있는데 로그인이 없으면(세션 만료) 안내 배너 + 설정 버튼 잠금
+  const inNodes=$("view-nodes") && $("view-nodes").classList.contains("active");
+  const b=$("roBanner"); if(b) b.style.display=(ro && inNodes)?"":"none";
   const btn=$("loginBtn");
   if(btn){
     btn.style.display=_opRequired?"":"none";
-    if(_opRequired && canMutate()){ const m=Math.floor(_opLeft()/60);
+    if(_opRequired && _opLoggedIn()){ const m=Math.floor(_opLeft()/60);
       btn.textContent="🔓 로그아웃 ("+(m>0?m+"분":_opLeft()+"초")+")"; }
     else btn.textContent="🔑 로그인";
   }
@@ -1080,7 +1081,7 @@ function applyPortalTitle(title, sub){
 }
 // 헤더 제목 클릭 → 이름 변경 모달(저장은 /api/portal/settings, 로그인 필요 시 먼저 로그인)
 async function editPortalTitle(){
-  if(_opRequired && !canMutate()){ const ok=await doLogin(); if(!ok) return; }
+  if(!_opLoggedIn()){ const ok=await ensureSettingsAuth(); if(!ok) return; }
   const curT=($("setTitle")&&$("setTitle").value)||"", curS=($("setSubtitle")&&$("setSubtitle").value)||"";
   const ov=document.createElement("div");
   ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center;";
@@ -1117,6 +1118,8 @@ async function editPortalTitle(){
 async function loadAuth(){
   try{ const j=await (await _origFetch("/api/portal/auth",{cache:"no-store"})).json();
     _opRequired=!!j.op_required;
+    _opTemp=!!j.op_temp; _opInfoPath=j.op_info_path||"";
+    if(_opTemp) showTempPasswordNotice();
     if($("aboutVer") && j.version) $("aboutVer").textContent = "v"+j.version;   // About 버전 배지
     applyPortalTitle(j.portal_title, j.portal_subtitle);
     applyNavHidden(j.nav_hidden); renderNavMenu(j.nav_hidden);   // 상단 메뉴 표시 적용 + 선택 UI
@@ -1211,8 +1214,52 @@ function passwordPrompt(msg){
     ov.addEventListener("mousedown",e=>{ if(e.target===ov) done(null); });
   });
 }
+// 임시 비밀번호 안내 팝업(브라우저 세션당 1회) — 경로만 보여 준다(엣지 대시보드와 같은 안내).
+function showTempPasswordNotice(){
+  try{ if(sessionStorage.getItem("pOpTempNoticeShown")) return; sessionStorage.setItem("pOpTempNoticeShown","1"); }catch(e){}
+  if($("pOpTempNotice")) return;
+  const ov=document.createElement("div"); ov.id="pOpTempNotice";
+  ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99998;display:flex;align-items:center;justify-content:center;";
+  ov.innerHTML='<div style="background:#16202c;border:1px solid #f5b942;border-radius:10px;padding:18px 20px;max-width:560px;box-shadow:0 12px 40px rgba(0,0,0,.55);color:#dfe8f3;">'
+    +'<div style="font-weight:700;font-size:15px;margin-bottom:8px;">🔑 임시 관리자 비밀번호가 만들어졌습니다</div>'
+    +'<div style="font-size:13.5px;line-height:1.6;">노드 설정과 되돌릴 수 없는 작업(노드 등록·삭제·업그레이드 설치 등)에는 비밀번호가 필요합니다.<br>'
+    +'포탈 서버의 아래 파일에서 임시 비밀번호를 확인하세요:<br>'
+    +'<code style="display:inline-block;margin:6px 0;padding:4px 8px;background:#0e1620;border-radius:6px;word-break:break-all;">'+escAttr(_opInfoPath||"실행 폴더/portal_info.MD")+'</code><br>'
+    +'로그인 후 <b>설정 → 보안·감사 → 접속 보안</b>에서 새 비밀번호로 바꾸면 이 안내가 사라집니다.<br>'
+    +'<span class="sub">잊었을 때(포탈 서버에서): <code>python3 -m isilon_usage reset-password --portal --data-dir &lt;포탈 데이터 폴더&gt;</code></span></div>'
+    +'<div style="margin-top:12px;text-align:right;"><button type="button" id="pOpTempNoticeOk">확인</button></div></div>';
+  document.body.appendChild(ov);
+  const close=()=>{ try{document.body.removeChild(ov);}catch(e){} };
+  $("pOpTempNoticeOk").onclick=close;
+  ov.addEventListener("mousedown",e=>{ if(e.target===ov) close(); });
+}
+// 비밀번호가 없을 때(임시 비밀번호를 못 만든 경우): 처음 만들기(2회 입력) → 바로 로그인.
+async function promptSetup(){
+  const pw=await passwordPrompt("먼저 포탈 관리 비밀번호를 만드세요(4자 이상):"); if(pw==null) return false;
+  const pw2=await passwordPrompt("확인을 위해 같은 비밀번호를 한 번 더 입력하세요:"); if(pw2==null) return false;
+  if(pw!==pw2){ alert("두 비밀번호가 다릅니다."); return false; }
+  if(pw.trim().length<4){ alert("비밀번호는 4자 이상이어야 합니다."); return false; }
+  try{ const j=await (await _origFetch("/api/portal/password",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({password:pw, encrypt:false})})).json();
+    if(!j.ok){ if(j.op_required){ _opRequired=true; return await doLogin(); } alert("비밀번호를 만들지 못했습니다: "+(j.reason||"")); return false; }
+    _opRequired=true;
+    const r=await (await _origFetch("/api/portal/login",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({password:pw})})).json();
+    if(r.ok && r.token){ try{ sessionStorage.setItem("pOpToken",r.token); }catch(e){}
+      _opExpiry=Date.now()+(r.ttl||1800)*1000; try{ sessionStorage.setItem("pOpExpiry",String(_opExpiry)); }catch(e){}
+      _opStartTimer(); updateLoginUI(); return true; }
+  }catch(e){ alert("비밀번호를 만들지 못했습니다: "+e); }
+  return false;
+}
+// 설정(노드 설정) 진입 인증: 로그인돼 있으면 통과, 비밀번호가 있으면 로그인, 없으면 처음 만들기.
+async function ensureSettingsAuth(){
+  if(_opLoggedIn()) return true;
+  const ok=_opRequired ? await doLogin() : await promptSetup();
+  updateLoginUI(); return ok;
+}
 async function doLogin(){
-  const pw=await passwordPrompt("로그인 — 비밀번호를 입력하세요:"); if(pw==null) return false;
+  const pw=await passwordPrompt(_opTemp ? ("로그인 — 임시 관리자 비밀번호가 포탈 서버의 "+(_opInfoPath||"실행 폴더의 portal_info.MD")+" 파일에 있습니다. 비밀번호를 입력하세요:")
+                                        : "로그인 — 비밀번호를 입력하세요:"); if(pw==null) return false;
   try{ const r=await _origFetch("/api/portal/login",{method:"POST",
       headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pw})});
     const j=await r.json();
@@ -1248,8 +1295,10 @@ window.fetch=async function(url,opts){
   if(m==="POST" && u.indexOf("/api/portal/login")<0){
     opts.headers=Object.assign({},opts.headers||{},{"X-Op-Token":_opToken()});
     let res=await _origFetch(url,opts);
-    if(res.status===401){ _opRequired=true; updateLoginUI();
-      if(await doLogin()){ opts.headers["X-Op-Token"]=_opToken(); res=await _origFetch(url,opts); } }
+    if(res.status===401){
+      let j401={}; try{ j401=await res.clone().json(); }catch(e){}
+      const ok=j401.need_setup ? await promptSetup() : (_opRequired=true, updateLoginUI(), await doLogin());
+      if(ok){ opts.headers["X-Op-Token"]=_opToken(); res=await _origFetch(url,opts); } }
     return res;
   }
   return _origFetch(url,opts);
@@ -1299,11 +1348,16 @@ function capCell(used,total){
       <i style="width:${p.toFixed(1)}%;background:${c}"></i><b>${p.toFixed(0)}%</b></div>
       <div class="sub mono" style="white-space:nowrap;margin-top:2px;">${fmtBytes(used)} / ${fmtBytes(total)}</div>`;
 }
-function show(v){ if(v==="nodes" && _opRequired && !canMutate()) v="dash";   // 비번설정+비로그인이면 관리 탭 차단
+function show(v){
+  if(v==="nodes" && !_opLoggedIn()){   // 설정 진입 = 인증(비밀번호가 없으면 처음 만들기) — 취소하면 그대로
+    ensureSettingsAuth().then(ok=>{ if(ok) show("nodes"); });
+    return;
+  }
   ["dash","compare","nodes","netmon"].forEach(n=>$("view-"+n).classList.toggle("active", n===v));
   if(v==="compare") loadCompare();
   if(v==="netmon") netmonStart(); else netmonStop();
-  document.querySelectorAll(".navbtn").forEach(b=>b.classList.toggle("active", b.dataset.view===v)); }
+  document.querySelectorAll(".navbtn").forEach(b=>b.classList.toggle("active", b.dataset.view===v));
+  updateLoginUI(); }
 document.querySelectorAll(".navbtn").forEach(b=>b.addEventListener("click",()=>show(b.dataset.view)));
 // 설정 하위 탭(설치·구성 / 업그레이드 / 노드 관리 / 보안·감사)
 function showSub(id){
@@ -1681,7 +1735,7 @@ function renderPortalDash(){
                   : '<span class="badge b-offline">오프라인</span>');
     // 온라인인데 스캔 안 함 + 이전 스캔 기록 있음 → '스캔 시작'(마지막 경로와 동일)
     const canScan = n.enabled && n.online && n.active_scans===0 && !n.running && n.roots && n.roots.length;
-    const scanLocked = _opRequired && !canMutate();   // 비번설정+비로그인이면 스캔 시작 잠금
+    const scanLocked = false;   // 원격 스캔 시작은 일반 작업 — 로그인 없이(설정·되돌릴 수 없는 작업만 로그인)
     const scanBtn = !canScan ? ""
       : scanLocked
         ? ` <button class="ssbtn" disabled title="로그인 후 스캔을 시작할 수 있습니다">🔒 스캔 시작</button>`
@@ -1864,17 +1918,17 @@ async function nodePassword(clear){
   const id=$("npNode").value, ids=id?[id]:[], pass=$("npPass").value;
   if(!clear && !pass){ $("npMsg").textContent="새 비밀번호를 입력하세요."; return; }
   const tgt=id?("노드 ‘"+id+"’"):"전체 노드";
-  if(!confirm(tgt+" 의 작업 비밀번호를 "+(clear?"해제":"설정/변경")+"할까요?")) return;
+  if(!confirm(tgt+" 의 작업 비밀번호를 "+(clear?"초기화(새 임시 비밀번호 — 각 엣지 실행 폴더의 info.MD)":"설정/변경")+"할까요?")) return;
   $("npMsg").textContent="적용 중…"; $("npResult").innerHTML="";
   try{
     const j=await (await fetch("/api/portal/node-password",{method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({ids, password:pass, clear:!!clear})})).json();
     if(!j.ok && j.reason){ $("npMsg").textContent="실패: "+j.reason; return; }
-    $("npMsg").textContent=`${j.ok_count||0}/${j.total||0} 노드 ${clear?"해제":"설정"} 완료`;
+    $("npMsg").textContent=`${j.ok_count||0}/${j.total||0} 노드 ${clear?"초기화":"설정"} 완료`;
     $("npPass").value="";
     $("npResult").innerHTML=(j.results||[]).map(r=>
-      `<div>${r.ok?"✅":"❌"} <span class="mono">${r.id}</span>${r.reason?(" — "+r.reason):""}</div>`).join("");
+      `<div>${r.ok?"✅":"❌"} <span class="mono">${escAttr(r.id)}</span>${r.reason?(" — "+escAttr(r.reason)):""}</div>`).join("");
     loadNodes();
   }catch(e){ $("npMsg").textContent="요청 오류: "+e; }
 }
@@ -2236,25 +2290,26 @@ $("ugSshBtn").addEventListener("click", async()=>{
 function tickClock(){ const el=$("clock"); if(el) el.textContent=new Date().toLocaleString("ko-KR",{hour12:false}); }
 tickClock(); setInterval(()=>{ tickClock(); tickElapsed(); },1000);
 if($("loginBtn")) $("loginBtn").addEventListener("click", async()=>{
-  if(_opRequired && canMutate()) doLogout(); else await doLogin(); });
-if($("roLoginBtn")) $("roLoginBtn").addEventListener("click", doLogin);
+  if(_opRequired && _opLoggedIn()) doLogout(); else await doLogin(); });
+if($("roLoginBtn")) $("roLoginBtn").addEventListener("click", ensureSettingsAuth);
 if($("setPwBtn")) $("setPwBtn").addEventListener("click", async()=>{
   const msg=$("setPwMsg"); msg.textContent=" 저장 중…";
   try{ const j=await (await fetch("/api/portal/password",{method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({password:$("setPw").value, encrypt:$("setPwEnc").checked})})).json();
-    if(j.ok){ msg.textContent=j.op_required?(" ✓ 보호 켜짐 "+(j.encrypted?"(암호화)":"(평문)")):" ✓ 보호 해제됨";
-      $("setPw").value=""; _opRequired=!!j.op_required; updateLoginUI(); }
+    if(j.ok){ msg.textContent=j.op_required?(" ✓ 비밀번호 저장 "+(j.encrypted?"(암호화)":"(평문)")):" ✓ 보호 해제됨";
+      $("setPw").value=""; _opRequired=!!j.op_required; _opTemp=false; updateLoginUI(); }
     else msg.textContent=" ✗ "+(j.reason||j.error||"실패"); }
   catch(e){ msg.textContent=" ✗ "+e; }
 });
 if($("setPwClearBtn")) $("setPwClearBtn").addEventListener("click", async()=>{
-  if(!confirm("로그인 비밀번호를 해제할까요?\n이후에는 로그인 없이 노드 등록·업그레이드 등 변경 작업이 가능해집니다.")) return;
+  if(!confirm("비밀번호를 초기화할까요?\n새 임시 비밀번호가 포탈 서버의 portal_info.MD 에 만들어지고, 지금 로그인은 끝납니다.")) return;
   const msg=$("setPwMsg"); msg.textContent=" 해제 중…";
   try{ const j=await (await fetch("/api/portal/password",{method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({password:"", encrypt:false})})).json();
-    if(j.ok){ msg.textContent=" ✓ 보호 해제됨"; $("setPw").value=""; _opRequired=!!j.op_required; updateLoginUI(); }
+    if(j.ok){ msg.textContent=j.reset_to_temp?" ✓ 임시 비밀번호로 초기화됨(portal_info.MD)":" ✓ 보호 해제됨"; $("setPw").value="";
+      _opRequired=!!j.op_required; if(j.reset_to_temp){ doLogout(); loadAuth(); } else updateLoginUI(); }
     else if(j.reason==="locked"||j.op_required) msg.textContent=" ✗ 먼저 우상단에서 로그인하세요(현재 비밀번호 필요)";
     else msg.textContent=" ✗ "+(j.reason||j.error||"실패"); }
   catch(e){ msg.textContent=" ✗ "+e; }

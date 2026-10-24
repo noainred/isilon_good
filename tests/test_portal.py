@@ -535,7 +535,103 @@ def _test_node_id_safety_and_enroll_token() -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _test_portal_temp_password_and_policy() -> None:
+    """포탈도 엣지와 같은 정책: 기동 시 임시 비밀번호(portal_info.MD) · reset-password --portal 즉시 반영 ·
+    설정·되돌릴 수 없는 작업만 로그인(동기화 등 일반 작업은 자유) · 해제→임시 재생성 · enroll 은 enroll_token 필요."""
+    import re as _re
+    import subprocess
+    import urllib.error
+
+    def _pw_in(path):
+        with open(path, encoding="utf-8") as fh:
+            return _re.search(r"\| 임시 비밀번호\(서버가 자동 생성\) \| `([^`]+)` \|", fh.read()).group(1)
+
+    def _req(base, path, data, token=None, ctype="application/json"):
+        h = {"Content-Type": ctype}
+        if token:
+            h["X-Op-Token"] = token
+        req = urllib.request.Request(base + path, data=json.dumps(data).encode(), headers=h, method="POST")
+        try:
+            r = urllib.request.urlopen(req, timeout=10)
+            return r.getcode(), json.load(r)
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read() or b"{}")
+
+    d = tempfile.mkdtemp(prefix="portal_tmppw_")
+    run_dir = os.path.join(d, "run")
+    os.makedirs(run_dir)
+    cwd0 = os.getcwd()
+    os.chdir(run_dir)                       # 실행 디렉터리 = run_dir (portal_info.MD 위치)
+    try:
+        httpd = portalmod.serve_portal(os.path.join(d, "data"), host="127.0.0.1", port=0,
+                                       auto_op_password=True)
+    finally:
+        os.chdir(cwd0)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = "http://127.0.0.1:%d" % httpd.server_address[1]
+    pc = httpd.controller
+    try:
+        info = os.path.join(os.path.realpath(run_dir), "portal_info.MD")   # getcwd 는 심볼릭 링크를 푼 경로
+        assert httpd.op_temp_made and httpd.op_temp_made["info_path"] == info and os.path.exists(info)
+        assert oct(os.stat(info).st_mode & 0o777) == "0o600"
+        st = json.load(urllib.request.urlopen(base + "/api/portal/auth", timeout=5))
+        assert st["op_required"] and st["op_temp"] and st["op_info_path"] == info, st
+        assert _pw_in(info) not in json.dumps(st)                    # 비밀번호 값은 응답에 없다
+        pw1 = _pw_in(info)
+        # 일반 작업은 토큰 없이, 설정·노드 등록은 401
+        code, _ = _req(base, "/api/portal/sync", {})
+        assert code == 200, code
+        for pth, body in (("/api/portal/settings", {"portal_title": "X"}),
+                          ("/api/portal/nodes", {"id": "n1", "url": "http://10.0.0.1:8765"}),
+                          ("/api/portal/upgrade/install", {})):
+            code, j = _req(base, pth, body)
+            assert code == 401 and j.get("op_required"), (pth, code, j)
+        code, lg = _req(base, "/api/portal/login", {"password": pw1})
+        tok = lg.get("token")
+        assert code == 200 and tok, lg
+        code, j = _req(base, "/api/portal/settings", {"portal_title": "HQ"}, token=tok)
+        assert code == 200 and j.get("ok"), (code, j)
+        # enroll: 비밀번호가 있으니(임시) enroll_token 없이 자기등록 거부
+        en = pc.enroll_node({"url": "http://10.0.0.5:8765", "id": "e5"})
+        assert not en["ok"] and "enroll_token" in en["reason"], en
+        # 서버 명령 초기화(별도 프로세스) → 실행 중 포탈 즉시 반영, 옛 토큰 만료
+        sp = portalmod.portal_settings_path(pc.data_dir)
+        t0 = os.stat(sp).st_mtime_ns
+        while os.stat(sp).st_mtime_ns == t0:
+            out = subprocess.run([sys.executable, "-m", "isilon_usage", "reset-password", "--portal",
+                                  "--data-dir", pc.data_dir],
+                                 cwd=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."),
+                                 capture_output=True, text=True, timeout=60)
+            assert out.returncode == 0, out.stderr
+        assert info in out.stdout, out.stdout
+        pw2 = _pw_in(info)
+        assert pw2 != pw1
+        code, _ = _req(base, "/api/portal/settings", {"portal_title": "HQ2"}, token=tok)
+        assert code == 401, code
+        assert not pc.login(pw1).get("ok") and pc.login(pw2).get("ok")
+        pc.set_title("HQ3", "")               # 다른 저장이 옛 비밀번호로 되돌리지 않는다
+        with open(sp, encoding="utf-8") as fh:
+            assert json.load(fh)["op_password"] == pw2
+        # 사용자 비밀번호 → 임시 해제 + 임시 파일 삭제, 해제 → 다시 임시
+        assert pc.set_password("mine-1234", False)["ok"]
+        assert not pc.op_temp_info()["op_temp"] and not os.path.exists(info)
+        r = pc.set_password("", False)
+        assert r["ok"] and r["reset_to_temp"] and pc.auth_required() and os.path.exists(info), r
+        assert pc.login(_pw_in(info)).get("ok")
+        print("[portal] 임시 비밀번호(portal_info.MD 600)·reset-password --portal 즉시 반영·설정만 인증·"
+              "일반 작업 자유·해제→임시·enroll 토큰 필요 OK")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        try:
+            pc.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
+    _test_portal_temp_password_and_policy()
     _test_node_id_safety_and_enroll_token()
     _test_merge_scan_lists()
     _test_rep_due_policy()

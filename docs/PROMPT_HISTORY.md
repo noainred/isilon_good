@@ -1171,4 +1171,9 @@
      표시·소유자 유지), 실행 중 서버의 settings.json 변경 감지(비밀번호만 반영·세션 폐기)와 단일 저장 경로, 대시보드 팝업(경로만).
      실서버 E2E 로 확인. v1.99.38.
 
+299. (한글로 다시 물어봐 → 포탈도 엣지와 같게 변경 · CLAUDE.md 규칙 추가) 직전 보고를 영어로 쓴 것을 바로잡고 두 질문을 한글로
+     다시 함. 포탈 POST 게이트를 보호 목록(PORTAL_PROTECTED_POSTS)만 인증으로, 기동 시 임시 비밀번호(portal_info.MD — 엣지와 같은
+     폴더에서 겹치지 않게), reset-password --portal, 노드 설정 탭 진입 인증·경로 팝업, 공용 reset_op_password_file 로 엣지와 통일.
+     enroll 은 enroll_token 필요로 바뀜(명시). CLAUDE.md 에 서브에이전트 sonnet·3개 이하 규칙. v1.99.39.
+
 <!-- 새 프롬프트는 이 아래에 계속 추가 -->

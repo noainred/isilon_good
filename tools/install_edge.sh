@@ -14,7 +14,7 @@
 #                 http://<사내-미러-호스트>/repository/manager-upgrade/isilon_good/raw/<branch>
 #   --hq URL    : HQ 포탈 주소(예: http://10.0.0.5:8800). 주면 설치 후 이 엣지를
 #                 포탈에 자동 등록(enroll)한다. --region/--node-id/--enroll/--advertise-host 동반 가능.
-#   --enroll T  : 포탈에 로그인 비밀번호가 걸려 있으면 필요한 enroll 공유 토큰.
+#   --enroll T  : 포탈 enroll 공유 토큰(포탈 설정 → 설치·구성에서 정한 값 — 자기등록에 필요).
 # =============================================================================
 set -euo pipefail
 
@@ -35,7 +35,7 @@ BASE_URL=""                              # 다운로드 베이스 직접 지정(
 HQ=""                                    # 포탈(HQ) URL — 주면 설치 후 포탈에 자기등록(enroll)
 REGION=""                                # 노드 지역 라벨(표시용)
 NODE_ID=""                               # 노드 id(비우면 hostname)
-ENROLL_TOKEN=""                          # 포탈 enroll 공유 토큰(포탈에 로그인 비번이 걸린 경우 필요)
+ENROLL_TOKEN=""                          # 포탈 enroll 공유 토큰(자기등록에 필요 — 포탈 설정에서 정함)
 ADVERTISE_HOST=""                        # 포탈이 이 엣지를 찾아올 IP/호스트(비우면 자동 감지)
 
 # ===== 인자로 덮어쓰기 =====
@@ -176,7 +176,7 @@ esac
 mkdir -p "$INSTALL_DIR" "$DATA_DIR"
 if command -v rsync >/dev/null 2>&1; then
   # --delete 는 설치 폴더(서비스 WorkingDirectory)에 앱이 쓰는 런타임 파일까지 지운다 → 보호.
-  rsync -a --delete --exclude info.MD --exclude .iu_data_persist.json "$TMP_DIR"/ "$INSTALL_DIR"/
+  rsync -a --delete --exclude info.MD --exclude portal_info.MD --exclude .iu_data_persist.json "$TMP_DIR"/ "$INSTALL_DIR"/
 else
   cp -a "$TMP_DIR"/. "$INSTALL_DIR"/
 fi
