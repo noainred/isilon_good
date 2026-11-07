@@ -427,7 +427,7 @@ class Scanner:
             pass
         if conn is not None:
             try:
-                dbmod.add_scan_log(conn, self.run_id, self._phase, msg)
+                dbmod.add_scan_log(conn, self.run_id, self._phase, dbmod.db_text(msg))
             except Exception:
                 pass
 
@@ -485,9 +485,10 @@ class Scanner:
             fields["advanced_at"] = self._advanced_at
         try:   # 워커별 현재 디렉터리(병렬 표시용). 탐색 단계에서만 채워짐.
             fields["worker_dirs"] = json.dumps(
-                [p for p in list(self._worker_dirs.values()) if p], ensure_ascii=False)
+                [dbmod.db_text(p) for p in list(self._worker_dirs.values()) if p], ensure_ascii=False)
         except Exception:
             pass
+        current_dir = dbmod.db_text(current_dir)       # 비 UTF-8 이름도 저장 가능하게
         self._current_dir = current_dir
         if current_dir is not None:
             fields["current_dir"] = current_dir
@@ -706,6 +707,11 @@ class Scanner:
                 self._root_dev = os.stat(self.root_path).st_dev
             except OSError:
                 self._root_dev = None
+            # 대상(NAS) 접근 확인 — 못 열거나(마운트 해제·권한) 재개인데 전에 본 하위가 하나도 안 보이면
+            # (빈 마운트 지점) 진행하지 않는다. 예전엔 남은 디렉터리가 전부 '오류 행'으로 확정돼 거의 0 인
+            # 합계가 '완료'로 굳었고, 마운트가 돌아와도 재개가 그 행들을 다시 훑지 않았다.
+            self._probe_paths = self._load_probe_paths(conn)
+            self._check_root_access(initial=True)
 
             # 루트 디렉터리를 프론티어에 등록
             root_name = os.path.basename(self.root_path.rstrip("/")) or self.root_path
@@ -713,7 +719,7 @@ class Scanner:
                 """INSERT OR IGNORE INTO directories
                    (run_id, parent_id, path, name, depth, status)
                    VALUES (?, NULL, ?, ?, 0, 'pending')""",
-                (self.run_id, self.root_path, root_name),
+                (self.run_id, dbmod.db_text(self.root_path), dbmod.db_text(root_name)),
             )
             conn.commit()
 
@@ -735,7 +741,7 @@ class Scanner:
             return self.run_id
         except Exception as exc:  # 치명적 오류는 기록하고 종료
             if self.run_id is not None:
-                dbmod.update_run(conn, self.run_id, status="error", error=str(exc),
+                dbmod.update_run(conn, self.run_id, status="error", error=dbmod.db_text(str(exc)),
                                  finished_at=time.time())
                 conn.commit()
             self._status = "error"
@@ -746,7 +752,7 @@ class Scanner:
                     if self._mgr_conn is None:
                         self._mgr_conn = dbmod.connect(self.manager_db)
                     mgr.update_scan(self._mgr_conn, self.manager_scan_id,
-                                    status="error", phase="error", error=str(exc),
+                                    status="error", phase="error", error=dbmod.db_text(str(exc)),
                                     finished_at=time.time())
                     self._mgr_conn.commit()
             except Exception:
@@ -759,6 +765,46 @@ class Scanner:
                     self._mgr_conn.close()
                 except Exception:
                     pass
+
+    # ----- 대상(NAS) 접근 확인 — 마운트 해제·장애를 '디렉터리 오류'와 구분 -----
+    def _load_probe_paths(self, conn, limit: int = 8) -> list:
+        """재개 때: 이미 발견한 깊이 1 디렉터리 몇 개(실제 경로) — 빈 마운트 지점 판별용."""
+        try:
+            rows = conn.execute("SELECT path FROM directories WHERE run_id=? AND depth=1 LIMIT ?",
+                                (self.run_id, int(limit))).fetchall()
+            return [dbmod.fs_text(r[0]) for r in rows]
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _root_lost(self) -> Optional[str]:
+        """대상이 통째로 안 보이면 사유 문자열, 정상이면 None.
+
+        ① 루트를 열 수 없음 ② 전에 본 깊이 1 디렉터리가 하나도 없음(마운트가 빠져 빈 마운트 지점만 남은 경우).
+        개별 디렉터리가 지워진 것(churn)·권한 없음은 여기 해당하지 않는다.
+        """
+        try:
+            with os.scandir(self.root_path) as it:
+                next(it, None)
+        except OSError as exc:
+            return "대상 경로에 접근할 수 없습니다(%s: %s)" % (type(exc).__name__, exc)
+        probes = getattr(self, "_probe_paths", None) or []
+        if probes and not any(os.path.lexists(p) for p in probes):
+            return "대상 경로에서 이전에 본 하위 폴더가 하나도 보이지 않습니다(마운트 해제 의심)"
+        return None
+
+    def _check_root_access(self, *, initial: bool = False) -> None:
+        why = self._root_lost()
+        if why:
+            raise RuntimeError(why + " — NAS 마운트를 확인한 뒤 재개하세요. 진행분은 보존됩니다.")
+
+    def _pause_if_root_lost(self) -> None:
+        """디렉터리 오류가 났을 때 호출: 대상 전체 소실이면 자동 일시정지(오류 행으로 확정하지 않음)."""
+        if self.stop_event.is_set():
+            return
+        why = self._root_lost()
+        if why:
+            self._stop_reason = why + " — 자동 일시정지. NAS 복구 후 재개하세요(진행분 보존)."
+            self.stop_event.set()
 
     def _load_progress(self, conn) -> None:
         """재개 시 기존 per-run DB 에서 진행 카운터를 복원한다."""
@@ -836,12 +882,12 @@ class Scanner:
             ext_top = sorted(self._stat_ext.items(), key=lambda kv: kv[1][0],
                              reverse=True)[:500]
             dbmod.replace_scan_stats(conn, self.run_id, "ext",
-                                     [(k, v[0], v[1]) for k, v in ext_top])
+                                     [(dbmod.db_text(k), v[0], v[1]) for k, v in ext_top])
             dbmod.replace_scan_stats(conn, self.run_id, "size",
                                      [(k, v[0], v[1]) for k, v in self._stat_size.items()])
             dbmod.replace_top_files(
                 conn, self.run_id,
-                [(p, b, m, u, a) for (b, p, m, u, a) in self._top_files])
+                [(dbmod.db_text(p), b, m, u, a) for (b, p, m, u, a) in self._top_files])
             conn.commit()
         except Exception:
             pass
@@ -1056,6 +1102,7 @@ class Scanner:
         파일 청크는 유휴 워커가 있으면 그쪽에 넘겨(작업 나눔) 거대 평면 폴더도 병렬로 stat 된다.
         """
         acc = _DirAcc()
+        fpath = dbmod.fs_text(path)        # DB 에 저장된 경로 → 실제 파일시스템 경로(비 UTF-8 이름 복원)
         subdir_count = 0
         children: List[tuple] = []
         err: Optional[str] = None
@@ -1069,7 +1116,7 @@ class Scanner:
         fold_deadline = time.time() + float(self.fold_budget_secs)
 
         try:
-            with os.scandir(path) as it:                  # I/O — 락 밖
+            with os.scandir(fpath) as it:                 # I/O — 락 밖(DB 경로를 실제 경로로 되돌려)
                 for entry in it:
                     if self._stopped():
                         break
@@ -1103,14 +1150,16 @@ class Scanner:
                                 fold_left -= used
                                 fold_dir_bytes += fdb
                                 for op in over:
-                                    children.append((self.run_id, dir_id, op,
-                                                     os.path.basename(op) or op, depth + 1))
+                                    children.append((self.run_id, dir_id, dbmod.db_text(op),
+                                                     dbmod.db_text(os.path.basename(op) or op), depth + 1))
                             else:
                                 children.append(
-                                    (self.run_id, dir_id, entry.path, entry.name, depth + 1))
+                                    (self.run_id, dir_id, dbmod.db_text(entry.path),
+                                     dbmod.db_text(entry.name), depth + 1))
                             continue
                         children.append(
-                            (self.run_id, dir_id, entry.path, entry.name, depth + 1))
+                            (self.run_id, dir_id, dbmod.db_text(entry.path),
+                             dbmod.db_text(entry.name), depth + 1))
                     else:
                         file_chunk.append(entry)
                         if len(file_chunk) >= STAT_CHUNK:
@@ -1120,14 +1169,18 @@ class Scanner:
                 chunk, file_chunk = file_chunk, []
                 self._dispatch_chunk(acc, chunk, path)
         except OSError as exc:
-            err = "%s: %s" % (type(exc).__name__, exc)
+            err = dbmod.db_text("%s: %s" % (type(exc).__name__, exc))
+            # 대상 전체가 사라졌으면(마운트 해제·NAS 장애) 오류 행으로 확정하지 않고 자동 일시정지 —
+            # 아래 완료 블록이 _stopped() 를 보고 이 디렉터리를 미완료로 남긴다(복구 후 재개하면 다시 훑음).
+            self._pause_if_root_lost()
             with self._dlock:
-                self._error_dirs += 1
+                if not self._stopped():
+                    self._error_dirs += 1
 
         # 다른 워커에게 넘긴 청크가 끝날 때까지(그동안 큐를 직접 돕는다 — 교착 없음)
         self._wait_chunks(acc)
         # 디렉터리 자기 inode 분(du 와 동일). 파일 분은 청크 처리에서 이미 acc 에 반영됨.
-        dstat = self._safe_stat_path(path)                # I/O — 락 밖
+        dstat = self._safe_stat_path(fpath)               # I/O — 락 밖
         dir_bytes = _entry_bytes(dstat, self.size_mode) if dstat is not None else 0
 
         with self._dlock:
@@ -1168,6 +1221,8 @@ class Scanner:
             # 비우고, kill -9 면 claimed→pending 으로 되돌아 재스캔되어 안전하다.
             self._discovered += 1
             self._advanced_at = time.time()
+            if depth == 0 and children and not getattr(self, "_probe_paths", None):
+                self._probe_paths = [dbmod.fs_text(c[2]) for c in children[:8]]   # 마운트 소실 판별용
             if depth > 0 and not over_fold:   # 넘김 행의 깊이는 논리값이라 최대 깊이 표시엔 반영 안 함
                 self._maybe_update_depth(self._disc_conn, depth)
             self._flush_progress_locked(self._disc_conn,
@@ -1233,6 +1288,7 @@ class Scanner:
                     used += len(files_chunk)
                     self._dispatch_chunk(acc, files_chunk, d)
             except OSError:
+                self._pause_if_root_lost()
                 with self._dlock:
                     self._error_dirs += 1
         return dir_bytes, [], used
@@ -1318,6 +1374,8 @@ class Scanner:
         """
         t0 = time.monotonic()
         stats = [self._safe_stat(e) for e in entries]   # I/O — 락 밖
+        if None in stats:                               # 파일이 사라짐: 보통 churn, 대상 전체 소실이면 일시정지
+            self._pause_if_root_lost()
         if entries:   # 파일당 stat 소요(EMA) — 청크 나눔을 I/O 대기형에서만 켜기 위한 측정
             us = (time.monotonic() - t0) * 1e6 / len(entries)
             self._stat_us_ema = us if not self._stat_us_ema else (0.7 * self._stat_us_ema + 0.3 * us)
@@ -1559,7 +1617,7 @@ class Scanner:
         child_files = int(agg["f"])
 
         if du_path is not None:
-            total_bytes = self._run_du(du_path, path)
+            total_bytes = self._run_du(du_path, dbmod.fs_text(path))
             if total_bytes < 0:  # du 실패 시 native 로 대체
                 total_bytes = own_bytes + child_bytes
         else:

@@ -2088,7 +2088,7 @@ class ScanController:
                     # parallel_scan 이 ≥1초 간격으로 호출(워커 보고를 모아서) — 작업 단위 완료 때만이
                     # 아니라 큰 디렉터리 안에서도 파일 수/바이트/현재 경로가 올라온다.
                     wl = p.get("workers") or []
-                    wdirs = [w.get("dir") or "" for w in wl]
+                    wdirs = [dbmod.db_text(w.get("dir") or "") for w in wl]   # 비 UTF-8 경로도 저장
                     try:
                         c = dbmod.connect(mdb)
                         mgrmod.update_scan(c, scan_id, processed_dirs=int(p.get("done", 0)),
@@ -2313,6 +2313,10 @@ class ScanController:
             mconn.close()
         if row is None:
             return {"ok": False, "reason": "없는 scan"}
+        # 재개는 멈춘(일시정지/오류) 스캔만 — 완료된 스캔을 '재개'하면 pscan 은 결과 DB 를 지우고 처음부터
+        # 다시 돈다(재개는 로그인 없이 허용되는 작업이라 삭제 보호를 우회하는 셈이었다).
+        if row["status"] not in ("paused", "error"):
+            return {"ok": False, "reason": "멈춘(일시정지/오류) 스캔만 재개할 수 있습니다(현재 %s)." % row["status"]}
         dup = self._active_scan_on(row["root_path"], exclude=scan_id)
         if dup is not None:
             self._log("scan #%s 재개 거부: 같은 경로를 #%s 가 스캔 중(중복 방지)" % (scan_id, dup))
@@ -2506,18 +2510,28 @@ class ScanController:
                 if csid in running:
                     continue                       # 현재 단계 아직 진행 중 → 대기
                 if self._scan_status(csid) == "paused":
-                    continue                       # 사용자가 멈춤 → 자동 진행 안 함
-                nxt = int(sc.get("chain_i", 0) or 0) + 1
-                if nxt < len(paths):
-                    sc["chain_scan_id"] = self._chain_start(
-                        sc, paths[nxt], running, running_paths)  # 실패 시 None → 체인 종료
-                    sc["chain_i"] = nxt
-                else:
+                    # 이번 주기는 멈춘 그대로 둔다(다음 경로로 자동 진행 안 함). 단 다음 차례가 오면 새 주기를
+                    # 첫 경로부터 시작한다 — 비정상 종료(kill -9·OOM·정전) 뒤 재기동 정리로 paused 가 된 체인이
+                    # 예약 전체를 영구히 멈추던 문제. 멈춘 스캔은 그대로 남아 재개·삭제할 수 있다.
+                    if not (sc.get("enabled", True) and setmod.schedule_due(sc, now)):
+                        continue
+                    self._log("예약: 체인 scan #%s 가 멈춘 상태로 다음 차례 도래 — 새 주기 시작" % csid)
+                    sc["chain_scan_id"] = None
                     sc["chain_i"] = 0
-                    sc["chain_scan_id"] = None      # 체인 완료
-                changed = True
-                continue
-            # (2) 진행 중 체인 없음: 활성 + 차례면 첫 경로부터 체인 시작.
+                    changed = True
+                    csid = None                    # → 아래 (2) 로 내려가 새 주기 시작
+                else:
+                    nxt = int(sc.get("chain_i", 0) or 0) + 1
+                    if nxt < len(paths):
+                        sc["chain_scan_id"] = self._chain_start(
+                            sc, paths[nxt], running, running_paths)  # 실패 시 None → 체인 종료
+                        sc["chain_i"] = nxt
+                    else:
+                        sc["chain_i"] = 0
+                        sc["chain_scan_id"] = None      # 체인 완료
+                    changed = True
+                    continue
+            # (2) 진행 중 체인 없음(또는 멈춘 체인을 버림): 활성 + 차례면 첫 경로부터 체인 시작.
             if not sc.get("enabled", True):
                 continue
             if not setmod.schedule_due(sc, now):

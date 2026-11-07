@@ -477,6 +477,11 @@ def write_run_db(db_path: str, root: str, result: dict, *,
         err_text = "워커 실패 %d개(부분 집계): " % len(failed) + "; ".join(
             "%s: %s" % (f.get("path"), f.get("error")) for f in failed[:3])
 
+    # 비 UTF-8 이름(EUC-KR 등)도 저장되게 DB 경계 변환(단일 소스 db.db_text) — 예전엔 스캔이 다 끝난 뒤
+    # 여기서 UnicodeEncodeError 로 결과 전체가 버려졌다.
+    root = dbmod.db_text(root)
+    per_top = [dict(c, path=dbmod.db_text(c.get("path", ""))) for c in per_top]
+    err_text = dbmod.db_text(err_text)
     dbmod.init_db(db_path)
     conn = dbmod.connect(db_path)
     try:

@@ -1524,7 +1524,7 @@ class PortalController:
         want = str(self.settings.get("enroll_token") or "").strip()
         given = str(raw.get("enroll_token") or "").strip()
         if want:
-            if not secrets.compare_digest(given, want):
+            if not authmod.secret_equal(given, want):   # 한글 토큰도 예외 없이(바이트 비교)
                 return {"ok": False, "reason": "enroll_token 불일치", "_status": 401}
         elif self._auth.required():
             return {"ok": False, "_status": 401,
@@ -2150,7 +2150,7 @@ class PortalController:
         tok = (self.settings.get("export_token") or "").strip()
         if not tok:
             return True
-        return hmac.compare_digest(str(given or ""), tok)
+        return authmod.secret_equal(given or "", tok)
 
     # --- 노드 응답시간(핑) ---
     def ping_nodes(self) -> dict:

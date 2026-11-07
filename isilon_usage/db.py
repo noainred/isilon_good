@@ -150,6 +150,41 @@ CREATE TABLE IF NOT EXISTS seen_inodes (
 BUSY_TIMEOUT_MS = 30000
 
 
+# --- 비 UTF-8 파일 이름(예: EUC-KR 로 만든 이름) — DB 경계에서 가역 변환(단일 소스) ---
+# os.scandir 는 디코딩 못 한 바이트를 surrogateescape(U+DC80~U+DCFF)로 돌려주는데, SQLite 는 UTF-8 만 받아
+# 그 이름 하나로 INSERT 가 실패해 스캔이 영구히 끝나지 않았다. 저장 때는 그 문자를 보충 사설영역
+# (U+10FF80~U+10FFFF)으로 옮기고, 파일시스템에 다시 쓸 때 되돌린다. 일반 이름은 그대로(빠른 경로).
+_SUR_LO, _SUR_HI = 0xDC80, 0xDCFF
+_SUR_SHIFT = 0x10FF80 - 0xDC80
+
+
+def db_text(s):
+    """파일시스템 문자열 → DB 저장용(비 UTF-8 바이트를 사설영역 문자로). str 이 아니면 그대로."""
+    if not isinstance(s, str):
+        return s
+    try:
+        s.encode("utf-8")
+        return s
+    except UnicodeEncodeError:
+        out = []
+        for ch in s:
+            o = ord(ch)
+            if _SUR_LO <= o <= _SUR_HI:
+                out.append(chr(o + _SUR_SHIFT))
+            elif 0xD800 <= o <= 0xDFFF:
+                out.append("\ufffd")          # surrogateescape 범위 밖 고아 서로게이트(드묾)
+            else:
+                out.append(ch)
+        return "".join(out)
+
+
+def fs_text(s):
+    """DB 저장 문자열 → 파일시스템 경로(db_text 의 역변환)."""
+    if not isinstance(s, str) or not any(ord(ch) >= _SUR_LO + _SUR_SHIFT for ch in s):
+        return s
+    return "".join(chr(ord(ch) - _SUR_SHIFT) if ord(ch) >= _SUR_LO + _SUR_SHIFT else ch for ch in s)
+
+
 def connect(db_path: str, *, timeout: float = 30.0) -> sqlite3.Connection:
     """스레드별/용도별로 호출하는 SQLite 연결 팩토리.
 

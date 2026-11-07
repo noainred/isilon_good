@@ -52,7 +52,14 @@ def verify_password(pw: str, stored: str) -> bool:
             return False
     if not stored:
         return False
-    return hmac.compare_digest(pw, stored)
+    # 바이트로 비교 — str 끼리면 비 ASCII(한글 비밀번호)에서 compare_digest 가 TypeError(→ 500, 로그인 영구 불가)
+    return secret_equal(pw, stored)
+
+
+def secret_equal(a, b) -> bool:
+    """비밀값 상수시간 비교(단일 소스). 한글 등 비 ASCII 도 안전하게 UTF-8 바이트로 비교한다."""
+    return hmac.compare_digest(str(a if a is not None else "").encode("utf-8", "surrogatepass"),
+                               str(b if b is not None else "").encode("utf-8", "surrogatepass"))
 
 
 def store_password(pw: str, *, encrypt: bool) -> str:
