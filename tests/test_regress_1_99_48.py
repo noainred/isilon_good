@@ -543,11 +543,53 @@ def check_q4_disabled_ping() -> None:
     print("[Q4] OK  비활성 노드는 핑 이력에 '다운'으로 기록하지 않음")
 
 
+# ------------------------------------------------------------------ 3회차(포탈)
+def check_t1_t5_portal_round3() -> None:
+    from isilon_usage import portal as P
+    d = tempfile.mkdtemp(prefix="iu_t1_")
+    try:
+        pc = P.PortalController(os.path.join(d, "hq"))
+        # T1: 잘못된 새 이름으로 같은 서버를 프로비저닝해도 옛 노드·복제본이 지워지지 않는다
+        pc.upsert_node({"id": "keep", "url": "http://10.0.0.5:8765", "token": "t"})
+        os.makedirs(os.path.join(pc.replicas_dir, "keep", "scans"))
+        for bad in ("a/b", "..", "."):
+            r = pc.provision_plan({"host": "10.0.0.5", "port": 8765, "name": bad})
+            assert r["ok"] is False, r
+        assert [n["id"] for n in pc.nodes] == ["keep"] and os.path.isdir(os.path.join(pc.replicas_dir, "keep"))
+        r = pc.provision_plan({"host": "10.0.0.5", "port": 8765, "name": "new1"})     # 정상 교체는 그대로
+        assert r["ok"] and r["registered"] and r["replaced_prev"] == "keep", r
+        assert [n["id"] for n in pc.nodes] == ["new1"]
+        # T2: Infinity 주기 → 상한, 응답이 표준 JSON
+        res = pc.set_backup_config(os.path.join(d, "bk"), float("inf"), 3)
+        assert res["backup_every_hours"] == 8760.0
+        json.loads(json.dumps(res, allow_nan=False))
+        pc2 = P.PortalController(os.path.join(d, "hq"))
+        assert pc2.settings["backup_every_hours"] == 8760.0
+        # T3: 끊긴 노드의 옛 '진행 중' 루트는 처리량·스캔 중에서 제외
+        now = time.time()
+        pc.upsert_node({"id": "dead", "url": "http://10.0.0.9:8765", "token": "t"})
+        pc._cache["dead"] = {"online": False, "ts": now - 9999, "edge_now": now, "overall": P._sanitize_overall(
+            {"roots": [{"root_path": "/a", "status": "sizing", "phase": "sizing", "started_at": now - 10000,
+                        "updated_at": now - 9999, "scanned_bytes": 1e12}]})}
+        tw = {x["id"]: x for x in pc.throughput_windows()["nodes"]}
+        assert tw["dead"]["scanning"] is False and not tw["dead"].get("since_start_bph"), tw["dead"]
+        # T4: 문자열이 아닌 필드 → 사유(500 아님)
+        for body in ({"url": 5}, {"url": "http://x:1", "id": 7}, {"url": "http://x:1", "region": 3}):
+            assert pc.enroll_node(body)["ok"] is False
+        assert pc.provision_plan({"host": 5})["ok"] is False
+        # T5: 비교 API 는 상대 경로 거부(포탈 작업 폴더 기준으로 조용히 바뀌던 것)
+        assert _read("../isilon_usage/portal.py").count('if not qp.startswith("/"):') == 2
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    print("[T1~T4] OK  프로비저닝 이름 선검증·Infinity 상한·끊긴 노드 처리량 제외·문자열 필드 검증")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
             check_s1_sizing_window, check_c2_prune_keeps_active, check_c3_c4_upgrade_bundle, check_c5_dst_schedule,
-            check_c6_c7_cli_inputs, check_q1_q2_replica_compare, check_q3_nested_roots, check_q4_disabled_ping]
+            check_c6_c7_cli_inputs, check_q1_q2_replica_compare, check_q3_nested_roots, check_q4_disabled_ping,
+            check_t1_t5_portal_round3]
 
 
 def main() -> int:

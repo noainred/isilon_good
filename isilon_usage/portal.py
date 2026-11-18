@@ -93,6 +93,13 @@ PORTAL_PROTECTED_POSTS = frozenset({
 OP_RUNTIME_KEYS = ("op_password", "op_password_temp", "op_info_path")
 
 
+def _non_str_field(raw, keys):
+    """raw 에서 값이 있는데 문자열이 아닌 첫 키(없으면 None) — .strip() AttributeError 로 500 이 나던 것 방지."""
+    if not isinstance(raw, dict):
+        return "(body)"
+    return next((k for k in keys if raw.get(k) is not None and not isinstance(raw.get(k), str)), None)
+
+
 def safe_node_id(nid) -> bool:
     """노드 id 가 복제본 폴더 이름으로 안전한지(경로 구분자·'.'/'..'·NUL 금지).
 
@@ -115,7 +122,7 @@ def sanitize_node(raw: dict) -> Optional[dict]:
         url = "http://" + url
     try:
         interval = max(1, int(raw.get("interval_minutes", 30)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         interval = 30
     mode = raw.get("mode", "both")
     if mode not in ("both", "poll", "replicate"):
@@ -124,7 +131,7 @@ def sanitize_node(raw: dict) -> Optional[dict]:
     def _f(v):
         try:
             return float(v or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return 0.0
 
     # 복제 주기: 예약 스캔과 같은 '시작 + 반복주기' 모델(분/시간/일/주/개월).
@@ -135,7 +142,7 @@ def sanitize_node(raw: dict) -> Optional[dict]:
     if raw.get("every") is not None:
         try:
             every = max(1, int(raw.get("every")))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             every = interval if unit == "minute" else 1
     else:
         every = interval if unit == "minute" else 1
@@ -147,7 +154,7 @@ def sanitize_node(raw: dict) -> Optional[dict]:
     def _i(key, lo, hi, dflt):
         try:
             return max(lo, min(hi, int(raw.get(key, dflt))))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return dflt
 
     return {
@@ -232,7 +239,7 @@ def _num(v):
         return v
     try:
         f = float(v)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if f != f or f in (float("inf"), float("-inf")):
         return None
@@ -273,7 +280,7 @@ def _ov_capacity(ov: dict) -> int:
         v = ov.get("total_scanned_bytes")
     try:
         return int(v or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -283,7 +290,7 @@ def _root_capacity(r: dict) -> int:
         v = r.get("scanned_bytes")
     try:
         return int(v or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -597,7 +604,7 @@ class PortalController:
                 out["upgrade_watch_dir"] = str(s.get("upgrade_watch_dir") or "").strip()
                 try:
                     out["upgrade_check_secs"] = max(10, int(s.get("upgrade_check_secs", 60) or 60))
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     pass
                 _src = str(s.get("upgrade_source") or "off").strip().lower()
                 out["upgrade_source"] = _src if _src in ("off", "github") else "off"
@@ -609,12 +616,12 @@ class PortalController:
                                       or "/opt/isilon_release")
                 out["backup_dir"] = str(s.get("backup_dir") or "").strip()
                 try:
-                    out["backup_every_hours"] = max(0.1, float(s.get("backup_every_hours", 1) or 1))
-                except (TypeError, ValueError):
+                    out["backup_every_hours"] = min(8760.0, max(0.1, float(s.get("backup_every_hours", 1) or 1)))
+                except (TypeError, ValueError, OverflowError):
                     pass
                 try:
                     out["backup_keep"] = min(1000, max(1, int(s.get("backup_keep", 100) or 100)))
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     pass
                 out["portal_title"] = str(s.get("portal_title") or "").strip()
                 out["portal_subtitle"] = str(s.get("portal_subtitle") or "").strip()
@@ -624,14 +631,14 @@ class PortalController:
                 out["export_token"] = str(s.get("export_token") or "").strip()
                 try:
                     out["op_ttl_minutes"] = max(1, min(10080, int(s.get("op_ttl_minutes", 30))))
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     pass
                 out["show_update_popup"] = bool(s.get("show_update_popup", False))
                 _lp = str(s.get("log_popup_pos") or "center").strip().lower()
                 out["log_popup_pos"] = _lp if _lp in ("center", "tl", "tr", "bl", "br") else "center"
                 try:
                     out["replica_keep_per_root"] = max(0, min(1000, int(s.get("replica_keep_per_root", 5))))
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     pass
                 _rd = str(s.get("replica_dir") or "").strip()
                 out["replica_dir"] = _rd if os.path.isabs(_rd) else ""
@@ -641,7 +648,7 @@ class PortalController:
                 out["ask_llm_key"] = str(s.get("ask_llm_key") or "")
                 try:
                     out["ask_llm_timeout"] = max(1, min(600, int(s.get("ask_llm_timeout", 20) or 20)))
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     pass
         except (OSError, ValueError):
             pass
@@ -838,7 +845,7 @@ class PortalController:
         복제 중인 노드는 건너뛴다(그 노드는 이번 복제가 끝날 때 같은 규칙으로 정리된다)."""
         try:
             n = int(keep)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return {"ok": False, "reason": "보관 수는 0 이상의 정수여야 합니다(0=무제한)."}
         if not 0 <= n <= 1000:
             return {"ok": False, "reason": "보관 수는 0~1000 사이여야 합니다(0=무제한)."}
@@ -1049,12 +1056,13 @@ class PortalController:
         """자동 백업 폴더·주기(시간)·최대 보관 수를 저장(폴더 비우면 자동 백업 끔)."""
         self.settings["backup_dir"] = str(dest_dir or "").strip()
         try:
-            self.settings["backup_every_hours"] = max(0.1, float(every_hours))
-        except (TypeError, ValueError):
+            # 상한(1년) — 1e999(=Infinity)가 저장되면 응답 JSON 이 깨지고 자동 백업이 영영 안 돌았다(2026-11 리뷰)
+            self.settings["backup_every_hours"] = min(8760.0, max(0.1, float(every_hours)))
+        except (TypeError, ValueError, OverflowError):
             pass
         try:
             self.settings["backup_keep"] = min(1000, max(1, int(keep)))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             pass
         self._save_settings()
         return dict({"ok": True}, **self.backup_info())
@@ -1094,7 +1102,7 @@ class PortalController:
         if check_secs is not None:
             try:
                 self.settings["upgrade_check_secs"] = max(10, int(check_secs))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 pass
         self._save_settings()
         return {"ok": True, "upgrade_watch_dir": self.settings["upgrade_watch_dir"],
@@ -1140,7 +1148,7 @@ class PortalController:
         if "ask_llm_timeout" in body:
             try:
                 self.settings["ask_llm_timeout"] = max(1, min(600, int(body.get("ask_llm_timeout") or 20)))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 pass
         self._save_settings()
         return {"ok": True, "ask_llm_enabled": bool(self.settings.get("ask_llm_enabled"))}
@@ -1604,7 +1612,7 @@ class PortalController:
         if check_secs is not None:
             try:
                 self.settings["upgrade_check_secs"] = max(10, int(check_secs))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 pass
         self._save_settings()
         return self.upgrade_status()
@@ -1704,6 +1712,9 @@ class PortalController:
         elif self._auth.required():
             return {"ok": False, "_status": 401,
                     "reason": "포탈 설정(설치·구성)에서 enroll_token 을 정하고, 엣지 설치 때 --enroll <토큰> 으로 넘기세요."}
+        bad = _non_str_field(raw, ("url", "id", "region", "path", "token"))
+        if bad:
+            return {"ok": False, "reason": "%s 는 문자열이어야 합니다" % bad}
         url = (raw.get("url") or "").strip()
         if not url:
             return {"ok": False, "reason": "url 필요"}
@@ -1934,7 +1945,7 @@ class PortalController:
             try:
                 if float(rt.get("finished_at") or 0) > wm:
                     return True
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 continue
         return False
 
@@ -2206,7 +2217,7 @@ class PortalController:
             try:
                 ftot = int(rt.get("fs_total_bytes") or 0)
                 fused = int(rt.get("fs_used_bytes") or 0)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 continue
             if ftot <= 0:
                 continue
@@ -2246,19 +2257,19 @@ class PortalController:
         out["eta_seconds"] = None
         try:
             recv = float(recv_ts) if recv_ts else None
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             recv = None
         left = None
         if rt.get("eta_seconds") is not None:              # 엣지가 계산한 남은 초(응답 순간 기준)
             try:
                 left = max(0.0, float(rt["eta_seconds"]))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 left = None
         else:                                              # 구버전 엣지 — 포탈이 같은 계산으로 추정
             try:
                 st = float(rt.get("started_at") or 0)
                 up = float(rt.get("updated_at") or 0)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 st = up = 0.0
             if st > 0 and up > st:
                 eta = mgrmod.estimate_eta_seconds(rt.get("phase"), rt.get("processed_dirs"), rt.get("total_dirs"),
@@ -2266,7 +2277,7 @@ class PortalController:
                 if eta is not None:
                     try:
                         lag = max(0.0, float(edge_now) - up) if edge_now else 0.0
-                    except (TypeError, ValueError):
+                    except (TypeError, ValueError, OverflowError):
                         lag = 0.0
                     left = max(0.0, eta - lag)
                     out["eta_by_portal"] = True
@@ -2455,7 +2466,7 @@ class PortalController:
         if "op_ttl_minutes" in body:
             try:
                 self.settings["op_ttl_minutes"] = max(1, min(10080, int(body.get("op_ttl_minutes"))))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 self.settings["op_ttl_minutes"] = 30
         if "show_update_popup" in body:
             self.settings["show_update_popup"] = bool(body.get("show_update_popup"))
@@ -2591,13 +2602,15 @@ class PortalController:
             bph = 0.0
             starts = []
             for r in roots:
-                if r.get("status") not in ("discovering", "sizing"):
+                # 끊긴(offline) 노드의 roots 는 마지막으로 받은 옛 값 — '진행 중'으로 세면 죽은 노드가 스캔 중·
+                # 거대한 처리량으로 표 맨 위에 떴다(2026-11 리뷰; overview 의 active/running 과 같은 규칙).
+                if not n.get("online") or r.get("status") not in ("discovering", "sizing"):
                     continue
                 try:
                     st = float(r.get("started_at") or 0)
                     up = float(r.get("updated_at") or 0) or now
                     sb = float(r.get("scanned_bytes") or 0)
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     continue
                 if st <= 0:
                     continue
@@ -2810,7 +2823,7 @@ class PortalController:
         if fold_depth is not None and not autotune:   # 깊이 접기 오버라이드(직접 스캔 경로에만; 오토튜닝 스캔은 노드 설정값)
             try:
                 payload["fold_depth"] = max(0, min(100000, int(fold_depth)))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 pass
         res = self._edge_post(node, endpoint, payload, timeout=30)
         if res.get("ok"):
@@ -2961,16 +2974,22 @@ class PortalController:
         — 기존 노드가 있으면 그 토큰을 **재사용**(엣지 페어링 유지), 없으면 새로 생성한다.
         overwrite=False 인데 이미 있으면 등록하지 않고 사유를 돌려준다.
         """
+        bad = _non_str_field(raw, ("host", "path", "name", "region", "token", "hq_base", "install"))
+        if bad:
+            return {"ok": False, "reason": "%s 는 문자열이어야 합니다" % bad}
         host = (raw.get("host") or "").strip()
         if not host:
             return {"ok": False, "reason": "host(IP/주소) 필요"}
         try:
             port = int(raw.get("port") or 8765)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             port = 8765
         path = (raw.get("path") or "/mnt/hadoop").strip()
         name = ((raw.get("name") or "").strip()
                 or re.sub(r"[^A-Za-z0-9_.-]+", "-", host).strip("-") or "edge")
+        if not safe_node_id(name):
+            # 먼저 거른다 — 예전엔 같은 서버의 옛 노드(와 복제본)를 지운 뒤에야 새 이름이 거부돼 둘 다 사라졌다
+            return {"ok": False, "reason": "노드 이름에 '/'·'\\'·'.'·'..' 는 쓸 수 없습니다."}
         region = (raw.get("region") or "").strip()
         install = "nohup" if (raw.get("install") == "nohup") else "systemd"
         hq_base = (raw.get("hq_base") or "").strip()
@@ -3000,14 +3019,15 @@ class PortalController:
         except ValueError as exc:
             return {"ok": False, "reason": str(exc)}
         replaced_prev = None
-        if existing and existing["id"] != name:   # 같은 서버가 다른 이름으로 있었으면 옛 항목 제거
-            replaced_prev = existing["id"]
-            self.delete_node(existing["id"])
         rec = {"id": name, "region": region, "url": edge_url, "token": token,
                "alias_local": path, "alias_logical": path}
         if self._get(name) is None:        # 새 노드만 기본 주기·모드(덮어쓰기는 운영자가 바꾼 주기 유지)
             rec.update({"unit": "minute", "every": 30, "mode": "both", "enabled": True})
         node_res = self.upsert_node(rec, partial=True)
+        # 같은 서버가 다른 이름으로 있었으면 옛 항목 제거 — 새 항목이 '등록된 뒤에만'(실패 시 옛 노드·복제본 보존)
+        if node_res.get("ok") and existing and existing["id"] != name:
+            replaced_prev = existing["id"]
+            self.delete_node(existing["id"])
         return {"ok": True, "script": script, "token": token, "edge_url": edge_url,
                 "install": install, "registered": bool(node_res.get("ok")),
                 "overwritten": bool(existing), "replaced_prev": replaced_prev,
@@ -3026,7 +3046,7 @@ class PortalController:
         password = raw.get("ssh_password") or ""
         try:
             ssh_port = int(raw.get("ssh_port") or 22)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             ssh_port = 22
         # 사용자/호스트가 '-o…' 처럼 옵션으로 해석되면 ProxyCommand 등으로 포탈에서 임의 명령이 돈다 —
         # 허용 문자만 받고, 목적지 앞에 '--' 를 둔다(2026-11 리뷰).
@@ -3374,7 +3394,7 @@ class PortalHandler(BaseHTTPRequestHandler):
                 qs = parse_qs(urlparse(self.path).query)
                 try:
                     rng = int(qs.get("range", ["86400"])[0])
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     rng = 86400
                 self._send_json(c.ping_history(rng))
                 return
@@ -3442,15 +3462,15 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/portal/compare":
                 qp = parse_qs(urlparse(self.path).query).get("path", [""])[0]
-                if not qp:
-                    self._send_json({"ok": False, "reason": "path 필요"}, status=400)
+                if not qp.startswith("/"):   # 상대 경로는 포탈 작업 폴더 기준으로 조용히 바뀌었다 → 거부
+                    self._send_json({"ok": False, "reason": "절대 경로(/ 로 시작) 필요"}, status=400)
                 else:
                     self._send_json(c.compare_path(qp))
                 return
             if path == "/api/portal/matrix":
                 qp = parse_qs(urlparse(self.path).query).get("path", [""])[0]
-                if not qp:
-                    self._send_json({"ok": False, "reason": "path 필요"}, status=400)
+                if not qp.startswith("/"):   # 상대 경로는 포탈 작업 폴더 기준으로 조용히 바뀌었다 → 거부
+                    self._send_json({"ok": False, "reason": "절대 경로(/ 로 시작) 필요"}, status=400)
                 else:
                     self._send_json(c.compare_matrix(qp))
                 return
