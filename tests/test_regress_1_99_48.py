@@ -182,7 +182,7 @@ def check_p3_p6_p7_d1_d5_static() -> None:
     i_home = dh.index("try { renderHome(o, j); }")
     assert dh.index("_opTemp = !!j.op_temp") < i_home and dh.index("runningSet = new Set(j.running") < i_home   # D1
     css = _read("theme.css")
-    assert "@media (max-width:900px){ .card{ overflow-x:auto; } }" in css                                   # D5
+    assert re.search(r"^\.card\{ overflow-x:auto; \}$", css, re.M)          # D5(3회차에 전 폭으로 확장)
     print("[P3·P6·P7·D1·D5] OK  노드 이름 잠금·버튼 이름·지역 필터 해제·홈 갱신 순서·좁은 화면 표")
 
 
