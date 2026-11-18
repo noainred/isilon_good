@@ -1202,6 +1202,7 @@ class ScanController:
         st["auto"] = bool(self.settings.get("upgrade_auto"))
         st["url"] = (self.settings.get("upgrade_url") or upgrademod.DEFAULT_UPGRADE_BASE)
         st["url_custom"] = self.settings.get("upgrade_url") or ""
+        st["check_secs"] = int(self.settings.get("upgrade_check_secs", 60) or 60)
         st["token_set"] = bool(self.settings.get("upgrade_token"))   # 값 비노출, 설정 여부만
         st["watch_dir"] = self.settings.get("upgrade_watch_dir", "")
         st["scan_busy"] = busy
@@ -1378,19 +1379,29 @@ class ScanController:
         # 비밀번호/토큰은 화면에 노출하지 않으므로(마스킹), 빈 값으로 오면 기존 값 유지
         if not (new.get("smtp_password") or "").strip():
             new.pop("smtp_password", None)
-        if not (new.get("api_token") or "").strip():
+        if _truthy(new.pop("api_token_clear", False)):
+            new["api_token"] = ""          # 명시적 지우기(빈칸은 '유지'라 화면에서 지울 방법이 없었다 — 2026-11 리뷰)
+        elif not (new.get("api_token") or "").strip():
             new.pop("api_token", None)
-        if not (new.get("isilon_password") or "").strip():
-            new.pop("isilon_password", None)
-        if not (new.get("powerstore_password") or "").strip():
-            new.pop("powerstore_password", None)
-        # 어레이 목록: 빈 비밀번호는 기존 값(같은 id) 유지
+        # 단, 접속 주소(URL)가 바뀌었으면 옛 비밀번호를 새 주소로 넘기지 않는다 — 예전엔 주소만 바꾸고 비밀번호를
+        # 비워 두면 옛 장비의 비밀번호가 새(다른) 호스트로 전송됐다(2026-11 리뷰). 주소를 바꾸면 비밀번호도 다시 입력.
+        def _same_url(a, b):
+            return str(a or "").strip().rstrip("/") == str(b or "").strip().rstrip("/")
+        for _pw, _url in (("isilon_password", "isilon_url"), ("powerstore_password", "powerstore_url")):
+            if not (new.get(_pw) or "").strip():
+                if _url in new and not _same_url(new.get(_url), self.settings.get(_url)):
+                    new[_pw] = ""
+                else:
+                    new.pop(_pw, None)
+        # 어레이 목록: 빈 비밀번호는 기존 값(같은 id·같은 주소) 유지
         if isinstance(new.get("storage_arrays"), list):
-            cur = {a.get("id"): a for a in (self.settings.get("storage_arrays") or [])}
+            olds = [a for a in (self.settings.get("storage_arrays") or []) if isinstance(a, dict)]
             for a in new["storage_arrays"]:
                 if isinstance(a, dict) and not (a.get("password") or "").strip():
-                    old = cur.get(a.get("id")) or cur.get(a.get("name")) or cur.get(a.get("url"))
-                    if old:
+                    old = (next((o for o in olds if a.get("id") and o.get("id") == a.get("id")), None)
+                           or next((o for o in olds if a.get("name") and o.get("name") == a.get("name")), None)
+                           or next((o for o in olds if a.get("url") and _same_url(o.get("url"), a.get("url"))), None))
+                    if old and _same_url(old.get("url"), a.get("url")):
                         a["password"] = old.get("password", "")
         self._sync_op_from_disk()
         merged = dict(self.settings)

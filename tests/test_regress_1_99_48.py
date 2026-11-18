@@ -673,13 +673,60 @@ def check_w1_w2_round4() -> None:
     print("[W1·W2] OK  포탈 비밀번호 4자·encrypt 문자열 해석·atime CSV 수식 주입 방지")
 
 
+def check_x1_x8_settings_round4() -> None:
+    """X1 주소가 바뀌어도 옛 비밀번호 승계 X2 업그레이드 확인 주기 60 으로 되돌림 X3 소스 주소 칸 두 개
+    X4 시간 단위 시각 표시(무시됨) X5 범위 밖 숫자 조용히 보정 X6 시차 배치가 저장 안 한 칸을 되돌림
+    X7 API 토큰을 화면에서 지울 수 없음 X8 노드 수정 시 저장된 상태 초기화."""
+    from isilon_usage import server as SV
+    from isilon_usage import portal as P
+    d = tempfile.mkdtemp(prefix="iu_x1_")
+    try:
+        httpd = SV.serve(os.path.join(d, "data"), host="127.0.0.1", port=0, enable_scan=True)
+        c = httpd.RequestHandlerClass.controller
+        arr = {"id": "u1", "type": "isilon", "name": "u1", "url": "https://u1", "user": "a", "password": "apw"}
+        assert c.update_settings({"storage_arrays": [arr], "isilon_url": "https://i1", "isilon_password": "ipw",
+                                  "upgrade_check_secs": 300})["ok"]
+        c.update_settings({"storage_arrays": [dict(arr, password="")], "isilon_url": "https://i1",
+                           "isilon_password": ""})                                  # 같은 주소·빈칸 → 유지
+        assert c.settings["storage_arrays"][0]["password"] == "apw" and c.settings["isilon_password"] == "ipw"
+        c.update_settings({"storage_arrays": [dict(arr, url="https://other", password="")],
+                           "isilon_url": "https://i2", "isilon_password": ""})        # X1: 주소 바뀜 → 승계 안 함
+        assert c.settings["storage_arrays"][0]["password"] == "" and c.settings["isilon_password"] == "", \
+            (c.settings["storage_arrays"], c.settings["isilon_password"])
+        assert c.upgrade_status()["check_secs"] == 300                                 # X2
+        c.update_settings({"api_token": "tok1"})
+        c.update_settings({"api_token": ""})
+        assert c.settings["api_token"] == "tok1"
+        c.update_settings({"api_token": "", "api_token_clear": True})                  # X7
+        assert c.settings["api_token"] == "" and "api_token_clear" not in c.settings
+        httpd.server_close()
+        pc = P.PortalController(os.path.join(d, "hq"))                                 # X8
+        pc.upsert_node({"id": "e1", "url": "http://10.0.0.1:8765", "token": "t"})
+        with pc._lock:
+            pc._get("e1")["last_status"] = "online"
+            pc._get("e1")["last_error"] = "x"
+        pc.upsert_node({"id": "e1", "url": "http://10.0.0.1:8765", "token": "", "region": "서울"})
+        assert pc._get("e1")["last_status"] == "online" and pc._get("e1")["last_error"] == "x"
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    dh, ph = _read("dashboard.html"), _read("portal.html")
+    assert "setUpgUrl" not in dh and 'id="goUpgSrc"' in dh                             # X3: 한 곳에서만
+    assert '$("upgSecs").value = j.check_secs' in dh
+    assert 'if (u === "hour") return `매 ${y}시간마다`;' in dh and 'if(u==="hour") return `매 ${y}시간마다`;' in ph   # X4
+    assert '(u !== "minute" && u !== "hour") ? "inline-block"' in dh and '(u!=="minute"&&u!=="hour")?"inline-block"' in ph
+    assert "const bad = settingsNumberProblem();" in dh                                  # X5
+    m = re.search(r"async function staggerSchedules\(\) \{[\s\S]*?\n\}", dh)          # X6
+    assert m and "loadSettings()" not in m.group(0) and "_schedLoaded" in m.group(0)
+    print("[X1~X8] OK  주소 바뀌면 비밀번호 재입력·확인 주기 유지·소스 주소 단일화·시간 단위 표시·숫자 검사·시차 배치·토큰 지우기·노드 상태 유지")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
             check_s1_sizing_window, check_c2_prune_keeps_active, check_c3_c4_upgrade_bundle, check_c5_dst_schedule,
             check_c6_c7_cli_inputs, check_q1_q2_replica_compare, check_q3_nested_roots, check_q4_disabled_ping,
             check_t1_t5_portal_round3, check_u1_u3_ui_round3,
-            check_v1_v6_edge_round3, check_w1_w2_round4]
+            check_v1_v6_edge_round3, check_w1_w2_round4, check_x1_x8_settings_round4]
 
 
 def main() -> int:

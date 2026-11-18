@@ -657,11 +657,8 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
                  placeholder="예: /opt/isilon_releases — 이 폴더에 새 버전 isilon_usage-*.tar.gz/.zip 을 두면 자동 적용 후 재시작" />
           <div class="sub" style="margin-top:2px;">현재 버전보다 새 압축본만 적용하고, 기존 코드는 백업합니다.</div>
         </label>
-        <label style="display:block; margin-top:12px;">🌐 업데이트(버전) 소스 URL — 빈값=기본
-          <input id="setUpgUrl" class="setinput mono" style="width:100%;"
-                 placeholder="예: http://사내미러/repository/manager-upgrade/isilon_good/raw/브랜치/download" />
-          <div class="sub" style="margin-top:2px;">새 버전 확인·자동 업그레이드가 이 주소에서 <span class="mono">versions.json</span> 과 패키지를 받습니다. 폐쇄망이면 사내 미러 주소를 넣으세요(위 ‘⬆ 자동 업그레이드’ 카드의 ‘소스 주소’와 같은 값).</div>
-        </label>
+        <div class="sub" style="margin-top:12px;">🌐 업데이트(버전) 소스 주소는 <a href="#" id="goUpgSrc">‘📖 버전 기록’ 탭의 ⬆ 자동 업그레이드 카드</a>에서
+          설정합니다(한 곳에서만 — 예전엔 여기와 그 카드에 같은 값을 고치는 칸이 둘이라, 한쪽에서 바꾼 값이 다른 쪽 저장에 되돌려졌다).</div>
         <div class="sub" style="margin-top:4px;">설정한 비밀번호는 실행한 디렉터리의 <span class="mono">info.MD</span>(권한 600)에 저장됩니다.</div>
       </div>
 
@@ -671,6 +668,8 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
           <input id="setApiToken" type="password" class="setinput mono" style="width:100%;"
                  placeholder="(미설정 — 변경 시에만 입력)" />
         </label>
+        <label class="sub" style="display:flex; gap:5px; align-items:center; margin-top:4px;">
+          <input type="checkbox" id="setApiTokenClear" /> 토큰 지우기(복제를 다시 공개로) — 빈칸은 '기존 값 유지'라서 지우려면 이걸 켜고 저장</label>
       </div>
 
       <div data-scat="storage" style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
@@ -1941,6 +1940,7 @@ async function loadSettings() {
     $("setRetention").value = s.retention_per_root;
     $("setWebhook").value = s.notify_webhook || "";
     $("setApiToken").value = "";
+    if ($("setApiTokenClear")) $("setApiTokenClear").checked = false;
     $("setApiToken").placeholder = s.api_token_set ? "(설정됨 — 변경 시에만 입력)" : "(미설정 — 공개)";
     $("setOpLock").checked = !!s.op_password_set;
     $("setOpPassword").value = "";
@@ -1950,7 +1950,6 @@ async function loadSettings() {
     if ($("setOpTtl") && document.activeElement !== $("setOpTtl")) $("setOpTtl").value = s.op_ttl_minutes || 30;
     if ($("setShowUpdatePopup")) $("setShowUpdatePopup").checked = !!s.show_update_popup;
     if ($("setUpgradeDir")) $("setUpgradeDir").value = s.upgrade_watch_dir || "";
-    if ($("setUpgUrl") && document.activeElement !== $("setUpgUrl")) $("setUpgUrl").value = s.upgrade_url || "";
     $("setIsilonUrl").value = s.isilon_url || "";
     $("setIsilonUser").value = s.isilon_user || "";
     $("setIsilonPass").value = "";
@@ -1991,6 +1990,7 @@ async function loadSettings() {
     storageArrays = (s.storage_arrays || []).map(x => ({...x}));
     renderStorageArrays();
     schedules = (s.schedules || []).map(x => ({...x}));
+    _schedLoaded = JSON.stringify(schedules);
     renderSchedules();
     populateSchedulePaths();
 
@@ -2026,7 +2026,7 @@ async function loadSettings() {
     // 편집 가능 여부
     $("settingsLockMsg").style.display = j.locked ? "block" : "none";
     ["setBackend","setSize","setOFS","setReadonly","setBatch","setSample","setTopN","setRefresh",
-     "setWorkers","setFoldDepth","setDbMaxGb","setMaxDepth","setMinFreeGb","setHardlink","setRetention","setWebhook","setUpgradeDir","setUpgUrl","setApiToken","setOpLock","setOpPassword",
+     "setWorkers","setFoldDepth","setDbMaxGb","setMaxDepth","setMinFreeGb","setHardlink","setRetention","setWebhook","setUpgradeDir","setApiToken","setApiTokenClear","setOpLock","setOpPassword",
      "setIsilonUrl","setIsilonUser","setIsilonPass","setIsilonVerify",
      "setPsUrl","setPsUser","setPsPass","setPsVerify",
      "arrType","arrName","arrUrl","arrUser","arrPass","arrVerify","arrAdd","setMounts","saveSettingsBtn",
@@ -2664,7 +2664,29 @@ async function loadAudit() {
   } catch (e) { $("auditMsg").textContent = " 오류: " + e; }
 }
 
+// 숫자 칸 검사 — 범위 밖·빈칸을 서버가 조용히 보정(70000→65535, 빈칸→기본값)해 '저장됨'으로 보이던 문제(2026-11 리뷰).
+// 저장하기 전에 어느 칸이 왜 안 되는지 알려 준다. (step 은 보지 않는다 — 1234ms 같은 값도 허용)
+const _SET_REQUIRED_NUM = ["setBatch", "setSample", "setTopN", "setRefresh", "setWorkers", "setRetention", "setSmtpPort"];
+function settingsNumberProblem() {
+  for (const el of document.querySelectorAll('#settingsCard input[type="number"]')) {
+    if (!el.id || el.disabled || el.offsetParent === null && !_SET_REQUIRED_NUM.includes(el.id)) continue;
+    const v = el.validity || {};
+    const empty = el.value.trim() === "";
+    if (v.badInput || v.rangeUnderflow || v.rangeOverflow || (empty && _SET_REQUIRED_NUM.includes(el.id))) {
+      const lab = (el.closest("label") ? el.closest("label").textContent : el.id).replace(/\s+/g, " ").trim().slice(0, 40);
+      const rng = (el.min !== "" || el.max !== "") ? ` (${el.min || "…"} ~ ${el.max || "…"})` : "";
+      return {el, msg: `${lab}: ${empty ? "값을 입력하세요" : "범위를 벗어났습니다"}${rng}`};
+    }
+  }
+  return null;
+}
 async function saveSettings() {
+  const bad = settingsNumberProblem();
+  if (bad) {
+    $("settingsMsg").innerHTML = '<span class="err">✗ 저장 안 함 — ' + escHtml(bad.msg) + '</span>';
+    try { bad.el.focus(); } catch (e) { /* 숨은 탭 */ }
+    return;
+  }
   const payload = {
     default_backend: $("setBackend").value,
     default_size_mode: $("setSize").value,
@@ -2683,13 +2705,13 @@ async function saveSettings() {
     retention_per_root: parseInt($("setRetention").value),
     notify_webhook: $("setWebhook").value.trim(),
     api_token: $("setApiToken").value,
+    api_token_clear: $("setApiTokenClear") ? $("setApiTokenClear").checked : false,
     op_lock: $("setOpLock").checked,
     op_password: $("setOpPassword").value,
     op_password_encrypted: $("setOpEncrypt") ? $("setOpEncrypt").checked : false,
     op_ttl_minutes: $("setOpTtl") ? (parseInt($("setOpTtl").value) || 30) : 30,
     show_update_popup: $("setShowUpdatePopup") ? $("setShowUpdatePopup").checked : false,
     upgrade_watch_dir: $("setUpgradeDir") ? $("setUpgradeDir").value.trim() : "",
-    upgrade_url: $("setUpgUrl") ? $("setUpgUrl").value.trim() : "",
     isilon_url: $("setIsilonUrl").value.trim(),
     isilon_user: $("setIsilonUser").value.trim(),
     isilon_password: $("setIsilonPass").value,
@@ -3656,6 +3678,7 @@ async function loadErrors() {
 
 // ---- 예약 스캔 편집 ----
 let schedules = [];
+let _schedLoaded = "[]";   // 마지막으로 서버에서 받은 예약(저장 안 한 변경이 있는지 판별)
 let storageArrays = [];   // 추가 스토리지 어레이(Unity/PowerMax/VMAX/XtremIO/VPLEX 등)
 function renderStorageArrays() {
   const tb = $("arrBody");
@@ -3691,7 +3714,7 @@ function renderSchChain() {
 function scheduleSummary(s) {
   const u = s.unit || "minute", y = s.every || s.every_minutes || 1;
   if (u === "minute") return `매 ${y}분마다`;
-  if (u === "hour") return `${s.at || "00:00"} 기준 · 매 ${y}시간마다`;
+  if (u === "hour") return `매 ${y}시간마다`;   // 시간 단위는 마지막 실행 기준 간격 — 시각(at)은 쓰지 않는다(예전엔 "05:30 기준"으로 보였지만 무시됐다)
   if (u === "day") return `${s.at || "03:00"} · 매 ${y}일마다`;
   if (u === "week") {
     const d = (s.weekdays || []).map(i => SCHED_DOW[i]).join(",");
@@ -3715,7 +3738,7 @@ function fillSchSel(id, n, suf) {
 }
 function updateSchUnit() {
   const u = $("schUnit").value;
-  $("schAt").style.display = (u !== "minute") ? "inline-block" : "none";
+  $("schAt").style.display = (u !== "minute" && u !== "hour") ? "inline-block" : "none";
   $("schWeekdays").style.display = (u === "week") ? "inline-flex" : "none";
   $("schMonth").style.display = (u === "month") ? "inline-block" : "none";
   $("schDay").style.display = (u === "month") ? "inline-block" : "none";
@@ -4301,13 +4324,24 @@ async function startScanPath(path) {
 
 async function staggerSchedules() {
   const msg = $("staggerMsg");
+  // 시차 배치는 '저장된' 예약에 적용된다. 저장 안 한 예약 변경이 있으면 먼저 알린다(예전엔 말없이 사라졌다).
+  if (JSON.stringify(schedules) !== _schedLoaded
+      && !confirm("저장하지 않은 예약 변경이 있습니다. 시차 배치는 저장된 예약에만 적용되고, 저장 안 한 예약 변경은 사라집니다. 계속할까요?")) return;
   msg.textContent = " 배치 중…";
   try {
     const j = await (await fetch("/api/schedules/stagger", {
       method: "POST", headers: {"Content-Type": "application/json"}, body: "{}",
     })).json();
     msg.textContent = j.ok ? ` ✓ 예약 ${j.staggered || 0}개를 시차 배치함` : (" 실패: " + (j.reason || j.error || ""));
-    if (j.ok && typeof loadSettings === "function") loadSettings();
+    if (j.ok) {
+      // 예약 목록만 새로 받는다 — 예전엔 설정 전체를 다시 불러 저장 안 한 다른 칸(top_n 등)까지 되돌렸다(2026-11 리뷰)
+      const r = await (await fetch("/api/settings", {cache: "no-store"})).json();
+      if (r && r.ok && r.settings) {
+        schedules = (r.settings.schedules || []).map(x => ({...x}));
+        _schedLoaded = JSON.stringify(schedules);
+        renderSchedules();
+      }
+    }
   } catch (e) { msg.textContent = " 요청 오류: " + e; }
 }
 
@@ -5109,6 +5143,8 @@ function renderUpgrade(j) {
         + `${j.auto_blocked ? "⚠" : "✓"} 자동설치: </span><span class="sub">${escHtml(j.auto_reason)}</span>` : "");
   if (document.activeElement !== $("upgSource")) $("upgSource").value = j.source_mode || "off";
   if ($("upgUrl") && document.activeElement !== $("upgUrl")) $("upgUrl").value = j.url_custom || "";
+  // 확인 주기도 저장값으로 채운다(예전엔 늘 60 이 떠, 다른 칸만 고쳐 저장해도 300 → 60 으로 되돌아갔다)
+  if ($("upgSecs") && document.activeElement !== $("upgSecs") && j.check_secs) $("upgSecs").value = j.check_secs;
   if ($("upgToken") && document.activeElement !== $("upgToken"))
     $("upgToken").placeholder = j.token_set ? "•••• 저장됨 (바꾸려면 새로 입력)" : "GitHub PAT 등 — 공개면 비움";
   if (document.activeElement !== $("upgAuto")) $("upgAuto").checked = !!j.auto;
@@ -5141,6 +5177,11 @@ $("upgInstallBtn").addEventListener("click", async () => {
   } catch (e) {
     $("upgMsg").innerHTML = '<span class="sub">설치 후 재시작되었습니다. 잠시 후 새로고침하세요.</span>';
   }
+});
+if ($("goUpgSrc")) $("goUpgSrc").addEventListener("click", (e) => {
+  e.preventDefault();
+  const b = document.querySelector('.stab[data-cat="history"]'); if (b) b.click();
+  setTimeout(() => { const u = $("upgUrl"); if (u) { u.scrollIntoView({block: "center"}); u.focus(); } }, 50);
 });
 $("upgSaveBtn").addEventListener("click", async () => {
   const st = {upgrade_source: $("upgSource").value,

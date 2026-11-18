@@ -1665,6 +1665,10 @@ class PortalController:
                 if not raw.get("anchor") and cur.get("anchor"):
                     n["anchor"] = cur.get("anchor")
                 n["last_poll"] = cur.get("last_poll", 0)
+                # 마지막 상태·오류도 승계 — 예전엔 지역만 고쳐도 저장 파일의 상태가 unknown·빈 오류로 초기화됐다
+                for _k in ("last_status", "last_error"):
+                    if _k in cur and not raw.get(_k):
+                        n[_k] = cur.get(_k)
                 self.nodes = [n if x["id"] == n["id"] else x for x in self.nodes]
             else:
                 self.nodes.append(n)

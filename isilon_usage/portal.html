@@ -2294,7 +2294,7 @@ const N_DOW = ["일","월","화","수","목","금","토"]; let nWsel = new Set([
 function nodeSummary(o){
   const u=o.unit||"minute", y=o.every||o.interval_minutes||1;
   if(u==="minute") return `매 ${y}분마다`;
-  if(u==="hour") return `${o.at||"00:00"} 기준 · 매 ${y}시간마다`;
+  if(u==="hour") return `매 ${y}시간마다`;   // 시간 단위는 마지막 복제 기준 간격 — 시각은 쓰지 않음(엣지 예약과 같은 규칙)
   if(u==="day") return `${o.at||"03:00"} · 매 ${y}일마다`;
   if(u==="week"){ const d=(o.weekdays||[]).map(i=>N_DOW[i]).join(","); return `${d||"?"}요일 ${o.at||"03:00"} · 매 ${y}주마다`; }
   if(u==="month") return `${o.start_month||1}월 ${o.start_day||1}일 ${o.at||"04:00"} · 매 ${y}개월마다`;
@@ -2305,7 +2305,7 @@ function buildNW(){ const b=$("nWeekdays"); b.innerHTML="";
     c.onclick=()=>{ nWsel.has(i)?nWsel.delete(i):nWsel.add(i); c.classList.toggle("on"); updateNUnit(); }; b.appendChild(c); }); }
 function fillNSel(id,n,s){ const e=$(id); if(e.options.length) return; for(let i=1;i<=n;i++){ const o=document.createElement("option"); o.value=i; o.textContent=i+s; e.appendChild(o);} }
 function updateNUnit(){ const u=$("nUnit").value;
-  $("nAt").style.display=(u!=="minute")?"inline-block":"none";
+  $("nAt").style.display=(u!=="minute"&&u!=="hour")?"inline-block":"none";
   $("nWeekdays").style.display=(u==="week")?"inline-flex":"none";
   $("nMonth").style.display=(u==="month")?"inline-block":"none"; $("nDay").style.display=(u==="month")?"inline-block":"none";
   $("nUnitLabel").textContent={minute:"분마다",hour:"시간마다",day:"일마다",week:"주마다",month:"개월마다"}[u];
