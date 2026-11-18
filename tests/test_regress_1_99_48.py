@@ -649,13 +649,37 @@ def check_v1_v6_edge_round3() -> None:
     print("[V1~V6] OK  분석 워커 상한·Infinity 400/기본값·비밀값 타입·비밀번호 4자·문자열 불리언")
 
 
+# ------------------------------------------------------------------ 4회차
+def check_w1_w2_round4() -> None:
+    """W1 포탈 비밀번호 길이 규칙 없음·encrypt 문자열 "false" 가 참 W2 atime CSV 수식 주입."""
+    from isilon_usage import portal as P
+    d = tempfile.mkdtemp(prefix="iu_w1_")
+    try:
+        pc = P.PortalController(os.path.join(d, "hq"))
+        for bad in (" ", "a", "abc", "   x   "):
+            r = pc.set_password(bad, False)
+            assert r["ok"] is False and r.get("_status") == 400, (bad, r)
+        r = pc.set_password("abcd1234", "false")
+        assert r["ok"] and r["encrypted"] is False, r
+        assert pc.set_password("abcd1234", True)["encrypted"] is True
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    dh = _read("dashboard.html")
+    m = re.search(r"function atimeCsv\(\)[\s\S]*?const esc = (s => \{[\s\S]*?\});", dh)
+    assert m, "atimeCsv esc 없음"
+    js = "const esc = %s; console.log(JSON.stringify([esc('=HYPERLINK(1)'), esc('@x'), esc('-2+3'), esc('a\"b')]));" % m.group(1)
+    out = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=30).stdout.strip()
+    assert json.loads(out) == ['"\'=HYPERLINK(1)"', '"\'@x"', '"\'-2+3"', '"a""b"'], out
+    print("[W1·W2] OK  포탈 비밀번호 4자·encrypt 문자열 해석·atime CSV 수식 주입 방지")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
             check_s1_sizing_window, check_c2_prune_keeps_active, check_c3_c4_upgrade_bundle, check_c5_dst_schedule,
             check_c6_c7_cli_inputs, check_q1_q2_replica_compare, check_q3_nested_roots, check_q4_disabled_ping,
             check_t1_t5_portal_round3, check_u1_u3_ui_round3,
-            check_v1_v6_edge_round3]
+            check_v1_v6_edge_round3, check_w1_w2_round4]
 
 
 def main() -> int:

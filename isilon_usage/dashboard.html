@@ -4777,7 +4777,10 @@ async function doAtime() {
 }
 function atimeCsv() {
   if (!_atLastRows || !_atLastRows.length) return;
-  const esc = s => '"' + String(s == null ? "" : s).replace(/"/g, '""') + '"';
+  // 수식 주입 방지: = + - @ (탭·CR) 로 시작하는 칸은 앞에 ' — NAS 의 파일 이름 '=HYPERLINK(…)' 가
+  // 엑셀에서 수식으로 실행되던 문제(2026-11 리뷰, OWASP CSV Injection 권고)
+  const esc = s => { s = String(s == null ? "" : s); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return '"' + s.replace(/"/g, '""') + '"'; };
   const lines = [["name", "path", "type", "size_bytes", "atime", "mtime", "owner"].join(",")];
   _atLastRows.forEach(e => lines.push([esc(e.name), esc(e.path), e.is_dir ? "dir" : "file",
     e.size, esc(_atDate(e.atime)), esc(_atDate(e.mtime)), esc(e.owner || ("uid " + e.uid))].join(",")));

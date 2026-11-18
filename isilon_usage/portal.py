@@ -38,7 +38,7 @@ from . import upgrade as upgrademod
 from . import ask as askmod
 from . import netutil
 from .server import ThreadingHTTPServer, browse_dir  # 3.6 폴백 포함 재사용
-from .server import read_json_body, _has_nul, _json_bytes   # 요청 본문 검증·응답 인코딩(엣지와 같은 규칙)
+from .server import read_json_body, _has_nul, _json_bytes, _truthy   # 요청 본문 검증·응답 인코딩(엣지와 같은 규칙)
 from .server import reset_op_password_file      # 임시 비밀번호(엣지와 같은 규칙·같은 함수)
 
 # SSH 실행 입력 검증(옵션 주입 차단): 사용자는 POSIX 계정 이름, 호스트는 IP/호스트명/[IPv6] 만.
@@ -766,7 +766,10 @@ class PortalController:
         """비밀번호 설정/변경/해제. 호출 측(핸들러)에서 인증을 확인한다.
         해제(빈 비밀번호)는 기동 후엔 '비밀번호 없음'으로 두지 않고 새 임시 비밀번호로 초기화한다."""
         pw = str(new_password or "")
-        enc = bool(encrypt)
+        if pw and len(pw.strip()) < 4:
+            # 엣지와 같은 규칙 — 예전엔 공백 한 칸·1자도 로그인 비밀번호가 됐다(2026-11 리뷰). 빈 값=해제는 그대로.
+            return {"ok": False, "_status": 400, "reason": "비밀번호는 4자 이상이어야 합니다."}
+        enc = _truthy(encrypt)
         self._sync_op_from_disk()
         old_info = self.settings.get("op_info_path") or ""
         was_temp = bool(self.settings.get("op_password_temp"))
@@ -3522,9 +3525,9 @@ class PortalHandler(BaseHTTPRequestHandler):
                 if not c.auth_required() and "application/json" not in (self.headers.get("Content-Type") or ""):
                     self._send_json({"ok": False, "reason": "JSON 요청만 허용"}, status=415)
                     return
-                res = c.set_password(body.get("password") or "", bool(body.get("encrypt")))
+                res = c.set_password(body.get("password") or "", body.get("encrypt"))
                 self._audit("password", res.get("ok"))
-                self._send_json(res)
+                self._send_json(res, status=res.pop("_status", None) or 200)
                 return
             # 엣지 자기등록(enroll) — op 로그인 토큰이 아니라 공유 enroll_token 으로 인증하므로
             # 일반 인증 게이트 '앞'에 둔다(엣지는 포탈 로그인 토큰을 갖지 않는다).
