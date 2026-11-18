@@ -832,6 +832,56 @@ class PortalController:
         return {"ok": True, "replica_dir": p, "replica_dir_effective": new,
                 "replica_moved": moved, "replica_note": note}
 
+    def set_replica_keep(self, keep) -> dict:
+        """노드·루트별 복제 스캔 보관 수(0=무제한)를 설정하고, 줄였으면 지금 있는 복제본에도 바로 적용한다.
+
+        복제 중인 노드는 건너뛴다(그 노드는 이번 복제가 끝날 때 같은 규칙으로 정리된다)."""
+        try:
+            n = int(keep)
+        except (TypeError, ValueError):
+            return {"ok": False, "reason": "보관 수는 0 이상의 정수여야 합니다(0=무제한)."}
+        if not 0 <= n <= 1000:
+            return {"ok": False, "reason": "보관 수는 0~1000 사이여야 합니다(0=무제한)."}
+        self.settings["replica_keep_per_root"] = n
+        self._save_settings()
+        removed = skipped = 0
+        if n > 0:
+            with self._lock:
+                busy = set(self._rep_inflight)
+            try:    # 복제본 폴더 기준(노드 목록에서 지운 노드의 옛 복제본도 같은 규칙으로)
+                ids = sorted(x for x in os.listdir(self.replicas_dir)
+                             if os.path.isdir(os.path.join(self.replicas_dir, x)))
+            except OSError:
+                ids = []
+            for nid in ids:
+                if nid in busy:
+                    skipped += 1
+                    continue
+                removed += self._prune_replica_dir(os.path.join(self.replicas_dir, nid), n)
+        return {"ok": True, "replica_keep_per_root": n, "replica_pruned": removed,
+                "replica_prune_skipped": skipped}
+
+    def _prune_replica_dir(self, dest: str, keep: int) -> int:
+        """한 노드 복제본 폴더(meta.json + scans/)에 보관 규칙을 적용 — 지운 스캔 수를 돌려준다."""
+        mp = os.path.join(dest, "meta.json")
+        try:
+            with open(mp, encoding="utf-8") as fh:
+                meta = json.load(fh)
+        except (OSError, ValueError):
+            return 0
+        scans = meta.get("scans") if isinstance(meta, dict) else None
+        if not isinstance(scans, list):
+            return 0
+        kept = self._prune_replica_scans(dest, [x for x in scans if isinstance(x, dict)], keep)
+        if len(kept) == len(scans):
+            return 0
+        meta["scans"] = kept
+        tmp = mp + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as w:
+            json.dump(meta, w, ensure_ascii=False)
+        os.replace(tmp, mp)
+        return len(scans) - len(kept)
+
     def set_release_dir(self, release_dir: str) -> dict:
         """엣지가 받아갈 릴리스 패키지 폴더를 설정(비우면 기본 /opt/isilon_release)."""
         self.settings["release_dir"] = (str(release_dir or "").strip()
@@ -1054,6 +1104,7 @@ class PortalController:
             replica_count = 0
         return dict({"ok": True, "upgrade_watch_dir": self.settings.get("upgrade_watch_dir", ""),
                      "replica_dir": self.settings.get("replica_dir") or "",
+                     "replica_keep_per_root": int(self.settings.get("replica_keep_per_root", 5) or 0),
                      "replica_dir_effective": self.replicas_dir,
                      "replica_dir_default": os.path.join(self.data_dir, "replicas"),
                      "replica_count": replica_count,
@@ -3362,6 +3413,8 @@ class PortalHandler(BaseHTTPRequestHandler):
                     res.update(c.set_release_dir(body.get("release_dir") or ""))
                 if "replica_dir" in body:   # 중앙 복제 DB 저장 경로
                     res.update(c.set_replica_dir(body.get("replica_dir") or ""))
+                if "replica_keep_per_root" in body:   # 노드·루트별 복제 스캔 보관 수
+                    res.update(c.set_replica_keep(body.get("replica_keep_per_root")))
                 if "portal_title" in body or "portal_subtitle" in body:
                     res.update(c.set_title(body.get("portal_title") or "",
                                            body.get("portal_subtitle") or ""))

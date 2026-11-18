@@ -957,9 +957,19 @@ def check_replica_prune_and_pick() -> None:
         json.dump({"scans": kept}, open(os.path.join(rep, "meta.json"), "w"))
         got = pc._replica_db_for("n1", "/data/x")
         assert got and got.endswith("s1.db"), got
+        # 화면에서 보관 수 변경(설정 API) → 저장·조회값 반영 + 지금 있는 복제본에 바로 적용
+        assert pc.upgrade_config()["replica_keep_per_root"] == 5
+        assert not pc.set_replica_keep("x")["ok"] and not pc.set_replica_keep(-1)["ok"]
+        r = pc.set_replica_keep(1)
+        assert r["ok"] and r["replica_pruned"] == 2, r                      # s1(최신 완료)만 남음
+        assert sorted(os.listdir(os.path.join(rep, "scans"))) == ["s1.db"]
+        assert json.load(open(os.path.join(rep, "meta.json")))["scans"][0]["db_filename"] == "s1.db"
+        pc2 = P.PortalController(os.path.join(d, "hq"))                     # 재시작 후에도 유지
+        assert pc2.upgrade_config()["replica_keep_per_root"] == 1
+        assert pc2.set_replica_keep(0)["replica_pruned"] == 0               # 0=무제한(지우지 않음)
     finally:
         shutil.rmtree(d, ignore_errors=True)
-    print("[replica] OK  루트별 보관(최신 완료는 항상 유지)·비교는 완료 스캔 우선")
+    print("[replica] OK  루트별 보관(최신 완료는 항상 유지)·비교는 완료 스캔 우선·화면 설정(저장·즉시 적용·재시작 유지)")
 
 
 def check_overview_bad_meta() -> None:

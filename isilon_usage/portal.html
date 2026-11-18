@@ -702,6 +702,15 @@ th,td{ border-color:rgba(84,110,160,.14); }
       <span class="sub" id="dbDirMsg"></span>
     </div>
     <div class="sub" style="margin-top:8px;">현재 적용 경로: <span class="mono" id="dbDirEff">—</span> · 노드 복제본 <b id="dbDirCount">—</b>개</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px;">
+      <label class="sub" for="repKeep">노드·루트별 보관할 스캔 수</label>
+      <input id="repKeep" class="inp" type="number" min="0" max="1000" step="1" style="width:90px;" />
+      <button id="repKeepSave" class="primary">저장</button>
+      <span class="sub" id="repKeepMsg"></span>
+    </div>
+    <div class="sub" style="margin-top:4px;">반복 스캔마다 복제본이 쌓여 포탈 디스크가 계속 늘지 않도록, 노드의 루트(스캔 경로)마다 최신 N개만 남기고
+      오래된 복제 DB 를 지웁니다. <b>최신 완료 스캔은 N 밖이어도 항상 남깁니다</b>(비교·용량의 기준). 0 = 무제한(지우지 않음).
+      줄이면 저장할 때 지금 있는 복제본에도 바로 적용됩니다(복제 중인 노드는 그 복제가 끝날 때 적용). 엣지의 원본 DB 는 지우지 않습니다.</div>
   </div>
 
   <div class="card" style="margin-bottom:14px;">
@@ -2391,6 +2400,7 @@ async function pLoadUpgradeCfg(){
       if($("dbDirEff")) $("dbDirEff").textContent=j.replica_dir_effective||"—";
       if($("dbDirDefault")) $("dbDirDefault").textContent=j.replica_dir_default||"데이터 폴더/replicas";
       if($("dbDirCount")) $("dbDirCount").textContent=(j.replica_count==null?"—":j.replica_count);
+      _fillIdle($("repKeep"), j.replica_keep_per_root==null?5:j.replica_keep_per_root);
     }
     if(j.ok) renderBackup(j); }catch(e){}
   loadNetUpg();
@@ -2404,6 +2414,23 @@ if($("dbDirSave")) $("dbDirSave").addEventListener("click", async()=>{
     if(j.ok){ msg.textContent=" ✓ 저장됨"+(j.replica_moved?" — 기존 복제본 이동 완료":"")
         +(j.replica_note?" — "+j.replica_note:"");
       if($("dbDirEff")) $("dbDirEff").textContent=j.replica_dir_effective||"—"; }
+    else msg.textContent=" ✗ "+(j.reason||"실패(로그인이 필요할 수 있습니다)");
+  }catch(e){ msg.textContent=" ✗ "+e; }
+});
+// 노드·루트별 복제 스캔 보관 수 저장 — 줄이면 서버가 지금 있는 복제본에도 바로 적용
+if($("repKeepSave")) $("repKeepSave").addEventListener("click", async()=>{
+  const msg=$("repKeepMsg"), el=$("repKeep");
+  const v=parseInt(el.value,10);
+  if(isNaN(v)||v<0||v>1000){ msg.textContent=" ✗ 0~1000 사이 정수(0=무제한)"; return; }
+  if(v>0 && !confirm("노드·루트별 최신 "+v+"개(+최신 완료 스캔)만 남기고 오래된 복제 DB 를 지웁니다.\n엣지의 원본은 지우지 않습니다. 진행할까요?")) return;
+  msg.textContent=" 저장 중…";
+  try{ const j=await (await fetch("/api/portal/settings",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({replica_keep_per_root:v})})).json();
+    if(j.ok){ delete el.dataset.dirty;
+      msg.textContent=" ✓ 저장됨"+(j.replica_keep_per_root===0?" — 무제한(지우지 않음)"
+        :(" — 정리한 복제 스캔 "+(j.replica_pruned||0)+"개"+(j.replica_prune_skipped?(" · 복제 중이라 나중에 정리 "+j.replica_prune_skipped+"개 노드"):"")));
+      pLoadUpgradeCfg(); }
     else msg.textContent=" ✗ "+(j.reason||"실패(로그인이 필요할 수 있습니다)");
   }catch(e){ msg.textContent=" ✗ "+e; }
 });
