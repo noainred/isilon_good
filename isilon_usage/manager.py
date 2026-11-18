@@ -298,6 +298,24 @@ def prune_scans(data_dir: str, *, keep_per_root: Optional[int] = None,
     return {"ok": True, "deleted": deleted, "count": len(deleted)}
 
 
+def estimate_eta_seconds(phase, processed, total_dirs, discovered, elapsed):
+    """남은 시간(초) 추정 — 집계(sizing) 단계에서만: 지금까지의 처리 속도로 남은 디렉터리를 나눈다.
+
+    대시보드 '요약'·홈 카드·포탈이 모두 이 함수 하나를 쓴다(단일 소스). 폴더 찾기(discovering) 단계는
+    전체 디렉터리 수를 아직 모르므로 None. 경과(elapsed)는 스캔 시작부터라 탐색 시간이 포함돼,
+    추정은 보수적(실제보다 길게)으로 나온다."""
+    try:
+        processed = int(processed or 0)
+        elapsed = float(elapsed or 0)
+        total = int(total_dirs or 0) or int(discovered or 0)
+    except (TypeError, ValueError):
+        return None
+    if phase != "sizing" or processed <= 0 or elapsed <= 0:
+        return None
+    rate = processed / elapsed
+    return max(total - processed, 0) / rate if rate > 0 else None
+
+
 def overall_capacity(conn) -> dict:
     """전체 용량 관리 집계.
 
@@ -321,9 +339,13 @@ def overall_capacity(conn) -> dict:
     roots = []
     total_scanned = 0
     total_capacity = 0
+    now_ts = time.time()
     for rp, s in latest_by_root.items():
         cap = done_by_root.get(rp) or s
         cap_bytes = int(cap.get("scanned_bytes") or 0)
+        eta = (estimate_eta_seconds(s.get("phase"), s.get("processed_dirs"), s.get("total_dirs"),
+                                    s.get("discovered_dirs"), now_ts - float(s.get("started_at") or now_ts))
+               if s["status"] in ("discovering", "sizing") else None)
         total_scanned += s.get("scanned_bytes") or 0
         total_capacity += cap_bytes
         roots.append({
@@ -350,6 +372,9 @@ def overall_capacity(conn) -> dict:
             "capacity_scan_id": cap["id"],
             "capacity_finished_at": cap.get("finished_at") if cap.get("status") == "done" else None,
             "capacity_partial": rp not in done_by_root,     # 완료 스캔이 아직 없어 부분 값
+            # 진행 중이면 남은 시간(초)과 끝날 시각(epoch) 추정 — 상태 화면 '요약'과 같은 계산
+            "eta_seconds": eta,
+            "eta_at": (now_ts + eta) if eta is not None else None,
         })
     roots.sort(key=lambda x: x["capacity_bytes"], reverse=True)
 

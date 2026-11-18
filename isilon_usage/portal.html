@@ -321,6 +321,8 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
 .portal .add-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(200px,1fr)); gap:12px; margin-top:12px; }
 .portal .add-opt{ display:flex; flex-direction:column; align-items:flex-start; gap:6px; padding:14px; border:1px solid var(--line-strong); border-radius:10px; }
 .portal details.card > summary{ min-height:32px; }
+.eta-line{ display:flex; flex-wrap:wrap; gap:4px 20px; font-size:13px; color:var(--muted); }
+.eta-line b{ color:var(--text); font-weight:600; }
 </style>
 <!-- THEME:END -->
 <script src="/i18n.js"></script>
@@ -1751,6 +1753,12 @@ function elapsedSpan(started, updated){   // 진행 중 경과를 1초마다 라
 }
 function tickElapsed(){ document.querySelectorAll(".js-elapsed").forEach(el=>{
   el.textContent=fmtDur(elapsedLive(+el.dataset.srv||0)); }); }
+// 완료 예상시각(엣지가 보낸 eta_at, epoch 초) → '오늘 HH:MM' / 'M/D HH:MM' — 엣지 대시보드와 같은 표기
+function fmtEtaAt(at){
+  if(!at) return "";
+  const end=new Date(at*1000), hm=end.toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"});
+  return (end.toDateString()===new Date().toDateString()) ? ("오늘 "+hm) : ((end.getMonth()+1)+"/"+end.getDate()+" "+hm);
+}
 function scanElapsed(n){ const rn=n&&n.running; if(!rn) return 0;   // 진행 중 스캔 경과(초, 라이브)
   return elapsedLive(Math.max(0,(rn.updated_at||rn.started_at||0)-(rn.started_at||0))); }
 function scanProgress(r){   // 루트별 스캔 단계/진행률
@@ -1861,7 +1869,8 @@ function renderPortalDash(){
            : `연결 실패: ${_he(a.error||"")}`}</td></tr>`).join("");
     const roots = arrRows + (n.roots||[]).map(r=>{
       const act=(r.status==="discovering"||r.status==="sizing");
-      const startTxt=(act&&r.started_at)?(" · 시작 "+fmtClock(r.started_at)+" · 진행 "+elapsedSpan(r.started_at, r.updated_at)):"";
+      const startTxt=(act&&r.started_at)?(" · 시작 "+fmtClock(r.started_at)+" · 진행 "+elapsedSpan(r.started_at, r.updated_at)
+        +(r.eta_at?(" · 완료 예상 "+fmtEtaAt(r.eta_at)):"")):"";
       const fsTxt=r.fs_total_bytes?(" of "+fmtBytes(r.fs_total_bytes)+" ("+Math.round((r.fs_used_bytes||0)/r.fs_total_bytes*100)+"%)"):"";
       return `<tr class="rr-${idx}" style="display:none; background:#FFFFFF;"><td></td>
         <td colspan="8" class="sub mono">📁 ${escAttr(r.root_path)} — 조사 ${fmtBytes(r.capacity_bytes!=null?r.capacity_bytes:r.scanned_bytes)}${(r.capacity_scan_id!=null&&r.capacity_scan_id!==r.scan_id)?(" (마지막 완료 기준 · 최신 스캔 "+fmtBytes(r.scanned_bytes)+")"):(r.capacity_partial?" (부분 값)":"")} · fs ${fmtBytes(r.fs_used_bytes)}${fsTxt} · ${scanProgress(r)}${startTxt}${r.finished_at?(" · 완료 "+ago(r.finished_at)):(r.updated_at?(" · 갱신 "+ago(r.updated_at)):"")}</td></tr>`;
@@ -1878,7 +1887,7 @@ function renderPortalDash(){
     const staleB = (n.enabled && n.online && n.last_poll && (Date.now()/1000 - n.last_poll) >= 120)
       ? ` <span class="sub ${freshClass(n.last_poll)}" style="white-space:nowrap;" title="포탈이 이 노드 상태를 마지막으로 받은 시각 — 오래되면 표시 값이 실제와 다를 수 있습니다">⏳ 상태 ${ago(n.last_poll)}</span>` : "";
     const rn=n.running;
-    const runLine = rn ?`<div class="sub" style="white-space:nowrap; margin-top:3px;">⏱ ${elapsedSpan(rn.started_at, rn.updated_at)} · 시작 ${fmtClock(rn.started_at)}</div>` : "";
+    const runLine = rn ?`<div class="sub" style="white-space:nowrap; margin-top:3px;">⏱ ${elapsedSpan(rn.started_at, rn.updated_at)} · 시작 ${fmtClock(rn.started_at)}${rn.eta_at?(" · 완료 예상 <b>"+fmtEtaAt(rn.eta_at)+"</b>"):""}</div>` : "";
     const loopBadge = n.auto_restart ? ` <span style="color:#B42318; font-weight:700; white-space:nowrap;" title="완료되면 같은 설정으로 자동 재시작(반복) 중">🔁 반복 동작 중</span>` : "";
     // 스캔 진행 바(집계 단계 % 가 있을 때만 — 정직하게)
     const _spct = (n.online && n.active_scans>0) ? nodeScanPct(n) : null;

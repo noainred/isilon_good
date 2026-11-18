@@ -321,6 +321,8 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
 .portal .add-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(200px,1fr)); gap:12px; margin-top:12px; }
 .portal .add-opt{ display:flex; flex-direction:column; align-items:flex-start; gap:6px; padding:14px; border:1px solid var(--line-strong); border-radius:10px; }
 .portal details.card > summary{ min-height:32px; }
+.eta-line{ display:flex; flex-wrap:wrap; gap:4px 20px; font-size:13px; color:var(--muted); }
+.eta-line b{ color:var(--text); font-weight:600; }
 </style>
 <!-- THEME:END -->
 <script src="/i18n.js"></script>
@@ -3803,6 +3805,13 @@ const _ICO = {
   info: '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>',
   ok: '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5L16 9.5"/></svg>',
 };
+// 완료 예상시각: 지금 + 남은 초 → '오늘 HH:MM' / 'M/D HH:MM' (요약 카드·홈 카드 공용 — 같은 표기)
+function fmtEtaClock(etaSeconds) {
+  const end = new Date(Date.now() + etaSeconds * 1000);
+  const hm = end.toLocaleTimeString("ko-KR", {hour: "2-digit", minute: "2-digit"});
+  return (end.toDateString() === new Date().toDateString())
+    ? ("오늘 " + hm) : ((end.getMonth() + 1) + "/" + end.getDate() + " " + hm);
+}
 function _fmtKoCount(n) {   // 큰 개수를 '14.4억 개'·'3,820만 개'처럼(정확한 값은 title 로)
   n = Number(n) || 0;
   if (n >= 1e8) return (n / 1e8).toFixed(n >= 1e10 ? 0 : 1).replace(/\.0$/, "") + "억 개";
@@ -3836,7 +3845,9 @@ function renderHome(o, j) {
   const running = roots.filter(r => runningSet.has(r.scan_id));
   const paused = roots.filter(r => r.status === "paused" && !runningSet.has(r.scan_id));
   $("kpiScans").textContent = running.length ? ("진행 " + running.length + "건") : "대기";
-  $("kpiScansSub").textContent = "전체 " + fmtNum(o.scan_count || 0) + "건" + (paused.length ? (" · 멈춤 " + paused.length + "건") : "");
+  const etas = running.map(r => r.eta_seconds).filter(v => v != null);
+  $("kpiScansSub").textContent = (etas.length ? ("완료 예상 " + fmtEtaClock(Math.max.apply(null, etas)) + " · ") : "")
+    + "전체 " + fmtNum(o.scan_count || 0) + "건" + (paused.length ? (" · 멈춤 " + paused.length + "건") : "");
   const cnt = $("scanCnt"); if (cnt) cnt.textContent = (running.length + paused.length) ? String(running.length + paused.length) : "";
 
   // 진행 중인 스캔(+ 멈춘 스캔)
@@ -3857,6 +3868,9 @@ function renderHome(o, j) {
       </div>
       ${pc != null ? `<div class="bar" role="img" aria-label="집계 진행률 ${pc.toFixed(0)}%"><span style="width:${pc.toFixed(1)}%"></span></div>` : ""}
       <div class="sub">지금까지 ${fmtBytes(r.scanned_bytes)} · 파일 ${fmtNum(r.total_files || 0)}개${t ? " · 폴더 " + fmtNum(p) + " / " + fmtNum(t) : ""}</div>
+      <div class="eta-line">${(r.eta_seconds != null)
+        ? `<span>남은 시간 <b>약 ${fmtDur(r.eta_seconds)}</b></span><span>완료 예상 <b>${fmtEtaClock(r.eta_seconds)}</b></span>`
+        : `<span class="sub">완료 예상: ${disc ? "폴더를 다 찾은 뒤(2단계부터) 계산됩니다" : "계산 중…"}</span>`}</div>
       ${canMutate() ? `<div><button class="stopbtn" data-hstop="${r.scan_id}">중지</button></div>` : ""}
     </div>`;
   }).join("");
@@ -4433,17 +4447,7 @@ function render(d) {
   }
   $("eta").textContent = p.eta_seconds == null ? "—" : fmtDur(p.eta_seconds);
   // 완료 예상시각: 지금 + 남은 시간 → 절대 시계 시각(오늘이면 'HH:MM', 다른 날이면 'M/D HH:MM')
-  if (p.eta_seconds == null || !running) {
-    $("etaClock").textContent = "—";
-  } else {
-    const end = new Date(Date.now() + p.eta_seconds * 1000);
-    const hm = end.toLocaleTimeString("ko-KR", {hour: "2-digit", minute: "2-digit"});
-    const today = new Date();
-    const sameDay = end.toDateString() === today.toDateString();
-    $("etaClock").textContent = sameDay
-      ? ("오늘 " + hm)
-      : ((end.getMonth() + 1) + "/" + end.getDate() + " " + hm);
-  }
+  $("etaClock").textContent = (p.eta_seconds == null || !running) ? "—" : fmtEtaClock(p.eta_seconds);
 
   // 로컬 저장 공간 여유(DB 데이터 폴더 / 로그 위치) — DB 폭증·디스크 부족 조기 감지
   const ld = d.local_disk || {};

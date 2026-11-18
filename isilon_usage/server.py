@@ -395,12 +395,7 @@ def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 
         dir_progress = _safe_pct(processed, total_dirs or discovered)
 
     # 처리 속도 / ETA (집계 단계 기준)
-    eta = None
-    if r["phase"] == "sizing" and processed > 0 and elapsed > 0:
-        rate = processed / elapsed
-        remaining = max((total_dirs or discovered) - processed, 0)
-        if rate > 0:
-            eta = remaining / rate
+    eta = mgrmod.estimate_eta_seconds(r["phase"], processed, total_dirs, discovered, elapsed)   # 홈·포탈과 같은 계산
 
     # 최신 자원 샘플 + 시계열(스파크라인용). 구버전 DB(scanner_cpu/du_cpu 없음) 호환.
     _cols = ("ts, mem_percent, mem_used, mem_total, swap_used, cpu_percent, "

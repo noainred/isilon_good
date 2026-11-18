@@ -104,6 +104,35 @@ def check_theme_served_and_bundled() -> None:
     print("[serve] OK  엣지·포탈 모두 /theme.css 응답(text/css), 에이전트 번들에 포함")
 
 
+def check_eta_single_source() -> None:
+    """완료 예상: 상태 화면 '요약'·홈 카드·포탈이 같은 계산(manager.estimate_eta_seconds)을 쓰고, 저장소 목록에 실린다."""
+    import time
+    from isilon_usage import db as dbmod
+    from isilon_usage import manager as M
+    assert M.estimate_eta_seconds("sizing", 100, 1000, 0, 50) == 450.0
+    assert M.estimate_eta_seconds("discovering", 100, 1000, 0, 50) is None     # 폴더 찾기 단계는 계산 안 함
+    assert M.estimate_eta_seconds("sizing", 0, 1000, 0, 50) is None
+    d = tempfile.mkdtemp(prefix="iu_eta_")
+    try:
+        M.init_manager(d)
+        sid = M.register_scan(d, root_path="/x", db_path=os.path.join(d, "a.db"), backend="native", size_mode="disk")
+        c = dbmod.connect(M.manager_db_path(d))
+        M.update_scan(c, sid, status="sizing", phase="sizing", processed_dirs=250, total_dirs=1000,
+                      started_at=time.time() - 100)
+        c.commit()
+        r = M.overall_capacity(c)["roots"][0]
+        c.close()
+        assert r["eta_seconds"] is not None and 290 <= r["eta_seconds"] <= 310, r["eta_seconds"]
+        assert abs(r["eta_at"] - (time.time() + r["eta_seconds"])) < 5
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    src = open(os.path.join(HERE, "server.py"), encoding="utf-8").read()
+    assert "mgrmod.estimate_eta_seconds(" in src, "상태 화면 ETA 가 공용 함수를 쓰지 않음"
+    dash = _read("dashboard.html")
+    assert dash.count("fmtEtaClock(") >= 3, "요약·홈 카드가 같은 완료 시각 표기를 쓰지 않음"
+    print("[eta] OK  남은 시간·완료 예상 = 공용 계산 1개, 저장소 목록(eta_seconds·eta_at)에 실림")
+
+
 def check_inline_js_syntax() -> None:
     """화면 HTML 안의 스크립트 문법 검사(node 가 있으면) — 한 줄 실수로 화면 전체 JS 가 멈추는 것을 배포 전에 잡는다."""
     import subprocess
@@ -131,6 +160,7 @@ def main() -> int:
     check_every_view_reachable()
     check_theme_served_and_bundled()
     check_inline_js_syntax()
+    check_eta_single_source()
     print("모든 테스트 통과 ✅")
     return 0
 

@@ -221,7 +221,7 @@ _OV_NUM_KEYS = ("total_capacity_bytes", "total_scanned_bytes", "root_count", "ac
 _ROOT_NUM_KEYS = ("capacity_bytes", "scanned_bytes", "fs_total_bytes", "fs_used_bytes", "fs_free_bytes",
                   "total_files", "finished_at", "updated_at", "started_at", "processed_dirs",
                   "total_dirs", "discovered_dirs", "files_per_sec", "bytes_per_sec", "scan_id",
-                  "capacity_scan_id")
+                  "capacity_scan_id", "eta_seconds", "eta_at")
 
 
 def _num(v):
@@ -2236,6 +2236,9 @@ class PortalController:
             "processed_dirs": int(rep.get("processed_dirs") or 0),
             "total_dirs": int(rep.get("total_dirs") or 0),
             "count": len(act),
+            # 끝날 예상 시각(epoch) — 여러 개가 돌면 가장 늦게 끝날 것. 엣지가 같은 함수로 계산해 보낸 값
+            # (구버전 엣지는 없음 → None, 화면에서 표시 안 함)
+            "eta_at": max((rt["eta_at"] for rt in act if rt.get("eta_at") is not None), default=None),
         }
 
     def overview(self) -> dict:
