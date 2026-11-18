@@ -2153,7 +2153,7 @@ async function gtStart() {
     const j = await (await fetch("/api/gentest/start", {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify(body)})).json();
-    if (!j.ok) { $("gtMsg").innerHTML = '<span style="color:var(--danger)">시작 실패: ' + (j.error || "") + '</span>'; return; }
+    if (!j.ok) { $("gtMsg").innerHTML = '<span style="color:var(--danger)">시작 실패: ' + escHtml(j.error || "") + '</span>'; return; }
   } catch (e) { $("gtMsg").innerHTML = '<span style="color:var(--danger)">오류: ' + e + '</span>'; return; }
   $("gtStart").disabled = true; $("gtStop").style.display = "";
   $("gtProgWrap").style.display = "block"; $("gtMsg").textContent = "";
@@ -2172,7 +2172,7 @@ async function gtPoll() {
     if (j.done) {
       clearInterval(_gtTimer); _gtTimer = null;
       $("gtStart").disabled = false; $("gtStop").style.display = "none";
-      $("gtMsg").innerHTML = j.error ? ('<span style="color:var(--danger)">' + j.error + '</span>')
+      $("gtMsg").innerHTML = j.error ? ('<span style="color:var(--danger)">' + escHtml(j.error) + '</span>')
         : (j.stopped ? '<span style="color:var(--warn)">중지됨</span>'
         : '<span style="color:var(--ok)">✓ 완료 — 이제 이 경로를 스캔해 보세요.</span>');
     }
@@ -2217,7 +2217,7 @@ async function depStart() {
   try {
     const j = await (await fetch("/api/analyze/start", {
       method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})).json();
-    if (!j.ok) { $("depMsg").innerHTML = '<span style="color:var(--danger)">시작 실패: ' + (j.error || "") + '</span>'; return; }
+    if (!j.ok) { $("depMsg").innerHTML = '<span style="color:var(--danger)">시작 실패: ' + escHtml(j.error || "") + '</span>'; return; }
   } catch (e) { $("depMsg").innerHTML = '<span style="color:var(--danger)">오류: ' + e + '</span>'; return; }
   $("depStartBtn").disabled = true; $("depStopBtn").style.display = "";
   $("depProgWrap").style.display = "block"; $("depMsg").textContent = "";
@@ -2235,7 +2235,7 @@ async function depPoll() {
     if (j.done) {
       clearInterval(_depTimer); _depTimer = null;
       $("depStartBtn").disabled = false; $("depStopBtn").style.display = "none";
-      if (j.error) { $("depMsg").innerHTML = '<span style="color:var(--danger)">' + j.error + '</span>'; return; }
+      if (j.error) { $("depMsg").innerHTML = '<span style="color:var(--danger)">' + escHtml(j.error) + '</span>'; return; }
       $("depMsg").innerHTML = '<span style="color:var(--ok)">✓ 분석 완료</span>';
       if (j.result) depRender(j.result);
     }
@@ -2299,7 +2299,7 @@ async function tsRun() {
   _tsBusy = true; $("tsMsg").textContent = "진단 중… (약 1초)";
   try {
     const j = await (await fetch("/api/troubleshoot?sample=1.0", {cache: "no-store"})).json();
-    if (!j.ok) { $("tsMsg").innerHTML = '<span style="color:var(--danger)">' + (j.error || "진단 불가") + '</span>'; return; }
+    if (!j.ok) { $("tsMsg").innerHTML = '<span style="color:var(--danger)">' + escHtml(j.error || "진단 불가") + '</span>'; return; }
     if (!j.running) {
       $("tsMsg").innerHTML = '<span class="sub">' + (j.msg || "실행 중인 스캔이 없습니다.") + '</span>';
       $("tsResult").style.display = "none";
@@ -2602,7 +2602,7 @@ async function tuneRun() {
   const p = $("tunePath").value.trim();
   try {
     const j = await (await fetch("/api/systune" + (p ? "?path=" + encodeURIComponent(p) : ""), {cache: "no-store"})).json();
-    if (!j.ok) { $("tuneMsg").innerHTML = '<span style="color:var(--danger)">' + (j.error || "점검 불가") + '</span>'; return; }
+    if (!j.ok) { $("tuneMsg").innerHTML = '<span style="color:var(--danger)">' + escHtml(j.error || "점검 불가") + '</span>'; return; }
     $("tuneMsg").textContent = ""; tuneRender(j);
   } catch (e) { $("tuneMsg").innerHTML = '<span style="color:var(--danger)">오류: ' + e + '</span>'; }
 }
@@ -2720,11 +2720,17 @@ async function saveSettings() {
       body: JSON.stringify({settings: payload}),
     })).json();
     if (j.ok) {
+      // 비밀번호를 바꿨으면 서버가 옛 세션을 모두 만료하고 새 토큰을 준다 — 그 토큰으로 갈아끼운다.
+      if (j.token) {
+        try { sessionStorage.setItem("opToken", j.token); } catch (e) {}
+        _opRequired = true;
+        startOpCountdown(j.ttl || 10);
+      }
       $("settingsMsg").innerHTML = '<span style="color:var(--ok)">✓ 저장됨(값은 보정될 수 있음)</span>';
       await loadSettings();   // 저장된(보정된) 값으로 다시 채우고 적용
       poll();
     } else {
-      $("settingsMsg").innerHTML = '<span class="err">저장 실패: ' + (j.reason || j.error || "") + '</span>';
+      $("settingsMsg").innerHTML = '<span class="err">저장 실패: ' + escHtml(j.reason || j.error || "") + '</span>';
     }
   } catch (e) {
     $("settingsMsg").innerHTML = '<span class="err">오류: ' + e + '</span>';
@@ -2914,7 +2920,7 @@ async function startScan() {
         _autotuneTracked = null;
         await pollAutotune();
       } else {
-        $("startMsg").innerHTML = '<span class="err">오토튜닝 시작 실패: ' + (j.error || j.reason || "") + '</span>';
+        $("startMsg").innerHTML = '<span class="err">오토튜닝 시작 실패: ' + escHtml(j.error || j.reason || "") + '</span>';
       }
     } else {
       let j = await reqScanStart(path, false);
@@ -2934,7 +2940,7 @@ async function startScan() {
         selectedScan = j.scan_id; userPicked = true;
         updateStartButton(1);   // 즉시 빨간 "스캔 중…"
       } else {
-        $("startMsg").innerHTML = '<span class="err">시작 실패: ' + (j.reason || j.error || "") + '</span>';
+        $("startMsg").innerHTML = '<span class="err">시작 실패: ' + escHtml(j.reason || j.error || "") + '</span>';
       }
     }
   } catch (e) {
@@ -3540,7 +3546,7 @@ async function runDiff() {
   $("diffSummary").textContent = "비교 중…";
   try {
     const j = await (await fetch(`/api/diff?base=${base}&target=${target}`, {cache:"no-store"})).json();
-    if (!j.ok) { $("diffSummary").innerHTML = '<span class="err">' + (j.reason||"") + '</span>'; return; }
+    if (!j.ok) { $("diffSummary").innerHTML = '<span class="err">' + escHtml(j.reason||"") + '</span>'; return; }
     if (j.root_path) diffRoot = j.root_path;
     const sign = j.total_delta >= 0 ? "+" : "−";
     $("diffSummary").innerHTML = `전체 변화: <b>${sign}${fmtBytes(Math.abs(j.total_delta))}</b> `
@@ -3568,7 +3574,7 @@ async function loadFolderHistory(p) {
   $("fhOut").textContent = "이력 불러오는 중…";
   try {
     const j = await (await fetch(`/api/folder-history?root=${encodeURIComponent(diffRoot)}&path=${encodeURIComponent(path)}`, {cache:"no-store"})).json();
-    if (!j.ok) { $("fhOut").innerHTML = '<span class="err">'+(j.reason||"")+'</span>'; return; }
+    if (!j.ok) { $("fhOut").innerHTML = '<span class="err">'+ escHtml(j.reason||"") +'</span>'; return; }
     if (!j.points || !j.points.length) { $("fhOut").innerHTML = '<span class="sub">이 경로를 가진 완료 스캔이 없습니다(경로가 정확한지 확인하세요).</span>'; return; }
     const rows = j.points.map(pt => {
       const bd = pt.bytes_delta||0, fd = pt.files_delta||0;
@@ -3748,7 +3754,8 @@ function renderOverview(j) {
   allScans = j.scans || [];
   populateSchedulePaths();
   const o = j.overall || {};
-  $("ovTotal").textContent = fmtBytes(o.total_scanned_bytes);
+  // 조사 용량 = 루트별 '마지막 완료 스캔' 합(멈춤·오류·진행 중인 부분 값이 용량을 덮지 않게). 구버전 응답은 예전 값.
+  $("ovTotal").textContent = fmtBytes(o.total_capacity_bytes != null ? o.total_capacity_bytes : o.total_scanned_bytes);
   $("ovRoots").textContent = fmtNum(o.root_count);
   $("ovScans").textContent = fmtNum(o.scan_count);
   $("ovActive").textContent = fmtNum(o.active_scans);
@@ -3790,7 +3797,12 @@ function renderOverview(j) {
     body.innerHTML = '<tr><td colspan="8" style="color:var(--muted)">등록된 스캔이 없습니다.</td></tr>';
   } else {
     body.innerHTML = roots.map(r => {
-      const pct = r.fs_used_bytes ? (r.scanned_bytes / r.fs_used_bytes * 100) : 0;
+      const cap = (r.capacity_bytes != null) ? r.capacity_bytes : r.scanned_bytes;
+      const pct = r.fs_used_bytes ? (cap / r.fs_used_bytes * 100) : 0;
+      // 최신 스캔이 완료가 아니면(진행·멈춤·오류) 용량은 마지막 완료 기준 — 최신 스캔의 값은 아래 줄에 따로
+      const capNote = (r.capacity_scan_id != null && r.capacity_scan_id !== r.scan_id)
+        ? `<div class="sub" title="용량은 마지막 완료 스캔(#${r.capacity_scan_id}) 기준">#${r.scan_id} ${statusKo[r.status] || escHtml(r.status)}: ${fmtBytes(r.scanned_bytes)}</div>`
+        : (r.capacity_partial ? '<div class="sub" title="완료된 스캔이 아직 없어 부분 값입니다">부분 값</div>' : "");
       const endt = r.finished_at || r.updated_at;
       const el = (r.started_at && endt) ? (endt - r.started_at) : null;
       const running = runningSet.has(r.scan_id);
@@ -3811,7 +3823,7 @@ function renderOverview(j) {
       return `<tr class="ovrow" data-scan="${r.scan_id}" style="cursor:pointer;" title="클릭: 이 스캔 결과를 ‘디렉터리 분석’에서 보기">
         <td class="path" title="${escHtml(r.root_path)}">${escHtml(r.root_path)}</td>
         <td>${escHtml(r.hostname || "—")}</td>
-        <td class="num">${fmtBytes(r.scanned_bytes)}</td>
+        <td class="num">${fmtBytes(cap)}${capNote}</td>
         <td class="num">${fmtBytes(r.fs_used_bytes)}</td>
         <td class="num">${pct.toFixed(1)}%</td>
         <td class="num">${el == null ? "—" : fmtDur(el)}</td>
@@ -4423,7 +4435,7 @@ function _atAgeDays(ts) {
 function renderAtime(j) {
   const out = $("atOut"), note = $("atNote");
   if (!j || !j.ok) {
-    out.innerHTML = '<span class="err">' + ((j && j.error) || "조회 실패") + "</span>";
+    out.innerHTML = '<span class="err">' + escHtml((j && j.error) || "조회 실패") + "</span>";
     note.textContent = ""; $("atCsv").style.display = "none"; _atLastRows = null;
     return;
   }

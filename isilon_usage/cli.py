@@ -97,6 +97,29 @@ def _prepare_run(args, path: str):
     return data_dir, db_path, manager_db, scan_id
 
 
+def _initial_settings(args, mount_bases) -> dict:
+    """serve/run 의 CLI 플래그 → 초기 설정(settings.json 이 없을 때만 적용; 이후엔 웹 편집값 우선)."""
+    initial_settings = {
+        "default_backend": args.backend,
+        "default_size_mode": args.size_mode,
+        "default_one_file_system": args.one_file_system,
+        "batch_size": args.batch_size,
+        "sample_interval": args.sample_interval,
+        "mount_bases": mount_bases,
+        "api_token": getattr(args, "api_token", "") or "",
+    }
+    # 이 하위 명령에 없는 옵션은 넣지 않는다 — 예전엔 serve 에 --fold-depth 가 없는데 0 을 넣어
+    # 첫 설치 기본값(fold_depth=4)을 '접기 끔'으로 덮었다(2026-11 리뷰). 없으면 settings 기본값.
+    for key, attr in (("scan_workers", "workers"), ("scan_max_depth", "max_depth"),
+                      ("fold_depth", "fold_depth"), ("db_max_gb", "db_max_gb"),
+                      ("min_free_gb", "min_free_gb")):
+        if getattr(args, attr, None) is not None:
+            initial_settings[key] = getattr(args, attr)
+    if hasattr(args, "no_hardlink_dedup"):
+        initial_settings["hardlink_dedup"] = not args.no_hardlink_dedup
+    return initial_settings
+
+
 def _run_server(args, *, initial_path: Optional[str]) -> int:
     """serve/run 공통: 웹 스캔 가능한 대시보드 서버를 띄운다.
 
@@ -116,21 +139,7 @@ def _run_server(args, *, initial_path: Optional[str]) -> int:
     mount_bases = [os.path.abspath(b) for b in (getattr(args, "mount_base", None) or [])]
 
     # CLI 플래그 → 초기 설정(settings.json 이 없을 때만 적용; 이후엔 웹 편집값 우선)
-    initial_settings = {
-        "default_backend": args.backend,
-        "default_size_mode": args.size_mode,
-        "default_one_file_system": args.one_file_system,
-        "batch_size": args.batch_size,
-        "scan_workers": getattr(args, "workers", 1),
-        "scan_max_depth": getattr(args, "max_depth", 0),
-        "fold_depth": getattr(args, "fold_depth", 0),
-        "db_max_gb": getattr(args, "db_max_gb", 0),
-        "min_free_gb": getattr(args, "min_free_gb", 0),
-        "hardlink_dedup": not getattr(args, "no_hardlink_dedup", False),
-        "sample_interval": args.sample_interval,
-        "mount_bases": mount_bases,
-        "api_token": getattr(args, "api_token", "") or "",
-    }
+    initial_settings = _initial_settings(args, mount_bases)
     if getattr(args, "reset_settings", False):
         mgrmod.init_manager(data_dir)
         setmod.save(data_dir, initial_settings)   # 기존 settings.json 을 CLI 값으로 덮어씀
@@ -230,6 +239,15 @@ def cmd_scan(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGTERM, handle_sigint)
 
     data_dir, db_path, manager_db, scan_id = _prepare_run(args, path)
+    # 재개(서버 화면·resume 명령)가 같은 옵션으로 이어 가도록 스캔 행에 기록(서버 시작과 같은 규칙).
+    _mc = dbmod.connect(manager_db)
+    try:
+        mgrmod.update_scan(_mc, scan_id, opt_one_fs=1 if args.one_file_system else 0,
+                           opt_fold_depth=int(args.fold_depth or 0),
+                           opt_max_depth=int(args.max_depth or 0))
+        _mc.commit()
+    finally:
+        _mc.close()
     print(f"스캔 시작: {path} (scan #{scan_id}, backend={args.backend})")
     print(f"  이번 DB: {db_path}")
     t0 = time.time()
@@ -247,9 +265,39 @@ def cmd_scan(args: argparse.Namespace) -> int:
         stop_event=stop, with_monitor=True,
         manager_db=manager_db, manager_scan_id=scan_id,
     )
-    print(f"완료(scan #{scan_id}). 소요 {time.time()-t0:.1f}s. "
-          f"대시보드로 보려면: python -m isilon_usage serve --data-dir {data_dir}")
-    return 0
+    rc = _report_end(manager_db, scan_id, time.time() - t0)
+    if rc == 0:
+        print(f"대시보드로 보려면: python -m isilon_usage serve --data-dir {data_dir}")
+    return rc
+
+
+def _report_end(manager_db: str, scan_id: int, secs: float) -> int:
+    """스캔 종료 상태를 출력하고 종료 코드를 돌려준다: 완료 0 · 일시정지/중지 3 · 오류 1.
+
+    예전엔 디스크 가드·마운트 소실로 멈추거나 오류가 나도 '완료'를 찍고 0 을 돌려줘, cron/스크립트가
+    실패를 알 수 없었다(2026-11 리뷰)."""
+    st, reason = "unknown", ""
+    try:
+        mc = dbmod.connect(manager_db)
+        try:
+            row = mgrmod.get_scan(mc, scan_id)
+        finally:
+            mc.close()
+        if row is not None:
+            d = dict(row)
+            st = d.get("status") or "unknown"
+            reason = d.get("error") or d.get("note") or ""
+    except Exception:  # noqa: BLE001
+        pass
+    if st == "done":
+        print(f"완료(scan #{scan_id}). 소요 {secs:.1f}s.")
+        return 0
+    if st == "paused":
+        print(f"일시정지(scan #{scan_id}) — 완료되지 않았습니다. 소요 {secs:.1f}s. {reason}".rstrip()
+              + f"\n  이어서 하려면: python -m isilon_usage resume {scan_id}", file=sys.stderr)
+        return 3
+    print(f"오류로 끝남(scan #{scan_id}, 상태 {st}). 소요 {secs:.1f}s. {reason}".rstrip(), file=sys.stderr)
+    return 1
 
 
 def cmd_reset_password(args: argparse.Namespace) -> int:
@@ -378,6 +426,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
     if row["backend"] == "pscan":   # pscan 은 행 단위 재개 상태가 없다(서버도 재스캔으로 처리)
         print("pscan 스캔은 재개할 수 없습니다 — 새로 스캔하세요.", file=sys.stderr)
         return 2
+    if row["status"] == "done":     # 완료 스캔을 '재개'하면 결과를 다시 쓰며 망가뜨린다(서버와 같은 규칙)
+        print(f"scan #{args.scan} 은 이미 완료됐습니다 — 새로 스캔하세요.", file=sys.stderr)
+        return 2
     busy = _scan_writer_alive(row["db_path"])
     if busy:   # 서버(또는 다른 CLI)가 같은 per-run DB 에 쓰는 중 — 두 번째 writer 금지
         print("scan #%d 은 이미 실행 중입니다(pid %d). 서버 화면에서 재개/중지하세요."
@@ -389,12 +440,18 @@ def cmd_resume(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGTERM, lambda *a: stop.set())
     print(f"재개: scan #{args.scan}  {row['root_path']}")
     t0 = time.time()
+    rd = dict(row)
+
+    def _opt(key, dflt):            # 시작 때 기록한 옵션 우선(없으면 현재 설정) — 서버 재개와 같은 규칙
+        v = rd.get(key)
+        return int(v) if v is not None else dflt
     run_scan(
         row["db_path"], row["root_path"],
         backend=row["backend"], size_mode=row["size_mode"],
+        one_file_system=bool(_opt("opt_one_fs", 0)),
         batch_size=s["batch_size"], workers=s["scan_workers"],
-        max_depth=int(s.get("scan_max_depth", 0) or 0),
-        fold_depth=int(s.get("fold_depth", 0) or 0),
+        max_depth=_opt("opt_max_depth", int(s.get("scan_max_depth", 0) or 0)),
+        fold_depth=_opt("opt_fold_depth", int(s.get("fold_depth", 0) or 0)),
         db_max_bytes=int(s.get("db_max_gb", 0) or 0) * (1024 ** 3),
         hardlink_dedup=bool(s.get("hardlink_dedup", True)),
         min_free_bytes=int(s.get("min_free_gb", 0) or 0) * (1024 ** 3),
@@ -402,8 +459,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         stop_event=stop, with_monitor=True,
         manager_db=mgrmod.manager_db_path(data_dir), manager_scan_id=args.scan,
     )
-    print(f"완료(scan #{args.scan}). 소요 {time.time()-t0:.1f}s.")
-    return 0
+    return _report_end(mgrmod.manager_db_path(data_dir), args.scan, time.time() - t0)
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
@@ -655,7 +711,9 @@ def cmd_pscan(args: argparse.Namespace) -> int:
         sys.stdout.flush()
     res = psmod.parallel_scan(root, processes=args.processes, size_mode=args.size_mode,
                               node_mounts=node_mounts, threads_per_proc=args.threads,
-                              on_progress=_prog)
+                              on_progress=_prog,
+                              one_file_system=bool(getattr(args, "one_file_system", False)),
+                              hardlink_dedup=not getattr(args, "no_hardlink_dedup", False))
     print()
     if not res.get("ok"):
         print("  실패: %s" % res.get("error"), file=sys.stderr)
@@ -1008,6 +1066,10 @@ def build_parser() -> argparse.ArgumentParser:
     pps.add_argument("--size-mode", choices=["disk", "apparent"], default="disk")
     pps.add_argument("--node-mount", action="append", default=None,
                      help="멀티노드: 같은 트리의 다른 노드 마운트(여러 번 지정 → 라운드로빈 분산)")
+    pps.add_argument("--one-file-system", "-x", action="store_true",
+                     help="다른 파일시스템(하위 마운트)으로 넘어가지 않음(native 의 -x 와 같음)")
+    pps.add_argument("--no-hardlink-dedup", action="store_true",
+                     help="하드링크를 링크마다 용량에 셈(기본은 inode 당 한 번 — native 와 같음)")
     pps.add_argument("--compare", action="store_true",
                      help="프로세스 1·2·4·8 로 확장성(처리량) 비교")
     pps.add_argument("--json", action="store_true", help="결과를 JSON 으로 출력")

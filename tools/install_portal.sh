@@ -28,12 +28,13 @@ MIRROR_ROOT="${IU_MIRROR_ROOT:-}"          # 사내 폐쇄망 미러 루트(회�
 BASE_URL=""                                # 다운로드 베이스 직접 지정(비우면 미러: MIRROR_ROOT/BRANCH)
 
 # ===== 인자로 덮어쓰기 =====
+SET_PORT=""; SET_DATA_DIR=""; SET_INSTALL_DIR=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --port)        PORT="$2";        shift 2;;
+    --port)        PORT="$2"; SET_PORT=1;        shift 2;;
     --branch)      BRANCH="$2";      shift 2;;
-    --data-dir)    DATA_DIR="$2";    shift 2;;
-    --install-dir) INSTALL_DIR="$2"; shift 2;;
+    --data-dir)    DATA_DIR="$2"; SET_DATA_DIR=1;    shift 2;;
+    --install-dir) INSTALL_DIR="$2"; SET_INSTALL_DIR=1; shift 2;;
     --tmp-dir)     TMP_DIR="$2";     shift 2;;
     --token|--github-token) GITHUB_TOKEN="$2"; shift 2;;
     --base-url|--mirror) BASE_URL="$2"; shift 2;;
@@ -41,6 +42,43 @@ while [ $# -gt 0 ]; do
     *) echo "알 수 없는 옵션: $1 (도움말: --help)"; exit 1;;
   esac
 done
+
+# ===== 재실행(업그레이드) 시 이전 설치 값 유지 =====
+# 옵션 없이 다시 실행하면 예전엔 포트·데이터 경로가 기본값으로 바뀌어, 데이터 폴더를 잃은 것처럼
+# 빈 상태로 뜨거나 포탈이 엣지를 못 찾았다(2026-11 리뷰). 명시하지 않은 값은 기존 서비스 유닛에서 읽어 쓴다.
+UNIT="/etc/systemd/system/${SERVICE}.service"
+if [ -f "$UNIT" ] && command -v python3 >/dev/null 2>&1; then
+  eval "$(python3 - "$UNIT" <<'PY'
+import shlex, sys
+prev = {}
+try:
+    for ln in open(sys.argv[1], encoding="utf-8"):
+        ln = ln.strip()
+        if ln.startswith("WorkingDirectory="):
+            prev["INSTALL_DIR"] = ln.split("=", 1)[1].replace("%%", "%")
+        elif ln.startswith("ExecStart="):
+            a = [x.replace("%%", "%").replace("$$", "$") for x in shlex.split(ln.split("=", 1)[1])]
+            for flag, var in (("--data-dir", "DATA_DIR"), ("--port", "PORT"), ("--mount-base", "MOUNT_BASE")):
+                if flag in a and a.index(flag) + 1 < len(a):
+                    prev[var] = a[a.index(flag) + 1]
+except Exception:
+    pass
+for k, v in prev.items():
+    print("PREV_%s=%s" % (k, shlex.quote(v)))
+PY
+)"
+fi
+if [ -z "$SET_PORT" ] && [ -n "${PREV_PORT:-}" ]; then PORT="$PREV_PORT"; fi
+if [ -z "$SET_DATA_DIR" ] && [ -n "${PREV_DATA_DIR:-}" ]; then DATA_DIR="$PREV_DATA_DIR"; fi
+if [ -z "$SET_INSTALL_DIR" ] && [ -n "${PREV_INSTALL_DIR:-}" ]; then INSTALL_DIR="$PREV_INSTALL_DIR"; fi
+
+# systemd 유닛에 그대로 쓰므로 공백·따옴표·역슬래시가 든 경로는 받지 않는다(유닛 파싱이 깨짐).
+for _v in "$INSTALL_DIR" "$DATA_DIR"; do
+  case "$_v" in *[[:space:]]*|*\"*|*\\*) echo "✗ 경로에 공백/따옴표/역슬래시는 쓸 수 없습니다: $_v" >&2; exit 1;; esac
+done
+case "$PORT" in ''|*[!0-9]*) echo "✗ --port 는 숫자여야 합니다: $PORT" >&2; exit 1;; esac
+SD_INSTALL_DIR="${INSTALL_DIR//%/%%}"; SD_DATA_DIR="${DATA_DIR//%/%%}"
+SD_DATA_DIR_X="${SD_DATA_DIR//\$/\$\$}"
 
 RAW_BASE="${BASE_URL:-$MIRROR_ROOT/$BRANCH}"   # 다운로드 베이스(--base-url 또는 환경변수 IU_MIRROR_ROOT/BRANCH)
 case "$RAW_BASE" in
@@ -149,7 +187,6 @@ rm -rf "$TMP_DIR"
 cd "$INSTALL_DIR"
 
 # ----- 5) systemd 서비스 등록 -----
-UNIT="/etc/systemd/system/${SERVICE}.service"
 echo "→ 서비스 등록: $UNIT"
 cat > "$UNIT" <<EOF
 [Unit]
@@ -157,13 +194,13 @@ Description=Isilon Portal (HQ) - 글로벌 통합 관제
 After=network.target remote-fs.target local-fs.target
 # 데이터 폴더가 별도 영속 디스크 마운트면, 그 마운트가 붙은 뒤에 시작한다(재부팅 시 빈 폴더에
 # 노드 0·새 토큰으로 초기화되어 노드/설정이 사라지는 사고 방지).
-RequiresMountsFor=$DATA_DIR
+RequiresMountsFor=$SD_DATA_DIR
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=$INSTALL_DIR
-ExecStart=/usr/bin/python3 -m isilon_usage portal --data-dir $DATA_DIR --host 0.0.0.0 --port $PORT
+WorkingDirectory=$SD_INSTALL_DIR
+ExecStart=/usr/bin/python3 -m isilon_usage portal --data-dir "$SD_DATA_DIR_X" --host 0.0.0.0 --port $PORT
 Restart=on-failure
 RestartSec=5
 

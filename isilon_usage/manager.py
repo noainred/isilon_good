@@ -128,6 +128,10 @@ def init_manager(data_dir: str) -> str:
         dbmod.ensure_column(conn, "scans", "opt_one_fs", "INTEGER")
         dbmod.ensure_column(conn, "scans", "opt_fold_depth", "INTEGER")
         dbmod.ensure_column(conn, "scans", "opt_max_depth", "INTEGER")
+        # 멈춘 이유: 'orphan' = 실행 중 프로세스가 죽어 재기동 정리로 멈춤(예약 스캔은 이어서 재개)
+        dbmod.ensure_column(conn, "scans", "paused_by", "TEXT")
+        # 마운트 출처(포탈이 같은 파일시스템 식별 — 크기만 같은 다른 볼륨을 하나로 합치지 않게)
+        dbmod.ensure_column(conn, "scans", "fs_source", "TEXT")
         conn.execute(f"PRAGMA user_version={int(SCHEMA_VERSION)}")
         conn.commit()
     finally:
@@ -261,6 +265,15 @@ def prune_scans(data_dir: str, *, keep_per_root: Optional[int] = None,
     finally:
         conn.close()
 
+    # 루트별 '마지막 완료(done)' 스캔은 어떤 정리 규칙에서도 지우지 않는다 — 예전엔 id 순으로만 남겨,
+    # 최근 스캔이 멈춤/오류면 마지막 정상 결과가 지워지고 부분 결과만 남았다.
+    protected = set()
+    _done_seen = set()
+    for r in rows:
+        if r["status"] == "done" and r["root_path"] not in _done_seen:
+            _done_seen.add(r["root_path"])
+            protected.add(r["id"])
+
     to_delete = set()
     if keep_per_root and keep_per_root > 0:
         seen: Dict[str, int] = {}
@@ -277,7 +290,7 @@ def prune_scans(data_dir: str, *, keep_per_root: Optional[int] = None,
                 to_delete.add(r["id"])
 
     deleted = []
-    for sid in to_delete:
+    for sid in sorted(to_delete - protected):
         if sid in running:
             continue
         if delete_scan(data_dir, sid).get("ok"):
@@ -288,20 +301,31 @@ def prune_scans(data_dir: str, *, keep_per_root: Optional[int] = None,
 def overall_capacity(conn) -> dict:
     """전체 용량 관리 집계.
 
-    같은 루트를 여러 번 스캔했을 수 있으므로, 루트별로 "가장 최근 스캔"만
-    골라 합산한다(과거 스캔 중복 합산 방지). 루트별 최신 요약 목록도 함께 준다.
+    같은 루트를 여러 번 스캔했을 수 있으므로 루트별로 한 번만 센다. 루트마다 두 가지를 준다:
+      - 활동(status·phase·진행 카운터·scanned_bytes·시각) = 그 루트의 '가장 최근' 스캔 — 진행 중 표시·처리량용
+      - 용량(capacity_*) = 그 루트의 '마지막 완료(done)' 스캔 — 완료 스캔이 없으면 최신 스캔 값(capacity_partial)
+    예전엔 최신 스캔을 상태와 무관하게 용량으로 써서, 멈춤·오류·진행 중인 부분 결과(예: 7바이트)가 그 루트의
+    용량으로 표시·합산됐다. total_capacity_bytes = 용량 합(화면·포탈의 '조사 용량'), total_scanned_bytes = 최신
+    스캔 합(진행량 — 처리량 시계열이 쓰므로 의미를 바꾸지 않는다).
     """
     scans = conn.execute("SELECT * FROM scans ORDER BY id DESC").fetchall()
     latest_by_root: Dict[str, dict] = {}
+    done_by_root: Dict[str, dict] = {}
     for s in scans:
         rp = s["root_path"]
         if rp not in latest_by_root:  # id 내림차순이므로 처음 본 게 최신
             latest_by_root[rp] = dict(s)
+        if rp not in done_by_root and s["status"] == "done":
+            done_by_root[rp] = dict(s)
 
     roots = []
     total_scanned = 0
+    total_capacity = 0
     for rp, s in latest_by_root.items():
+        cap = done_by_root.get(rp) or s
+        cap_bytes = int(cap.get("scanned_bytes") or 0)
         total_scanned += s.get("scanned_bytes") or 0
+        total_capacity += cap_bytes
         roots.append({
             "scan_id": s["id"],
             "root_path": rp,
@@ -316,16 +340,23 @@ def overall_capacity(conn) -> dict:
             "fs_total_bytes": s.get("fs_total_bytes") or 0,
             "fs_used_bytes": s.get("fs_used_bytes") or 0,
             "fs_free_bytes": s.get("fs_free_bytes") or 0,
+            "fs_source": s.get("fs_source") or cap.get("fs_source"),
             "started_at": s.get("started_at"),
             "finished_at": s.get("finished_at"),
             "updated_at": s.get("updated_at"),
             "partial_agg_at": s.get("partial_agg_at"),   # 멈춘 자료 부분 집계 시각(이력 표 배지)
+            "capacity_bytes": cap_bytes,
+            "capacity_files": int(cap.get("total_files") or 0),
+            "capacity_scan_id": cap["id"],
+            "capacity_finished_at": cap.get("finished_at") if cap.get("status") == "done" else None,
+            "capacity_partial": rp not in done_by_root,     # 완료 스캔이 아직 없어 부분 값
         })
-    roots.sort(key=lambda x: x["scanned_bytes"], reverse=True)
+    roots.sort(key=lambda x: x["capacity_bytes"], reverse=True)
 
     active = sum(1 for s in scans if s["status"] in ("discovering", "sizing"))
     return {
         "total_scanned_bytes": total_scanned,
+        "total_capacity_bytes": total_capacity,
         "root_count": len(latest_by_root),
         "scan_count": len(scans),
         "active_scans": active,

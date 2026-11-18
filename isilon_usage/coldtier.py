@@ -198,9 +198,24 @@ def plan_cold_move(root: str, *, days: int = 365, field: str = "mtime",
     seen_inodes: set = set()
     rlen = len(root.rstrip(os.sep))
 
+    try:
+        root_dev = os.lstat(root).st_dev
+    except OSError:
+        root_dev = None
     for dp, dirs, files in os.walk(root):   # followlinks=False: 심볼릭 디렉터리 안 따라감
         if _stopped():
             break
+        # 생성 스크립트의 find -xdev 와 같게 마운트 경계를 넘지 않는다 — 예전엔 미리보기만 하위 마운트까지
+        # 세어, 스크립트가 실제로 옮길 양보다 크게 보였다(2026-11 리뷰).
+        if root_dev is not None:
+            keep = []
+            for d in dirs:
+                try:
+                    if os.lstat(os.path.join(dp, d)).st_dev == root_dev:
+                        keep.append(d)
+                except OSError:
+                    keep.append(d)
+            dirs[:] = keep
         dirs.sort()
         for nm in sorted(files):
             fp = os.path.join(dp, nm)

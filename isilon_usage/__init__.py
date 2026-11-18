@@ -5,7 +5,7 @@
 """
 
 # 애플리케이션 버전(릴리즈노트 CHANGELOG.md 와 git 태그 v<버전>에 대응)
-__version__ = "1.99.40"
+__version__ = "1.99.41"
 
 # DB 스키마 버전. 스키마가 바뀌면 1씩 올리고 마이그레이션을 추가한다.
 # (per-run DB / manager DB 의 PRAGMA user_version 에 기록된다)
@@ -19,4 +19,5 @@ __version__ = "1.99.40"
 # 10: scan_log 테이블(단계별 진단 로그) + scan_runs.agg_rate(집계 행/초 자체 측정)
 # 11: scan_runs.advanced_at(마지막 전진 시각 — 진행 갱신과 구분해 정체를 판정)
 # 12: scan_runs.partial_agg_at(멈춘 자료 부분 집계 시각 — total_bytes 가 하한값임을 표시)
-SCHEMA_VERSION = 12
+# 13: scan_runs.root_mount·fs_source, directories.error_count, stats_journal·top_journal(통계 저널)
+SCHEMA_VERSION = 13

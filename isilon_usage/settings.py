@@ -11,7 +11,64 @@
 import datetime as _dt
 import json
 import os
+import shutil
+import tempfile
+import threading
 import time as _time
+
+_SAVE_LOCK = threading.Lock()
+
+
+def write_json_atomic(path: str, obj, *, mode: int = 0o600) -> None:
+    """JSON 을 원자적으로 저장한다 — 매번 고유한 임시 파일(동시 저장끼리 같은 .tmp 를 덮어써 반쯤 쓴
+    파일이 교체되던 경합 방지), fsync 후 교체, 직전 정상본은 .bak 으로 남긴다(2026-11 리뷰)."""
+    d = os.path.dirname(os.path.abspath(path))
+    os.makedirs(d, exist_ok=True)
+    with _SAVE_LOCK:
+        fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".", suffix=".tmp", dir=d)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(obj, fh, ensure_ascii=False, indent=2)
+                fh.flush()
+                try:
+                    os.fsync(fh.fileno())
+                except OSError:
+                    pass
+            try:
+                os.chmod(tmp, mode)
+            except OSError:
+                pass
+            if os.path.exists(path):
+                try:
+                    with open(path, encoding="utf-8") as fh:
+                        json.load(fh)             # 정상본일 때만 백업(깨진 파일로 .bak 을 덮지 않게)
+                    shutil.copyfile(path, path + ".bak")
+                    os.chmod(path + ".bak", mode)
+                except (OSError, ValueError):
+                    pass
+            os.replace(tmp, path)
+            tmp = None
+        finally:
+            if tmp:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+
+
+def read_json_with_backup(path: str):
+    """JSON 을 읽는다. 본 파일이 깨졌으면 .bak 을 쓴다(둘 다 없거나 깨지면 None).
+
+    깨진 설정을 '빈 기본값'으로 읽은 채 저장하면 비밀번호·토큰이 조용히 사라진다 — 그걸 막는다."""
+    for p in (path, path + ".bak"):
+        try:
+            with open(p, encoding="utf-8") as fh:
+                v = json.load(fh)
+            if isinstance(v, dict):
+                return v
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 # 키: (기본값) — 새 설정 항목을 추가하면 여기에 등록한다.
@@ -278,12 +335,16 @@ def _sanitize_schedules(raw) -> list:
             last_run = float(it.get("last_run", 0) or 0)
         except (TypeError, ValueError):
             last_run = 0.0
+        if not (0.0 <= last_run < now + 86400 * 366):   # NaN·무한대·먼 미래(잘못된 값) → 미실행으로
+            last_run = 0.0
         try:
             anchor = float(it.get("anchor", 0) or 0)
         except (TypeError, ValueError):
             anchor = 0.0
-        if anchor <= 0:
-            anchor = now   # 생성 시각(주/월 반복주기 정렬 기준)
+        # 생성 시각(주/월 반복주기 정렬 기준). 비정상 값(예: 1e300)은 날짜 변환에서 OverflowError 를 내
+        # 매 틱 예약 검사 전체를 멈췄다 → 합리적 범위(1970~지금+100년) 밖이면 지금으로.
+        if not (0.0 < anchor < now + 86400 * 365 * 100):
+            anchor = now
         hh, mm = parse_at(it.get("at"))
         # minute 일 때 every_minutes 도 유지(구버전 읽기 호환)
         every_minutes = every if unit == "minute" else _int("every_minutes", 1, 100000, 60)
@@ -297,11 +358,16 @@ def _sanitize_schedules(raw) -> list:
             chain_scan_id = int(_csid) if _csid not in (None, "", 0, "0") else None
         except (TypeError, ValueError):
             chain_scan_id = None
+        try:   # 비정상 종료로 멈춘 체인 스캔의 자동 재개 시도 횟수(런타임)
+            chain_resumes = max(0, min(100, int(it.get("chain_resumes", 0) or 0)))
+        except (TypeError, ValueError):
+            chain_resumes = 0
         out.append({
             "path": path,            # 호환: 첫 경로(paths[0])
             "paths": plist,          # 순차 스캔 대상(순서대로)
             "chain_i": chain_i,
             "chain_scan_id": chain_scan_id,
+            "chain_resumes": chain_resumes,
             "unit": unit,
             "every": every,
             "at": "%02d:%02d" % (hh, mm),
@@ -336,7 +402,8 @@ def schedule_due(sc: dict, now: float) -> bool:
 
     n = _dt.datetime.fromtimestamp(now)
     hh, mm = parse_at(sc.get("at"))
-    slot = n.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    # fold=0: 서머타임 해제로 같은 시각이 두 번 오는 날엔 첫 번째 것으로 고정(결정적).
+    slot = n.replace(hour=hh, minute=mm, second=0, microsecond=0, fold=0)
     if n < slot:
         return False                       # 오늘 지정 시각 전
     if last >= slot.timestamp():
@@ -354,7 +421,10 @@ def schedule_due(sc: dict, now: float) -> bool:
         return weeks >= 0 and weeks % every == 0
     if unit == "month":
         sd = int(sc.get("start_day", 1) or 1)
-        if n.day != sd:
+        # 29~31일 지정은 그 날이 없는 달엔 말일에 돈다(예전엔 2·4·6·9·11월을 조용히 건너뜀).
+        import calendar as _cal
+        last_dom = _cal.monthrange(n.year, n.month)[1]
+        if n.day != min(sd, last_dom):
             return False
         sm = int(sc.get("start_month", 1) or 1)
         # 시작(start_month/day)이 생성 연도에 이미 지났으면 첫 발생은 다음 해
@@ -393,29 +463,18 @@ def stagger_schedules(schedules: list) -> list:
 def load(data_dir: str) -> dict:
     """설정을 읽는다(파일이 없거나 깨졌으면 기본값)."""
     s = dict(DEFAULTS)
-    try:
-        with open(settings_path(data_dir), "r", encoding="utf-8") as fh:
-            s.update(json.load(fh))
-    except (OSError, ValueError):
-        pass
+    disk = read_json_with_backup(settings_path(data_dir))
+    if disk:
+        s.update(disk)
     return sanitize(s)
 
 
 def save(data_dir: str, raw: dict) -> dict:
     """설정을 보정해 원자적으로 저장하고, 저장된 값을 반환한다."""
     s = sanitize(raw)
-    os.makedirs(data_dir, exist_ok=True)
-    path = settings_path(data_dir)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(s, fh, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
     # 서비스 자격증명(SMTP·Isilon·PowerStore·api_token·LLM 키)이 평문으로 들어가므로
-    # 소유자만 읽도록 권한을 제한한다(POSIX). Windows 등에서는 무시.
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+    # 소유자만 읽도록 권한을 제한한다(POSIX — 임시 파일 단계부터 0600). Windows 등에서는 무시.
+    write_json_atomic(settings_path(data_dir), s)
     return s
 
 

@@ -66,10 +66,20 @@ def _archive_version(filename: str) -> Optional[Tuple[int, int, int]]:
     return tuple(int(x) for x in m.groups()) if m else None
 
 
-def find_newer_archive(watch_dir: str, current_version: str):
+def archive_sig(path: str):
+    """아카이브 식별(경로·크기·수정 시각) — 같은 파일이 다시 놓이면(교체) 다른 서명이 된다."""
+    try:
+        st = os.stat(path)
+        return (os.path.abspath(path), st.st_size, int(st.st_mtime))
+    except OSError:
+        return (os.path.abspath(path), -1, -1)
+
+
+def find_newer_archive(watch_dir: str, current_version: str, skip=()):
     """watch_dir 에서 current 보다 새 isilon_usage-*.tar.gz/.zip 중 '최신'을 찾는다.
 
-    반환 (path, version_tuple) 또는 None.
+    skip: 설치에 실패한 아카이브 서명(archive_sig) 모음 — 깨진 최신 파일 하나가 매 주기 재시도되며
+    그보다 낮은 정상 새 버전까지 막던 문제(2026-11 리뷰). 반환 (path, version_tuple) 또는 None.
     """
     cur = parse_version(current_version) or (0, 0, 0)
     best = None
@@ -80,8 +90,40 @@ def find_newer_archive(watch_dir: str, current_version: str):
     for name in names:
         v = _archive_version(name)
         if v and v > cur and (best is None or v > best[1]):
-            best = (os.path.join(watch_dir, name), v)
+            p = os.path.join(watch_dir, name)
+            if skip and archive_sig(p) in skip:
+                continue
+            best = (p, v)
     return best
+
+
+def prune_package_backups(code_dir: str, keep: int = 3) -> None:
+    """업그레이드마다 쌓이는 isilon_usage.bak.<ts> 를 최신 keep 개만 남긴다(디스크 누수 방지)."""
+    import re as _re
+    code_dir = os.path.abspath(code_dir)
+    try:
+        names = os.listdir(code_dir)
+    except OSError:
+        return
+    baks = sorted((n for n in names if _re.match(r"^isilon_usage\.(bak|new)\.\d+$", n)),
+                  key=lambda n: int(n.rsplit(".", 1)[1]), reverse=True)
+    baks_only = [n for n in baks if ".bak." in n]
+    for n in baks_only[keep:]:
+        shutil.rmtree(os.path.join(code_dir, n), ignore_errors=True)
+
+
+def prune_downloads(dest_dir: str, keep: int = 3) -> None:
+    """내려받은 업그레이드 아카이브를 최신 버전 keep 개만 남긴다."""
+    try:
+        names = [n for n in os.listdir(dest_dir) if _archive_version(n)]
+    except OSError:
+        return
+    names.sort(key=lambda n: _archive_version(n), reverse=True)
+    for n in names[keep:]:
+        try:
+            os.remove(os.path.join(dest_dir, n))
+        except OSError:
+            pass
 
 
 def _accept_member(name: str) -> Optional[str]:
@@ -176,6 +218,10 @@ def apply_package(members: Dict[str, bytes], code_dir: str) -> str:
             os.replace(backup, pkg)        # 롤백
         shutil.rmtree(staging, ignore_errors=True)
         raise
+    try:
+        prune_package_backups(code_dir, keep=3)
+    except Exception:  # noqa: BLE001 — 정리는 베스트 에포트
+        pass
     return backup if had_old else ""
 
 
@@ -365,6 +411,7 @@ def download_archive(url: str, dest_dir: str, *, token: Optional[str] = None,
     dest = os.path.join(dest_dir, name)
     with open(dest, "wb") as fh:
         fh.write(data)
+    prune_downloads(dest_dir, keep=3)
     return {"ok": True, "path": dest, "size": len(data)}
 
 

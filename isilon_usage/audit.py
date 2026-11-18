@@ -11,7 +11,9 @@ import time
 from typing import List
 
 AUDIT_FILE = "audit.log"
-MAX_BYTES = 5 * 1024 * 1024   # 5MB 넘으면 한 번 회전(.1 로)
+MAX_BYTES = 5 * 1024 * 1024   # 5MB 넘으면 회전(.1 → .2 … .KEEP)
+KEEP = 5                      # 보관할 회전 파일 수(예전엔 .1 하나뿐이라 10MB 이전 기록이 사라짐)
+MAX_FIELD = 500               # 항목(action/detail) 최대 길이 — 긴 사유·경로가 로그를 부풀리지 않게
 
 
 def audit_path(data_dir: str) -> str:
@@ -25,11 +27,17 @@ def record(data_dir: str, *, action: str, ok: bool, ip: str = "", detail: str = 
         path = audit_path(data_dir)
         try:
             if os.path.getsize(path) > MAX_BYTES:
-                os.replace(path, path + ".1")     # 단순 1회 회전
+                for i in range(KEEP - 1, 0, -1):
+                    try:
+                        os.replace("%s.%d" % (path, i), "%s.%d" % (path, i + 1))
+                    except OSError:
+                        pass
+                os.replace(path, path + ".1")
         except OSError:
             pass
-        line = json.dumps({"ts": round(time.time(), 3), "action": str(action),
-                           "ok": bool(ok), "ip": str(ip or ""), "detail": str(detail or "")},
+        line = json.dumps({"ts": round(time.time(), 3), "action": str(action)[:MAX_FIELD],
+                           "ok": bool(ok), "ip": str(ip or "")[:64],
+                           "detail": str(detail or "")[:MAX_FIELD]},
                           ensure_ascii=False)
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")

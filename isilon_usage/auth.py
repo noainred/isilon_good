@@ -85,8 +85,12 @@ class AuthGuard:
         self._lock = threading.Lock()
         self._max_fails = int(max_fails)     # 연속 로그인 실패 허용 횟수
         self._lockout = float(lockout)       # 초과 시 잠금 시간(초)
-        self._fails = 0
-        self._locked_until = 0.0
+        # 잠금은 클라이언트(IP)별 — 전역 잠금이면 공격자 한 명이 모든 운영자를 잠가 버린다(DoS).
+        # 진행 중(in-flight) 시도도 실패 횟수에 미리 예약해, PBKDF2 검증이 느린 동안 병렬 요청으로
+        # 잠금 한도를 우회하지 못하게 한다(2026-11 리뷰).
+        self._fails: dict = {}               # client -> 연속 실패 수
+        self._locked: dict = {}              # client -> 잠금 해제 시각
+        self._inflight: dict = {}            # client -> 검증 중인 시도 수
 
     def _ttl_now(self) -> float:
         """현재 세션 유효 시간(초). 콜러블이면 호출해 동적으로 읽는다(최소값 가드는 설정에서)."""
@@ -104,37 +108,76 @@ class AuthGuard:
         """변경 작업에 로그인이 필요한가(= 비밀번호가 설정됨)."""
         return bool(str(self._get_pw() or ""))
 
-    def login(self, password: str) -> dict:
+    _MAX_CLIENTS = 4096                     # 추적할 클라이언트 상한(메모리 보호)
+
+    def _prune_clients_locked(self, now: float) -> None:
+        if len(self._fails) + len(self._locked) <= self._MAX_CLIENTS:
+            return
+        self._locked = {k: v for k, v in self._locked.items() if v > now}
+        keep = set(self._locked) | {k for k, v in self._inflight.items() if v}
+        self._fails = {k: v for k, v in self._fails.items() if k in keep}
+
+    def login(self, password: str, client=None) -> dict:
         """비밀번호를 확인하고 맞으면 세션 토큰을 발급한다.
 
-        무차별 대입을 막기 위해 연속 실패가 max_fails 회를 넘으면 lockout 초간 잠근다.
+        무차별 대입을 막기 위해 같은 클라이언트(client — 보통 접속 IP)의 연속 실패가
+        max_fails 회에 이르면 lockout 초간 그 클라이언트만 잠근다. 검증 중인 시도도 한도에 포함한다.
         """
         stored = str(self._get_pw() or "")
         if not stored:
             return {"ok": True, "token": "", "op_required": False}
+        key = str(client or "")
         now = time.time()
         with self._lock:
-            if now < self._locked_until:
-                wait = int(self._locked_until - now) + 1
+            until = self._locked.get(key, 0.0)
+            if now < until:
+                wait = int(until - now) + 1
                 return {"ok": False, "locked_out": True,
                         "reason": "로그인 시도가 많아 잠시 잠겼습니다(%d초 후 재시도)" % wait}
-        if not verify_password(password, stored):
+            self._locked.pop(key, None)
+            if self._fails.get(key, 0) + self._inflight.get(key, 0) >= self._max_fails:
+                return {"ok": False, "locked_out": True,
+                        "reason": "동시 로그인 시도가 너무 많습니다 — 잠시 후 다시 시도하세요"}
+            self._inflight[key] = self._inflight.get(key, 0) + 1
+        try:
+            good = verify_password(password, stored)
+        finally:
             with self._lock:
-                self._fails += 1
-                if self._fails >= self._max_fails:
-                    self._locked_until = now + self._lockout
-                    self._fails = 0
+                n = self._inflight.get(key, 1) - 1
+                if n > 0:
+                    self._inflight[key] = n
+                else:
+                    self._inflight.pop(key, None)
+        if not good:
+            with self._lock:
+                n = self._fails.get(key, 0) + 1
+                if n >= self._max_fails:
+                    self._locked[key] = now + self._lockout
+                    self._fails.pop(key, None)
+                    self._prune_clients_locked(now)
                     return {"ok": False, "locked_out": True,
                             "reason": "로그인 실패가 많아 %d초간 잠급니다" % int(self._lockout)}
+                self._fails[key] = n
+                self._prune_clients_locked(now)
             return {"ok": False, "reason": "비밀번호가 올바르지 않습니다."}
         token = secrets.token_hex(16)
         with self._lock:
-            self._fails = 0
+            self._fails.pop(key, None)
             ttl = self._ttl_now()
             self._tokens = {t: ts for t, ts in self._tokens.items()
                             if now - ts < ttl}
             self._tokens[token] = now
         return {"ok": True, "token": token, "op_required": True, "ttl": int(ttl)}
+
+    def issue_token(self) -> str:
+        """검증을 이미 마친 호출자(비밀번호를 바꾼 본인 등)에게 새 세션 토큰을 발급한다."""
+        if not self.required():
+            return ""
+        token = secrets.token_hex(16)
+        now = time.time()
+        with self._lock:
+            self._tokens[token] = now
+        return token
 
     def token_valid(self, token) -> bool:
         """세션 토큰이 유효한가(만료 시 폐기)."""

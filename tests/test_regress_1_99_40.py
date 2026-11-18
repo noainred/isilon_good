@@ -162,32 +162,8 @@ def check_mount_down() -> None:
         got, run = _root(db2)
         assert run["status"] == "done" and got == exp and not run["error_dirs"], (run, got, exp)
 
-        # (b2) 마운트가 빠지고 빈 마운트 지점 폴더만 남음(실제 umount 와 같은 모습) → 자동 일시정지
-        class Unmount(Scanner):
-            n = 0
-
-            def _discover_one(self, dir_id, path, depth):
-                Unmount.n += 1
-                if Unmount.n == 4:
-                    os.rename(tree, tree + ".off")
-                    os.makedirs(tree)                      # 빈 마운트 지점
-                return Scanner._discover_one(self, dir_id, path, depth)
-        db4 = os.path.join(d, "b2.db")
-        dbmod.init_db(db4)
-        Unmount(db4, tree, workers=1).run()
-        _got, run = _root(db4)
-        assert run["status"] == "paused" and "마운트" in (run["error"] or ""), run
-        try:                                               # 빈 마운트 지점인 채로 재개 → 진행하지 않음
-            run_scan(db4, tree, workers=1, with_monitor=False, resume=True)
-        except Exception:  # noqa: BLE001
-            pass
-        _got, run = _root(db4)
-        assert run["status"] != "done", run
-        os.rmdir(tree)
-        os.rename(tree + ".off", tree)
-        run_scan(db4, tree, workers=1, with_monitor=False, resume=True)
-        got, run = _root(db4)
-        assert run["status"] == "done" and got == exp and not run["error_dirs"], (run, got, exp)
+        # (b2) '빈 마운트 지점' 은 1.99.41 부터 실제 마운트 지점 기준으로 판별한다(이름 바꾸기 흉내로는 재현 불가)
+        #      → tests/test_regress_1_99_41.py check_real_mount_loss(tmpfs 실제 umount)로 옮김.
 
         # (c) 새 스캔인데 루트를 열 수 없음 → '완료 0바이트'가 아니라 오류
         db3 = os.path.join(d, "c.db")
@@ -279,7 +255,7 @@ def check_schedule_after_orphan() -> None:
         c = ScanController(os.path.join(d, "data"))
         started = []
         c._chain_start = lambda sc, path, running, rp: (started.append(path) or 99)  # type: ignore[assignment]
-        c._scan_status = lambda sid: "paused"                                         # type: ignore[assignment]
+        c._scan_row = lambda sid: {"status": "paused", "paused_by": None}             # type: ignore[assignment]
         c.running_ids = lambda: []                                                    # type: ignore[assignment]
         c.running_paths = lambda: set()                                               # type: ignore[assignment]
         now = time.time()
@@ -289,17 +265,17 @@ def check_schedule_after_orphan() -> None:
         c.settings["schedules"] = [dict(base, last_run=now - 60)]
         c._check_schedules()
         assert started == [], started
-        # 다음 차례가 왔는데 체인 스캔이 여전히 paused(비정상 종료 정리 등) → 새 주기를 첫 경로부터 시작
+        # 1.99.41: 사용자·가드로 멈춘 체인은 다음 차례가 와도 새 주기를 시작하지 않는다(1.99.40 의 '새 주기 시작'은
+        # 가드에 걸린 예약이 주기마다 일시정지 스캔을 쌓는 부작용이 있었다). 비정상 종료 고아만 이어서 재개한다.
         c.settings["schedules"] = [dict(base, last_run=now - 600)]
         c._check_schedules()
-        sc = c.settings["schedules"][0]
-        assert started == ["/data/A"] and sc.get("chain_scan_id") == 99 and sc.get("chain_i") == 0, (started, sc)
-        # 꺼진 예약은 차례가 와도 시작하지 않는다
-        started.clear()
-        c.settings["schedules"] = [dict(base, last_run=now - 600, enabled=False)]
-        c._check_schedules()
         assert started == [], started
-        print("[schedule-orphan] OK  paused 체인: 이번 주기는 대기, 다음 차례엔 새 주기 시작(꺼진 예약 제외)")
+        resumed = []
+        c._scan_row = lambda sid: {"status": "paused", "paused_by": "orphan"}         # type: ignore[assignment]
+        c.resume_scan = lambda sid: (resumed.append(sid) or {"ok": True})             # type: ignore[assignment]
+        c._check_schedules()
+        assert resumed == [7] and started == [], (resumed, started)
+        print("[schedule-orphan] OK  사용자 정지 체인은 대기, 비정상 종료 고아는 이어서 재개(새 스캔 없음)")
     finally:
         os.chdir(cwd)
         shutil.rmtree(d, ignore_errors=True)

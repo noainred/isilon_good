@@ -1115,6 +1115,20 @@ async function editPortalTitle(){
   i2.addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); ok.onclick(); } });
   ov.addEventListener("mousedown",e=>{ if(e.target===ov) done(); });
 }
+function _fillIdle(el, v){
+  if(!el) return;
+  const isCb=el.type==="checkbox";
+  const cur=isCb?el.checked:el.value;
+  if(!el._dirtyHooked){ el._dirtyHooked=true;
+    const mark=()=>{ el.dataset.dirty="1"; };
+    el.addEventListener("input",mark); el.addEventListener("change",mark); }
+  if(el.dataset.dirty){
+    if(String(cur)===String(v)) delete el.dataset.dirty;   // 저장돼 서버 값과 같아지면 다시 동기화 대상
+    return;
+  }
+  if(document.activeElement===el) return;
+  if(isCb) el.checked=!!v; else el.value=v;
+}
 async function loadAuth(){
   try{ const j=await (await _origFetch("/api/portal/auth",{cache:"no-store"})).json();
     _opRequired=!!j.op_required;
@@ -1124,11 +1138,12 @@ async function loadAuth(){
     applyPortalTitle(j.portal_title, j.portal_subtitle);
     applyNavHidden(j.nav_hidden); renderNavMenu(j.nav_hidden);   // 상단 메뉴 표시 적용 + 선택 UI
     if(!window._updChecked){ window._updChecked=true; if(j.show_update_popup) checkUpdatePopup(j.version); }   // 업그레이드 후 첫 접속 안내(설정 ON일 때만)
-    const ti=$("setTitle"), su=$("setSubtitle");
-    if(ti) ti.value=j.portal_title||""; if(su) su.value=j.portal_subtitle||"";
-    const tt=$("setOpTtl"); if(tt && document.activeElement!==tt) tt.value=j.op_ttl_minutes||30;
-    const sp=$("setShowUpdatePopup"); if(sp) sp.checked=!!j.show_update_popup;
-    const lp=$("setLogPopupPos"); if(lp && document.activeElement!==lp) lp.value=j.log_popup_pos||"center";
+    // 주기적 새로고침이 사용자가 고치는 중인(포커스 또는 저장 전) 입력값을 서버 값으로 덮지 않게 한다.
+    _fillIdle($("setTitle"), j.portal_title||"");
+    _fillIdle($("setSubtitle"), j.portal_subtitle||"");
+    _fillIdle($("setOpTtl"), j.op_ttl_minutes||30);
+    _fillIdle($("setShowUpdatePopup"), !!j.show_update_popup);
+    _fillIdle($("setLogPopupPos"), j.log_popup_pos||"center");
     applyLogPopupPos(j.log_popup_pos||"center");
   }catch(e){}
   updateLoginUI();
@@ -1243,6 +1258,7 @@ async function promptSetup(){
         body:JSON.stringify({password:pw, encrypt:false})})).json();
     if(!j.ok){ if(j.op_required){ _opRequired=true; return await doLogin(); } alert("비밀번호를 만들지 못했습니다: "+(j.reason||"")); return false; }
     _opRequired=true;
+    if(_opAdopt(j)) return true;
     const r=await (await _origFetch("/api/portal/login",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({password:pw})})).json();
     if(r.ok && r.token){ try{ sessionStorage.setItem("pOpToken",r.token); }catch(e){}
@@ -1271,6 +1287,13 @@ async function doLogin(){
       updateLoginUI(); return true; }
   }catch(e){}
   window.alert("비밀번호가 올바르지 않습니다."); return false;
+}
+// 비밀번호를 바꾸면 서버가 옛 세션을 모두 만료하고 바꾼 본인에게만 새 토큰을 준다 — 그 토큰으로 갈아끼운다.
+function _opAdopt(j){
+  if(!j || !j.token) return false;
+  try{ sessionStorage.setItem("pOpToken",j.token); }catch(e){}
+  _opExpiry=Date.now()+(j.ttl||1800)*1000; try{ sessionStorage.setItem("pOpExpiry",String(_opExpiry)); }catch(e){}
+  _opRequired=true; _opStartTimer(); updateLoginUI(); return true;
 }
 function _opStartTimer(){
   if(_opTimer) clearInterval(_opTimer);
@@ -1671,7 +1694,16 @@ function scanProgress(r){   // 루트별 스캔 단계/진행률
   if(r.status==="error") return "⚠ 오류";
   if(r.phase==="sizing"){ const t=r.total_dirs||0,p=r.processed_dirs||0; return "📦 집계 "+(t?Math.round(p/t*100):0)+"% ("+fmtNum(p)+"/"+fmtNum(t)+")"; }
   if(r.status==="discovering"||r.phase==="discovering") return "🔄 탐색 중 ("+fmtNum(r.discovered_dirs||0)+"개)";
-  return r.status||"";
+  return _he(r.status||"");      // 엣지가 보낸 값 — HTML 로 끼워 넣으므로 이스케이프
+}
+function _verCmp(a,b){   // "1.99.10" 형식 버전 비교: 음수=a<b
+  const pa=String(a||"").split(/[.\-+]/), pb=String(b||"").split(/[.\-+]/);
+  for(let i=0;i<Math.max(pa.length,pb.length);i++){
+    const x=parseInt(pa[i]||"0",10), y=parseInt(pb[i]||"0",10);
+    if(isNaN(x)||isNaN(y)){ const c=String(pa[i]||"").localeCompare(String(pb[i]||"")); if(c) return c; continue; }
+    if(x!==y) return x-y;
+  }
+  return 0;
 }
 function renderPortalDash(){
   const j=pOverview; if(!j) return;
@@ -1716,7 +1748,8 @@ function renderPortalDash(){
     regionFilter=(regionFilter===c.dataset.region)?"":c.dataset.region; renderPortalDash(); }));
   // 노드 필터 + 정렬
   let rows=(j.nodes||[]).slice();
-  if(regionFilter) rows=rows.filter(n=>(n.region||"")===regionFilter);
+  // 지역이 비어 있는 노드는 서버가 '(미지정)' 카드로 묶는다 — 필터도 같은 이름으로 비교(예전엔 0건이 됨)
+  if(regionFilter) rows=rows.filter(n=>(n.region||"(미지정)")===regionFilter);
   rows.sort((a,b)=>{
     let va,vb;
     if(nodeSort==="status"){   // 상태 정렬 = 스캔 경과시간(오래 스캔한 순) 우선, 동률이면 상태 분류
@@ -1758,16 +1791,16 @@ function renderPortalDash(){
     }).join("");
     const arrRows = cfgArr.map(a => `<tr class="rr-${idx}" style="display:none; background:#101a26;"><td></td><td colspan="8" class="sub">${
       a.type === "isilon" ? "🟦" : "🟧"} ${_he(a.label||a.type)} ${
-      a.ok ? `<b>${_he(a.name||"?")}</b> · ${_he(a.version||"")} · 노드 ${(a.nodes&&a.nodes.online)!=null?a.nodes.online:"?"}/${(a.nodes&&a.nodes.total)!=null?a.nodes.total:"?"} · 용량 ${(a.capacity&&a.capacity.used_pct!=null)?a.capacity.used_pct+"%":"—"} · 이벤트/알림 ${a.events_unresolved!=null?a.events_unresolved:"—"} · ${a.health==="ok"?"정상":"주의"}`
+      a.ok ? `<b>${_he(a.name||"?")}</b> · ${_he(a.version||"")} · 노드 ${(a.nodes&&a.nodes.online)!=null?_he(a.nodes.online):"?"}/${(a.nodes&&a.nodes.total)!=null?_he(a.nodes.total):"?"} · 용량 ${(a.capacity&&a.capacity.used_pct!=null)?_he(a.capacity.used_pct)+"%":"—"} · 이벤트/알림 ${a.events_unresolved!=null?_he(a.events_unresolved):"—"} · ${a.health==="ok"?"정상":"주의"}`
            : `연결 실패: ${_he(a.error||"")}`}</td></tr>`).join("");
     const roots = arrRows + (n.roots||[]).map(r=>{
       const act=(r.status==="discovering"||r.status==="sizing");
       const startTxt=(act&&r.started_at)?(" · 시작 "+fmtClock(r.started_at)+" · 진행 "+elapsedSpan(r.started_at, r.updated_at)):"";
       const fsTxt=r.fs_total_bytes?(" of "+fmtBytes(r.fs_total_bytes)+" ("+Math.round((r.fs_used_bytes||0)/r.fs_total_bytes*100)+"%)"):"";
       return `<tr class="rr-${idx}" style="display:none; background:#121a24;"><td></td>
-        <td colspan="8" class="sub mono">📁 ${escAttr(r.root_path)} — 조사 ${fmtBytes(r.scanned_bytes)} · fs ${fmtBytes(r.fs_used_bytes)}${fsTxt} · ${scanProgress(r)}${startTxt}${r.finished_at?(" · 완료 "+ago(r.finished_at)):(r.updated_at?(" · 갱신 "+ago(r.updated_at)):"")}</td></tr>`;
+        <td colspan="8" class="sub mono">📁 ${escAttr(r.root_path)} — 조사 ${fmtBytes(r.capacity_bytes!=null?r.capacity_bytes:r.scanned_bytes)}${(r.capacity_scan_id!=null&&r.capacity_scan_id!==r.scan_id)?(" (마지막 완료 기준 · 최신 스캔 "+fmtBytes(r.scanned_bytes)+")"):(r.capacity_partial?" (부분 값)":"")} · fs ${fmtBytes(r.fs_used_bytes)}${fsTxt} · ${scanProgress(r)}${startTxt}${r.finished_at?(" · 완료 "+ago(r.finished_at)):(r.updated_at?(" · 갱신 "+ago(r.updated_at)):"")}</td></tr>`;
     }).join("");
-    const outdated = j.version && n.version && n.version!==j.version;
+    const outdated = j.version && n.version && _verCmp(n.version, j.version) < 0;   // 숫자 비교(1.99.9 < 1.99.10), 더 새 엣지는 구버전 아님
     const verBadge = n.version
       ? ` <span class="pill" title="${outdated?('구버전 — 포탈 v'+escAttr(j.version)):'버전'}" style="color:${outdated?'#f0c86a':'#9fb3c8'};border-color:${outdated?'#6a5a25':'var(--line)'}">v${_he(n.version)}${outdated?' ⬆':''}</span>`
       : "";
@@ -1845,13 +1878,13 @@ async function loadNodes(){
     const np=$("npNode");
     if(np){ const cur=np.value;
       np.innerHTML='<option value="">전체 노드</option>'+rows.map(n=>
-        `<option value="${escAttr(n.id)}">${n.id}${n.token_set===false?" (토큰없음)":""}</option>`).join("");
+        `<option value="${escAttr(n.id)}">${_he(n.id)}${n.token_set===false?" (토큰없음)":""}</option>`).join("");
       np.value=cur; }
     // 토큰 강제 맞추기 드롭다운(개별 노드 — 온라인/오프라인 표시)
     const tk=$("tkNode");
     if(tk){ const cur=tk.value;
       tk.innerHTML='<option value="">— 노드 선택 —</option>'+rows.map(n=>
-        `<option value="${escAttr(n.id)}">${n.id}${n.online?"":" (오프라인)"}</option>`).join("");
+        `<option value="${escAttr(n.id)}">${_he(n.id)}${n.online?"":" (오프라인)"}</option>`).join("");
       tk.value=cur; }
   } catch(e){ /* 무시 */ }
 }
@@ -2298,7 +2331,7 @@ if($("setPwBtn")) $("setPwBtn").addEventListener("click", async()=>{
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({password:$("setPw").value, encrypt:$("setPwEnc").checked})})).json();
     if(j.ok){ msg.textContent=j.op_required?(" ✓ 비밀번호 저장 "+(j.encrypted?"(암호화)":"(평문)")):" ✓ 보호 해제됨";
-      $("setPw").value=""; _opRequired=!!j.op_required; _opTemp=false; updateLoginUI(); }
+      $("setPw").value=""; _opRequired=!!j.op_required; _opTemp=false; if(!_opAdopt(j)) updateLoginUI(); }
     else msg.textContent=" ✗ "+(j.reason||j.error||"실패"); }
   catch(e){ msg.textContent=" ✗ "+e; }
 });

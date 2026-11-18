@@ -12,6 +12,7 @@
 
 from typing import Optional
 
+import re
 import os
 import socket
 import sqlite3
@@ -142,6 +143,25 @@ CREATE TABLE IF NOT EXISTS seen_inodes (
     ino     INTEGER NOT NULL,
     PRIMARY KEY (run_id, dev, ino)
 );
+
+-- 리포트 통계 저널: 디렉터리 완료를 커밋할 때 그 사이 늘어난 통계(델타)를 같은 트랜잭션으로 덧붙인다.
+-- 20초마다 scan_stats/top_files 를 통째로 다시 쓸 때 비운다. kill -9·OOM·업그레이드 재시작으로 끊겨도
+-- 재개 때 scan_stats + 저널 = 커밋된 디렉터리의 통계와 정확히 같다(예전엔 최대 20초분이 영구 누락).
+CREATE TABLE IF NOT EXISTS stats_journal (
+    run_id  INTEGER NOT NULL,
+    kind    TEXT    NOT NULL,
+    key     TEXT    NOT NULL,
+    bytes   INTEGER NOT NULL DEFAULT 0,
+    files   INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS top_journal (
+    run_id  INTEGER NOT NULL,
+    path    TEXT    NOT NULL,
+    bytes   INTEGER NOT NULL DEFAULT 0,
+    mtime   REAL,
+    atime   REAL,
+    uid     INTEGER
+);
 """
 
 
@@ -154,35 +174,57 @@ BUSY_TIMEOUT_MS = 30000
 # os.scandir 는 디코딩 못 한 바이트를 surrogateescape(U+DC80~U+DCFF)로 돌려주는데, SQLite 는 UTF-8 만 받아
 # 그 이름 하나로 INSERT 가 실패해 스캔이 영구히 끝나지 않았다. 저장 때는 그 문자를 보충 사설영역
 # (U+10FF80~U+10FFFF)으로 옮기고, 파일시스템에 다시 쓸 때 되돌린다. 일반 이름은 그대로(빠른 경로).
+# 1.99.41: 이름에 원래 U+10FF7F 이상 문자가 있으면 표시자(U+10FF7F)를 앞에 붙여 그대로 보존한다 — 1:1(가역).
+# (1.99.40 은 그런 이름을 서로게이트로 잘못 되돌려 그 하위 트리가 통째로 빠졌다.) 1.99.40 DB 와도 호환.
 _SUR_LO, _SUR_HI = 0xDC80, 0xDCFF
 _SUR_SHIFT = 0x10FF80 - 0xDC80
+_ESC = "\U0010FF7F"            # 표시자: 다음 문자는 원래 그 문자
+_HI = 0x10FF7F                  # 이 이상은 변환 대상(표시자 또는 서로게이트 사상)
+# 빠른 경로: 대부분 이름은 ASCII(str.isascii — 3.7+, 3.6 은 정규식만). 변환이 필요한 문자가 없으면 그대로.
+_NEEDS_DB = re.compile("[\ud800-\udfff\U0010FF7F-\U0010FFFF]")
+_NEEDS_FS = re.compile("[\U0010FF7F-\U0010FFFF]")
+_isascii = getattr(str, "isascii", None)
 
 
 def db_text(s):
     """파일시스템 문자열 → DB 저장용(비 UTF-8 바이트를 사설영역 문자로). str 이 아니면 그대로."""
-    if not isinstance(s, str):
+    if not isinstance(s, str) or not s:
         return s
-    try:
-        s.encode("utf-8")
+    if (_isascii is not None and _isascii(s)) or not _NEEDS_DB.search(s):
         return s
-    except UnicodeEncodeError:
-        out = []
-        for ch in s:
-            o = ord(ch)
-            if _SUR_LO <= o <= _SUR_HI:
-                out.append(chr(o + _SUR_SHIFT))
-            elif 0xD800 <= o <= 0xDFFF:
-                out.append("\ufffd")          # surrogateescape 범위 밖 고아 서로게이트(드묾)
-            else:
-                out.append(ch)
-        return "".join(out)
+    out = []
+    for ch in s:
+        o = ord(ch)
+        if _SUR_LO <= o <= _SUR_HI:
+            out.append(chr(o + _SUR_SHIFT))
+        elif 0xD800 <= o <= 0xDFFF:
+            out.append("\ufffd")          # surrogateescape 범위 밖 고아 서로게이트(드묾)
+        elif o >= _HI:
+            out.append(_ESC + ch)          # 원래 있던 사설영역 문자 — 표시자로 보존
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def fs_text(s):
     """DB 저장 문자열 → 파일시스템 경로(db_text 의 역변환)."""
-    if not isinstance(s, str) or not any(ord(ch) >= _SUR_LO + _SUR_SHIFT for ch in s):
+    if not isinstance(s, str) or not s:
         return s
-    return "".join(chr(ord(ch) - _SUR_SHIFT) if ord(ch) >= _SUR_LO + _SUR_SHIFT else ch for ch in s)
+    if (_isascii is not None and _isascii(s)) or not _NEEDS_FS.search(s):
+        return s
+    out = []
+    it = iter(s)
+    for ch in it:
+        o = ord(ch)
+        if ch == _ESC:
+            nxt = next(it, None)
+            if nxt is not None:
+                out.append(nxt)
+        elif o > _HI:
+            out.append(chr(o - _SUR_SHIFT))
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def connect(db_path: str, *, timeout: float = 30.0) -> sqlite3.Connection:
@@ -236,6 +278,12 @@ def init_db(db_path: str) -> None:
         ensure_column(conn, "scan_runs", "advanced_at", "REAL")
         # '멈춘 자료 집계'(부분 집계) 완료 시각 — total_bytes 가 하한값(재개 전)임을 화면에 표시
         ensure_column(conn, "scan_runs", "partial_agg_at", "REAL")
+        # 대상이 속한 마운트 지점(처음 시작 때) — 재개·진행 중 마운트 소실 판별 기준
+        ensure_column(conn, "scan_runs", "root_mount", "TEXT")
+        # 마운트 출처(예: isilon01:/ifs/data, /dev/sdb1) — 포탈이 같은 파일시스템을 식별(용량 중복 합산 방지)
+        ensure_column(conn, "scan_runs", "fs_source", "TEXT")
+        # 디렉터리 오류 수(fold 로 접힌 하위 폴더 오류 포함) — 재개 후에도 오류 수가 줄지 않게
+        ensure_column(conn, "directories", "error_count", "INTEGER NOT NULL DEFAULT 0")
         conn.execute(f"PRAGMA user_version={int(SCHEMA_VERSION)}")
         conn.commit()
     finally:

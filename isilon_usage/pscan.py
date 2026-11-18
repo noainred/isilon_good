@@ -13,10 +13,11 @@
      라운드로빈 치환 → 같은 아이실론을 **여러 노드로 동시 접근**해 메타데이터 부하 분산.
   4) 코디네이터가 루트 직속 파일 + 단위별 결과를 합산한다.
 
-한계(정직하게): 하드링크 중복 제거는 프로세스 경계를 넘지 못한다(단위 내에서만).
-보통 하드링크는 같은 상위 트리 안이라 영향이 작지만, 스냅샷/백업 트리는 과대 계상될
-수 있다. 1단계 분할이라 한 자식이 거대하면 그 프로세스가 straggler 가 된다(실제
-구현은 작업 훔치기/더 깊은 분할로 개선).
+하드링크(1.99.41): native 와 같은 정책 — 용량은 inode 당 한 번, 파일 수는 링크마다. 단위 안에서는
+(dev, ino) 집합으로, 단위 사이는 '단위 안에서 링크를 다 못 본 inode' 목록을 코디네이터가 모아 두 번째부터
+차감한다(예전엔 중복 제거가 없어 스냅샷/백업 트리가 몇 배로 부풀었다 — 재현 6.9배). one_file_system(-x)도
+native 처럼 다른 파일시스템 디렉터리를 세지도 내려가지도 않는다(예전엔 무시해 하위 마운트까지 합산).
+한계: 1단계 분할이라 한 자식이 거대하면 그 프로세스가 straggler 가 된다(적응형 분할로 완화).
 """
 
 import os
@@ -60,9 +61,47 @@ def _expired(deadline: float) -> bool:
     return bool(deadline) and time.time() >= deadline
 
 
+class _HardLinks:
+    """단위 하나의 하드링크(st_nlink>1) 집계 — 용량은 inode 당 한 번, 파일 수는 링크마다(native 와 같음).
+
+    open() = 이 단위에서 링크를 다 보지 못한 inode → 다른 단위에도 링크가 있을 수 있어 코디네이터가 합친다.
+    """
+    __slots__ = ("seen",)
+
+    def __init__(self) -> None:
+        self.seen = {}    # (dev, ino) -> [counted_bytes, links_seen, nlink]
+
+    def bytes_for(self, st, eb: int) -> int:
+        k = (st.st_dev, st.st_ino)
+        e = self.seen.get(k)
+        if e is None:
+            self.seen[k] = [eb, 1, st.st_nlink]
+            return eb
+        e[1] += 1
+        return 0
+
+    def open(self) -> dict:
+        return {k: v[0] for k, v in self.seen.items() if v[1] < v[2]}
+
+
+def _opt(opts, key, default):
+    return (opts or {}).get(key, default)
+
+
+def _other_fs(e, ref_dev) -> bool:
+    """디렉터리 항목이 기준과 다른 파일시스템(하위 마운트)인가 — one_file_system 용."""
+    if ref_dev is None:
+        return False
+    try:
+        return e.stat(follow_symlinks=False).st_dev != ref_dev
+    except OSError:
+        return True
+
+
 def scan_subtree(path: str, size_mode: str = "disk", per_file_work: int = 0,
-                 threads: int = 1, recursive: bool = True, deadline: float = 0.0) -> tuple:
-    """path 아래 전체(자기 포함)를 재귀로 훑어 (path, bytes, files, dirs, errors).
+                 threads: int = 1, recursive: bool = True, deadline: float = 0.0,
+                 opts: Optional[dict] = None) -> tuple:
+    """path 아래 전체(자기 포함)를 재귀로 훑어 (path, bytes, files, dirs, errors, open_hardlinks).
 
     프로세스 워커가 호출하는 모듈 레벨 함수(피클 가능). 스택 기반 반복(재귀 깊이 무제한).
     per_file_work>0 이면 파일마다 그만큼 CPU 연산을 더 한다(벤치마크 전용 — 실제
@@ -74,16 +113,27 @@ def scan_subtree(path: str, size_mode: str = "disk", per_file_work: int = 0,
     디렉터리는 각각 별도 단위로 처리되므로 부모는 내려가지 않는다).
     deadline>0(절대 epoch 시각)이면 그 시각에 멈춘다(오토튜닝의 시간상자 측정 — 부분
     결과 + files_per_sec 만 쓰고 합계는 버린다).
+    opts: {"one_fs": 다른 파일시스템 디렉터리 제외, "hardlink_dedup": 하드링크 용량 1회(기본 True)}.
+    open_hardlinks: {(dev, ino): bytes} — 이 단위에서 링크를 다 못 본 inode(코디네이터가 단위 간 중복 차감).
     """
     if not recursive:
-        return _scan_shallow(path, size_mode, deadline)
+        return _scan_shallow(path, size_mode, deadline, opts)
     if threads and threads > 1 and not per_file_work:
-        return _scan_subtree_threaded(path, size_mode, threads, deadline)
+        return _scan_subtree_threaded(path, size_mode, threads, deadline, opts)
+    dedup = _opt(opts, "hardlink_dedup", True)
+    hl = _HardLinks()
     total_bytes = 0
     files = 0
     dirs = 0
     errors = 0
     acc = 0
+    ref_dev = None
+    try:                                       # 단위 기준 파일시스템(노드 마운트 치환 경로도 자기 기준)
+        dst0 = os.stat(path, follow_symlinks=False)
+        if _opt(opts, "one_fs", False):
+            ref_dev = dst0.st_dev
+    except OSError:
+        pass
     stack = [path]
     while stack:
         if deadline and time.time() >= deadline:   # 시간상자 만료(오토튜닝)
@@ -102,10 +152,14 @@ def scan_subtree(path: str, size_mode: str = "disk", per_file_work: int = 0,
                 for e in it:
                     try:
                         if e.is_dir(follow_symlinks=False):
-                            stack.append(e.path)
+                            if not _other_fs(e, ref_dev):
+                                stack.append(e.path)
                         else:
                             st = e.stat(follow_symlinks=False)
-                            total_bytes += _entry_bytes(st, size_mode)
+                            eb = _entry_bytes(st, size_mode)
+                            if dedup and st.st_nlink > 1:
+                                eb = hl.bytes_for(st, eb)
+                            total_bytes += eb
                             files += 1
                             if per_file_work:          # 파일당 처리 비용 모사(벤치 전용)
                                 for k in range(per_file_work):
@@ -119,21 +173,28 @@ def scan_subtree(path: str, size_mode: str = "disk", per_file_work: int = 0,
         except OSError:
             errors += 1
     _maybe_report(path, files, total_bytes, path, force=True)
-    return (path, total_bytes, files, dirs, errors)
+    return (path, total_bytes, files, dirs, errors, hl.open())
 
 
 def _scan_subtree_threaded(path: str, size_mode: str, threads: int,
-                           deadline: float = 0.0) -> tuple:
+                           deadline: float = 0.0, opts: Optional[dict] = None) -> tuple:
     """scan_subtree 의 스레드판 — 디렉터리 작업큐를 T 스레드가 당겨 지연을 은닉한다.
 
-    임계구역은 카운터/큐 갱신뿐(작게) — stat/scandir(I/O)는 락 밖. 결과는 직렬판과
-    동일한 (path, bytes, files, dirs, errors) 튜플. 프로세스 내부에서만 도는 스레드라
-    프로세스 간 공유 상태는 없다(기존 pscan 정합성 그대로).
+    임계구역은 카운터/큐/하드링크 집합 갱신뿐(작게) — stat/scandir(I/O)는 락 밖. 결과는 직렬판과
+    동일한 6-튜플. 프로세스 내부에서만 도는 스레드라 프로세스 간 공유 상태는 없다.
     deadline>0 이면 그 절대 시각에 워커가 멈춘다(오토튜닝의 시간상자 측정).
     """
     import queue
     import threading
 
+    dedup = _opt(opts, "hardlink_dedup", True)
+    hl = _HardLinks()
+    ref_dev = None
+    if _opt(opts, "one_fs", False):
+        try:
+            ref_dev = os.stat(path, follow_symlinks=False).st_dev
+        except OSError:
+            ref_dev = None
     q: "queue.Queue[str]" = queue.Queue()
     q.put(path)
     lock = threading.Lock()
@@ -152,6 +213,7 @@ def _scan_subtree_threaded(path: str, size_mode: str, threads: int,
                 continue
             lb = lf = le = 0
             subs = []
+            links = []                          # (st, eb) — 하드링크는 공유 집합이라 락 안에서 판정
             try:                                # 디렉터리 자기 inode 분
                 dst = os.stat(d, follow_symlinks=False)
                 lb += _entry_bytes(dst, size_mode)
@@ -162,9 +224,15 @@ def _scan_subtree_threaded(path: str, size_mode: str, threads: int,
                     for e in it:
                         try:
                             if e.is_dir(follow_symlinks=False):
-                                subs.append(e.path)
+                                if not _other_fs(e, ref_dev):
+                                    subs.append(e.path)
                             else:
-                                lb += _entry_bytes(e.stat(follow_symlinks=False), size_mode)
+                                st = e.stat(follow_symlinks=False)
+                                eb = _entry_bytes(st, size_mode)
+                                if dedup and st.st_nlink > 1:
+                                    links.append((st, eb))
+                                else:
+                                    lb += eb
                                 lf += 1
                                 if (lf & 4095) == 0:
                                     with lock:   # 큰 디렉터리 안에서도 진행 보고 + 시간상자
@@ -175,15 +243,17 @@ def _scan_subtree_threaded(path: str, size_mode: str, threads: int,
                             le += 1
             except OSError:
                 le += 1
-            with lock:                          # 카운터/큐만 — 짧게
+            with lock:                          # 카운터/큐/하드링크만 — 짧게
+                for st, eb in links:
+                    lb += hl.bytes_for(st, eb)
                 tot["b"] += lb
                 tot["f"] += lf
                 tot["d"] += 1
                 tot["e"] += le
                 if (tot["d"] & 255) == 0:
                     _maybe_report(path, tot["f"], tot["b"], d)
-                for s in subs:
-                    q.put(s)
+                for s_ in subs:
+                    q.put(s_)
                     tot["pending"] += 1
                 tot["pending"] -= 1
 
@@ -194,7 +264,7 @@ def _scan_subtree_threaded(path: str, size_mode: str, threads: int,
     for t in ts:
         t.join()
     _maybe_report(path, tot["f"], tot["b"], path, force=True)
-    return (path, tot["b"], tot["f"], tot["d"], tot["e"])
+    return (path, tot["b"], tot["f"], tot["d"], tot["e"], hl.open())
 
 
 def _remap(child: str, root: str, node_mount: str) -> str:
@@ -203,12 +273,15 @@ def _remap(child: str, root: str, node_mount: str) -> str:
     return os.path.join(node_mount, rel) if rel != "." else node_mount
 
 
-def _scan_shallow(path: str, size_mode: str, deadline: float = 0.0) -> tuple:
+def _scan_shallow(path: str, size_mode: str, deadline: float = 0.0,
+                  opts: Optional[dict] = None) -> tuple:
     """path 직속 파일만 센다(자식 디렉터리로 내려가지 않음 — 적응형 분할의 '부모' 단위).
 
     자식 디렉터리들은 각각 별도 단위로 재귀 스캔되므로, 부모는 자기 inode + 직속 파일만
-    세면 누락/중복이 없다. dirs=1(자기 자신).
+    세면 누락/중복이 없다. dirs=1(자기 자신). 반환은 scan_subtree 와 같은 6-튜플.
     """
+    dedup = _opt(opts, "hardlink_dedup", True)
+    hl = _HardLinks()
     total_bytes = files = errors = 0
     try:
         dst = os.stat(path, follow_symlinks=False)
@@ -221,7 +294,10 @@ def _scan_shallow(path: str, size_mode: str, deadline: float = 0.0) -> tuple:
                 try:
                     if not e.is_dir(follow_symlinks=False):
                         st = e.stat(follow_symlinks=False)
-                        total_bytes += _entry_bytes(st, size_mode)
+                        eb = _entry_bytes(st, size_mode)
+                        if dedup and st.st_nlink > 1:
+                            eb = hl.bytes_for(st, eb)
+                        total_bytes += eb
                         files += 1
                         if (files & 4095) == 0:
                             _maybe_report(path, files, total_bytes, path)
@@ -231,11 +307,11 @@ def _scan_shallow(path: str, size_mode: str, deadline: float = 0.0) -> tuple:
                     errors += 1
     except OSError:
         errors += 1
-    return (path, total_bytes, files, 1, errors)
+    return (path, total_bytes, files, 1, errors, hl.open())
 
 
 def _split_units(child_dirs: List[str], procs: int, target_factor: int = 4,
-                 deadline: float = 0.0) -> list:
+                 deadline: float = 0.0, ref_dev=None) -> list:
     """1단계 자식이 프로세스 수보다 적으면 더 깊이 펼쳐 병렬 단위를 늘린다.
 
     반환: [(scan_path, top_label, recursive)]. 펼친 부모는 recursive=False(직속 파일만),
@@ -261,7 +337,7 @@ def _split_units(child_dirs: List[str], procs: int, target_factor: int = 4,
             continue
         try:
             subs = [e.path for e in os.scandir(upath)
-                    if e.is_dir(follow_symlinks=False)]
+                    if e.is_dir(follow_symlinks=False) and not _other_fs(e, ref_dev)]
         except OSError:
             subs = []
         if not subs:                 # 더 못 펼침(파일만 있는 잎 디렉터리)
@@ -277,7 +353,8 @@ def _split_units(child_dirs: List[str], procs: int, target_factor: int = 4,
 def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
                   node_mounts: Optional[List[str]] = None,
                   threads_per_proc: int = 1, max_seconds: float = 0.0,
-                  on_progress: Optional[Callable[[dict], None]] = None) -> dict:
+                  on_progress: Optional[Callable[[dict], None]] = None,
+                  one_file_system: bool = False, hardlink_dedup: bool = True) -> dict:
     """root 를 1단계 자식 단위로 쪼개 processes 개 프로세스로 병렬 스캔한다.
 
     threads_per_proc>1 이면 각 프로세스가 자기 단위를 다시 T 스레드로 훑어 **NFS 왕복
@@ -292,12 +369,18 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
     deadline = (t0 + max_seconds) if max_seconds else 0.0   # 오토튜닝 시간상자(0=무제한)
 
     # 루트 직속: 파일은 코디네이터가 직접 세고, 자식 디렉터리는 작업 단위로.
+    opts = {"one_fs": bool(one_file_system), "hardlink_dedup": bool(hardlink_dedup)}
     total_bytes = 0
     total_files = 0
     errors = 0
     child_dirs: List[str] = []
+    root_dev = None
+    root_hl = _HardLinks()
     try:
-        total_bytes += _entry_bytes(os.stat(root, follow_symlinks=False), size_mode)
+        rst = os.stat(root, follow_symlinks=False)
+        total_bytes += _entry_bytes(rst, size_mode)
+        if one_file_system:
+            root_dev = rst.st_dev
     except OSError:
         pass
     try:
@@ -305,9 +388,14 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
             for e in it:
                 try:
                     if e.is_dir(follow_symlinks=False):
-                        child_dirs.append(e.path)
+                        if not _other_fs(e, root_dev):
+                            child_dirs.append(e.path)
                     else:
-                        total_bytes += _entry_bytes(e.stat(follow_symlinks=False), size_mode)
+                        st = e.stat(follow_symlinks=False)
+                        eb = _entry_bytes(st, size_mode)
+                        if hardlink_dedup and st.st_nlink > 1:
+                            eb = root_hl.bytes_for(st, eb)
+                        total_bytes += eb
                         total_files += 1
                         if (total_files & 4095) == 0 and _expired(deadline):
                             break                      # 루트 직속 파일이 거대해도 시간상자 준수
@@ -321,6 +409,9 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
     n_units = len(child_dirs)
     failed_units: list = []     # 워커 실패(예외) — 0바이트 성공으로 합치지 않고 따로 보고한다
     workers_live: dict = {}     # 단위 경로 → 마지막 진행 보고(파일/바이트/현재 경로/pid/시각)
+    # 단위 간 하드링크 중복 차감: 먼저 끝난 단위(또는 루트 직속 파일)가 용량을 갖고, 나중 단위는 차감한다.
+    hl_seen = set(root_hl.open().keys())
+    hl_dup_bytes = 0
 
     if child_dirs:
         import multiprocessing
@@ -330,7 +421,7 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
         # 재귀로 스캔 → 누락/중복 없음. per_top 은 원래 1단계 자식(top)으로 합산.
         # 목표는 요청한 프로세스 수 기준이다(예전엔 min(processes, 최초 자식 수) 로 묶어,
         # 자식이 1~2개인 루트에선 목표 4~8 에서 펼치기를 멈춰 프로세스가 놀았다).
-        units = _split_units(child_dirs, int(processes or 1), deadline=deadline)
+        units = _split_units(child_dirs, int(processes or 1), deadline=deadline, ref_dev=root_dev)
         n_units = len(units)
         procs = max(1, min(int(processes or 1), n_units))
         top_acc: dict = {}
@@ -355,7 +446,7 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
                 sp = (_remap(upath, root, node_mounts[j % len(node_mounts)])
                       if node_mounts else upath)
                 futs[ex.submit(scan_subtree, sp, size_mode, 0,
-                               tpp if rec else 1, rec, deadline)] = (top, sp)
+                               tpp if rec else 1, rec, deadline, opts)] = (top, sp)
             done_n = 0
             last_prog = 0.0
             pending = set(futs)
@@ -377,7 +468,9 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
                     top, sp = futs[fut]
                     workers_live.pop(sp, None)
                     try:
-                        _, b, f, d, e = fut.result()
+                        res_t = fut.result()
+                        _, b, f, d, e = res_t[:5]
+                        open_hl = res_t[5] if len(res_t) > 5 else {}
                     except Exception as exc:    # noqa: BLE001 — 한 단위 실패가 전체를 막지 않되, 성공으로 위장하지 않는다
                         failed_units.append({"path": sp, "top": top,
                                              "error": "%s: %s" % (type(exc).__name__, exc)})
@@ -385,6 +478,12 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
                         a[3] += 1
                         done_n += 1
                         continue
+                    for k, kb in open_hl.items():   # 다른 단위가 이미 센 inode 면 이 단위 몫에서 뺀다
+                        if k in hl_seen:
+                            b -= kb
+                            hl_dup_bytes += kb
+                        else:
+                            hl_seen.add(k)
                     total_bytes += b
                     total_files += f
                     total_dirs += d
@@ -433,6 +532,9 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
         # 워커 실패(예외로 끝난 단위) — 합계에 들어가지 않은 부분. 비어 있지 않으면 결과는 '부분'이다.
         "failed_units": failed_units,
         "complete": not failed_units,
+        "one_file_system": bool(one_file_system),
+        "hardlink_dedup": bool(hardlink_dedup),
+        "hardlink_cross_unit_bytes": hl_dup_bytes,   # 단위 사이에서 중복이라 뺀 용량(진단용)
     }
 
 

@@ -37,6 +37,7 @@ import heapq
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -96,6 +97,66 @@ AGG_CACHE_KB = 64 * 1024
 # 되레 행 루프보다 느려진다(측정 23.7k 행/초 → 상향 시 158.4k). 30초 주기의
 # wal_checkpoint(TRUNCATE) 가 별도로 WAL 크기를 계속 눌러 준다.
 AGG_AUTOCKPT_PAGES = 25000
+
+
+# --- 마운트 정보(단일 소스) — 마운트 소실 판별·파일시스템 식별에 쓴다 ---
+_MI_ESC = re.compile(rb"\\([0-7]{3})")
+
+
+def _mi_unescape(b: bytes) -> str:
+    return os.fsdecode(_MI_ESC.sub(lambda m: bytes([int(m.group(1), 8)]), b))
+
+
+def mount_table():
+    """/proc/self/mountinfo → {마운트 지점: (fstype, source)}. 읽을 수 없으면 None(리눅스 외·권한).
+
+    같은 지점에 여러 번 마운트됐으면 마지막(보이는) 것이 남는다. bind 마운트도 잡힌다
+    (os.path.ismount 는 같은 파일시스템 안의 bind 마운트를 놓친다).
+    """
+    try:
+        with open("/proc/self/mountinfo", "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return None
+    out = {}
+    for line in data.split(b"\n"):
+        parts = line.split(b" ")
+        if len(parts) < 7:
+            continue
+        try:
+            sep = parts.index(b"-", 6)
+        except ValueError:
+            continue
+        fstype = parts[sep + 1].decode("ascii", "replace") if len(parts) > sep + 1 else ""
+        source = _mi_unescape(parts[sep + 2]) if len(parts) > sep + 2 else ""
+        out[_mi_unescape(parts[4])] = (fstype, source)
+    return out
+
+
+def is_mount_point(path: str, table=None) -> bool:
+    """path(실제 경로)가 지금 마운트 지점인가 — mountinfo 우선, 못 읽으면 os.path.ismount."""
+    if table is None:
+        table = mount_table()
+    if table is not None:
+        return path in table
+    return os.path.ismount(path)
+
+
+def mount_info(path: str):
+    """path 가 속한 마운트 (지점, fstype, source). 예: ('/mnt/isilon', 'nfs', 'isilon01:/ifs/data').
+
+    mountinfo 를 못 읽으면 os.path.ismount 로 지점만 찾는다(fstype/source 는 빈 문자열).
+    """
+    table = mount_table()
+    p = os.path.realpath(path)
+    while True:
+        if is_mount_point(p, table):
+            fs = (table or {}).get(p, ("", ""))
+            return p, fs[0], fs[1]
+        parent = os.path.dirname(p)
+        if parent == p:
+            return p, "", ""
+        p = parent
 
 
 def _age_bucket(ref: float, mtime: float) -> str:
@@ -180,13 +241,17 @@ def _merge_counts(dst: dict, src: dict) -> None:
             e[1] += v[1]
 
 
-def _top_merge_into(h: list, items: list) -> None:
-    """Top-N 후보 힙 items 를 힙 h 에 병합(크기 TOP_FILES_N 유지)."""
+def _top_merge_into(h: list, items: list) -> list:
+    """Top-N 후보 힙 items 를 힙 h 에 병합(크기 TOP_FILES_N 유지). 실제로 힙에 들어간 항목을 돌려준다."""
+    entered = []
     for it in items:
         if len(h) < TOP_FILES_N:
             heapq.heappush(h, it)
+            entered.append(it)
         elif it[0] > h[0][0]:
             heapq.heapreplace(h, it)
+            entered.append(it)
+    return entered
 
 
 class _TimedLock:
@@ -274,7 +339,7 @@ class _DirAcc:
     age 통계에선 26~50개). 청크를 다른 워커가 대신 처리할 수 있어 갱신은 _dlock 안에서 한다.
     """
     __slots__ = ("bytes", "files", "age", "atime", "uid", "ext", "size", "top",
-                 "new_inodes", "pending", "abandoned")
+                 "new_inodes", "pending", "abandoned", "errors")
 
     def __init__(self) -> None:
         self.bytes = 0
@@ -288,6 +353,7 @@ class _DirAcc:
         self.new_inodes: list = []
         self.pending = 0          # 다른 워커가 대신 처리 중인 청크 수
         self.abandoned = False    # 중단 등으로 버려짐 — 늦게 끝난 청크는 반영하지 않음
+        self.errors = 0           # fold 로 접힌 하위 폴더 읽기 오류 수(완료 때 오류 수에 합산)
 
 
 class Scanner:
@@ -362,6 +428,18 @@ class Scanner:
                       "max_ms": 0.0, "last_busy": 0, "last_at": 0.0, "wal_mb": 0.0, "next_at": 0.0}
         self._advanced_at = 0.0        # 마지막으로 파일/디렉터리 수가 실제로 늘어난 시각
         self._adv_col = False          # scan_runs.advanced_at 컬럼 존재 여부(구버전 DB 호환)
+        # 마운트 소실 판별: 스캔이 처음 시작될 때 대상이 속한 마운트 지점(재개 때는 DB 에 기록된 값)
+        self._root_mount: Optional[str] = None
+        self._errcnt_col = False       # directories.error_count 컬럼 존재 여부(구버전 DB 호환)
+        self._fs_source = None         # 마운트 출처(예: isilon01:/ifs/data) — 포탈의 파일시스템 식별용
+        self._root_ok_until = 0.0      # 권한 오류 등 흔한 오류에서 검사를 1초에 한 번으로 묶는다
+        self._clear_finished = False   # 재개 세션: 관리 DB 의 지난 finished_at 을 지운다(경과·ETA 정지 방지)
+        self._stats_err_logged = None  # 통계 저장 실패 로그(같은 오류 반복 기록 방지)
+        # 리포트 통계 저널: 다음 커밋에 같은 트랜잭션으로 덧붙일 델타((kind, key) -> [bytes, files])와
+        # 힙에 새로 들어간 Top-N 후보. 디렉터리 완료와 원자적으로 기록돼 강제 종료에도 통계가 빠지지 않는다.
+        self._jr: dict = {}
+        self._jr_top: list = []
+        self._journal_ok = True
         self._pagg_col = False         # scan_runs.partial_agg_at 컬럼 존재 여부
         # 워커 예외 전달: 한 워커가 죽으면 전체를 멈추고 run() 이 status=error 로 끝낸다.
         self._worker_exc: list = []
@@ -512,6 +590,8 @@ class Scanner:
             self._agg_mark = (now, self._processed)
             fields["agg_rate"] = round(self._agg_rate, 1)
         dbmod.update_run(conn, self.run_id, **fields)
+        if conn is self._disc_conn:
+            self._journal_stats_locked(conn)   # 이 커밋에 실리는 완료 디렉터리의 통계 델타 — 같은 트랜잭션
         conn.commit()
         # 집계 리포트(나이/소유자/확장자)를 주기적으로 저장(재개 안전).
         if (now - self._last_stats_write) > 20.0:
@@ -649,10 +729,15 @@ class Scanner:
                 "fs_free_bytes": self._fs_free,
                 "current_dir": getattr(self, "_current_dir", None),
             }
+            if self._fs_source:
+                fields["fs_source"] = self._fs_source
             if finished:
                 fields["finished_at"] = time.time()
+            elif self._clear_finished:
+                fields["finished_at"] = None     # 재개 세션: 지난 일시정지 시각을 지운다
             mgr.update_scan(self._mgr_conn, self.manager_scan_id, **fields)
             self._mgr_conn.commit()
+            self._clear_finished = False
         except Exception:
             # 관리 DB 갱신 실패가 스캔을 멈추면 안 된다.
             pass
@@ -668,16 +753,23 @@ class Scanner:
                 _cols = {r[1] for r in conn.execute("PRAGMA table_info(scan_runs)")}
                 self._adv_col = "advanced_at" in _cols
                 self._pagg_col = "partial_agg_at" in _cols
+                self._mount_col = "root_mount" in _cols
+                self._errcnt_col = "error_count" in {
+                    r[1] for r in conn.execute("PRAGMA table_info(directories)")}
             except Exception:  # noqa: BLE001
                 self._adv_col = False
                 self._pagg_col = False
+                self._mount_col = False
+                self._errcnt_col = False
 
             existing = dbmod.latest_run_id(conn) if self.resume else None
             if existing:
                 # 중단된 스캔 이어하기: 기존 run 과 진행 카운터를 복원
                 self.run_id = existing
                 self._load_progress(conn)
-                dbmod.update_run(conn, self.run_id, scanner_pid=os.getpid())
+                # 재개 세션은 '진행 중' — 지난 일시정지의 finished_at 이 남아 있으면 경과·ETA 가 그 시각에 멈춘다
+                dbmod.update_run(conn, self.run_id, scanner_pid=os.getpid(), finished_at=None)
+                self._clear_finished = True
             else:
                 self.resume = False
                 self.run_id = dbmod.create_run(
@@ -710,7 +802,7 @@ class Scanner:
             # 대상(NAS) 접근 확인 — 못 열거나(마운트 해제·권한) 재개인데 전에 본 하위가 하나도 안 보이면
             # (빈 마운트 지점) 진행하지 않는다. 예전엔 남은 디렉터리가 전부 '오류 행'으로 확정돼 거의 0 인
             # 합계가 '완료'로 굳었고, 마운트가 돌아와도 재개가 그 행들을 다시 훑지 않았다.
-            self._probe_paths = self._load_probe_paths(conn)
+            self._init_root_mount(conn)
             self._check_root_access(initial=True)
 
             # 루트 디렉터리를 프론티어에 등록
@@ -767,29 +859,55 @@ class Scanner:
                     pass
 
     # ----- 대상(NAS) 접근 확인 — 마운트 해제·장애를 '디렉터리 오류'와 구분 -----
-    def _load_probe_paths(self, conn, limit: int = 8) -> list:
-        """재개 때: 이미 발견한 깊이 1 디렉터리 몇 개(실제 경로) — 빈 마운트 지점 판별용."""
+    def _init_root_mount(self, conn) -> None:
+        """대상이 속한 마운트 지점을 정한다 — 새 스캔은 지금 값, 재개는 처음 시작 때 기록한 값.
+
+        재개 때 지금 값을 다시 구하면 안 된다: 마운트가 빠진 상태라면 더 위(예: '/')가 나와 소실을 못 잡는다.
+        """
+        stored = None
+        if self._mount_col:
+            try:
+                r = conn.execute("SELECT root_mount FROM scan_runs WHERE id=?", (self.run_id,)).fetchone()
+                stored = (r[0] if r else None) or None
+            except Exception:  # noqa: BLE001
+                stored = None
+        if stored:
+            self._root_mount = stored
+            try:
+                r = conn.execute("SELECT fs_source FROM scan_runs WHERE id=?", (self.run_id,)).fetchone()
+                self._fs_source = (r[0] if r else None) or None
+            except Exception:  # noqa: BLE001
+                pass
+            return
         try:
-            rows = conn.execute("SELECT path FROM directories WHERE run_id=? AND depth=1 LIMIT ?",
-                                (self.run_id, int(limit))).fetchall()
-            return [dbmod.fs_text(r[0]) for r in rows]
+            mp, _fstype, src = mount_info(self.root_path)
+            self._root_mount = mp
+            self._fs_source = src or mp
         except Exception:  # noqa: BLE001
-            return []
+            self._root_mount = None
+        if self._mount_col and self._root_mount:
+            try:
+                dbmod.update_run(conn, self.run_id, root_mount=self._root_mount, fs_source=self._fs_source)
+                conn.commit()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _root_lost(self) -> Optional[str]:
         """대상이 통째로 안 보이면 사유 문자열, 정상이면 None.
 
-        ① 루트를 열 수 없음 ② 전에 본 깊이 1 디렉터리가 하나도 없음(마운트가 빠져 빈 마운트 지점만 남은 경우).
-        개별 디렉터리가 지워진 것(churn)·권한 없음은 여기 해당하지 않는다.
+        ① 루트를 열 수 없음(마운트 아래 경로가 사라짐·NFS 오류) ② 스캔 시작 때 대상이 속했던 마운트 지점이 지금
+        마운트돼 있지 않음(빈 마운트 지점만 남은 경우). 개별 폴더 삭제(churn)·권한 오류는 해당하지 않는다.
+        (1.99.40 은 처음 본 최상위 폴더 8개가 다 없으면 소실로 봤는데, 사용자가 그 폴더들을 정상적으로 지우면
+         재개가 영구히 거부됐다 — 마운트 지점 기준으로 바꿨다.)
         """
         try:
             with os.scandir(self.root_path) as it:
                 next(it, None)
         except OSError as exc:
             return "대상 경로에 접근할 수 없습니다(%s: %s)" % (type(exc).__name__, exc)
-        probes = getattr(self, "_probe_paths", None) or []
-        if probes and not any(os.path.lexists(p) for p in probes):
-            return "대상 경로에서 이전에 본 하위 폴더가 하나도 보이지 않습니다(마운트 해제 의심)"
+        mp = self._root_mount
+        if mp and mp != "/" and not is_mount_point(mp):
+            return "대상이 있던 마운트 지점(%s)이 마운트되어 있지 않습니다(NAS 마운트 해제 의심)" % mp
         return None
 
     def _check_root_access(self, *, initial: bool = False) -> None:
@@ -797,14 +915,27 @@ class Scanner:
         if why:
             raise RuntimeError(why + " — NAS 마운트를 확인한 뒤 재개하세요. 진행분은 보존됩니다.")
 
-    def _pause_if_root_lost(self) -> None:
-        """디렉터리 오류가 났을 때 호출: 대상 전체 소실이면 자동 일시정지(오류 행으로 확정하지 않음)."""
+    # 마운트 소실과 함께 흔히 나는 오류 — 이때는 검사를 미루지 않는다(오류 행으로 잘못 확정되지 않게)
+    _LOSS_ERRNOS = frozenset(e for e in (getattr(__import__("errno"), n, None) for n in (
+        "ENOENT", "ESTALE", "EIO", "ENOTCONN", "ENODEV", "EHOSTDOWN", "EHOSTUNREACH", "ETIMEDOUT")) if e)
+
+    def _pause_if_root_lost(self, exc: Optional[BaseException] = None) -> None:
+        """디렉터리·파일 오류가 났을 때 호출: 대상 전체 소실이면 자동 일시정지(오류 행으로 확정하지 않음).
+
+        권한 오류처럼 흔하고 소실과 무관한 오류는 1초에 한 번만 검사한다(대량 권한 오류 트리에서 비용 제한).
+        """
         if self.stop_event.is_set():
+            return
+        now = time.monotonic()
+        suspicious = exc is None or getattr(exc, "errno", None) in self._LOSS_ERRNOS
+        if not suspicious and now < self._root_ok_until:
             return
         why = self._root_lost()
         if why:
             self._stop_reason = why + " — 자동 일시정지. NAS 복구 후 재개하세요(진행분 보존)."
             self.stop_event.set()
+        else:
+            self._root_ok_until = now + 1.0
 
     def _load_progress(self, conn) -> None:
         """재개 시 기존 per-run DB 에서 진행 카운터를 복원한다."""
@@ -815,7 +946,8 @@ class Scanner:
                  COALESCE(SUM(CASE WHEN status='done' THEN 1 ELSE 0 END),0)     AS done,
                  COALESCE(SUM(own_bytes),0)  AS b,
                  COALESCE(SUM(file_count),0) AS f,
-                 COALESCE(SUM(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END),0) AS e
+                 COALESCE(SUM(CASE WHEN error_count > 0 THEN error_count
+                                   WHEN error IS NOT NULL THEN 1 ELSE 0 END),0) AS e
                FROM directories WHERE run_id=?""",
             (self.run_id,),
         ).fetchone()
@@ -842,7 +974,7 @@ class Scanner:
 
     # ----- 집계 리포트(나이/소유자/확장자) -----
     @staticmethod
-    def _stat_bump(d: dict, key: str, eb: int, fcount: int, cap: int = STAT_KEY_CAP) -> None:
+    def _stat_bump(d: dict, key: str, eb: int, fcount: int, cap: int = STAT_KEY_CAP) -> str:
         e = d.get(key)
         if e is None:
             if len(d) >= cap:        # distinct 키 폭증 방지 — 초과분은 '(기타)'로
@@ -853,44 +985,129 @@ class Scanner:
                 d[key] = e
         e[0] += eb
         e[1] += fcount
+        return key
 
     def _accum_merge(self, l_age: dict, l_atime: dict, l_uid: dict, l_ext: dict,
-                     l_size: dict) -> None:
-        """스레드 로컬 집계 dict 들을 공유 집계에 병합(_dlock 안에서 호출, 캡은 여기서 적용)."""
-        for k, v in l_age.items():
-            self._stat_bump(self._stat_age, k, v[0], v[1])
-        for k, v in l_atime.items():
-            self._stat_bump(self._stat_atime_age, k, v[0], v[1])
-        for k, v in l_uid.items():
-            self._stat_bump(self._stat_uid, k, v[0], v[1], cap=50000)
-        for k, v in l_ext.items():
-            self._stat_bump(self._stat_ext, k, v[0], v[1])
-        for k, v in l_size.items():
-            self._stat_bump(self._stat_size, k, v[0], v[1])
+                     l_size: dict, journal: bool = False) -> None:
+        """스레드 로컬 집계 dict 들을 공유 집계에 병합(_dlock 안에서 호출, 캡은 여기서 적용).
 
-    def _write_stats(self, conn) -> None:
-        """집계를 scan_stats 에 저장(이 run 행 교체). 확장자는 상위 500개만."""
-        if self.run_id is None:
+        journal=True 면 실제로 쓰인 키로 저널 델타에도 더한다(다음 커밋에 같은 트랜잭션으로 기록).
+        확장자 키는 DB 형식으로 — 재개 때 복원한 키(DB 형식)와 새로 센 키(서로게이트)가 따로 쌓였다가 저장 때
+        같은 키가 되어 PRIMARY KEY 충돌 → 통계·Top-N 저장 전체가 조용히 실패했다(1.99.40 회귀).
+        """
+        jr = self._jr if (journal and self._journal_ok) else None
+        for kind, dst, src, cap in (("age", self._stat_age, l_age, STAT_KEY_CAP),
+                                    ("atime_age", self._stat_atime_age, l_atime, STAT_KEY_CAP),
+                                    ("owner", self._stat_uid, l_uid, 50000),
+                                    ("ext", self._stat_ext, l_ext, STAT_KEY_CAP),
+                                    ("size", self._stat_size, l_size, STAT_KEY_CAP)):
+            for k, v in src.items():
+                if kind == "ext":
+                    k = dbmod.db_text(k)
+                ek = self._stat_bump(dst, k, v[0], v[1], cap=cap)
+                if jr is not None:
+                    e = jr.get((kind, ek))
+                    if e is None:
+                        jr[(kind, ek)] = [v[0], v[1]]
+                    else:
+                        e[0] += v[0]
+                        e[1] += v[1]
+
+    def _journal_stats_locked(self, conn) -> None:
+        """대기 중인 통계 델타·Top-N 후보를 저널 테이블에 쓴다 — 커밋 직전, 같은 트랜잭션(_dlock 안).
+
+        저널을 쓸 수 없으면(구버전 DB 등) 끄고 예전 방식(20초 주기 스냅샷)으로 돌아간다.
+        """
+        if not self._journal_ok or (not self._jr and not self._jr_top):
             return
         try:
-            dbmod.replace_scan_stats(conn, self.run_id, "age",
-                                     [(k, v[0], v[1]) for k, v in self._stat_age.items()])
-            dbmod.replace_scan_stats(conn, self.run_id, "atime_age",
-                                     [(k, v[0], v[1]) for k, v in self._stat_atime_age.items()])
-            dbmod.replace_scan_stats(conn, self.run_id, "owner",
-                                     [(k, v[0], v[1]) for k, v in self._stat_uid.items()])
-            ext_top = sorted(self._stat_ext.items(), key=lambda kv: kv[1][0],
-                             reverse=True)[:500]
-            dbmod.replace_scan_stats(conn, self.run_id, "ext",
-                                     [(dbmod.db_text(k), v[0], v[1]) for k, v in ext_top])
-            dbmod.replace_scan_stats(conn, self.run_id, "size",
-                                     [(k, v[0], v[1]) for k, v in self._stat_size.items()])
-            dbmod.replace_top_files(
-                conn, self.run_id,
-                [(dbmod.db_text(p), b, m, u, a) for (b, p, m, u, a) in self._top_files])
-            conn.commit()
-        except Exception:
+            if self._jr:
+                conn.executemany(
+                    "INSERT INTO stats_journal(run_id, kind, key, bytes, files) VALUES (?,?,?,?,?)",
+                    [(self.run_id, k[0], str(k[1]), int(v[0]), int(v[1])) for k, v in self._jr.items()])
+            if self._jr_top:
+                conn.executemany(
+                    "INSERT INTO top_journal(run_id, path, bytes, mtime, uid, atime) VALUES (?,?,?,?,?,?)",
+                    [(self.run_id, str(p), int(b), float(m or 0), int(u or 0), float(a or 0))
+                     for (b, p, m, u, a) in self._jr_top])
+        except Exception as exc:  # noqa: BLE001
+            self._journal_ok = False
+            self._log("리포트 통계 저널을 쓸 수 없어 끕니다(20초 주기 저장으로): %s" % exc, conn)
+        self._jr = {}
+        self._jr_top = []
+
+    def _commit_disc_locked(self) -> None:
+        """탐색 연결 커밋 — 디렉터리 완료와 그 통계 델타를 같은 트랜잭션으로(_dlock 안에서 호출)."""
+        self._journal_stats_locked(self._disc_conn)
+        self._disc_conn.commit()
+
+    def _write_stats(self, conn) -> None:
+        """집계를 scan_stats·top_files 에 저장(이 run 행 교체). 확장자는 상위 500개만.
+
+        종류별로 따로 시도한다 — 한 종류가 실패해도 나머지는 저장되고, 실패는 진단 로그에 남긴다
+        (예전엔 예외 하나를 통째로 삼켜, 앞 단계 실패 시 크기 통계·Top-N 이 아무 표시 없이 멈췄다).
+        """
+        if self.run_id is None:
+            return
+        ext_top = sorted(self._stat_ext.items(), key=lambda kv: kv[1][0], reverse=True)[:500]
+        jobs = (
+            ("age", lambda: dbmod.replace_scan_stats(
+                conn, self.run_id, "age", [(k, v[0], v[1]) for k, v in self._stat_age.items()])),
+            ("atime_age", lambda: dbmod.replace_scan_stats(
+                conn, self.run_id, "atime_age", [(k, v[0], v[1]) for k, v in self._stat_atime_age.items()])),
+            ("owner", lambda: dbmod.replace_scan_stats(
+                conn, self.run_id, "owner", [(k, v[0], v[1]) for k, v in self._stat_uid.items()])),
+            ("ext", lambda: dbmod.replace_scan_stats(
+                conn, self.run_id, "ext", [(k, v[0], v[1]) for k, v in ext_top])),
+            ("size", lambda: dbmod.replace_scan_stats(
+                conn, self.run_id, "size", [(k, v[0], v[1]) for k, v in self._stat_size.items()])),
+            ("top_files", lambda: dbmod.replace_top_files(
+                conn, self.run_id, [(p, b, m, u, a) for (b, p, m, u, a) in self._top_files])),
+        )
+        failed = []
+        ok_kinds = []
+        try:   # 스냅샷과 저널 정리를 '한' 트랜잭션으로(중간에 끊기면 둘 다 이전 상태 — 이중 계산 없음)
+            if not conn.in_transaction:
+                conn.execute("BEGIN")
+        except Exception:  # noqa: BLE001
             pass
+        for name, fn in jobs:
+            try:
+                conn.execute("SAVEPOINT iu_stats")
+                fn()
+                conn.execute("RELEASE iu_stats")
+                ok_kinds.append(name)
+            except Exception as exc:  # noqa: BLE001 — 통계 저장 실패가 스캔을 멈추면 안 된다
+                try:
+                    conn.execute("ROLLBACK TO iu_stats")
+                    conn.execute("RELEASE iu_stats")
+                except Exception:  # noqa: BLE001
+                    pass
+                failed.append("%s: %s: %s" % (name, type(exc).__name__, exc))
+        try:
+            self._after_stats_written(conn, ok_kinds)
+            conn.commit()
+        except Exception as exc:  # noqa: BLE001
+            failed.append("commit: %s: %s" % (type(exc).__name__, exc))
+        if failed:
+            msg = "리포트 통계 저장 실패: " + "; ".join(failed)[:400]
+            if msg != self._stats_err_logged:
+                self._stats_err_logged = msg
+                self._log(msg, conn)
+
+    def _after_stats_written(self, conn, ok_kinds) -> None:
+        """스냅샷을 쓴 종류의 저널을 같은 트랜잭션에서 지운다(스냅샷에 이미 포함). 실패한 종류는 저널 유지."""
+        if not self._journal_ok:
+            return
+        try:
+            for kind in ok_kinds:
+                if kind == "top_files":
+                    conn.execute("DELETE FROM top_journal WHERE run_id=?", (self.run_id,))
+                else:
+                    conn.execute("DELETE FROM stats_journal WHERE run_id=? AND kind=?", (self.run_id, kind))
+        except Exception as exc:  # noqa: BLE001 — 저널 테이블이 없는 구버전 DB
+            self._journal_ok = False
+            self._log("리포트 통계 저널 정리 실패 — 저널을 끕니다: %s" % exc, conn)
 
     def _load_stats(self, conn) -> None:
         for kind, d in (("age", self._stat_age), ("owner", self._stat_uid),
@@ -908,6 +1125,22 @@ class Scanner:
                 for r in dbmod.get_top_files(conn, self.run_id)]
             heapq.heapify(self._top_files)
         except Exception:
+            pass
+        # 저널 재생: 마지막 스냅샷 이후 커밋된 디렉터리의 통계 델타(강제 종료로 스냅샷에 못 들어간 부분)
+        caps = {"owner": 50000}
+        dicts = {"age": self._stat_age, "atime_age": self._stat_atime_age, "owner": self._stat_uid,
+                 "ext": self._stat_ext, "size": self._stat_size}
+        try:
+            for r in conn.execute("SELECT kind, key, SUM(bytes), SUM(files) FROM stats_journal "
+                                  "WHERE run_id=? GROUP BY kind, key", (self.run_id,)):
+                d = dicts.get(r[0])
+                if d is not None:
+                    self._stat_bump(d, r[1], int(r[2] or 0), int(r[3] or 0), cap=caps.get(r[0], STAT_KEY_CAP))
+            have = {it[1] for it in self._top_files}
+            items = [(int(r[1]), r[0], r[2], r[3], float(r[4] or 0)) for r in conn.execute(
+                "SELECT path, bytes, mtime, uid, atime FROM top_journal WHERE run_id=?", (self.run_id,))]
+            _top_merge_into(self._top_files, [it for it in items if it[1] not in have])
+        except Exception:  # noqa: BLE001 — 저널 테이블이 없는 구버전 DB
             pass
 
     def _safe_stat(self, entry):
@@ -1005,7 +1238,7 @@ class Scanner:
         finally:
             with self._dlock:
                 try:
-                    self._disc_conn.commit()
+                    self._commit_disc_locked()
                     self._disc_conn.close()
                 except Exception:
                     pass
@@ -1047,7 +1280,7 @@ class Scanner:
                 ph = ",".join("?" * len(ids))
                 self._disc_conn.execute(
                     "UPDATE directories SET status='claimed' WHERE id IN (%s)" % ph, ids)
-                self._disc_conn.commit()
+                self._commit_disc_locked()
                 self._disc_active += 1
                 return rows
             # pending 없음: 아무도 작업 중이 아니면 끝, 아니면 잠시 대기
@@ -1080,7 +1313,7 @@ class Scanner:
                     for row in batch:
                         if self._stopped():
                             break
-                        self._worker_dirs[widx] = row["path"]   # 이 워커가 지금 보는 디렉터리
+                        self._worker_dirs[widx] = dbmod.fs_text(row["path"])   # 이 워커가 지금 보는 디렉터리(실제 경로)
                         self._discover_one(row["id"], row["path"], row["depth"])
                 finally:
                     self._worker_dirs[widx] = None
@@ -1164,18 +1397,15 @@ class Scanner:
                         file_chunk.append(entry)
                         if len(file_chunk) >= STAT_CHUNK:
                             chunk, file_chunk = file_chunk, []
-                            self._dispatch_chunk(acc, chunk, path)
+                            self._dispatch_chunk(acc, chunk, fpath)
             if file_chunk:
                 chunk, file_chunk = file_chunk, []
-                self._dispatch_chunk(acc, chunk, path)
+                self._dispatch_chunk(acc, chunk, fpath)
         except OSError as exc:
             err = dbmod.db_text("%s: %s" % (type(exc).__name__, exc))
             # 대상 전체가 사라졌으면(마운트 해제·NAS 장애) 오류 행으로 확정하지 않고 자동 일시정지 —
             # 아래 완료 블록이 _stopped() 를 보고 이 디렉터리를 미완료로 남긴다(복구 후 재개하면 다시 훑음).
-            self._pause_if_root_lost()
-            with self._dlock:
-                if not self._stopped():
-                    self._error_dirs += 1
+            self._pause_if_root_lost(exc)
 
         # 다른 워커에게 넘긴 청크가 끝날 때까지(그동안 큐를 직접 돕는다 — 교착 없음)
         self._wait_chunks(acc)
@@ -1191,9 +1421,17 @@ class Scanner:
             # 누적분(acc)도 같이 버린다 — 재개 후 다시 훑을 때 통계가 중복되지 않는다.
             if self._stopped():
                 acc.abandoned = True
+                # 이 디렉터리의 청크가 진행 표시용 공유 카운터에 먼저 더해 둔 몫을 되돌린다 — 안 그러면
+                # 일시정지 직후 '조사 용량/파일 수'가 커밋된 행 합보다 크게 남는다(재개 때야 바로잡혔다).
+                self._scanned_bytes -= acc.bytes
+                self._total_files -= acc.files
                 return
             own_bytes = acc.bytes + fold_dir_bytes + dir_bytes
             file_count = acc.files
+            n_err = acc.errors + (1 if err else 0)
+            self._error_dirs += n_err
+            if acc.errors and not err:
+                err = "하위(fold) 폴더 읽기 오류 %d개" % acc.errors
             self._scanned_bytes += dir_bytes + fold_dir_bytes
             if children:
                 self._disc_conn.executemany(
@@ -1202,31 +1440,41 @@ class Scanner:
                        VALUES (?, ?, ?, ?, ?, 'pending')""",
                     children,
                 )
-            self._disc_conn.execute(
-                """UPDATE directories
-                   SET status='discovered', own_bytes=?, file_count=?, subdir_count=?, error=?
-                   WHERE id=?""",
-                (own_bytes, file_count, subdir_count, err, dir_id),
-            )
+            if self._errcnt_col:
+                self._disc_conn.execute(
+                    """UPDATE directories
+                       SET status='discovered', own_bytes=?, file_count=?, subdir_count=?, error=?,
+                           error_count=?
+                       WHERE id=?""",
+                    (own_bytes, file_count, subdir_count, err, n_err, dir_id),
+                )
+            else:
+                self._disc_conn.execute(
+                    """UPDATE directories
+                       SET status='discovered', own_bytes=?, file_count=?, subdir_count=?, error=?
+                       WHERE id=?""",
+                    (own_bytes, file_count, subdir_count, err, dir_id),
+                )
             if acc.new_inodes:   # 완료 확정과 같은 트랜잭션 — 재개 후에도 하드링크 1회 계산 유지
                 self._disc_conn.executemany(
                     "INSERT OR IGNORE INTO seen_inodes (run_id, dev, ino) VALUES (?, ?, ?)",
                     [(self.run_id, dv, ino) for dv, ino in acc.new_inodes])
             # 파일별 통계/Top-N 은 완료 확정과 함께 공유 집계로(같은 커밋에 실린다)
-            _top_merge_into(self._top_files, acc.top)
-            self._accum_merge(acc.age, acc.atime, acc.uid, acc.ext, acc.size)
+            entered = _top_merge_into(self._top_files,
+                                      [(t[0], dbmod.db_text(t[1])) + tuple(t[2:]) for t in acc.top])
+            if self._journal_ok:
+                self._jr_top.extend(entered)
+            self._accum_merge(acc.age, acc.atime, acc.uid, acc.ext, acc.size, journal=True)
             # 커밋 배칭: 디렉터리마다 fsync 하던 것을 제거하고, 아래 진행 flush(최대
             # 0.4s 스로틀)에서 한 번에 커밋한다. 같은 커넥션이라 미커밋 쓰기도 다른 워커의
             # claim 쿼리엔 보인다(정합성 유지). 종료 시 _discover 의 마지막 커밋이 꼬리를
             # 비우고, kill -9 면 claimed→pending 으로 되돌아 재스캔되어 안전하다.
             self._discovered += 1
             self._advanced_at = time.time()
-            if depth == 0 and children and not getattr(self, "_probe_paths", None):
-                self._probe_paths = [dbmod.fs_text(c[2]) for c in children[:8]]   # 마운트 소실 판별용
             if depth > 0 and not over_fold:   # 넘김 행의 깊이는 논리값이라 최대 깊이 표시엔 반영 안 함
                 self._maybe_update_depth(self._disc_conn, depth)
             self._flush_progress_locked(self._disc_conn,
-                                        current_dir=path, current_depth=depth)
+                                        current_dir=fpath, current_depth=depth)
 
     def _fold_subtree(self, root: str, budget: int = 0, deadline: float = 0.0,
                       acc: Optional[_DirAcc] = None):
@@ -1287,10 +1535,10 @@ class Scanner:
                 if files_chunk:
                     used += len(files_chunk)
                     self._dispatch_chunk(acc, files_chunk, d)
-            except OSError:
-                self._pause_if_root_lost()
+            except OSError as exc:
+                self._pause_if_root_lost(exc)
                 with self._dlock:
-                    self._error_dirs += 1
+                    acc.errors += 1          # 완료 때 오류 수에 합산(멈추면 버림 — 재개 때 다시 셈)
         return dir_bytes, [], used
 
     # ----- 파일 청크 처리(공통) + 작업 나눔 -----
@@ -1401,6 +1649,8 @@ class Scanner:
             _local_top(l_top, entry.path, eb, st)
             _local_accum(ref, l_age, l_atime, l_uid, l_ext, l_size, entry.name, st, eb)
         with self._dlock:                       # 락 안 — 짧게 병합
+            if acc.abandoned:                   # 그 사이 디렉터리가 버려짐(중단) — 카운터·하드링크에 남기지 않는다
+                return 0, 0
             for p, name, eb, st in deferred:    # 하드링크 dedup(드묾)
                 key = (st.st_dev, st.st_ino)
                 if key in self._seen_inodes:
@@ -1485,6 +1735,11 @@ class Scanner:
         if self.backend == "du" and not du_path:
             # du 가 없으면 native 로 폴백
             self.backend = "native"
+        if du_path is not None and self.size_mode == "apparent":
+            # apparent 모드에서 du 는 버전마다 디렉터리 크기를 다르게 센다(coreutils 9.x 는 0, CentOS 7 의 8.x 는
+            # st_size) — 같은 설정이 서버마다 다른 합계를 냈다. 이 모드는 native 합산(디렉터리 st_size 포함)을 쓴다.
+            du_path = None
+            self._log("du 백엔드: apparent 모드는 du 버전마다 디렉터리 크기 처리가 달라 native 합산을 씁니다", conn)
 
         # 집계 튜닝(이 연결에만 적용): 페이지 캐시 상향 + 자동 체크포인트 간격 상향.
         # 기본 자동 체크포인트(1000페이지)는 윈도우 커밋마다 백필을 돌려 되레 느리다.
@@ -1632,7 +1887,7 @@ class Scanner:
             (total_bytes, total_files, time.time(), dir_id),
         )
         self._processed += 1
-        self._flush_progress(conn, current_dir=path, current_depth=depth)
+        self._flush_progress(conn, current_dir=dbmod.fs_text(path), current_depth=depth)
 
     def _run_du(self, du_path: str, path: str) -> int:
         """디렉터리 하나에 대해 시스템 du 를 별도 프로세스로 실행.

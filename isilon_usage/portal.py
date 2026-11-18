@@ -38,7 +38,12 @@ from . import upgrade as upgrademod
 from . import ask as askmod
 from . import netutil
 from .server import ThreadingHTTPServer, browse_dir  # 3.6 폴백 포함 재사용
+from .server import read_json_body, _has_nul         # 요청 본문 검증(엣지와 같은 규칙)
 from .server import reset_op_password_file      # 임시 비밀번호(엣지와 같은 규칙·같은 함수)
+
+# SSH 실행 입력 검증(옵션 주입 차단): 사용자는 POSIX 계정 이름, 호스트는 IP/호스트명/[IPv6] 만.
+_SSH_USER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9._-]{0,63}$")
+_SSH_HOST_RE = re.compile(r"^(?:[A-Za-z0-9](?:[A-Za-z0-9._-]{0,252})|\[[0-9A-Fa-f:.]+\]|[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*)$")
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -212,6 +217,76 @@ def save_nodes(data_dir: str, nodes: list) -> None:
         raise
 
 
+_OV_NUM_KEYS = ("total_capacity_bytes", "total_scanned_bytes", "root_count", "active_scans")
+_ROOT_NUM_KEYS = ("capacity_bytes", "scanned_bytes", "fs_total_bytes", "fs_used_bytes", "fs_free_bytes",
+                  "total_files", "finished_at", "updated_at", "started_at", "processed_dirs",
+                  "total_dirs", "discovered_dirs", "files_per_sec", "bytes_per_sec", "scan_id",
+                  "capacity_scan_id")
+
+
+def _num(v):
+    """숫자로 쓸 수 있으면 int/float, 아니면 None(NaN·무한대·문자열·bool 거부)."""
+    if isinstance(v, bool) or v is None:
+        return None
+    if isinstance(v, int):
+        return v
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if f != f or f in (float("inf"), float("-inf")):
+        return None
+    return int(f) if f.is_integer() and abs(f) < 2 ** 63 else f
+
+
+def _sanitize_overall(ov) -> dict:
+    """엣지가 보낸 overall 을 포탈 집계가 믿고 쓸 수 있는 모양으로 보정한다.
+
+    엣지 한 대의 이상한 값(문자열 숫자·null 루트·dict 가 아닌 항목)이 overview/usage/처리량
+    계산 전체를 예외로 멈춰 포탈 대시보드가 통째로 비던 문제(2026-11 리뷰)."""
+    if not isinstance(ov, dict):
+        return {}
+    out = dict(ov)
+    for k in _OV_NUM_KEYS:
+        if k in out:
+            out[k] = _num(out[k])
+    roots = []
+    for r in (ov.get("roots") if isinstance(ov.get("roots"), list) else []):
+        if not isinstance(r, dict):
+            continue
+        r = dict(r)
+        for k in _ROOT_NUM_KEYS:
+            if k in r:
+                r[k] = _num(r[k])
+        for k in ("root_path", "status", "phase", "fs_source"):
+            if k in r and r[k] is not None and not isinstance(r[k], str):
+                r[k] = str(r[k])
+        roots.append(r)
+    out["roots"] = roots
+    return out
+
+
+def _ov_capacity(ov: dict) -> int:
+    """엣지 overall 의 조사 용량 — 루트별 마지막 완료 스캔 합(total_capacity_bytes). 구버전 엣지는 예전 값."""
+    v = ov.get("total_capacity_bytes")
+    if v is None:
+        v = ov.get("total_scanned_bytes")
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _root_capacity(r: dict) -> int:
+    v = r.get("capacity_bytes")
+    if v is None:
+        v = r.get("scanned_bytes")
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _public_node(n: dict, cache: dict, rep_err: Optional[dict] = None) -> dict:
     """화면용 노드(토큰 마스킹 + 실시간 캐시 상태 병합). rep_err: id -> 마지막 복제 오류."""
     c = cache.get(n["id"], {})
@@ -225,7 +300,7 @@ def _public_node(n: dict, cache: dict, rep_err: Optional[dict] = None) -> dict:
     out["error"] = n.get("last_error") or c.get("error") or (rep_err or {}).get(n["id"], "")
     out["active_scans"] = int(ov.get("active_scans") or 0)   # 지금 스캔 중인 개수
     out["scanning"] = out["active_scans"] > 0
-    out["used_bytes"] = int(ov.get("total_scanned_bytes") or 0)
+    out["used_bytes"] = _ov_capacity(ov)
     return out
 
 
@@ -336,6 +411,12 @@ def build_provision_script(*, host, port, token, path, hq_base, install="systemd
     serve 를 기동한다(systemd 또는 nohup). 값은 shell 주입을 막기 위해 따옴표 처리.
     """
     q = shlex.quote
+    for _v in (path, data_dir, edge_dir, token):
+        if re.search(r'[\s"\\]', str(_v or "")):
+            raise ValueError("경로/토큰에 공백·따옴표·역슬래시는 쓸 수 없습니다(systemd 유닛이 깨짐): %r" % _v)
+
+    def sd(v):   # systemd ExecStart 인자: 큰따옴표 + 지정자(%)·변수($) 이스케이프(유닛 파일에 문자 그대로 기록)
+        return '"' + str(v).replace("%", "%%").replace("$", "$$") + '"'
     host = re.sub(r"[^A-Za-z0-9._:\[\]-]", "", str(host or ""))   # 표시용 host: 셸 위험문자 제거(주입 방지)
     hq = (hq_base or "http://<HQ-IP>:8800").rstrip("/")
     head = (
@@ -373,7 +454,7 @@ def build_provision_script(*, host, port, token, path, hq_base, install="systemd
         tail = (
             '\necho "[3/4] nohup 으로 기동 (포트 $PORT)"\n'
             'cd "$EDGE_DIR"\n'
-            'nohup python3 -m isilon_usage serve --data-dir "$DATA" --mount-base "$MOUNT" \\\n'
+            'nohup python3 -m isilon_usage serve --data-dir "$DATA" ${MOUNT:+--mount-base "$MOUNT"} \\\n'
             '    --host 0.0.0.0 --port "$PORT" --api-token "$TOKEN" \\\n'
             '    > /var/log/isilon_usage.log 2>&1 &\n'
             'echo "[4/4] 완료 — http://%s:%d/  (HQ 포탈이 자동 폴링)"\n'
@@ -381,17 +462,20 @@ def build_provision_script(*, host, port, token, path, hq_base, install="systemd
     else:
         tail = (
             '\necho "[3/4] systemd 서비스 설치/기동 (포트 $PORT)"\n'
-            "sudo tee /etc/systemd/system/isilon-edge.service >/dev/null <<UNIT\n"
+            # 유닛 내용은 문자 그대로('UNIT' — 셸 확장 없음) 쓰고, 값은 systemd 규칙으로 이스케이프한다.
+            # 예전엔 셸 변수를 따옴표 없이 펼쳐 %·$·공백이 든 경로/토큰에서 유닛이 깨졌다(2026-11 리뷰).
+            "sudo tee /etc/systemd/system/isilon-edge.service >/dev/null <<'UNIT'\n"
             "[Unit]\n"
             "Description=Isilon Edge - 디렉터리 사용량 스캐너\n"
             "After=network-online.target remote-fs.target\n"
             "Wants=network-online.target\n"
+            "RequiresMountsFor=%s\n"
             "[Service]\n"
             "Type=simple\n"
             "User=root\n"
-            "WorkingDirectory=$EDGE_DIR\n"
-            "ExecStart=/usr/bin/python3 -m isilon_usage serve --data-dir $DATA "
-            "--mount-base $MOUNT --host 0.0.0.0 --port $PORT --api-token $TOKEN\n"
+            "WorkingDirectory=%s\n"
+            "ExecStart=/usr/bin/python3 -m isilon_usage serve --data-dir %s%s "
+            "--host 0.0.0.0 --port %d --api-token %s\n"
             "Restart=on-failure\n"
             "RestartSec=5\n"
             "[Install]\n"
@@ -400,7 +484,8 @@ def build_provision_script(*, host, port, token, path, hq_base, install="systemd
             "sudo systemctl daemon-reload\n"
             "sudo systemctl enable --now isilon-edge\n"
             'echo "[4/4] 완료 — http://%s:%d/  ·  journalctl -u isilon-edge -f"\n'
-        ) % (host, int(port))
+        ) % (str(data_dir).replace("%", "%%"), str(edge_dir).replace("%", "%%"), sd(data_dir),
+             (" --mount-base " + sd(path)) if path else "", int(port), sd(token), host, int(port))
     return head + tail
 
 
@@ -497,13 +582,13 @@ class PortalController:
                "backup_dir": "", "backup_every_hours": 1.0, "backup_keep": 100,
                "portal_title": "", "portal_subtitle": "", "nav_hidden": [],
                "replica_dir": "",   # 중앙 복제 DB 저장 경로(빈값=기본 data_dir/replicas)
+               "replica_keep_per_root": 5,   # 노드·루트별 보관할 복제 스캔 수(0=무제한)
                "export_token": "", "op_ttl_minutes": 30, "show_update_popup": False,
                "log_popup_pos": "center",   # 로그 팝업 위치: center/tl/tr/bl/br
                "ask_llm_enabled": False, "ask_llm_endpoint": "", "ask_llm_model": "",
                "ask_llm_key": "", "ask_llm_timeout": 20}
         try:
-            with open(portal_settings_path(self.data_dir), encoding="utf-8") as fh:
-                s = json.load(fh)
+            s = setmod.read_json_with_backup(portal_settings_path(self.data_dir))
             if isinstance(s, dict):
                 out["op_password"] = str(s.get("op_password") or "")
                 out["op_password_encrypted"] = bool(s.get("op_password_encrypted", False))
@@ -544,6 +629,10 @@ class PortalController:
                 out["show_update_popup"] = bool(s.get("show_update_popup", False))
                 _lp = str(s.get("log_popup_pos") or "center").strip().lower()
                 out["log_popup_pos"] = _lp if _lp in ("center", "tl", "tr", "bl", "br") else "center"
+                try:
+                    out["replica_keep_per_root"] = max(0, min(1000, int(s.get("replica_keep_per_root", 5))))
+                except (TypeError, ValueError):
+                    pass
                 _rd = str(s.get("replica_dir") or "").strip()
                 out["replica_dir"] = _rd if os.path.isabs(_rd) else ""
                 out["ask_llm_enabled"] = bool(s.get("ask_llm_enabled"))
@@ -562,15 +651,8 @@ class PortalController:
         self._sync_op_from_disk()          # 서버 명령이 바꾼 비밀번호를 옛 메모리 값으로 되돌리지 않게
         os.makedirs(self.data_dir, exist_ok=True)
         path = portal_settings_path(self.data_dir)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(self.settings, fh, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
-        # 로그인 비밀번호·enroll 토큰·LLM 키 등이 들어가므로 소유자만 읽도록 제한.
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
+        # 로그인 비밀번호·enroll 토큰·LLM 키 등이 들어가므로 소유자만 읽도록 제한(고유 임시 파일·.bak).
+        setmod.write_json_atomic(path, self.settings)
         self._op_disk_seen = self.settings.get("op_password")
         try:
             self._settings_mtime = os.stat(path).st_mtime_ns
@@ -666,8 +748,8 @@ class PortalController:
         return {"ok": True, "portal_title": self.settings["portal_title"],
                 "portal_subtitle": self.settings["portal_subtitle"]}
 
-    def login(self, password: str) -> dict:
-        return self._auth.login(password)
+    def login(self, password: str, client=None) -> dict:
+        return self._auth.login(password, client)
 
     def token_valid(self, token) -> bool:
         self._sync_op_from_disk()          # 서버 명령으로 초기화됐으면 옛 세션을 먼저 폐기
@@ -691,11 +773,16 @@ class PortalController:
                 os.remove(old_info)
             except OSError:
                 pass
+        self._auth.revoke_all()            # 옛 비밀번호로 받은 로그인 세션은 모두 만료
         if not pw and self._op_auto:
             self.ensure_op_password()
-        return {"ok": True, "op_required": self._auth.required(),
-                "reset_to_temp": bool(not pw and self.settings.get("op_password_temp")),
-                "encrypted": bool(self.settings.get("op_password_encrypted"))}
+        out = {"ok": True, "op_required": self._auth.required(),
+               "reset_to_temp": bool(not pw and self.settings.get("op_password_temp")),
+               "encrypted": bool(self.settings.get("op_password_encrypted"))}
+        if pw:                             # 바꾼 본인에게만 새 토큰(검증은 핸들러에서 끝남)
+            out["token"] = self._auth.issue_token()
+            out["ttl"] = self._auth.ttl
+        return out
 
     def set_enroll_token(self, token: str) -> dict:
         """엣지 자기등록(enroll) 공유 토큰을 설정/해제. 호출 측에서 인증을 확인한다."""
@@ -927,11 +1014,24 @@ class PortalController:
         last = files[-1]["mtime"] if files else 0
         if now - last < every:
             return
+        # 실패 백오프: 저장이 실패(권한·디스크 부족)하면 예전엔 매 주기(수십 초) 전체 백업을 다시 만들며
+        # 실패했다(2026-11 리뷰). 5분→10분→…최대 1시간 간격으로 재시도하고, 실패 기록은 연속 첫 번만 남긴다.
+        if now < float(getattr(self, "_bk_retry_at", 0) or 0):
+            return
         res = self.save_backup(bdir)
         if res.get("ok"):
+            self._bk_fails = 0
+            self._bk_retry_at = 0
             self._prune_backups(bdir, int(self.settings.get("backup_keep") or 100))
             auditmod.record(self.data_dir, action="backup_auto", ok=True,
                             detail=res.get("path", ""))
+        else:
+            n = int(getattr(self, "_bk_fails", 0) or 0) + 1
+            self._bk_fails = n
+            self._bk_retry_at = now + min(3600.0, 300.0 * (2 ** (n - 1)))
+            if n == 1:
+                auditmod.record(self.data_dir, action="backup_auto", ok=False,
+                                detail=str(res.get("reason") or ""))
 
     # --- 자동 업그레이드 ---
     def set_upgrade_watch(self, watch_dir: str, check_secs=None) -> dict:
@@ -999,10 +1099,11 @@ class PortalController:
                 roots.append({
                     "label": who + ":" + str(r.get("root_path")),
                     "root_path": r.get("root_path"),
-                    "scanned_bytes": int(r.get("scanned_bytes") or 0),
+                    "scanned_bytes": _root_capacity(r),
                     "fs_used_bytes": int(r.get("fs_used_bytes") or 0),
                     "fs_total_bytes": int(r.get("fs_total_bytes") or 0),
-                    "total_files": int(r.get("total_files") or 0),
+                    "total_files": int(r.get("capacity_files") if r.get("capacity_files") is not None
+                                       else (r.get("total_files") or 0)),
                     "status": r.get("status"),
                     "finished_at": r.get("finished_at"),
                 })
@@ -1195,13 +1296,17 @@ class PortalController:
         # ① 로컬 감시 폴더
         wd = (self.settings.get("upgrade_watch_dir") or "").strip()
         if wd:
-            found = upgrademod.find_newer_archive(wd, __version__)
+            bad = getattr(self, "_upg_bad", None)
+            if bad is None:
+                bad = self._upg_bad = set()
+            found = upgrademod.find_newer_archive(wd, __version__, skip=bad)
             if found and self._try_begin_install():
                 try:
                     res = upgrademod.upgrade_from_archive(found[0], code_dir, __version__)
                     if res.get("ok"):
                         self._apply_self_upgrade(res, "감시 폴더")   # 재시작(돌아오지 않음)
                         return
+                    bad.add(upgrademod.archive_sig(found[0]))   # 바뀌기 전까지 재시도 안 함(매 주기 실패 기록 방지)
                     self._upg_log("감시 폴더 업그레이드 실패: %s" % res.get("reason"))
                     self._record_upgrade(kind="감시 폴더", ok=False, error=res.get("reason"))
                 finally:
@@ -1465,7 +1570,17 @@ class PortalController:
             nodes = [_public_node(n, cache, self._rep_err) for n in self.nodes]
         return {"ok": True, "nodes": nodes}
 
-    def upsert_node(self, raw: dict, *, keep_token_on_url_change: bool = True) -> dict:
+    def upsert_node(self, raw: dict, *, keep_token_on_url_change: bool = True,
+                    partial: bool = False) -> dict:
+        """노드 추가/수정. partial=True(CSV 가져오기·엣지 자기 등록)면 기존 노드의 값 위에 '값이 있는'
+        필드만 덮는다 — 예전엔 전체 교체라 재등록·CSV 갱신 때 별칭·복제 주기·모드·사용 여부·지역이
+        기본값으로 초기화됐다(2026-11 리뷰)."""
+        if partial and isinstance(raw, dict):
+            cur0 = self._get(str(raw.get("id") or "").strip())
+            if cur0 is not None:
+                base = {k: v for k, v in cur0.items() if k != "token"}   # 토큰 승계 규칙은 아래에서
+                base.update({k: v for k, v in raw.items() if v not in (None, "")})
+                raw = base
         n = sanitize_node(raw)
         if not n:
             return {"ok": False, "reason": "id 와 url 은 필수입니다(id 에 '/'·'..' 불가)."}
@@ -1536,12 +1651,12 @@ class PortalController:
                or re.sub(r"[^A-Za-z0-9_.-]+", "-", urlparse(url).hostname or url).strip("-")
                or "edge")
         path = (raw.get("path") or "").strip()
-        res = self.upsert_node({
-            "id": nid, "region": (raw.get("region") or "").strip(),
-            "url": url, "token": (raw.get("token") or "").strip(),
-            "alias_local": path, "alias_logical": path,
-            "unit": "minute", "every": 30, "mode": "both", "enabled": True,
-        }, keep_token_on_url_change=False)
+        rec = {"id": nid, "region": (raw.get("region") or "").strip(),
+               "url": url, "token": (raw.get("token") or "").strip(),
+               "alias_local": path, "alias_logical": path}
+        if self._get(nid) is None:         # 새 노드만 기본 주기·모드(재등록은 운영자가 바꾼 값 유지)
+            rec.update({"unit": "minute", "every": 30, "mode": "both", "enabled": True})
+        res = self.upsert_node(rec, keep_token_on_url_change=False, partial=True)
         if res.get("ok"):
             res["enrolled"] = nid
         return res
@@ -1593,7 +1708,7 @@ class PortalController:
                 errors.append({"line": line, "error": "id/url 누락"})
                 continue
             existed = self._get(raw["id"]) is not None
-            res = self.upsert_node(raw)
+            res = self.upsert_node(raw, partial=True)
             if res.get("ok"):
                 if existed:
                     updated += 1
@@ -1639,25 +1754,30 @@ class PortalController:
     def test_node(self, raw: dict) -> dict:
         """연결 테스트: url(+token) 또는 등록된 id 로 meta 를 받아 본다."""
         nid = str(raw.get("id") or "").strip()
-        if nid:
-            n = self._get(nid)
-            if n is None:
-                return {"ok": False, "reason": "등록되지 않은 노드"}
-            url, token = n["url"], n.get("token")
-        else:
-            url = str(raw.get("url") or "").strip()
-            token = raw.get("token") or None
+        n = self._get(nid) if nid else None
+        url = str(raw.get("url") or "").strip()
+        token = raw.get("token") or None
+        if url and not re.match(r"^https?://", url):
+            url = "http://" + url
+        url = url.rstrip("/")
+        if n is not None:
+            # 편집 중인 URL 을 테스트한다(예전엔 id 가 있으면 저장된 URL 만 봐서, 고친 주소가 맞는지 확인할 수
+            # 없었다 — 2026-11 리뷰). 저장된 토큰은 같은 호스트일 때만 쓴다(다른 주소로 토큰이 새지 않게).
             if not url:
-                return {"ok": False, "reason": "url 필요"}
-            if not re.match(r"^https?://", url):
-                url = "http://" + url
+                url = n["url"]
+            if not token and urlparse(url).netloc == urlparse(n["url"]).netloc:
+                token = n.get("token")
+        elif nid and not url:
+            return {"ok": False, "reason": "등록되지 않은 노드"}
+        if not url:
+            return {"ok": False, "reason": "url 필요"}
         try:
             meta = _probe_meta(url, token, timeout=8.0)
-            ov = meta.get("overall") or {}
+            ov = _sanitize_overall(meta.get("overall"))
             return {"ok": True, "version": meta.get("version"),
                     "hostname": meta.get("hostname"),
                     "storages": ov.get("root_count") or 0,
-                    "used_bytes": ov.get("total_scanned_bytes") or 0}
+                    "used_bytes": _ov_capacity(ov)}
         except urllib.error.HTTPError as e:  # type: ignore[attr-defined]
             reason = "인증 실패(토큰 확인)" if e.code == 401 else ("HTTP %d" % e.code)
             return {"ok": False, "reason": reason}
@@ -1832,9 +1952,10 @@ class PortalController:
             self._cache[nid] = {
                 "online": True, "ts": time.time(),
                 "version": meta.get("version"), "hostname": meta.get("hostname"),
-                "overall": meta.get("overall") or {},
-                "isilon": meta.get("isilon") or {"configured": False},
-                "storage": meta.get("storage") or [],
+                "overall": _sanitize_overall(meta.get("overall")),
+                "isilon": meta.get("isilon") if isinstance(meta.get("isilon"), dict) else {"configured": False},
+                "storage": [x for x in (meta.get("storage") if isinstance(meta.get("storage"), list) else [])
+                            if isinstance(x, dict)],
                 "error": "",
             }
             cur = self._get(nid)
@@ -1842,7 +1963,7 @@ class PortalController:
                 cur["last_poll"] = time.time()
                 cur["last_status"] = "online"
                 cur["last_error"] = ""
-        self._record_throughput(nid, meta.get("overall") or {})   # 처리량 시계열(영구)
+        self._record_throughput(nid, _sanitize_overall(meta.get("overall")))   # 처리량 시계열(영구)
         return True
 
     def _replicate_one(self, nid: str) -> None:
@@ -1882,6 +2003,39 @@ class PortalController:
                 merged[k] = s
         return list(merged.values())
 
+    @staticmethod
+    def _prune_replica_scans(dest: str, scans: list, keep: int) -> list:
+        """복제본 보관: 루트별 최신 keep 개만 남기고 나머지 DB 파일을 지운다(keep<=0 이면 무제한).
+
+        예전엔 복제본을 지우지 않아 반복 스캔마다 HQ 디스크가 끝없이 늘었다(2026-11 리뷰).
+        최신 완료(done) 스캔은 keep 밖이어도 항상 남긴다 — 비교·용량의 기준이다."""
+        if keep <= 0:
+            return scans
+        by_root: dict = {}
+        for sc in scans:
+            by_root.setdefault(sc.get("root_path") or "", []).append(sc)
+        kept = []
+        for items in by_root.values():
+            items.sort(key=lambda x: float(x.get("finished_at") or 0), reverse=True)
+            keep_set = items[:keep]
+            done = [x for x in items if x.get("status") == "done"]
+            if done and done[0] not in keep_set:
+                keep_set = keep_set[:-1] + [done[0]] if keep > 1 else [done[0]]
+            ids = {id(x) for x in keep_set}
+            for x in items:
+                if id(x) in ids:
+                    kept.append(x)
+                    continue
+                dbf = os.path.basename(x.get("db_filename") or x.get("db_path") or "")
+                if not dbf or dbf in {os.path.basename(k.get("db_filename") or "") for k in keep_set}:
+                    continue
+                for sfx in ("", "-wal", "-shm"):
+                    try:
+                        os.remove(os.path.join(dest, "scans", dbf + sfx))
+                    except OSError:
+                        pass
+        return kept
+
     def _replicate(self, n: dict) -> float:
         """완료 DB(증분) + meta.json 을 replicas/<id>/ 로 안전하게 내려받는다."""
         since = float(n.get("last_sync", 0) or 0)
@@ -1914,7 +2068,8 @@ class PortalController:
                                 new_meta = None
                         continue
                     elif (name.startswith("scans/") and name.endswith(".db")
-                          and "/" not in name[6:] and ".." not in name):
+                          and "/" not in name[6:] and "\\" not in name[6:]
+                          and name[6:] not in (".", "..")):   # 이름 속 '..'(예: a..b.db)는 정상 — 경로 성분만 거부
                         outp = os.path.join(dest, "scans", os.path.basename(name))
                     else:
                         continue  # 경로 탈출 방지: 그 외 멤버는 무시
@@ -1950,7 +2105,9 @@ class PortalController:
                         old_scans = (json.load(fh).get("scans") or [])
                 except (OSError, ValueError):
                     old_scans = []
-                new_meta["scans"] = self._merge_scan_lists(old_scans, new_meta.get("scans"))
+                new_meta["scans"] = self._prune_replica_scans(
+                    dest, self._merge_scan_lists(old_scans, new_meta.get("scans")),
+                    int(self.settings.get("replica_keep_per_root", 5) or 0))
                 tmp_meta = os.path.join(dest, "meta.json.tmp")
                 with open(tmp_meta, "w", encoding="utf-8") as w:
                     json.dump(new_meta, w, ensure_ascii=False)
@@ -1973,17 +2130,42 @@ class PortalController:
     # --- 글로벌 롤업 ---
     @staticmethod
     def _fs_capacity(roots_l):
-        """노드의 파일시스템 사용/전체 용량. 같은 FS(같은 total)는 한 번만 센다."""
-        seen = {}   # fs_total -> 최대 fs_used
+        """노드의 파일시스템 사용/전체 용량 — 같은 파일시스템은 한 번만 센다.
+
+        같은 FS 판별: ① 엣지가 보낸 마운트 출처(fs_source, 예: isilon01:/ifs/data)가 같으면 같은 FS
+        ② 출처를 모르거나 다르면 전체 용량이 거의 같고(0.1% 또는 4MiB 이내) 사용량도 비슷할 때(전체의 2% 이내)만
+        같은 FS 로 본다. 예전엔 '전체 용량이 같으면 같은 FS' 하나로, 크기만 같은 서로 다른 볼륨(예: 같은 크기
+        쿼터 export 둘)을 하나로 합치고(100TB+100TB → 100TB), 같은 FS 가 몇 KB 다르게 보고되면 두 번 셌다.
+        (아이실론 한 클러스터를 여러 export·노드 IP 로 마운트하면 출처는 달라도 전체·사용량이 같아 ②로 합쳐진다.)
+        """
+        clusters = []   # [{"total", "used", "srcs"}]
         for rt in roots_l:
-            ftot = int(rt.get("fs_total_bytes") or 0)
+            if not isinstance(rt, dict):
+                continue
+            try:
+                ftot = int(rt.get("fs_total_bytes") or 0)
+                fused = int(rt.get("fs_used_bytes") or 0)
+            except (TypeError, ValueError):
+                continue
             if ftot <= 0:
                 continue
-            fused = int(rt.get("fs_used_bytes") or 0)
-            if ftot not in seen or fused > seen[ftot]:
-                seen[ftot] = fused
-        ftot = sum(seen.keys())
-        fused = sum(seen.values())
+            src = str(rt.get("fs_source") or "").strip()
+            hit = None
+            if src:
+                hit = next((c for c in clusters if src in c["srcs"]), None)
+            if hit is None:
+                tol_t = max(4 * 1024 * 1024, ftot * 0.001)
+                hit = next((c for c in clusters
+                            if abs(c["total"] - ftot) <= tol_t and abs(c["used"] - fused) <= ftot * 0.02), None)
+            if hit is None:
+                clusters.append({"total": ftot, "used": fused, "srcs": {src} if src else set()})
+            else:
+                hit["total"] = max(hit["total"], ftot)
+                hit["used"] = max(hit["used"], fused)
+                if src:
+                    hit["srcs"].add(src)
+        ftot = sum(c["total"] for c in clusters)
+        fused = sum(c["used"] for c in clusters)
         pct = round(fused / ftot * 100, 1) if ftot else None
         return ftot, fused, max(0, ftot - fused), pct
 
@@ -2019,47 +2201,54 @@ class PortalController:
         active = 0
         out_nodes = []
         for n in nodes_snapshot:
-            c = cache.get(n["id"], {})
-            ov = c.get("overall") or {}
-            used = int(ov.get("total_scanned_bytes") or 0)
-            st = int(ov.get("root_count") or 0)
-            is_on = bool(c.get("online"))
-            if is_on:
-                online += 1
-            active += int(ov.get("active_scans") or 0)
-            total_used += used
-            storages += st
-            reg = n.get("region") or "(미지정)"
-            r = regions.setdefault(reg, {"region": reg, "used_bytes": 0, "storages": 0,
-                                         "fs_used_bytes": 0, "fs_total_bytes": 0})
-            r["used_bytes"] += used
-            r["storages"] += st
-            roots_l = ov.get("roots") or []
-            last_scan = max([0] + [max(rt.get("finished_at") or 0, rt.get("updated_at") or 0)
-                                   for rt in roots_l])     # 그 DC 가 마지막으로 스캔한 시각
-            fs_total, fs_used, fs_free, fs_pct = self._fs_capacity(roots_l)
-            total_fs_total += fs_total
-            total_fs_used += fs_used
-            r["fs_used_bytes"] += fs_used      # 지역별 디스크 사용량/전체 용량 집계
-            r["fs_total_bytes"] += fs_total
-            out_nodes.append({
-                "id": n["id"], "region": n.get("region"), "url": n["url"],
-                "enabled": n.get("enabled"), "online": is_on,
-                "version": c.get("version"), "hostname": c.get("hostname"),
-                "last_poll": n.get("last_poll"), "last_sync": n.get("last_sync"),
-                "last_scan_at": last_scan or None,
-                # 폴링 오류 우선, 없으면 마지막 복제 오류(다음 복제 성공 전까지 유지)
-                "last_error": n.get("last_error") or c.get("error") or rep_err.get(n["id"], ""),
-                "used_bytes": used, "storages": st,
-                "active_scans": int(ov.get("active_scans") or 0),
-                "fs_total_bytes": fs_total, "fs_used_bytes": fs_used,
-                "fs_free_bytes": fs_free, "fs_used_pct": fs_pct,
-                "running": self._running_scan(roots_l),
-                "auto_restart": any(rt.get("auto_restart") for rt in roots_l),  # 반복 스캔 중
-                "roots": roots_l,
-                "isilon": c.get("isilon") or {"configured": False},
-                "storage": c.get("storage") or [],
-            })
+            try:
+                c = cache.get(n["id"], {})
+                ov = c.get("overall") or {}
+                used = _ov_capacity(ov)
+                st = int(ov.get("root_count") or 0)
+                is_on = bool(c.get("online"))
+                if is_on:
+                    online += 1
+                active += int(ov.get("active_scans") or 0)
+                total_used += used
+                storages += st
+                reg = n.get("region") or "(미지정)"
+                r = regions.setdefault(reg, {"region": reg, "used_bytes": 0, "storages": 0,
+                                             "fs_used_bytes": 0, "fs_total_bytes": 0})
+                r["used_bytes"] += used
+                r["storages"] += st
+                roots_l = ov.get("roots") or []
+                last_scan = max([0] + [max(rt.get("finished_at") or 0, rt.get("updated_at") or 0)
+                                       for rt in roots_l])     # 그 DC 가 마지막으로 스캔한 시각
+                fs_total, fs_used, fs_free, fs_pct = self._fs_capacity(roots_l)
+                total_fs_total += fs_total
+                total_fs_used += fs_used
+                r["fs_used_bytes"] += fs_used      # 지역별 디스크 사용량/전체 용량 집계
+                r["fs_total_bytes"] += fs_total
+                out_nodes.append({
+                    "id": n["id"], "region": n.get("region"), "url": n["url"],
+                    "enabled": n.get("enabled"), "online": is_on,
+                    "version": c.get("version"), "hostname": c.get("hostname"),
+                    "last_poll": n.get("last_poll"), "last_sync": n.get("last_sync"),
+                    "last_scan_at": last_scan or None,
+                    # 폴링 오류 우선, 없으면 마지막 복제 오류(다음 복제 성공 전까지 유지)
+                    "last_error": n.get("last_error") or c.get("error") or rep_err.get(n["id"], ""),
+                    "used_bytes": used, "storages": st,
+                    "active_scans": int(ov.get("active_scans") or 0),
+                    "fs_total_bytes": fs_total, "fs_used_bytes": fs_used,
+                    "fs_free_bytes": fs_free, "fs_used_pct": fs_pct,
+                    "running": self._running_scan(roots_l),
+                    "auto_restart": any(rt.get("auto_restart") for rt in roots_l),  # 반복 스캔 중
+                    "roots": roots_l,
+                    "isilon": c.get("isilon") or {"configured": False},
+                    "storage": c.get("storage") or [],
+                })
+            except Exception as exc:  # noqa: BLE001 — 노드 하나의 이상 값이 전체 화면을 멈추지 않게
+                out_nodes.append({"id": n.get("id"), "region": n.get("region"), "url": n.get("url"),
+                                  "enabled": n.get("enabled"), "online": False, "roots": [],
+                                  "storage": [], "isilon": {"configured": False},
+                                  "last_error": "집계 오류: %s" % exc})
+
         return {
             "ok": True,
             "version": __version__,
@@ -2083,7 +2272,9 @@ class PortalController:
         for n in ov.get("nodes") or []:
             roots = [{
                 "root_path": r.get("root_path"),
-                "scanned_bytes": int(r.get("scanned_bytes") or 0),
+                # 용량 = 마지막 완료 스캔(멈춤·오류·진행 중 부분 값 아님). capacity_partial=완료 스캔이 아직 없음
+                "scanned_bytes": _root_capacity(r),
+                "capacity_partial": bool(r.get("capacity_partial")),
                 "fs_total_bytes": int(r.get("fs_total_bytes") or 0),
                 "fs_used_bytes": int(r.get("fs_used_bytes") or 0),
                 "total_files": int(r.get("total_files") or 0),
@@ -2261,11 +2452,26 @@ class PortalController:
         live = {}
         for n in (self.overview().get("nodes") or []):
             roots = n.get("roots") or []
-            scanned = sum(int(r.get("scanned_bytes") or 0) for r in roots)
-            starts = [r.get("started_at") for r in roots
-                      if r.get("status") in ("discovering", "sizing") and r.get("started_at")]
+            # 시작 이후 시간당 = '진행 중' 루트마다 (그 스캔이 지금까지 센 양 ÷ 그 스캔의 경과)의 합.
+            # 예전엔 모든 루트(완료 포함)의 누적량을 가장 이른 진행 시작 이후 시간으로 나눠, 순차 스캔에서
+            # 51만 배까지 부풀었다. 경과는 엣지 시계(updated_at - started_at)로 — 포탈·엣지 시계 차이 영향 없음.
+            bph = 0.0
+            starts = []
+            for r in roots:
+                if r.get("status") not in ("discovering", "sizing"):
+                    continue
+                try:
+                    st = float(r.get("started_at") or 0)
+                    up = float(r.get("updated_at") or 0) or now
+                    sb = float(r.get("scanned_bytes") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if st <= 0:
+                    continue
+                starts.append(st)
+                bph += sb / max(1.0, up - st) * 3600.0
             live[n["id"]] = {"region": n.get("region"), "hostname": n.get("hostname"),
-                             "scanned": scanned, "start": (min(starts) if starts else None),
+                             "bph": bph, "start": (min(starts) if starts else None),
                              "scanning": bool(starts)}
         # 2) 히스토리: 최근 1일치 샘플(노드별)
         by_node = {}
@@ -2303,8 +2509,8 @@ class PortalController:
                 wins[str(w)] = {"bytes": db, "files": df,
                                 "bph": db / w * 3600.0, "fph": df / w * 3600.0}
             ss = None
-            if lv.get("start") and lv.get("scanned"):
-                ss = lv["scanned"] / max(1.0, now - lv["start"]) * 3600.0
+            if lv.get("start") and lv.get("bph"):
+                ss = lv["bph"]
             out.append({"id": nid, "region": lv.get("region") or "",
                         "hostname": lv.get("hostname") or "", "scanning": lv.get("scanning", False),
                         "since_start_bph": ss, "win": wins})
@@ -2653,17 +2859,20 @@ class PortalController:
                 token, token_reused = existing["token"], True
             else:
                 token = secrets.token_hex(16)
-        script = build_provision_script(host=host, port=port, token=token, path=path,
-                                        hq_base=hq_base, install=install)
+        try:
+            script = build_provision_script(host=host, port=port, token=token, path=path,
+                                            hq_base=hq_base, install=install)
+        except ValueError as exc:
+            return {"ok": False, "reason": str(exc)}
         replaced_prev = None
         if existing and existing["id"] != name:   # 같은 서버가 다른 이름으로 있었으면 옛 항목 제거
             replaced_prev = existing["id"]
             self.delete_node(existing["id"])
-        node_res = self.upsert_node({
-            "id": name, "region": region, "url": edge_url, "token": token,
-            "alias_local": path, "alias_logical": path,
-            "unit": "minute", "every": 30, "mode": "both", "enabled": True,
-        })
+        rec = {"id": name, "region": region, "url": edge_url, "token": token,
+               "alias_local": path, "alias_logical": path}
+        if self._get(name) is None:        # 새 노드만 기본 주기·모드(덮어쓰기는 운영자가 바꾼 주기 유지)
+            rec.update({"unit": "minute", "every": 30, "mode": "both", "enabled": True})
+        node_res = self.upsert_node(rec, partial=True)
         return {"ok": True, "script": script, "token": token, "edge_url": edge_url,
                 "install": install, "registered": bool(node_res.get("ok")),
                 "overwritten": bool(existing), "replaced_prev": replaced_prev,
@@ -2684,6 +2893,14 @@ class PortalController:
             ssh_port = int(raw.get("ssh_port") or 22)
         except (TypeError, ValueError):
             ssh_port = 22
+        # 사용자/호스트가 '-o…' 처럼 옵션으로 해석되면 ProxyCommand 등으로 포탈에서 임의 명령이 돈다 —
+        # 허용 문자만 받고, 목적지 앞에 '--' 를 둔다(2026-11 리뷰).
+        if not _SSH_USER_RE.match(user):
+            return {"ok": False, "reason": "ssh 사용자 이름이 올바르지 않습니다: %r" % user[:64]}
+        if not _SSH_HOST_RE.match(host):
+            return {"ok": False, "reason": "host 가 올바르지 않습니다(IP/호스트명만): %r" % host[:128]}
+        if not 1 <= ssh_port <= 65535:
+            return {"ok": False, "reason": "ssh 포트가 범위를 벗어났습니다: %d" % ssh_port}
         ssh = shutil.which("ssh")
         if not ssh:
             return {"ok": False,
@@ -2694,13 +2911,16 @@ class PortalController:
             if not sshpass:
                 return {"ok": False,
                         "reason": "비밀번호 인증엔 sshpass 가 필요합니다(미설치). 키 인증을 쓰거나 스크립트를 수동 실행하세요."}
-            cmd = [sshpass, "-p", password]
+            cmd = [sshpass, "-e"]           # 비밀번호는 환경변수(SSHPASS)로 — 명령줄(ps)에 노출 안 함
         cmd += [ssh, "-p", str(ssh_port),
                 "-o", "StrictHostKeyChecking=accept-new",
                 "-o", "ConnectTimeout=10",
-                "%s@%s" % (user, host), "bash -s"]
+                "-l", user, "--", host, "bash -s"]
+        env = dict(os.environ)
+        if password:
+            env["SSHPASS"] = password
         try:
-            p = subprocess.run(cmd, input=script.encode(),
+            p = subprocess.run(cmd, input=script.encode(), env=env,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                timeout=600)
             out = p.stdout.decode("utf-8", "replace")[-4000:]
@@ -2767,17 +2987,20 @@ class PortalController:
                 meta = json.load(fh)
         except (OSError, ValueError):
             return None
-        best = None
+        # 고르는 순서: ① 완료(done) 스캔 — 일시정지·오류는 일부만 센 값이라 비교에 쓰면 '줄어든' 것처럼
+        # 보인다 ② 경로를 더 구체적으로 덮는 루트 ③ 최신. 파일이 없는 항목은 건너뛴다(2026-11 리뷰).
+        cands = []
         for s in meta.get("scans", []):
             root = (s.get("root_path") or "").rstrip("/")
-            if path == root or path.startswith(root + "/"):
-                if best is None or float(s.get("finished_at") or 0) > float(best.get("finished_at") or 0):
-                    best = s
-        if not best:
+            if path == root or path.startswith(root + "/") or (not root and path.startswith("/")):
+                dbf = s.get("db_filename") or os.path.basename(s.get("db_path") or "")
+                dbp = os.path.join(rep, "scans", dbf)
+                if dbf and os.path.exists(dbp):
+                    cands.append(((s.get("status") == "done", len(root),
+                                   float(s.get("finished_at") or 0)), dbp))
+        if not cands:
             return None
-        dbf = best.get("db_filename") or os.path.basename(best.get("db_path") or "")
-        dbp = os.path.join(rep, "scans", dbf)
-        return dbp if (dbf and os.path.exists(dbp)) else None
+        return max(cands, key=lambda t: t[0])[1]
 
     def compare_path(self, path: str) -> dict:
         """같은 경로의 노드별 용량/파일 수를 모아 비교한다(복제본 기준)."""
@@ -2824,12 +3047,13 @@ class PortalController:
                 if prow is None:
                     c.close()
                     continue
-                like = (local.replace("\\", "\\\\").replace("%", "\\%")
-                        .replace("_", "\\_")).rstrip("/") + "/%"
+                # 범위 비교(대소문자 구분·인덱스 사용): LIKE 는 ASCII 대소문자를 무시해 /data/FOO 의 자식이
+                # /data/foo 매트릭스에 섞였다(2026-11 리뷰). prefix ≤ path < prefix 의 '/' 다음 문자('0').
+                base = local.rstrip("/")
                 kids = c.execute(
                     "SELECT name, total_bytes, own_bytes, subdir_count FROM directories "
-                    "WHERE run_id=? AND depth=? AND path LIKE ? ESCAPE '\\'",
-                    (rid, int(prow["depth"]) + 1, like)).fetchall()
+                    "WHERE run_id=? AND depth=? AND path >= ? AND path < ?",
+                    (rid, int(prow["depth"]) + 1, base + "/", base + "0")).fetchall()
                 c.close()
                 for k in kids:
                     e = children.setdefault(k["name"], {"name": k["name"], "subdir_count": 0, "vals": {}})
@@ -2854,6 +3078,14 @@ class PortalHandler(BaseHTTPRequestHandler):
         pass
 
     def _send_json(self, payload: dict, status: int = 200) -> None:
+        pend = getattr(self, "_audit_pending", None)
+        if pend:
+            self._audit_pending = None
+            if not (status == 404 and isinstance(payload, dict)
+                    and payload.get("reason") == "unknown_endpoint"):
+                ok = status < 400 and not (isinstance(payload, dict) and payload.get("ok") is False)
+                why = "" if ok else str((payload or {}).get("reason") or (payload or {}).get("error") or status)
+                self._audit(pend, ok, why)
         body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
         try:
             self.send_response(status)
@@ -2882,19 +3114,14 @@ class PortalHandler(BaseHTTPRequestHandler):
             pass
 
     def _read_json_body(self) -> dict:
-        try:
-            length = int(self.headers.get("Content-Length", 0))
-        except (TypeError, ValueError):
-            length = 0
-        if length <= 0 or length > 16 * 1024 * 1024:   # 본문 16MB 상한(메모리 폭주 방지)
-            return {}
-        try:
-            return json.loads(self.rfile.read(length).decode("utf-8"))
-        except (ValueError, OSError):
-            return {}
+        body, self._body_err = read_json_body(self)   # 엣지와 같은 규칙(단일 소스)
+        return body
 
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
+        if _has_nul(parse_qs(urlparse(self.path).query)):
+            self._send_json({"ok": False, "reason": "요청에 NUL 문자가 있습니다"}, status=400)
+            return
         if path in ("/", "/index.html"):
             self._send_html(PORTAL_HTML)
             return
@@ -3043,12 +3270,25 @@ class PortalHandler(BaseHTTPRequestHandler):
         auditmod.record(self.data_dir, action=action, ok=ok, ip=ip, detail=detail)
 
     def do_POST(self) -> None:  # noqa: N802
+        self._audit_pending = None
+        try:
+            self._do_POST()
+        finally:
+            pend, self._audit_pending = self._audit_pending, None
+            if pend:                       # JSON 이 아닌 응답(파일 등)으로 끝난 작업
+                self._audit(pend, True)
+
+    def _do_POST(self) -> None:
         path = urlparse(self.path).path
         body = self._read_json_body()
+        if self._body_err:
+            self._send_json({"ok": False, "reason": self._body_err[1]}, status=self._body_err[0])
+            return
         c = self.controller
         try:
             if path == "/api/portal/login":
-                res = c.login(body.get("password") or "")
+                res = c.login(body.get("password") or "",
+                              self.client_address[0] if self.client_address else None)
                 self._audit("login", res.get("ok"),
                             "" if res.get("ok") else (res.get("reason") or ""))
                 self._send_json(res)
@@ -3093,7 +3333,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             if path == "/api/portal/audit":      # 감사 로그 조회(로그인 필요)
                 self._send_json({"ok": True, "events": auditmod.tail(self.data_dir, 300)})
                 return
-            self._audit(path, True)              # 변경 작업 기록(보호 대상은 인증 통과분)
+            self._audit_pending = path           # 변경 작업 기록 — 처리 결과로(_send_json 이 마무리, 엣지와 같은 규칙)
             if path == "/api/portal/backup/save":      # 포탈+노드 백업을 서버 디렉터리에 저장
                 self._send_json(c.save_backup(body.get("dir") or body.get("path") or ""))
                 return
