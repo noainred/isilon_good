@@ -408,6 +408,44 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
     <div class="kpi"><div class="kl">파일 수</div><div class="kv2" id="kpiFiles">—</div><div class="ks" id="kpiFilesSub"></div></div>
     <div class="kpi"><div class="kl">스캔</div><div class="kv2" id="kpiScans">—</div><div class="ks" id="kpiScansSub"></div></div>
   </section>
+  <h2 class="sec-title" style="margin-top:0;">서버 자원 <span class="sub">— 이 서버의 메모리·CPU·디스크(파일시스템 전체·사용·여유)</span></h2>
+  <div class="grid cols-3" id="resRow" style="margin-bottom:14px;">
+    <div class="card">
+      <h2>서버 메모리</h2>
+      <div class="big" id="memPct">—</div>
+      <div class="sub" id="memDetail">— / —</div>
+      <div class="bar mem" style="margin-top:10px;"><span id="memBar"></span></div>
+      <canvas id="memChart" width="380" height="90" style="margin-top:12px;"></canvas>
+      <div class="legend"><span><span class="dot" style="background:#B45309"></span>메모리 사용률(%)</span></div>
+      <div class="kv" style="margin-top:8px;"><span class="k">스왑 사용</span><span class="v" id="swapUsed">0</span></div>
+    </div>
+
+    <div class="card">
+      <h2>측정 프로세스 (CPU · 메모리)</h2>
+      <div class="big" id="duRss">—</div>
+      <div class="sub" id="duRssNote">du 프로세스 RSS</div>
+      <canvas id="rssChart" width="380" height="90" style="margin-top:12px;"></canvas>
+      <div class="legend">
+        <span><span class="dot" style="background:#1D4ED8"></span>스캐너 프로세스</span>
+        <span><span class="dot" style="background:#15803D"></span>du 프로세스</span>
+      </div>
+      <div class="kv" style="margin-top:8px;"><span class="k" id="parWorkersK" style="white-space:nowrap;">⚡ Multi Scan Thread</span><span class="v" id="parWorkers" style="white-space:nowrap;">—</span></div>
+      <div class="kv"><span class="k">스캐너 CPU · RSS</span><span class="v"><span id="scanCpu">0%</span> · <span id="scanRss">0 B</span></span></div>
+      <div class="kv"><span class="k">du 프로세스 CPU · RSS</span><span class="v"><span id="duCpu">—</span> · <span id="duRssRow">0 B</span></span></div>
+      <div class="kv"><span class="k">최대(peak) du / 스캐너</span><span class="v" id="peakRss">0 B / 0 B</span></div>
+    </div>
+
+    <div class="card">
+      <h2>CPU · 디스크</h2>
+      <div class="big" id="cpuPct">—</div>
+      <div class="sub">CPU 사용률 · load1 <span id="load1">0</span></div>
+      <div class="kv" style="margin-top:10px;"><span class="k">파일시스템 전체</span><span class="v" id="fsTotal">—</span></div>
+      <div class="kv"><span class="k">파일시스템 사용</span><span class="v" id="fsUsed">—</span></div>
+      <div class="kv"><span class="k">파일시스템 여유</span><span class="v" id="fsFree">—</span></div>
+      <div class="kv"><span class="k">스캐너 PID</span><span class="v" id="pid">—</span></div>
+      <div class="kv"><span class="k">시간당 처리용량</span><span class="v" style="display:inline-flex; align-items:center; gap:6px; white-space:nowrap;"><span id="thruPerHr">—</span><button id="thruMoreBtn" title="시작부터 지금까지 1시간 단위 처리량" style="padding:1px 7px; font-size:11px;">More</button></span></div>
+    </div>
+  </div>
   <div style="display:flex; flex-wrap:wrap; gap:16px; margin-bottom:16px;">
     <section class="card" style="flex:3 1 460px; min-width:0;">
       <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
@@ -963,7 +1001,7 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
 <!-- 스캔 > 새 스캔·진행: 새 스캔 시작·오토튜닝·현재 진행·서버 자원 -->
 <div class="wrap view" id="view-scanrun" style="display:none;">
   <h1 class="page-title">새 스캔·진행</h1>
-  <p class="page-desc">새로 시작하고, 돌고 있는 스캔을 지켜봅니다. 지난 결과는 ‘지난 스캔’, 속도 기록은 ‘처리량’에 있습니다.</p>
+  <p class="page-desc">새로 시작하고, 돌고 있는 스캔을 지켜봅니다. 지난 결과는 ‘지난 스캔’, 속도 기록은 ‘처리량’, 서버 자원은 ‘홈’에 있습니다.</p>
   <!-- 새 스캔 시작 (웹에서 디렉터리 지정) -->
   <div class="card" id="startCard" style="margin-bottom:14px; display:none;">
     <h2>새 스캔</h2>
@@ -1100,44 +1138,6 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
   </div>
 
   <!-- 자원 모니터링 -->
-  <h2 class="sec-title">서버 자원 <span class="sub">— 스캔하는 이 서버의 메모리·CPU·디스크</span></h2>
-  <div class="grid cols-3" id="resRow" style="margin-bottom:14px;">
-    <div class="card">
-      <h2>서버 메모리</h2>
-      <div class="big" id="memPct">—</div>
-      <div class="sub" id="memDetail">— / —</div>
-      <div class="bar mem" style="margin-top:10px;"><span id="memBar"></span></div>
-      <canvas id="memChart" width="380" height="90" style="margin-top:12px;"></canvas>
-      <div class="legend"><span><span class="dot" style="background:#B45309"></span>메모리 사용률(%)</span></div>
-      <div class="kv" style="margin-top:8px;"><span class="k">스왑 사용</span><span class="v" id="swapUsed">0</span></div>
-    </div>
-
-    <div class="card">
-      <h2>측정 프로세스 (CPU · 메모리)</h2>
-      <div class="big" id="duRss">—</div>
-      <div class="sub" id="duRssNote">du 프로세스 RSS</div>
-      <canvas id="rssChart" width="380" height="90" style="margin-top:12px;"></canvas>
-      <div class="legend">
-        <span><span class="dot" style="background:#1D4ED8"></span>스캐너 프로세스</span>
-        <span><span class="dot" style="background:#15803D"></span>du 프로세스</span>
-      </div>
-      <div class="kv" style="margin-top:8px;"><span class="k" id="parWorkersK" style="white-space:nowrap;">⚡ Multi Scan Thread</span><span class="v" id="parWorkers" style="white-space:nowrap;">—</span></div>
-      <div class="kv"><span class="k">스캐너 CPU · RSS</span><span class="v"><span id="scanCpu">0%</span> · <span id="scanRss">0 B</span></span></div>
-      <div class="kv"><span class="k">du 프로세스 CPU · RSS</span><span class="v"><span id="duCpu">—</span> · <span id="duRssRow">0 B</span></span></div>
-      <div class="kv"><span class="k">최대(peak) du / 스캐너</span><span class="v" id="peakRss">0 B / 0 B</span></div>
-    </div>
-
-    <div class="card">
-      <h2>CPU · 디스크</h2>
-      <div class="big" id="cpuPct">—</div>
-      <div class="sub">CPU 사용률 · load1 <span id="load1">0</span></div>
-      <div class="kv" style="margin-top:10px;"><span class="k">파일시스템 전체</span><span class="v" id="fsTotal">—</span></div>
-      <div class="kv"><span class="k">파일시스템 사용</span><span class="v" id="fsUsed">—</span></div>
-      <div class="kv"><span class="k">파일시스템 여유</span><span class="v" id="fsFree">—</span></div>
-      <div class="kv"><span class="k">스캐너 PID</span><span class="v" id="pid">—</span></div>
-      <div class="kv"><span class="k">시간당 처리용량</span><span class="v" style="display:inline-flex; align-items:center; gap:6px; white-space:nowrap;"><span id="thruPerHr">—</span><button id="thruMoreBtn" title="시작부터 지금까지 1시간 단위 처리량" style="padding:1px 7px; font-size:11px;">More</button></span></div>
-    </div>
-  </div>
 
 </div>
 

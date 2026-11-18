@@ -133,6 +133,41 @@ def check_eta_single_source() -> None:
     print("[eta] OK  남은 시간·완료 예상 = 공용 계산 1개, 저장소 목록(eta_seconds·eta_at)에 실림")
 
 
+def check_portal_all_edges_eta() -> None:
+    """포탈 현황: 전체 엣지의 진행 중 스캔과 예상 종료 — 새 엣지는 보낸 eta_at, 구버전 엣지는 포탈이 같은 계산으로 채움."""
+    from isilon_usage import portal as P
+    d = tempfile.mkdtemp(prefix="iu_peta_")
+    try:
+        pc = P.PortalController(os.path.join(d, "hq"))
+        base = {"fs_total_bytes": 10, "fs_used_bytes": 5}
+        nodes = {
+            "new": {"status": "sizing", "phase": "sizing", "processed_dirs": 50, "total_dirs": 100,
+                    "started_at": 1000, "updated_at": 1100, "eta_at": 5000.0},
+            "old": {"status": "sizing", "phase": "sizing", "processed_dirs": 25, "total_dirs": 100,
+                    "started_at": 1000, "updated_at": 1100},                       # 구버전 — eta 없음
+            "disc": {"status": "discovering", "phase": "discovering", "discovered_dirs": 9,
+                     "started_at": 1000, "updated_at": 1100},
+            "off": {"status": "sizing", "phase": "sizing", "processed_dirs": 1, "total_dirs": 100,
+                    "started_at": 1000, "updated_at": 1100, "eta_at": 9e9},
+        }
+        for nid, rt in nodes.items():
+            pc.upsert_node({"id": nid, "url": "http://10.0.0.%d:8765" % (len(pc.nodes) + 1), "token": "t"})
+            pc._cache[nid] = {"online": nid != "off", "overall": P._sanitize_overall(
+                {"roots": [dict(base, root_path="/" + nid, **rt)], "active_scans": 1})}
+        ov = pc.overview()
+        run = {r["node"]: r for r in ov["running"]}
+        assert set(run) == {"new", "old", "disc"}, run.keys()            # 끊긴 노드(옛 값)는 제외
+        assert run["new"]["eta_at"] == 5000.0 and not run["new"]["eta_by_portal"]
+        assert run["old"]["eta_by_portal"] and abs(run["old"]["eta_at"] - (1100 + 300)) < 1e-6, run["old"]
+        assert run["disc"]["eta_at"] is None
+        assert ov["totals"]["eta_at"] == 5000.0 and ov["totals"]["running_no_eta"] == 1
+        assert [r["node"] for r in ov["running"]][-1] == "disc"              # 계산 전은 뒤로
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert "renderRunAll(j)" in _read("portal.html")
+    print("[portal-eta] OK  전체 엣지 진행 스캔·예상 종료(구버전 엣지는 포탈이 같은 계산으로 채움)")
+
+
 def check_inline_js_syntax() -> None:
     """화면 HTML 안의 스크립트 문법 검사(node 가 있으면) — 한 줄 실수로 화면 전체 JS 가 멈추는 것을 배포 전에 잡는다."""
     import subprocess
@@ -161,6 +196,7 @@ def main() -> int:
     check_theme_served_and_bundled()
     check_inline_js_syntax()
     check_eta_single_source()
+    check_portal_all_edges_eta()
     print("모든 테스트 통과 ✅")
     return 0
 

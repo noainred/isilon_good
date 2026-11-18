@@ -378,7 +378,22 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
     <div class="card"><h2>총 사용 용량 (전 DC)</h2><div class="big" id="kUsed">—</div><div class="sub" id="kUsedSub">조사 용량 합계</div></div>
     <div class="card"><h2>스토리지(루트)</h2><div class="big" id="kStorages">—</div><div class="sub">전 노드 합계</div></div>
     <div class="card"><h2>노드 온라인</h2><div class="big" id="kNodes">—</div><div class="sub">최근 동기화 기준</div></div>
-    <div class="card"><h2>진행 중 스캔</h2><div class="big" id="kActive">—</div><div class="sub">전 노드 합계</div></div>
+    <div class="card"><h2>진행 중 스캔</h2><div class="big" id="kActive">—</div><div class="sub" id="kActiveSub">전 노드 합계</div></div>
+  </div>
+
+  <!-- 전체 엣지의 진행 중 스캔 + 예상 종료 시각 -->
+  <div class="card" id="runAllCard" style="margin-bottom:14px;">
+    <div style="display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:8px;">
+      <h2 style="margin:0;">진행 중인 스캔 <span class="sub">— 전체 엣지 · 끝나는 순서</span></h2>
+      <span class="sub" id="runAllEta"></span>
+    </div>
+    <div style="overflow-x:auto; margin-top:8px;">
+      <table>
+        <thead><tr><th>노드</th><th>지역</th><th>경로</th><th>단계</th><th class="num">남은 시간</th><th>완료 예상</th></tr></thead>
+        <tbody id="runAllBody"><tr><td colspan="6" class="sub">불러오는 중…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="sub" style="margin-top:6px;">완료 예상은 각 엣지가 집계 단계의 처리 속도로 계산한 값입니다(엣지 대시보드와 같은 계산). 폴더 찾기(1단계) 중에는 전체 폴더 수를 몰라 아직 계산하지 않습니다.</div>
   </div>
 
   <div class="card" style="margin-bottom:14px;">
@@ -1759,6 +1774,24 @@ function fmtEtaAt(at){
   const end=new Date(at*1000), hm=end.toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"});
   return (end.toDateString()===new Date().toDateString()) ? ("오늘 "+hm) : ((end.getMonth()+1)+"/"+end.getDate()+" "+hm);
 }
+// 전체 엣지 진행 중 스캔 표 + 예상 종료 시각(overview.running / totals.eta_at — 서버 한 곳에서 계산)
+function renderRunAll(j){
+  const t=j.totals||{}, rows=j.running||[], now=Date.now()/1000;
+  $("kActiveSub").textContent = t.eta_at ? ("전체 완료 예상 "+fmtEtaAt(t.eta_at)) : "전 노드 합계";
+  $("runAllEta").innerHTML = t.eta_at
+    ? ("전체 완료 예상 <b>"+fmtEtaAt(t.eta_at)+"</b>"+(t.running_no_eta?(" · "+t.running_no_eta+"건은 폴더 찾는 중(계산 전)"):""))
+    : (rows.length ? "폴더 찾는 중 — 완료 예상은 2단계부터 계산됩니다" : "");
+  $("runAllBody").innerHTML = rows.length ? rows.map(r=>{
+    const disc=(r.status==="discovering"||r.phase==="discovering");
+    const t2=r.total_dirs||0, p=r.processed_dirs||0;
+    const stage = disc ? ("1 폴더 찾기 · "+fmtNum(r.discovered_dirs||0)+"개") : ("2 용량 집계 · "+(t2?Math.round(p/t2*100):0)+"%");
+    const left = r.eta_at ? Math.max(0, r.eta_at-now) : null;
+    return `<tr><td class="mono">${_he(r.node)}</td><td>${_he(r.region||"—")}</td>
+      <td class="mono" style="max-width:360px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escAttr(r.root_path||"")}">${_he(r.root_path||"")}</td>
+      <td>${stage}</td><td class="num">${left==null?"—":("약 "+fmtDur(left))}</td>
+      <td>${r.eta_at?("<b>"+fmtEtaAt(r.eta_at)+"</b>"+(r.eta_by_portal?' <span class="sub" title="구버전 엣지 — 포탈이 같은 계산으로 추정">(포탈 추정)</span>':"")):'<span class="sub">계산 전</span>'}</td></tr>`;
+  }).join("") : '<tr><td colspan="6" class="sub">지금 진행 중인 스캔이 없습니다.</td></tr>';
+}
 function scanElapsed(n){ const rn=n&&n.running; if(!rn) return 0;   // 진행 중 스캔 경과(초, 라이브)
   return elapsedLive(Math.max(0,(rn.updated_at||rn.started_at||0)-(rn.started_at||0))); }
 function scanProgress(r){   // 루트별 스캔 단계/진행률
@@ -1792,6 +1825,7 @@ function renderPortalDash(){
       : "조사 용량 합계 (전체 용량은 엣지가 fs 용량을 수집하면 표시)";
   }
   $("kNodes").textContent=(t.nodes_online||0)+" / "+(t.nodes_total||0); $("kActive").textContent=fmtNum(t.active_scans);
+  renderRunAll(j);
   // 전체 스토리지 용량 바(사용/전체 · %)
   const ft=t.fs_total_bytes||0, fu=t.fs_used_bytes||0, fp=ft?Math.min(100,fu/ft*100):0;
   if($("capFill")){ $("capFill").style.width=fp.toFixed(1)+"%"; $("capFill").style.background=capColor(fp); }

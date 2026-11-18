@@ -191,12 +191,13 @@
     "잠깐 시험해 보고 이 경로에서 가장 빠른 방식을 골라 시작합니다.": "Runs a short trial and starts with the fastest method for this path.",
     "여러 프로세스로 동시에 셉니다(pscan). 아주 큰 저장소용 — 결과는 루트와 바로 아래 폴더까지이고, 멈추면 처음부터 다시 합니다.": "Counts with several processes at once (pscan). For very large storage — results cover the root and its direct subfolders; if stopped it restarts from scratch.",
     "폴더별 상세 기록을 남기고(threads), 멈춘 곳부터 이어서 할 수 있습니다.": "Keeps per-folder detail (threads) and can resume where it stopped.",
-    "새로 시작하고, 돌고 있는 스캔을 지켜봅니다. 지난 결과는 ‘지난 스캔’, 속도 기록은 ‘처리량’에 있습니다.": "Start new scans and watch running ones. Past results are under ‘Past Scans’, speed history under ‘Throughput’.", "빠르게": "Fast", "꼼꼼하게": "Detailed",
+    "새로 시작하고, 돌고 있는 스캔을 지켜봅니다. 지난 결과는 ‘지난 스캔’, 속도 기록은 ‘처리량’, 서버 자원은 ‘홈’에 있습니다.": "Start new scans and watch running ones. Past results are under ‘Past Scans’, speed history under ‘Throughput’, server resources on ‘Home’.", "빠르게": "Fast", "꼼꼼하게": "Detailed",
     "세부 옵션": "Advanced options", "찾아보기": "Browse",
     "서버 자원": "Server resources", "이어서 하기": "Resume", "멈춘 이유": "Why it stopped",
     "지금 진행 중인 스캔이 없습니다.": "No scan is running now.", "새 스캔 시작": "Start a new scan",
     "큰 폴더부터 보기": "Show largest folders", "지난 스캔 보기": "Show past scans", "다시 스캔": "Rescan", "스캔하기": "Scan",
     "현황": "Overview", "네트워크": "Network", "노드·설정": "Nodes & Settings",
+    "남은 시간": "Time left", "완료 예상": "Expected finish", "계산 전": "not yet", "(포탈 추정)": "(portal estimate)",
     "모든 데이터센터의 저장소를 한 화면에서 봅니다.": "All data-center storage on one screen.",
     "포탈이 이 노드 상태를 마지막으로 받은 시각 — 오래되면 표시 값이 실제와 다를 수 있습니다":
       "When the portal last received this node's status — if old, the values shown may differ from the node"

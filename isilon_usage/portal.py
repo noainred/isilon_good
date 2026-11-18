@@ -2221,6 +2221,31 @@ class PortalController:
         return ftot, fused, max(0, ftot - fused), pct
 
     @staticmethod
+    def _with_eta(rt: dict) -> dict:
+        """진행 중 루트에 끝날 예상 시각(eta_at)이 없으면(구버전 엣지) 엣지가 보낸 진행 정보로 채운다.
+
+        엣지와 같은 공용 계산(manager.estimate_eta_seconds)을 쓰고, 경과는 엣지 시계 기준
+        (updated_at - started_at), 끝날 시각 = updated_at + 남은 시간(엣지 시계). 원본(캐시)은 바꾸지 않는다."""
+        if rt.get("status") not in ("discovering", "sizing") or rt.get("eta_at") is not None:
+            return rt
+        try:
+            st = float(rt.get("started_at") or 0)
+            up = float(rt.get("updated_at") or 0)
+        except (TypeError, ValueError):
+            return rt
+        if st <= 0 or up <= st:
+            return rt
+        eta = mgrmod.estimate_eta_seconds(rt.get("phase"), rt.get("processed_dirs"), rt.get("total_dirs"),
+                                          rt.get("discovered_dirs"), up - st)
+        if eta is None:
+            return rt
+        out = dict(rt)
+        out["eta_seconds"] = eta
+        out["eta_at"] = up + eta
+        out["eta_by_portal"] = True      # 구버전 엣지 — 포탈이 같은 계산으로 채움
+        return out
+
+    @staticmethod
     def _running_scan(roots_l):
         """진행 중(discovering/sizing) 스캔의 시작 시각·경과·단계 요약(없으면 None)."""
         act = [rt for rt in roots_l if rt.get("status") in ("discovering", "sizing")]
@@ -2254,6 +2279,7 @@ class PortalController:
         online = 0
         active = 0
         out_nodes = []
+        running_all = []   # 전체 엣지의 진행 중 스캔(노드·경로·진행·끝날 예상 시각) — 포탈 현황 '진행 중인 스캔' 표
         for n in nodes_snapshot:
             try:
                 c = cache.get(n["id"], {})
@@ -2271,7 +2297,19 @@ class PortalController:
                                              "fs_used_bytes": 0, "fs_total_bytes": 0})
                 r["used_bytes"] += used
                 r["storages"] += st
-                roots_l = ov.get("roots") or []
+                roots_l = [self._with_eta(rt) for rt in (ov.get("roots") or [])]
+                if is_on:
+                    for rt in roots_l:
+                        if rt.get("status") in ("discovering", "sizing"):
+                            running_all.append({
+                                "node": n["id"], "region": n.get("region") or "", "root_path": rt.get("root_path"),
+                                "status": rt.get("status"), "phase": rt.get("phase"),
+                                "processed_dirs": rt.get("processed_dirs") or 0, "total_dirs": rt.get("total_dirs") or 0,
+                                "discovered_dirs": rt.get("discovered_dirs") or 0,
+                                "scanned_bytes": rt.get("scanned_bytes") or 0,
+                                "started_at": rt.get("started_at"), "updated_at": rt.get("updated_at"),
+                                "eta_at": rt.get("eta_at"), "eta_by_portal": bool(rt.get("eta_by_portal")),
+                            })
                 last_scan = max([0] + [max(rt.get("finished_at") or 0, rt.get("updated_at") or 0)
                                        for rt in roots_l])     # 그 DC 가 마지막으로 스캔한 시각
                 fs_total, fs_used, fs_free, fs_pct = self._fs_capacity(roots_l)
@@ -2309,7 +2347,12 @@ class PortalController:
             "totals": {"used_bytes": total_used, "storages": storages,
                        "fs_total_bytes": total_fs_total, "fs_used_bytes": total_fs_used,
                        "nodes_online": online, "nodes_total": len(nodes_snapshot),
-                       "active_scans": active},
+                       "active_scans": active,
+                       # 전체 엣지 중 가장 늦게 끝날 예상 시각(진행 중이고 계산 가능한 것만)
+                       "eta_at": max((x["eta_at"] for x in running_all if x.get("eta_at")), default=None),
+                       "running_no_eta": sum(1 for x in running_all if not x.get("eta_at"))},
+            # 끝나는 순서(예상 시각이 없는 것 — 폴더 찾기 중 — 은 뒤로)
+            "running": sorted(running_all, key=lambda x: (x.get("eta_at") is None, x.get("eta_at") or 0)),
             "regions": sorted(regions.values(), key=lambda x: -x["used_bytes"]),
             "nodes": out_nodes,
         }
