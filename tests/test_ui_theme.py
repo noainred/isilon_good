@@ -134,38 +134,49 @@ def check_eta_single_source() -> None:
 
 
 def check_portal_all_edges_eta() -> None:
-    """포탈 현황: 전체 엣지의 진행 중 스캔과 예상 종료 — 새 엣지는 보낸 eta_at, 구버전 엣지는 포탈이 같은 계산으로 채움."""
+    """포탈 현황: 전체 엣지의 진행 중 스캔과 남은 시간·완료 예상 — 모두 포탈(메인) 시계 기준.
+
+    엣지마다 시계가 달라도(하루 앞선 엣지, 3시간 늦은 엣지) 엣지의 절대 시각은 쓰지 않고 상대 시간만 써서
+    포탈이 받은 시각(ts)에 더한다. 구버전 엣지(eta_seconds 없음)는 포탈이 같은 공용 계산으로 채운다."""
     from isilon_usage import portal as P
     d = tempfile.mkdtemp(prefix="iu_peta_")
     try:
         pc = P.PortalController(os.path.join(d, "hq"))
+        recv = 2_000_000.0                       # 포탈이 받은 시각(포탈 시계)
         base = {"fs_total_bytes": 10, "fs_used_bytes": 5}
+        day = 86400.0
         nodes = {
-            "new": {"status": "sizing", "phase": "sizing", "processed_dirs": 50, "total_dirs": 100,
-                    "started_at": 1000, "updated_at": 1100, "eta_at": 5000.0},
-            "old": {"status": "sizing", "phase": "sizing", "processed_dirs": 25, "total_dirs": 100,
-                    "started_at": 1000, "updated_at": 1100},                       # 구버전 — eta 없음
-            "disc": {"status": "discovering", "phase": "discovering", "discovered_dirs": 9,
-                     "started_at": 1000, "updated_at": 1100},
-            "off": {"status": "sizing", "phase": "sizing", "processed_dirs": 1, "total_dirs": 100,
-                    "started_at": 1000, "updated_at": 1100, "eta_at": 9e9},
+            # 새 엣지, 시계가 하루 빠름: 엣지가 보낸 eta_at(엣지 시계)은 무시하고 eta_seconds(600초)만 쓴다
+            "new": ({"status": "sizing", "phase": "sizing", "processed_dirs": 50, "total_dirs": 100,
+                     "started_at": recv + day - 500, "updated_at": recv + day, "eta_seconds": 600.0,
+                     "eta_at": recv + day + 600}, recv + day),
+            # 구버전 엣지, 시계가 3시간 늦음: 경과 100초에 25% → 남은 300초, 갱신 뒤 응답까지 20초 흘렀으니 280초
+            "old": ({"status": "sizing", "phase": "sizing", "processed_dirs": 25, "total_dirs": 100,
+                     "started_at": recv - 10800 - 100, "updated_at": recv - 10800}, recv - 10800 + 20),
+            "disc": ({"status": "discovering", "phase": "discovering", "discovered_dirs": 9,
+                      "started_at": 1000, "updated_at": 1100}, 1100),
+            "off": ({"status": "sizing", "phase": "sizing", "processed_dirs": 1, "total_dirs": 100,
+                     "started_at": 1000, "updated_at": 1100, "eta_seconds": 5.0}, 1100),
         }
-        for nid, rt in nodes.items():
+        for nid, (rt, edge_now) in nodes.items():
             pc.upsert_node({"id": nid, "url": "http://10.0.0.%d:8765" % (len(pc.nodes) + 1), "token": "t"})
-            pc._cache[nid] = {"online": nid != "off", "overall": P._sanitize_overall(
-                {"roots": [dict(base, root_path="/" + nid, **rt)], "active_scans": 1})}
+            pc._cache[nid] = {"online": nid != "off", "ts": recv, "edge_now": edge_now,
+                              "overall": P._sanitize_overall({"roots": [dict(base, root_path="/" + nid, **rt)],
+                                                              "active_scans": 1})}
         ov = pc.overview()
         run = {r["node"]: r for r in ov["running"]}
         assert set(run) == {"new", "old", "disc"}, run.keys()            # 끊긴 노드(옛 값)는 제외
-        assert run["new"]["eta_at"] == 5000.0 and not run["new"]["eta_by_portal"]
-        assert run["old"]["eta_by_portal"] and abs(run["old"]["eta_at"] - (1100 + 300)) < 1e-6, run["old"]
+        assert run["new"]["eta_at"] == recv + 600 and not run["new"]["eta_by_portal"], run["new"]
+        assert run["old"]["eta_by_portal"] and abs(run["old"]["eta_at"] - (recv + 280)) < 1e-6, run["old"]
         assert run["disc"]["eta_at"] is None
-        assert ov["totals"]["eta_at"] == 5000.0 and ov["totals"]["running_no_eta"] == 1
-        assert [r["node"] for r in ov["running"]][-1] == "disc"              # 계산 전은 뒤로
+        assert ov["totals"]["eta_at"] == recv + 600 and ov["totals"]["running_no_eta"] == 1
+        assert [r["node"] for r in ov["running"]] == ["old", "new", "disc"]   # 먼저 끝나는 순서, 계산 전은 뒤로
+        assert ov.get("server_time") and "tz_offset_min" in ov             # 화면이 포탈 시계·시간대로 그린다
     finally:
         shutil.rmtree(d, ignore_errors=True)
-    assert "renderRunAll(j)" in _read("portal.html")
-    print("[portal-eta] OK  전체 엣지 진행 스캔·예상 종료(구버전 엣지는 포탈이 같은 계산으로 채움)")
+    ph = _read("portal.html")
+    assert "renderRunAll(j)" in ph and "_setPortalClock(j)" in ph and "etaLeft(" in ph
+    print("[portal-eta] OK  전체 엣지 남은 시간·완료 예상 = 포탈 시계 기준(엣지 시계 ±하루여도 같음), 구버전은 포탈 추정")
 
 
 def check_inline_js_syntax() -> None:

@@ -389,11 +389,11 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
     </div>
     <div style="overflow-x:auto; margin-top:8px;">
       <table>
-        <thead><tr><th>노드</th><th>지역</th><th>경로</th><th>단계</th><th class="num">남은 시간</th><th>완료 예상</th></tr></thead>
+        <thead><tr><th>노드</th><th>지역</th><th>경로</th><th>단계</th><th class="num">남은 시간</th><th>완료 예상 시간</th></tr></thead>
         <tbody id="runAllBody"><tr><td colspan="6" class="sub">불러오는 중…</td></tr></tbody>
       </table>
     </div>
-    <div class="sub" style="margin-top:6px;">완료 예상은 각 엣지가 집계 단계의 처리 속도로 계산한 값입니다(엣지 대시보드와 같은 계산). 폴더 찾기(1단계) 중에는 전체 폴더 수를 몰라 아직 계산하지 않습니다.</div>
+    <div class="sub" style="margin-top:6px;">시간은 모두 <b>포탈(메인) 시계·시간대 기준</b>입니다 — 엣지마다 시계가 달라도 엣지의 절대 시각은 쓰지 않고 ‘남은 시간’만 받아 포탈이 받은 시각에 더합니다. 계산은 엣지 대시보드와 같습니다(집계 단계의 처리 속도). 폴더 찾기(1단계) 중에는 전체 폴더 수를 몰라 아직 계산하지 않습니다.</div>
   </div>
 
   <div class="card" style="margin-bottom:14px;">
@@ -1768,24 +1768,40 @@ function elapsedSpan(started, updated){   // 진행 중 경과를 1초마다 라
 }
 function tickElapsed(){ document.querySelectorAll(".js-elapsed").forEach(el=>{
   el.textContent=fmtDur(elapsedLive(+el.dataset.srv||0)); }); }
-// 완료 예상시각(엣지가 보낸 eta_at, epoch 초) → '오늘 HH:MM' / 'M/D HH:MM' — 엣지 대시보드와 같은 표기
+// 시각은 모두 포탈(메인) 시계·시간대 기준 — 엣지마다 시계가 달라도, 이 PC 시계가 틀려도 같은 값을 보인다.
+// overview 의 server_time(포탈 지금)·tz_offset_min(포탈 시간대)으로 보정한다(값이 없으면 이 PC 기준).
+let _srvSkew = 0, _srvTzMin = null;
+function _portalNow(){ return Date.now()/1000 + _srvSkew; }
+function _setPortalClock(j){
+  if(j && j.server_time) _srvSkew = j.server_time - Date.now()/1000;
+  if(j && j.tz_offset_min != null) _srvTzMin = j.tz_offset_min;
+}
+// 완료 예상시각(포탈 시계 epoch 초) → '오늘 오후 02:35' / 'M/D 오후 02:35'(포탈 시간대)
 function fmtEtaAt(at){
   if(!at) return "";
-  const end=new Date(at*1000), hm=end.toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"});
-  return (end.toDateString()===new Date().toDateString()) ? ("오늘 "+hm) : ((end.getMonth()+1)+"/"+end.getDate()+" "+hm);
+  if(_srvTzMin == null){
+    const end=new Date(at*1000), hm=end.toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"});
+    return (end.toDateString()===new Date().toDateString()) ? ("오늘 "+hm) : ((end.getMonth()+1)+"/"+end.getDate()+" "+hm);
+  }
+  const sh=_srvTzMin*60, end=new Date((at+sh)*1000), now=new Date((_portalNow()+sh)*1000);
+  const hm=end.toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit",timeZone:"UTC"});
+  const same=end.getUTCFullYear()===now.getUTCFullYear() && end.getUTCMonth()===now.getUTCMonth() && end.getUTCDate()===now.getUTCDate();
+  return same ? ("오늘 "+hm) : ((end.getUTCMonth()+1)+"/"+end.getUTCDate()+" "+hm);
 }
+function etaLeft(at){ return at ? Math.max(0, at - _portalNow()) : null; }   // 남은 시간(초) — 포탈 시계 기준
 // 전체 엣지 진행 중 스캔 표 + 예상 종료 시각(overview.running / totals.eta_at — 서버 한 곳에서 계산)
 function renderRunAll(j){
-  const t=j.totals||{}, rows=j.running||[], now=Date.now()/1000;
-  $("kActiveSub").textContent = t.eta_at ? ("전체 완료 예상 "+fmtEtaAt(t.eta_at)) : "전 노드 합계";
+  _setPortalClock(j);
+  const t=j.totals||{}, rows=j.running||[];
+  $("kActiveSub").textContent = t.eta_at ? ("남은 시간 약 "+fmtDur(etaLeft(t.eta_at))+" · 완료 예상 "+fmtEtaAt(t.eta_at)) : "전 노드 합계";
   $("runAllEta").innerHTML = t.eta_at
-    ? ("전체 완료 예상 <b>"+fmtEtaAt(t.eta_at)+"</b>"+(t.running_no_eta?(" · "+t.running_no_eta+"건은 폴더 찾는 중(계산 전)"):""))
+    ? ("전체 남은 시간 <b>약 "+fmtDur(etaLeft(t.eta_at))+"</b> · 완료 예상 <b>"+fmtEtaAt(t.eta_at)+"</b>"+(t.running_no_eta?(" · "+t.running_no_eta+"건은 폴더 찾는 중(계산 전)"):""))
     : (rows.length ? "폴더 찾는 중 — 완료 예상은 2단계부터 계산됩니다" : "");
   $("runAllBody").innerHTML = rows.length ? rows.map(r=>{
     const disc=(r.status==="discovering"||r.phase==="discovering");
     const t2=r.total_dirs||0, p=r.processed_dirs||0;
     const stage = disc ? ("1 폴더 찾기 · "+fmtNum(r.discovered_dirs||0)+"개") : ("2 용량 집계 · "+(t2?Math.round(p/t2*100):0)+"%");
-    const left = r.eta_at ? Math.max(0, r.eta_at-now) : null;
+    const left = etaLeft(r.eta_at);
     return `<tr><td class="mono">${_he(r.node)}</td><td>${_he(r.region||"—")}</td>
       <td class="mono" style="max-width:360px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escAttr(r.root_path||"")}">${_he(r.root_path||"")}</td>
       <td>${stage}</td><td class="num">${left==null?"—":("약 "+fmtDur(left))}</td>
@@ -1904,7 +1920,7 @@ function renderPortalDash(){
     const roots = arrRows + (n.roots||[]).map(r=>{
       const act=(r.status==="discovering"||r.status==="sizing");
       const startTxt=(act&&r.started_at)?(" · 시작 "+fmtClock(r.started_at)+" · 진행 "+elapsedSpan(r.started_at, r.updated_at)
-        +(r.eta_at?(" · 완료 예상 "+fmtEtaAt(r.eta_at)):"")):"";
+        +(r.eta_at?(" · 남은 약 "+fmtDur(etaLeft(r.eta_at))+" · 완료 예상 "+fmtEtaAt(r.eta_at)):"")):"";
       const fsTxt=r.fs_total_bytes?(" of "+fmtBytes(r.fs_total_bytes)+" ("+Math.round((r.fs_used_bytes||0)/r.fs_total_bytes*100)+"%)"):"";
       return `<tr class="rr-${idx}" style="display:none; background:#FFFFFF;"><td></td>
         <td colspan="8" class="sub mono">📁 ${escAttr(r.root_path)} — 조사 ${fmtBytes(r.capacity_bytes!=null?r.capacity_bytes:r.scanned_bytes)}${(r.capacity_scan_id!=null&&r.capacity_scan_id!==r.scan_id)?(" (마지막 완료 기준 · 최신 스캔 "+fmtBytes(r.scanned_bytes)+")"):(r.capacity_partial?" (부분 값)":"")} · fs ${fmtBytes(r.fs_used_bytes)}${fsTxt} · ${scanProgress(r)}${startTxt}${r.finished_at?(" · 완료 "+ago(r.finished_at)):(r.updated_at?(" · 갱신 "+ago(r.updated_at)):"")}</td></tr>`;
@@ -1921,7 +1937,7 @@ function renderPortalDash(){
     const staleB = (n.enabled && n.online && n.last_poll && (Date.now()/1000 - n.last_poll) >= 120)
       ? ` <span class="sub ${freshClass(n.last_poll)}" style="white-space:nowrap;" title="포탈이 이 노드 상태를 마지막으로 받은 시각 — 오래되면 표시 값이 실제와 다를 수 있습니다">⏳ 상태 ${ago(n.last_poll)}</span>` : "";
     const rn=n.running;
-    const runLine = rn ?`<div class="sub" style="white-space:nowrap; margin-top:3px;">⏱ ${elapsedSpan(rn.started_at, rn.updated_at)} · 시작 ${fmtClock(rn.started_at)}${rn.eta_at?(" · 완료 예상 <b>"+fmtEtaAt(rn.eta_at)+"</b>"):""}</div>` : "";
+    const runLine = rn ?`<div class="sub" style="white-space:nowrap; margin-top:3px;">⏱ ${elapsedSpan(rn.started_at, rn.updated_at)} · 시작 ${fmtClock(rn.started_at)}${rn.eta_at?(" · 남은 약 "+fmtDur(etaLeft(rn.eta_at))+" · 완료 예상 <b>"+fmtEtaAt(rn.eta_at)+"</b>"):""}</div>` : "";
     const loopBadge = n.auto_restart ? ` <span style="color:#B42318; font-weight:700; white-space:nowrap;" title="완료되면 같은 설정으로 자동 재시작(반복) 중">🔁 반복 동작 중</span>` : "";
     // 스캔 진행 바(집계 단계 % 가 있을 때만 — 정직하게)
     const _spct = (n.online && n.active_scans>0) ? nodeScanPct(n) : null;

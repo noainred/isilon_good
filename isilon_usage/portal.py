@@ -2001,7 +2001,8 @@ class PortalController:
             return False
         with self._lock:
             self._cache[nid] = {
-                "online": True, "ts": time.time(),
+                "online": True, "ts": time.time(),      # 포탈이 받은 시각(포탈 시계) — 예상 종료 계산의 기준
+                "edge_now": meta.get("exported_at"),    # 엣지가 응답을 만든 시각(엣지 시계) — 엣지 시각 차이 계산에만 사용
                 "version": meta.get("version"), "hostname": meta.get("hostname"),
                 "overall": _sanitize_overall(meta.get("overall")),
                 "isilon": meta.get("isilon") if isinstance(meta.get("isilon"), dict) else {"configured": False},
@@ -2221,28 +2222,48 @@ class PortalController:
         return ftot, fused, max(0, ftot - fused), pct
 
     @staticmethod
-    def _with_eta(rt: dict) -> dict:
-        """진행 중 루트에 끝날 예상 시각(eta_at)이 없으면(구버전 엣지) 엣지가 보낸 진행 정보로 채운다.
+    def _with_eta(rt: dict, recv_ts=None, edge_now=None) -> dict:
+        """진행 중 루트의 남은 시간·끝날 예상 시각을 **포탈(메인) 시계 기준**으로 만든다. 원본(캐시)은 바꾸지 않는다.
 
-        엣지와 같은 공용 계산(manager.estimate_eta_seconds)을 쓰고, 경과는 엣지 시계 기준
-        (updated_at - started_at), 끝날 시각 = updated_at + 남은 시간(엣지 시계). 원본(캐시)은 바꾸지 않는다."""
-        if rt.get("status") not in ("discovering", "sizing") or rt.get("eta_at") is not None:
-            return rt
-        try:
-            st = float(rt.get("started_at") or 0)
-            up = float(rt.get("updated_at") or 0)
-        except (TypeError, ValueError):
-            return rt
-        if st <= 0 or up <= st:
-            return rt
-        eta = mgrmod.estimate_eta_seconds(rt.get("phase"), rt.get("processed_dirs"), rt.get("total_dirs"),
-                                          rt.get("discovered_dirs"), up - st)
-        if eta is None:
+        엣지마다 시계(시간대·오차)가 달라, 엣지가 보낸 절대 시각(eta_at 등)은 쓰지 않는다. 엣지에서는 상대 시간만 쓴다:
+          - 1.99.45+ 엣지: eta_seconds = 엣지가 응답을 만든 순간 기준 남은 초
+          - 구버전 엣지: 같은 공용 계산(manager.estimate_eta_seconds)을 경과(updated_at - started_at, 둘 다 엣지 시계라
+            차이는 오차와 무관)로 하고, 갱신 뒤 응답까지 흐른 시간(exported_at - updated_at, 역시 엣지 시계 차이)을 뺀다.
+        그 남은 초를 포탈이 응답을 받은 시각(recv_ts, 포탈 시계)에 더해 eta_at(포탈 시계)을 만든다."""
+        if rt.get("status") not in ("discovering", "sizing"):
             return rt
         out = dict(rt)
-        out["eta_seconds"] = eta
-        out["eta_at"] = up + eta
-        out["eta_by_portal"] = True      # 구버전 엣지 — 포탈이 같은 계산으로 채움
+        out["eta_at"] = None
+        out["eta_seconds"] = None
+        try:
+            recv = float(recv_ts) if recv_ts else None
+        except (TypeError, ValueError):
+            recv = None
+        left = None
+        if rt.get("eta_seconds") is not None:              # 엣지가 계산한 남은 초(응답 순간 기준)
+            try:
+                left = max(0.0, float(rt["eta_seconds"]))
+            except (TypeError, ValueError):
+                left = None
+        else:                                              # 구버전 엣지 — 포탈이 같은 계산으로 추정
+            try:
+                st = float(rt.get("started_at") or 0)
+                up = float(rt.get("updated_at") or 0)
+            except (TypeError, ValueError):
+                st = up = 0.0
+            if st > 0 and up > st:
+                eta = mgrmod.estimate_eta_seconds(rt.get("phase"), rt.get("processed_dirs"), rt.get("total_dirs"),
+                                                  rt.get("discovered_dirs"), up - st)
+                if eta is not None:
+                    try:
+                        lag = max(0.0, float(edge_now) - up) if edge_now else 0.0
+                    except (TypeError, ValueError):
+                        lag = 0.0
+                    left = max(0.0, eta - lag)
+                    out["eta_by_portal"] = True
+        if left is not None and recv is not None:
+            out["eta_seconds"] = left                      # 포탈이 받은 순간 기준 남은 초
+            out["eta_at"] = recv + left                    # 포탈 시계 기준 끝날 시각
         return out
 
     @staticmethod
@@ -2297,7 +2318,7 @@ class PortalController:
                                              "fs_used_bytes": 0, "fs_total_bytes": 0})
                 r["used_bytes"] += used
                 r["storages"] += st
-                roots_l = [self._with_eta(rt) for rt in (ov.get("roots") or [])]
+                roots_l = [self._with_eta(rt, c.get("ts"), c.get("edge_now")) for rt in (ov.get("roots") or [])]
                 if is_on:
                     for rt in roots_l:
                         if rt.get("status") in ("discovering", "sizing"):
@@ -2355,6 +2376,9 @@ class PortalController:
             "running": sorted(running_all, key=lambda x: (x.get("eta_at") is None, x.get("eta_at") or 0)),
             "regions": sorted(regions.values(), key=lambda x: -x["used_bytes"]),
             "nodes": out_nodes,
+            # 화면이 포탈 시계·시간대로 남은 시간·완료 시각을 그리도록(브라우저 PC 시계가 틀려도 보정)
+            "server_time": time.time(),
+            "tz_offset_min": int(time.localtime().tm_gmtoff // 60),
         }
 
     def usage_export(self) -> dict:
