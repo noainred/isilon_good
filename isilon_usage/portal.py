@@ -338,7 +338,7 @@ def agent_bundle_bytes() -> bytes:
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tf:
         for name in sorted(os.listdir(HERE)):
-            if name.endswith((".py", ".html", ".js")):   # .js: i18n_en.js(영어 토글) 포함
+            if name.endswith((".py", ".html", ".js", ".css")):   # .js: 영어 토글, .css: 공통 테마(theme.css)
                 tf.add(os.path.join(HERE, name), arcname="isilon_usage/" + name)
     return buf.getvalue()
 
@@ -3176,6 +3176,20 @@ class PortalHandler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html"):
             self._send_html(PORTAL_HTML)
             return
+        if path == "/theme.css":   # 공통 화면 테마(단일 소스, 대시보드·포탈 공유)
+            try:
+                with open(os.path.join(HERE, "theme.css"), "rb") as fh:
+                    body = fh.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/css; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except OSError:
+                self.send_error(404, "theme.css not found")
+            return
+
         if path == "/i18n.js":     # 영어 토글 런타임+사전(단일 소스, 대시보드·포탈 공유)
             try:
                 with open(os.path.join(HERE, "i18n_en.js"), "rb") as fh:

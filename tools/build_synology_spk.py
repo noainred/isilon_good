@@ -85,12 +85,12 @@ def _icon_png(size: int) -> bytes:
     return buf.getvalue()
 
 
-# ---- payload: app/isilon_usage/*  (.py/.html/.js) ----
+# ---- payload: app/isilon_usage/*  (.py/.html/.js/.css) ----
 def _package_tgz() -> bytes:
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tf:
         for name in sorted(os.listdir(PKG_DIR)):
-            if name.endswith((".py", ".html", ".js")):
+            if name.endswith((".py", ".html", ".js", ".css")):   # .css: 공통 화면 테마(theme.css)
                 tf.add(os.path.join(PKG_DIR, name), arcname="app/isilon_usage/" + name)
     return buf.getvalue()
 

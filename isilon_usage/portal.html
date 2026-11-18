@@ -6,373 +6,46 @@
 <title>[The Davinci] NAS Management</title>
 <!-- 탭 파비콘: 헤더 V 마크와 같은 스타일(라운드 사각형·파란 그라데이션)의 N(=NAS). 외부 파일 없이 인라인 SVG. -->
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjNGFhM2ZmIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjN2FkMGZmIi8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3QgeD0iMyIgeT0iMyIgd2lkdGg9IjU4IiBoZWlnaHQ9IjU4IiByeD0iMTQiIGZpbGw9InVybCgjZykiLz48dGV4dCB4PSIzMiIgeT0iMzQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZiIgZm9udC1zaXplPSI0MiIgZm9udC13ZWlnaHQ9IjgwMCIgZmlsbD0iIzA4MjAzYSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZG9taW5hbnQtYmFzZWxpbmU9ImNlbnRyYWwiPk48L3RleHQ+PC9zdmc+" />
-<style>
-  :root { --bg:#0f141b; --panel:#19212c; --panel2:#1f2937; --line:#2b3543;
-    --text:#e6edf3; --muted:#8b98a9; --accent:#4f9cff; --accent2:#38d39f;
-    --warn:#f5a623; --danger:#ff5c5c; --ok:#38d39f; }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--text); font-size:14px;
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif; }
-  header { padding:16px 22px; border-bottom:1px solid var(--line); display:flex;
-    align-items:center; gap:16px; flex-wrap:wrap; background:linear-gradient(180deg,#1a232f,#141a23); }
-  header h1 { font-size:17px; margin:0; font-weight:650; }
-  .spacer { flex:1; }
-  nav { display:flex; gap:6px; }
-  .navbtn { background:transparent; color:var(--muted); border:1px solid transparent;
-    border-radius:7px; padding:6px 12px; cursor:pointer; font-size:13px; font-weight:600; }
-  .navbtn:hover { color:var(--text); } .navbtn.active { background:var(--panel2); color:var(--text); border-color:var(--line); }
-  .wrap { padding:18px 22px; max-width:1320px; margin:0 auto; }
-  .grid { display:grid; gap:14px; } .cols-4 { grid-template-columns:repeat(4,1fr); }
-  @media (max-width:980px){ .cols-4 { grid-template-columns:1fr 1fr; } }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 18px; }
-  .card h2 { font-size:12.5px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); margin:0 0 12px; font-weight:700; }
-  .big { font-size:28px; font-weight:700; font-variant-numeric:tabular-nums; }
-  .sub { color:var(--muted); font-size:12px; margin-top:2px; }
-  .mono { font-family:ui-monospace,Menlo,monospace; }
-  table { width:100%; border-collapse:collapse; font-size:13px; }
-  th,td { text-align:left; padding:8px 9px; border-bottom:1px solid #222c38; }
-  th { color:var(--muted); font-weight:600; font-size:12px; }
-  td.num,th.num { text-align:right; font-variant-numeric:tabular-nums; font-family:ui-monospace,Menlo,monospace; }
-  .badge { padding:2px 9px; border-radius:999px; font-size:11.5px; font-weight:600; border:1px solid var(--line); white-space:nowrap; }
-  .b-online { background:#173a2a; color:#52e0a0; } .b-offline { background:#43201f; color:#ff8b8b; }
-  .b-scan { background:#16344f; color:#7cc4ff; }
-  .ssbtn { padding:1px 9px; font-size:11px; border-radius:999px; border-color:#2f6f50;
-    color:#9fe6c0; background:#12241a; vertical-align:middle; white-space:nowrap; }
-  .ssbtn:hover:not(:disabled) { border-color:var(--accent2); } .ssbtn:disabled { opacity:.6; cursor:default; }
-  button { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:6px 11px; cursor:pointer; font-size:12.5px; }
-  button:hover { border-color:var(--accent); } button.primary { border-color:var(--accent2); color:#cfe; font-weight:700; }
-  a.link { color:#9fd0ff; text-decoration:none; } a.link:hover { text-decoration:underline; }
-  .setgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; }
-  label.fld { display:flex; flex-direction:column; gap:5px; font-size:12.5px; color:var(--muted); }
-  .inp { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:8px 10px; font-size:13px; }
-  .note { background:#0d1219; border:1px solid var(--line); border-radius:8px; padding:10px 12px; color:#bcd; font-size:12.5px; }
-  .view { display:none; } .view.active { display:block; }
-  .chip { background:var(--panel2); border:1px solid var(--line); border-radius:999px;
-    padding:4px 9px; cursor:pointer; font-size:12px; user-select:none; }
-  .chip.on { background:#16344f; border-color:#2f6fb0; color:#cfe6ff; font-weight:700; }
-  td.miss { color:#ff8b8b; font-weight:600; } td.warn { color:#ffcf8b; font-weight:600; }
-  th.sortable { cursor:pointer; user-select:none; white-space:nowrap; }
-  th.sortable:hover { color:var(--text); }
-  .regcard { cursor:pointer; border:1px solid transparent; border-radius:9px; padding:6px 8px; }
-  .regcard:hover { border-color:var(--line); }
-  .regcard.active { border-color:var(--accent); background:#13202e; }
-  .capbar { position:relative; height:15px; background:#0d1219; border:1px solid var(--line);
-    border-radius:8px; overflow:hidden; min-width:84px; }
-  .capbar > i { position:absolute; top:0; bottom:0; left:0; border-radius:8px 0 0 8px; transition:width .4s ease; }
-  .capbar > b { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
-    font-size:10.5px; font-weight:700; color:#eaf2fb; text-shadow:0 1px 2px #000a; }
-  .pill { display:inline-block; padding:1px 7px; border-radius:999px; font-size:10.5px;
-    font-weight:700; border:1px solid var(--line); white-space:nowrap; }
-  .fresh-ok { color:#52e0a0; } .fresh-warn { color:#f5c150; } .fresh-old { color:#ff8b8b; }
-  #clock { color:#9fc2e8; letter-spacing:.3px; }
-  /* 인프라 체크: 서버별 핑 이력 차트 */
-  .rbtns { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
-  .rbtn { background:var(--panel2); color:var(--muted); border:none; border-left:1px solid var(--line);
-    border-radius:0; padding:6px 13px; font-weight:600; font-size:12.5px; }
-  .rbtn:first-child { border-left:none; } .rbtn:hover { color:var(--text); }
-  .rbtn.active { background:#16344f; color:#cfe6ff; }
-  .reglabel { font-size:12px; font-weight:700; color:#9fc2e8; letter-spacing:.4px;
-    margin:16px 0 9px; text-transform:uppercase; border-left:3px solid var(--accent); padding-left:9px; }
-  .phgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:12px; }
-  .phcard { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
-  .phcard .phhead { display:flex; align-items:baseline; gap:8px; margin-bottom:4px; }
-  .phcard canvas { width:100%; height:120px; display:block; }
-  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; vertical-align:middle; }
-  /* 설정 하위 탭 */
-  .subtabs { display:flex; gap:7px; flex-wrap:wrap; margin-bottom:16px;
-    border-bottom:1px solid var(--line); padding-bottom:12px; }
-  .stab { background:var(--panel2); color:var(--muted); border:1px solid var(--line);
-    border-radius:9px; padding:9px 16px; cursor:pointer; font-weight:650; font-size:13px; }
-  .stab:hover { color:var(--text); } .stab.active { background:#16344f; color:#cfe6ff; border-color:#2f6fb0; }
-  .subpane { display:none; } .subpane.active { display:block; }
-  /* ── About / 소개 페이지 ── */
-  .about-hero { border-radius:18px; padding:24px 26px; margin-bottom:16px; position:relative; overflow:hidden;
-    background:linear-gradient(135deg,#1b2740 0%, #131a27 52%, #1d1733 100%);
-    border:1px solid #2c3a57; box-shadow:0 14px 48px rgba(40,80,170,.18); }
-  .about-hero-row { display:flex; align-items:center; gap:18px; }
-  .about-icon { width:66px; height:66px; flex:0 0 66px; border-radius:17px; font-size:34px;
-    display:flex; align-items:center; justify-content:center;
-    background:linear-gradient(135deg,#4f9cff,#38d39f); box-shadow:0 8px 24px rgba(79,156,255,.45); }
-  .about-title { font-size:30px; font-weight:800; letter-spacing:.4px; line-height:1.15;
-    background:linear-gradient(90deg,#dbe7ff,#9fb6e8 70%,#b9a8ff); -webkit-background-clip:text; background-clip:text; color:transparent; }
-  .about-tagline { color:var(--muted); font-size:14px; margin-top:4px; }
-  .about-slogan { margin:18px 0 15px; font-size:15px; color:#e3ebf6; }
-  .about-slogan i { color:#86a8ff; font-style:italic; }
-  .about-badges { display:flex; gap:10px; flex-wrap:wrap; }
-  .about-badge { padding:6px 15px; border-radius:10px; font-size:13px; font-weight:700; border:1px solid; }
-  .about-badge.ver { color:#c9b6ff; border-color:#5b4b8a; background:#241d3a; }
-  .about-badge.stack { color:#7fe3d0; border-color:#2f6a5e; background:#143029; }
-  .about-badge.edition { color:#7ee0a8; border-color:#2f6a48; background:#15301f; }
-  .about-2col { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; }
-  .about-label { color:var(--muted); font-size:12px; font-weight:700; letter-spacing:.7px; text-transform:uppercase; margin-bottom:14px; }
-  .about-author-row { display:flex; align-items:center; gap:14px; }
-  .about-avatar { width:50px; height:50px; flex:0 0 50px; border-radius:50%; color:#fff; font-weight:700; font-size:19px;
-    display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#4f9cff,#6f7bff); }
-  .about-author-name { font-size:17px; font-weight:700; }
-  .about-mail { color:var(--accent); text-decoration:none; font-size:14px; }
-  .about-mail:hover { text-decoration:underline; }
-  .about-copy { font-size:27px; font-weight:800; margin-bottom:3px; }
-  .about-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px 30px; }
-  .about-feat { display:flex; gap:12px; align-items:flex-start; }
-  .about-feat .fi { font-size:20px; line-height:1.25; flex:0 0 24px; }
-  .about-feat b { display:block; font-size:14.5px; margin-bottom:3px; color:var(--text); }
-  .about-feat .sub { display:block; line-height:1.5; margin-top:0; }
-  .about-notice { margin-top:4px; border:1px solid #3a3f63; border-left:3px solid var(--accent); border-radius:12px;
-    padding:16px 18px; background:#161a28; color:#c8d2e0; line-height:1.65; }
-  .about-foot { text-align:center; color:var(--muted); font-size:12px; margin:18px 0 4px; letter-spacing:.3px; }
-  @media (max-width:760px){ .about-2col, .about-grid { grid-template-columns:1fr; } .about-title { font-size:24px; } }
-
-/* ============================================================================
-   The Davinci NAS Management — Refined Theme (drop-in, Claude Design)
-   마크업/JS/DOM id 변경 없음. 클래스·토큰만 재정의(소스 순서로 덮어씀).
-   데이터·동작·색상 임계(capColor 등)는 그대로 유지.
-   ============================================================================ */
-:root{
-  --bg:#0a0e13; --panel:#121a24; --panel2:#182029; --line:#242f3d;
-  --text:#e7edf3; --muted:#8b98a9; --accent:#4f9cff; --accent2:#35d99a;
-  --warn:#f0b429; --danger:#f26d6d; --ok:#35d99a;
-}
-body{
-  background:
-    radial-gradient(1100px 520px at 80% -8%, rgba(53,217,154,.06), transparent 60%),
-    radial-gradient(900px 480px at 10% 2%, rgba(79,156,255,.05), transparent 55%),
-    var(--bg);
-  -webkit-font-smoothing:antialiased;
-}
-header{ padding:18px 24px; background:linear-gradient(180deg,#141c26,#0f151d); border-bottom:1px solid rgba(255,255,255,.06); }
-#brandVer{ background:rgba(255,255,255,.06)!important; color:#8b98a9!important; font-family:ui-monospace,Menlo,monospace; }
-#brandH1 span[style*="background:#16361f"]{ background:transparent!important; color:var(--accent2)!important; padding:0!important; display:inline-flex; align-items:center; gap:6px; }
-#clock{ color:#cdd6df; }
-.navbtn{ border-radius:9px; padding:7px 13px; transition:background .15s,color .15s,border-color .15s; }
-.navbtn.active{ background:color-mix(in srgb, var(--accent) 16%, transparent); color:#dbe9ff; border-color:color-mix(in srgb, var(--accent) 40%, transparent); }
-.wrap{ max-width:1400px; padding:22px 24px 80px; }
-.grid{ gap:16px; }
-.card{ background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.012)); border:1px solid rgba(255,255,255,.07); border-radius:16px; padding:20px 22px; }
-.card h2{ font-size:12px; letter-spacing:.7px; color:var(--muted); font-weight:700; margin:0 0 14px; }
-.big{ font-size:32px; font-weight:700; letter-spacing:-.4px; color:#fff; font-family:ui-monospace,Menlo,"JetBrains Mono",monospace; }
-.sub{ color:var(--muted); font-size:12px; }
-#askCard{ background:linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.015)); border-radius:18px; }
-#askInput{ border-radius:11px!important; padding:13px 16px!important; transition:border-color .15s, box-shadow .15s; }
-#askInput:focus{ outline:none; border-color:color-mix(in srgb, var(--accent2) 55%, transparent)!important; box-shadow:0 0 0 3px rgba(53,217,154,.14); }
-#askOut:not(:empty){ margin-top:14px; padding:14px 16px; border-radius:12px; background:rgba(53,217,154,.07); border:1px solid rgba(53,217,154,.18); color:#d6e6df; line-height:1.6; }
-button{ border-radius:9px; padding:7px 12px; transition:border-color .13s, background .13s, filter .13s; }
-button:hover{ border-color:var(--accent); }
-button.primary{ background:var(--accent2); color:#06231a; border-color:transparent; font-weight:700; }
-button.primary:hover{ filter:brightness(1.08); border-color:transparent; }
-.ssbtn{ border-radius:999px; }
-.chip{ border-radius:999px; padding:5px 11px; }
-.chip.on{ background:color-mix(in srgb, var(--accent) 18%, transparent); border-color:color-mix(in srgb, var(--accent) 45%, transparent); color:#dbe9ff; }
-.inp{ border-radius:9px; }
-.rbtn.active,.stab.active{ background:color-mix(in srgb, var(--accent) 16%, transparent); color:#dbe9ff; border-color:color-mix(in srgb, var(--accent) 40%, transparent); }
-table{ font-size:13px; }
-th,td{ padding:11px 10px; border-bottom:1px solid rgba(255,255,255,.05); }
-th{ font-size:11.5px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); }
-tbody tr{ transition:background .12s; }
-#nodeTable tbody tr:hover,
-#netmonTable tbody tr:hover{ background:rgba(255,255,255,.028); }
-td.num,th.num{ font-family:ui-monospace,Menlo,"JetBrains Mono",monospace; }
-.badge{ display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px; border:1px solid transparent; font-weight:600; }
-.b-online{ background:rgba(53,217,154,.12); color:#6ee7b7; }
-.b-offline{ background:rgba(242,109,109,.12); color:#f9a8a8; }
-.b-scan{ background:rgba(79,156,255,.14); color:#9cc9ff; }
-.capbar{ background:rgba(255,255,255,.06); border:none; border-radius:8px; }
-.capbar > i{ border-radius:8px; box-shadow:0 0 14px rgba(53,217,154,.35); }
-.capbar > b{ font-size:11px; }
-.regcard{ background:rgba(255,255,255,.025); border:1px solid rgba(255,255,255,.07); border-radius:13px; padding:14px 15px; transition:transform .12s, border-color .15s, background .15s; }
-.regcard:hover{ transform:translateY(-2px); border-color:rgba(255,255,255,.16); }
-.regcard.active{ border-color:var(--accent); background:color-mix(in srgb, var(--accent) 10%, rgba(255,255,255,.02)); }
-.regcard .big{ font-size:22px!important; }
-.pill{ border-radius:999px; }
-.reglabel{ color:#9fc2e8; }
-::-webkit-scrollbar{ width:11px; height:11px; }
-::-webkit-scrollbar-thumb{ background:rgba(255,255,255,.1); border-radius:6px; border:3px solid var(--bg); }
-::-webkit-scrollbar-thumb:hover{ background:rgba(255,255,255,.18); }
-
-/* ============================================================================
-   Refined polish v2 (dataviz-informed) — 더 깔끔하고 세련되게. 마크업/JS 무변경.
-   깊이(부드러운 그림자)·타이포 위계·차분한 표면·미터 정제(글로우 제거·얇은 트랙).
-   ============================================================================ */
-:root{ --elev:0 1px 2px rgba(0,0,0,.45), 0 10px 30px rgba(0,0,0,.20); }
-body{ letter-spacing:.1px; }
-.card{ box-shadow:var(--elev); border-color:rgba(255,255,255,.06);
-  background:linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.008)); }
-.card h2{ font-size:11px; letter-spacing:.9px; text-transform:uppercase; color:var(--muted); font-weight:600; margin:0 0 16px; }
-.big{ font-variant-numeric:tabular-nums; letter-spacing:-.5px; }
-.sub{ letter-spacing:.15px; }
-/* 내비 — 정제된 pill */
-.navbtn{ font-weight:600; letter-spacing:.2px; }
-.navbtn.active{ box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent); }
-/* 버튼 — 차분한 보조 + 확신 있는 primary */
-button{ background:rgba(255,255,255,.045); border-color:rgba(255,255,255,.10); font-weight:600; }
-button:hover{ background:rgba(255,255,255,.09); border-color:rgba(255,255,255,.22); filter:none; }
-button.primary{ background:var(--accent2); border-color:transparent; box-shadow:0 2px 12px rgba(53,217,154,.22); }
-button.primary:hover{ background:var(--accent2); box-shadow:0 3px 16px rgba(53,217,154,.34); }
-/* 표 — 여백·헤어라인·hover */
-th{ font-size:11px; letter-spacing:.5px; font-weight:600; }
-th,td{ border-color:rgba(255,255,255,.05); padding:12px 11px; }
-tbody tr{ transition:background .12s; }
-#nodeTable tbody tr:hover,#netmonTable tbody tr:hover{ background:rgba(255,255,255,.024); }
-/* 미터 — 얇고 차분한 트랙, 글로우 제거(노이즈↓), 둥근 데이터-엔드 */
-.capbar{ background:rgba(255,255,255,.05); }
-.capbar > i{ box-shadow:none !important; border-radius:6px; }
-/* 배지 — 크리스프 */
-.badge{ font-size:11px; letter-spacing:.2px; padding:3px 10px; }
-.pill{ letter-spacing:.2px; }
-/* 지역 카드 — 차분 */
-.regcard{ background:rgba(255,255,255,.02); box-shadow:0 1px 2px rgba(0,0,0,.25); }
-.regcard:hover{ background:rgba(255,255,255,.035); }
-/* 그리드 리듬 */
-.grid{ gap:14px; }
-/* 물어보기 답변 버블 — 차분 */
-#askOut:not(:empty){ background:rgba(53,217,154,.06); border-color:rgba(53,217,154,.16); }
-/* 언어 토글 버튼 — 헤더에 녹아들게 */
-#iuLangBtn{ background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.12); color:var(--muted);
-  border-radius:8px; padding:6px 11px; font-weight:600; font-size:12px; }
-#iuLangBtn:hover{ color:var(--text); border-color:rgba(255,255,255,.28); }
-
-/* ============================================================================
-   Overview 시안 v3 — Claude Design 'dashboards/overview-upgrade' 디자인 언어.
-   딥네이비+듀얼 글로우 · 모노 마이크로라벨 · KPI 액센트 스트라이프+호버 리프트 ·
-   블루 액션(내비/primary) · 펄스 LIVE 도트 · 민트 콘솔 스트립.
-   마크업/JS/DOM id 무변경(소스 순서로 덮어씀). 차트 팔레트는 dataviz 검증 통과값.
-   ============================================================================ */
-:root{
-  --bg:#070b14; --panel:#121a2c; --panel2:#1a2338;
-  --panel-grad:linear-gradient(180deg,#141c30 0%,#101728 100%);
-  --line:#253253; --line-soft:rgba(84,110,160,.22);
-  --text:#eaf1fb; --muted:#93a3bf; --faint:#5e6d89;
-  --accent:#3b82f6; --cyan:#22d3ee; --mint:#34e0b4; --accent2:#34e0b4; --ok:#34e0b4;
-  --purple:#a855f7;
-  --mono-ui:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;
-}
-body{
-  background:
-    radial-gradient(1100px 500px at 75% -12%, rgba(59,130,246,.07), transparent 60%),
-    radial-gradient(900px 420px at 12% -8%, rgba(52,224,180,.05), transparent 55%),
-    var(--bg);
-}
-::selection{ background:rgba(59,130,246,.4); }
-
-/* 헤더 — 반투명 블러 탑바 + 브랜드 마크 시안 글로우 */
-header{ background:rgba(10,15,26,.82); backdrop-filter:blur(8px);
-  border-bottom:1px solid var(--line-soft); }
-#brandH1 > span:first-child{
-  background:linear-gradient(135deg,#1d4ed8,#22d3ee)!important; color:#eaf6ff!important;
-  border-radius:11px!important; box-shadow:0 0 18px rgba(34,211,238,.35)!important; }
-#brandVer{ background:transparent!important; border:1px solid var(--line);
-  color:var(--muted)!important; font-size:10.5px!important; letter-spacing:.06em; }
-#brandH1 span[style*="background:#16361f"]{
-  font-family:var(--mono-ui); font-size:11px!important; letter-spacing:.08em;
-  color:var(--mint)!important; }
-#brandH1 span[style*="background:#16361f"]::before{
-  content:""; width:8px; height:8px; border-radius:50%; background:var(--mint);
-  animation:iuPulse 2.2s infinite; }
-@keyframes iuPulse{
-  0%{ box-shadow:0 0 0 0 rgba(52,224,180,.45); }
-  70%{ box-shadow:0 0 0 8px rgba(52,224,180,0); }
-  100%{ box-shadow:0 0 0 0 rgba(52,224,180,0); } }
-#clock{ font-family:var(--mono-ui); font-size:12px; color:var(--muted);
-  border:1px solid var(--line); border-radius:10px; padding:7px 12px;
-  background:rgba(18,26,44,.7); }
-
-/* 내비 — 활성 탭은 확신 있는 블루 그라데이션 필 */
-.navbtn:hover{ background:rgba(59,130,246,.1); color:var(--text); }
-.navbtn.active{ color:#fff; background:linear-gradient(180deg,#2563eb,#1d4ed8);
-  border-color:transparent; box-shadow:0 4px 14px rgba(37,99,235,.35); }
-.stab.active,.rbtn.active,.chip.on{ color:#dbeafe;
-  background:rgba(59,130,246,.16); border-color:rgba(59,130,246,.45); }
-
-/* 카드 — 패널 그라데이션 + 헤어라인, 라벨은 모노 마이크로 타이포 */
-.card{ background:var(--panel-grad); border:1px solid var(--line-soft);
-  border-radius:14px;
-  box-shadow:0 1px 2px rgba(0,0,0,.45), 0 12px 32px rgba(0,0,0,.22); }
-.card h2{ font-family:var(--mono-ui); font-size:10.5px; font-weight:600;
-  letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
-.card h2 .sub,.card h2 .pill,.card h2 button{ font-family:var(--sans);
-  letter-spacing:.15px; text-transform:none; }
-
-/* KPI 타일 — 좌측 액센트 스트라이프 + 호버 리프트(시안 kpi) */
-.grid.cols-4 > .card:has(.big){ position:relative; overflow:hidden;
-  transition:border-color .15s, transform .12s, box-shadow .15s; }
-.grid.cols-4 > .card:has(.big)::before{ content:""; position:absolute; left:0;
-  top:12px; bottom:12px; width:3px; border-radius:3px;
-  background:var(--kpi-accent,var(--accent)); opacity:.9; }
-.grid.cols-4 > .card:has(.big):hover{ border-color:var(--kpi-accent,var(--accent));
-  transform:translateY(-2px); box-shadow:0 10px 26px rgba(0,0,0,.45); }
-.grid.cols-4 > .card:nth-child(1){ --kpi-accent:var(--cyan); }
-.grid.cols-4 > .card:nth-child(2){ --kpi-accent:var(--accent); }
-.grid.cols-4 > .card:nth-child(3){ --kpi-accent:var(--mint); }
-.grid.cols-4 > .card:nth-child(4){ --kpi-accent:var(--purple); }
-.big{ font-family:var(--sans); font-size:30px; font-weight:800;
-  letter-spacing:-.01em; color:#fff; }
-
-/* 버튼 — primary = 블루 그라데이션(시안의 액션 색) */
-button.primary{ background:linear-gradient(180deg,#2563eb,#1d4ed8); color:#fff;
-  border-color:transparent; box-shadow:0 4px 14px rgba(37,99,235,.30); }
-button.primary:hover{ background:linear-gradient(180deg,#2f6cf0,#2153e0);
-  box-shadow:0 5px 18px rgba(37,99,235,.42); filter:none; }
-
-/* 표 — 모노 마이크로 헤더 + 헤어라인 */
-th{ font-family:var(--mono-ui); font-size:10.5px; letter-spacing:.09em; color:var(--muted); }
-th,td{ border-color:rgba(84,110,160,.14); }
-
-/* 칩·필 — 모노 캡슐(시안 chip/pill) */
-.chip,.pill{ font-family:var(--mono-ui); letter-spacing:.05em;
-  background:rgba(13,19,33,.6); border-color:var(--line); }
-.pill{ font-size:10.5px; } .chip{ font-size:11px; }
-.chip.on{ font-family:var(--mono-ui); }
-
-/* 입력 포커스 — 블루 링(물어보기 입력은 기존 민트 링 유지) */
-.inp:focus,.setinput:focus,.optsel:focus{ outline:none;
-  border-color:rgba(59,130,246,.55); box-shadow:0 0 0 3px rgba(59,130,246,.15); }
-
-/* 미터 트랙 — 차분한 톤 */
-.capbar{ background:rgba(94,109,137,.18); }
-
-/* 전체 노드 스캔 바 — 시안 콘솔 스트립(민트 헤어라인 스캔라인) */
-#scanAllBar{ position:relative; overflow:hidden;
-  border:1px solid rgba(52,224,180,.35)!important; border-radius:12px!important;
-  background:linear-gradient(90deg, rgba(52,224,180,.07) 0%, transparent 30%), rgba(13,19,33,.75)!important; }
-#scanAllBar::after{ content:""; position:absolute; top:0; left:0; right:0; height:1px;
-  background:linear-gradient(90deg, var(--mint), transparent 55%); opacity:.7; pointer-events:none; }
-
-/* 스크롤바 — 더 은은하게 */
-::-webkit-scrollbar-thumb{ background:rgba(84,110,160,.28); border:3px solid #070b14; }
-::-webkit-scrollbar-thumb:hover{ background:rgba(84,110,160,.45); }
-</style>
+<link rel="stylesheet" href="/theme.css" />
 <script src="/i18n.js"></script>
 </head>
-<body>
-<header>
-  <h1 id="brandH1" style="display:flex;align-items:center;gap:12px;margin:0;">
-    <span style="width:46px;height:46px;border-radius:12px;background:linear-gradient(135deg,#4aa3ff,#7ad0ff);display:inline-flex;align-items:center;justify-content:center;font-size:22px;font-weight:800;color:#08203a;box-shadow:0 4px 14px rgba(74,163,255,.35);flex:none;">V</span>
-    <span style="display:inline-flex;flex-direction:column;gap:4px;">
-      <span style="display:inline-flex;flex-direction:column;line-height:1.14;">
-        <span style="font-size:21px;font-weight:800;">The Davinci</span>
-        <span id="brandTitle" style="font-size:21px;font-weight:800;">NAS Management</span>
-      </span>
-      <span style="display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;">
-        <span id="brandVer" style="background:#14464a;color:#7fffd4;padding:1px 9px;border-radius:11px;font-size:12px;font-weight:700;">v—</span>
-        <span style="background:#16361f;color:#5cff8f;padding:1px 9px;border-radius:11px;font-size:12px;font-weight:700;letter-spacing:.5px;">LIVE</span>
-        <span id="brandSub" class="sub" style="font-weight:400;font-size:12px;"></span>
-      </span>
+<body class="portal">
+<aside id="sidebar" aria-label="주 메뉴">
+  <div class="brand" id="brandH1">
+    <span class="brand-mark" aria-hidden="true">D</span>
+    <span style="display:flex; flex-direction:column; min-width:0;">
+      <span class="brand-name" id="brandTitle">NAS Management</span>
+      <span class="brand-sub">글로벌 포탈 <span id="brandSub"></span></span>
     </span>
-  </h1>
-  <div class="spacer"></div>
-  <nav>
-    <button class="navbtn active" data-view="dash">글로벌 대시보드</button>
-    <button class="navbtn" data-view="netmon">네트워크 모니터링</button>
-    <button class="navbtn" data-view="compare">경로 비교</button>
-    <button class="navbtn" data-view="nodes">설정</button>
+  </div>
+  <nav class="side-nav">
+    <button type="button" class="sidebtn navbtn active" data-view="dash"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg>현황</button>
+    <button type="button" class="sidebtn navbtn" data-view="netmon"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>네트워크</button>
+    <button type="button" class="sidebtn navbtn" data-view="compare"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h6v14H4zM14 5h6v14h-6z"/></svg>비교</button>
   </nav>
-  <span class="sub mono" id="clock" style="min-width:152px; text-align:right;"></span>
-  <button id="loginBtn" title="로그인/로그아웃" style="display:none;">🔑 로그인</button>
-  <button id="refreshBtn" title="새로고침">↻</button>
+  <div class="side-foot">
+    <button type="button" class="sidebtn navbtn" data-view="nodes"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>노드·설정</button>
+    <div class="side-ver"><span id="brandVer">v—</span></div>
+  </div>
+</aside>
+<header id="topbar">
+  <div id="askBox">
+    <label class="askfield" title="전사 집계를 문장으로 물어보면 답합니다">
+      <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <span style="position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%);">물어보기</span>
+      <input id="askInput" type="text" autocomplete="off" placeholder="물어보세요 — 예: 전체 용량 얼마야? · 어느 노드가 제일 커? · 지금 스캔 진행 중이야?" />
+      <span id="askLlmTag" class="pill" style="display:none;">LLM</span>
+    </label>
+    <button id="askBtn" class="primary">질문</button>
+    <div id="askOut" aria-live="polite"></div>
+  </div>
+  <span class="sub mono" id="clock"></span>
+  <button id="loginBtn" title="로그인/로그아웃" style="display:none;">로그인</button>
+  <button id="refreshBtn" title="새로고침">새로고침</button>
 </header>
 
 <div id="roBanner" class="wrap" style="display:none;">
-  <div class="card" style="border-color:#f5a623; background:#2a2410;">
+  <div class="card" style="border-color:#B45309; background:#F5F1E5;">
     <b>🔒 설정 잠김</b> — 노드 설정(등록·원격 구성·업그레이드 등)은 <b>로그인</b> 후 사용할 수 있습니다(세션 만료).
     대시보드·동기화·원격 스캔 시작/중지는 로그인 없이 됩니다.
     <button id="roLoginBtn" style="margin-left:8px;">🔑 로그인</button>
@@ -381,16 +54,8 @@ th,td{ border-color:rgba(84,110,160,.14); }
 
 <!-- 글로벌 대시보드 -->
 <div class="wrap view active" id="view-dash">
-  <div class="card" id="askCard" style="margin-bottom:14px;">
-    <h2 style="margin:0 0 8px;">💬 물어보기 <span class="sub" style="font-weight:400;">— 전사 집계를 문장으로 물어보면 답합니다 <span id="askLlmTag" class="pill" style="display:none;">LLM</span></span></h2>
-    <div style="display:flex; gap:8px; flex-wrap:wrap;">
-      <input id="askInput" type="text" autocomplete="off"
-             placeholder="예: 전체 용량 얼마야? · 어느 노드가 제일 커? · 지금 스캔 진행 중이야?"
-             style="flex:1; min-width:280px; padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:var(--panel2); color:var(--text); font:inherit;" />
-      <button id="askBtn" class="primary">질문</button>
-    </div>
-    <div id="askOut" style="margin-top:10px; line-height:1.55; min-height:1.2em;"></div>
-  </div>
+  <h1 class="page-title">현황</h1>
+  <p class="page-desc">모든 데이터센터의 저장소를 한 화면에서 봅니다.</p>
   <div class="grid cols-4" style="margin-bottom:14px;">
     <div class="card"><h2>총 사용 용량 (전 DC)</h2><div class="big" id="kUsed">—</div><div class="sub" id="kUsedSub">조사 용량 합계</div></div>
     <div class="card"><h2>스토리지(루트)</h2><div class="big" id="kStorages">—</div><div class="sub">전 노드 합계</div></div>
@@ -418,9 +83,9 @@ th,td{ border-color:rgba(84,110,160,.14); }
     <h2>데이터센터별 사용량 — 행 클릭=스토리지 펼침 · 지역 카드=필터 · 머리글=정렬
       <span style="float:right; font-weight:400;"><button id="pingBtn" style="padding:3px 9px;">📡 Ping 체크</button> <span class="sub" id="updAt"></span></span></h2>
     <div class="sub" id="pingNote" style="margin:-4px 0 8px;"></div>
-    <div id="scanAllBar" style="display:flex; gap:10px 14px; align-items:center; flex-wrap:wrap; margin:0 0 10px; padding:8px 10px; background:#161c28; border:1px solid #263042; border-radius:8px;">
+    <div id="scanAllBar" style="display:flex; gap:10px 14px; align-items:center; flex-wrap:wrap; margin:0 0 10px; padding:8px 10px; background:#E7EBF2; border:1px solid #E2E6EE; border-radius:8px;">
       <button id="scanAllBtn" class="primary" style="padding:6px 12px;">▶ 전체 노드 스캔 시작</button>
-      <button id="stopAllBtn" style="padding:6px 12px; background:#2a1616; border:1px solid #5a2a2a; color:#ff9b9b;"
+      <button id="stopAllBtn" style="padding:6px 12px; background:#F2E7E7; border:1px solid #EFDCDC; color:#B42318;"
               title="전체 노드의 진행 중 스캔을 모두 중단합니다(threads 는 이어하기 가능, pscan 은 중지 불가)">⏹ 전체 중단</button>
       <label style="display:inline-flex; align-items:center; gap:5px;"><input type="checkbox" id="scanAllOFS"> 한 파일시스템(-x)</label>
       <label style="display:inline-flex; align-items:center; gap:5px;">엔진
@@ -481,10 +146,10 @@ th,td{ border-color:rgba(84,110,160,.14); }
       </div>
       <button id="phRefresh">🔄 새로고침</button>
       <span class="sub" style="margin-left:auto;">
-        <span class="dot" style="background:#4aa3ff"></span> 정상
+        <span class="dot" style="background:#0070E3"></span> 정상
         <span class="dot" style="background:var(--warn);margin-left:12px;"></span> +20% 이상
         <span class="dot" style="background:var(--danger);margin-left:12px;"></span> +50% 이상
-        <span style="display:inline-block;width:18px;border-top:1px dashed #8aa0b8;vertical-align:middle;margin-left:12px;"></span> 중앙값
+        <span style="display:inline-block;width:18px;border-top:1px dashed #5B7796;vertical-align:middle;margin-left:12px;"></span> 중앙값
       </span>
     </div>
     <div id="phGroups"><div class="sub" style="padding:14px 2px;">불러오는 중…</div></div>
@@ -559,9 +224,9 @@ th,td{ border-color:rgba(84,110,160,.14); }
         <button id="pvCopy">📋 복사</button><span class="sub" id="pvCopyMsg"></span>
       </div>
     </div>
-    <div style="margin-top:14px; border-top:1px solid #2a3550; padding-top:12px;">
+    <div style="margin-top:14px; border-top:1px solid #DEE3EE; padding-top:12px;">
       <div class="sub" style="margin-bottom:6px;"><b>② SSH로 원격 자동 설치 + 등록</b> — 위 <b>IP</b>에 SSH로 접속해 엣지를 <b>설치·기동·포탈 등록까지 한 번에</b>. (계정/비번만 더 입력하면 끝)</div>
-      <div class="note" style="margin:6px 0; border-color:#5a3030; color:#f0b0b0;">
+      <div class="note" style="margin:6px 0; border-color:#EDDCDC; color:#811818;">
         ⚠ 포탈이 SSH로 접속해 실행합니다. <b>비밀번호는 저장하지 않고 1회만</b> 씁니다(포탈 호스트에 <span class="mono">sshpass</span> 필요, 비번 인증 시). 신뢰망·키 인증 권장.
       </div>
       <div class="setgrid">
@@ -603,11 +268,11 @@ th,td{ border-color:rgba(84,110,160,.14); }
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
       <button id="nuSaveBtn">설정 저장</button>
       <button id="nuCheckBtn" class="primary">🔄 지금 확인</button>
-      <button id="nuInstallBtn" style="display:none; border-color:var(--warn); color:#ffd591;">⬆ 지금 업그레이드(+전 엣지)</button>
+      <button id="nuInstallBtn" style="display:none; border-color:var(--warn); color:#774F0D;">⬆ 지금 업그레이드(+전 엣지)</button>
       <span id="nuMsg" class="sub"></span>
     </div>
     <div id="nuLog" class="sub mono" style="display:none; max-height:160px; overflow:auto;
-      background:#0d1219; border:1px solid var(--line); border-radius:8px; padding:8px; white-space:pre-wrap; margin-top:8px;"></div>
+      background:#F7F8FA; border:1px solid var(--line); border-radius:8px; padding:8px; white-space:pre-wrap; margin-top:8px;"></div>
   </div>
   <div class="card" style="margin-bottom:14px;">
     <h2>🔄 원격 버전 업그레이드 — 엣지를 HQ 최신 코드로</h2>
@@ -630,7 +295,7 @@ th,td{ border-color:rgba(84,110,160,.14); }
     </div>
     <details style="margin-top:12px;">
       <summary class="sub" style="cursor:pointer;">[옵션 B] SSH로 원격 업그레이드 실행 — 보안 주의</summary>
-      <div class="note" style="margin:8px 0; border-color:#5a3030; color:#f0b0b0;">
+      <div class="note" style="margin:8px 0; border-color:#EDDCDC; color:#811818;">
         ⚠ 포탈이 SSH로 접속해 위 스크립트를 실행합니다. <b>비밀번호는 1회만</b> 쓰고 저장하지 않습니다. 신뢰망·키 인증 권장.
       </div>
       <div class="setgrid">
@@ -659,7 +324,7 @@ th,td{ border-color:rgba(84,110,160,.14); }
     <pre id="ugPushOut" class="note mono" style="display:none; white-space:pre-wrap; max-height:220px; overflow:auto; margin-top:8px;"></pre>
     <details style="margin-top:10px;">
       <summary class="sub" style="cursor:pointer;">[부트스트랩] 구버전 엣지(&lt;1.41.0)를 SSH로 한 번에 — 보안 주의</summary>
-      <div class="note" style="margin:8px 0; border-color:#5a3030; color:#f0b0b0;">
+      <div class="note" style="margin:8px 0; border-color:#EDDCDC; color:#811818;">
         ⚠ 위 ‘전 노드 지금 업그레이드’(푸시)는 엣지가 <b>1.41.0+</b> 일 때만 됩니다. 구버전은 포탈이 SSH로 접속해 업그레이드 스크립트를 실행합니다(엣지가 HQ에서 새 코드를 받아 교체·재시작). 비밀번호는 1회만 쓰고 저장 안 함. 신뢰망·키 인증 권장.
       </div>
       <div class="setgrid">
@@ -721,8 +386,8 @@ th,td{ border-color:rgba(84,110,160,.14); }
 
   <!-- 업그레이드 기록 세부 모달 -->
   <div id="histModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.62); z-index:2000; align-items:center; justify-content:center;">
-    <div style="background:#141a2b; border:1px solid #2a3550; border-radius:12px; width:min(820px,95vw); max-height:90vh; display:flex; flex-direction:column; box-shadow:0 14px 44px rgba(0,0,0,.55);">
-      <div style="padding:13px 18px; border-bottom:1px solid #2a3550; display:flex; align-items:center; gap:10px;">
+    <div style="background:#E6E9F3; border:1px solid #DEE3EE; border-radius:12px; width:min(820px,95vw); max-height:90vh; display:flex; flex-direction:column; box-shadow:0 14px 44px rgba(0,0,0,.55);">
+      <div style="padding:13px 18px; border-bottom:1px solid #DEE3EE; display:flex; align-items:center; gap:10px;">
         <span style="font-size:18px;">📜</span><b style="font-size:15px;" id="histModalTitle">업그레이드 세부</b>
         <button id="histModalClose" style="margin-left:auto;">닫기</button>
       </div>
@@ -732,13 +397,13 @@ th,td{ border-color:rgba(84,110,160,.14); }
 
   <!-- 업그레이드 진행 모달(단계별 라이브 로그) -->
   <div id="upgModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.62); z-index:2000; align-items:center; justify-content:center;">
-    <div style="background:#141a2b; border:1px solid #2a3550; border-radius:12px; width:min(760px,94vw); max-height:88vh; display:flex; flex-direction:column; box-shadow:0 14px 44px rgba(0,0,0,.55);">
-      <div style="padding:13px 18px; border-bottom:1px solid #2a3550; display:flex; align-items:center; gap:10px;">
+    <div style="background:#E6E9F3; border:1px solid #DEE3EE; border-radius:12px; width:min(760px,94vw); max-height:88vh; display:flex; flex-direction:column; box-shadow:0 14px 44px rgba(0,0,0,.55);">
+      <div style="padding:13px 18px; border-bottom:1px solid #DEE3EE; display:flex; align-items:center; gap:10px;">
         <span style="font-size:18px;">⬆️</span><b style="font-size:15px;">업그레이드 진행</b>
         <span id="upgModalStat" class="sub" style="margin-left:auto;"></span>
       </div>
       <pre id="upgModalLog" class="mono" style="margin:0; padding:14px 18px; overflow:auto; flex:1; min-height:240px; white-space:pre-wrap; word-break:break-all; font-size:12.5px; line-height:1.75;"></pre>
-      <div style="padding:10px 18px; border-top:1px solid #2a3550; display:flex; align-items:center; gap:10px;">
+      <div style="padding:10px 18px; border-top:1px solid #DEE3EE; display:flex; align-items:center; gap:10px;">
         <span class="sub">닫아도 업그레이드는 백그라운드로 계속됩니다.</span>
         <button id="upgModalClose" style="margin-left:auto;">닫기</button>
       </div>
@@ -747,18 +412,18 @@ th,td{ border-color:rgba(84,110,160,.14); }
 
   <!-- 전 노드 업그레이드 — 노드별 라이브 상세 진행 팝업 -->
   <div id="pushModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.62); z-index:2000; align-items:center; justify-content:center;">
-    <div style="background:#141a2b; border:1px solid #2a3550; border-radius:12px; width:min(900px,96vw); max-height:90vh; display:flex; flex-direction:column; box-shadow:0 14px 44px rgba(0,0,0,.55);">
-      <div style="padding:13px 18px; border-bottom:1px solid #2a3550; display:flex; align-items:center; gap:10px;">
+    <div style="background:#E6E9F3; border:1px solid #DEE3EE; border-radius:12px; width:min(900px,96vw); max-height:90vh; display:flex; flex-direction:column; box-shadow:0 14px 44px rgba(0,0,0,.55);">
+      <div style="padding:13px 18px; border-bottom:1px solid #DEE3EE; display:flex; align-items:center; gap:10px;">
         <span style="font-size:18px;">⬆️</span><b style="font-size:15px;">전 노드 업그레이드 진행</b>
         <span id="pushModalStat" class="sub" style="margin-left:auto;"></span>
       </div>
-      <div style="padding:12px 18px; border-bottom:1px solid #2a3550;">
+      <div style="padding:12px 18px; border-bottom:1px solid #DEE3EE;">
         <div id="pushModalHead" class="sub" style="margin-bottom:7px;">시작하는 중…</div>
         <div class="capbar" style="height:18px; border-radius:9px;"><i id="pushBar" style="width:0"></i><b id="pushBarTxt">—</b></div>
       </div>
       <div style="overflow:auto; flex:1; min-height:260px;">
         <table style="width:100%; font-size:12.5px; border-collapse:collapse;">
-          <thead><tr style="position:sticky; top:0; background:#141a2b; z-index:1;">
+          <thead><tr style="position:sticky; top:0; background:#E6E9F3; z-index:1;">
             <th style="text-align:left; padding:7px 18px;">노드</th>
             <th style="text-align:left; padding:7px 8px;">지역</th>
             <th style="text-align:left; padding:7px 8px;">현재</th>
@@ -768,7 +433,7 @@ th,td{ border-color:rgba(84,110,160,.14); }
           <tbody id="pushTbody"></tbody>
         </table>
       </div>
-      <div style="padding:10px 18px; border-top:1px solid #2a3550; display:flex; align-items:center; gap:10px;">
+      <div style="padding:10px 18px; border-top:1px solid #DEE3EE; display:flex; align-items:center; gap:10px;">
         <span class="sub">닫아도 전파는 백그라운드로 계속됩니다.</span>
         <button id="pushModalClose" style="margin-left:auto;">닫기</button>
       </div>
@@ -868,7 +533,7 @@ th,td{ border-color:rgba(84,110,160,.14); }
     <div style="margin-top:8px;">
       <button id="pAuditBtn" style="padding:4px 10px;">🧾 감사 로그 보기</button>
       <span class="sub" id="pAuditMsg"></span>
-      <div id="pAuditBox" style="display:none; margin-top:6px; max-height:260px; overflow:auto; border:1px solid #2a3550; border-radius:8px;"></div>
+      <div id="pAuditBox" style="display:none; margin-top:6px; max-height:260px; overflow:auto; border:1px solid #DEE3EE; border-radius:8px;"></div>
     </div>
   </div>
   <div class="card" id="cardSessPrefs" style="margin-bottom:14px;">
@@ -1020,7 +685,7 @@ th,td{ border-color:rgba(84,110,160,.14); }
   </div>
 
   <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--line); text-align:center; font-size:11.5px; color:var(--muted); letter-spacing:.4px;">
-    ✦ Crafted with care by <b style="color:#cfe6ff; font-weight:800; letter-spacing:.6px; text-shadow:0 0 10px rgba(124,196,255,.45);">JunHo&nbsp;Park</b> ✦ <span style="opacity:.6;">© 2026</span>
+    ✦ Crafted with care by <b style="color:#1E3A8A; font-weight:800; letter-spacing:.6px; text-shadow:0 0 10px rgba(124,196,255,.45);">JunHo&nbsp;Park</b> ✦ <span style="opacity:.6;">© 2026</span>
   </div>
 </div>
 
@@ -1095,14 +760,14 @@ async function editPortalTitle(){
   const ov=document.createElement("div");
   ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center;";
   const box=document.createElement("div");
-  box.style.cssText="background:#16202c;border:1px solid #2a3550;border-radius:10px;padding:18px;min-width:360px;box-shadow:0 12px 40px rgba(0,0,0,.55);";
+  box.style.cssText="background:#EEF3FF;border:1px solid #DEE3EE;border-radius:10px;padding:18px;min-width:360px;box-shadow:0 12px 40px rgba(0,0,0,.55);";
   const ttl=document.createElement("div"); ttl.textContent="🏷 관제센터 이름 변경";
-  ttl.style.cssText="font-size:14px;font-weight:700;color:#dfe8f3;margin-bottom:4px;";
+  ttl.style.cssText="font-size:14px;font-weight:700;color:#111827;margin-bottom:4px;";
   const hint=document.createElement("div"); hint.textContent="비우면 기본값을 씁니다.";
-  hint.style.cssText="font-size:12px;color:#8aa0b6;margin-bottom:10px;";
+  hint.style.cssText="font-size:12px;color:#5C7793;margin-bottom:10px;";
   const i1=document.createElement("input"); i1.type="text"; i1.value=curT; i1.placeholder="제목 (예: 다빈치 글로벌 아이실론 관제센터)";
   const i2=document.createElement("input"); i2.type="text"; i2.value=curS; i2.placeholder="부제 (예: 한국 HQ) — 선택";
-  [i1,i2].forEach(i=>i.style.cssText="width:100%;box-sizing:border-box;padding:8px 10px;margin-bottom:8px;border-radius:7px;border:1px solid #2a3550;background:#0e1620;color:#dfe8f3;font:inherit;");
+  [i1,i2].forEach(i=>i.style.cssText="width:100%;box-sizing:border-box;padding:8px 10px;margin-bottom:8px;border-radius:7px;border:1px solid #DEE3EE;background:#E8EEF5;color:#111827;font:inherit;");
   const btns=document.createElement("div"); btns.style.cssText="margin-top:6px;display:flex;gap:8px;justify-content:flex-end;";
   const cancel=document.createElement("button"); cancel.textContent="취소"; cancel.type="button";
   const ok=document.createElement("button"); ok.textContent="저장"; ok.type="button"; ok.className="primary";
@@ -1194,14 +859,14 @@ function showUpdatePopup(ver, notes){
   const ov=document.createElement("div");
   ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;";
   const box=document.createElement("div");
-  box.style.cssText="background:#16202c;border:1px solid #2a3550;border-radius:12px;max-width:640px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 16px 50px rgba(0,0,0,.6);";
+  box.style.cssText="background:#EEF3FF;border:1px solid #DEE3EE;border-radius:12px;max-width:640px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 16px 50px rgba(0,0,0,.6);";
   const hd=document.createElement("div");
-  hd.style.cssText="padding:16px 20px;border-bottom:1px solid #2a3550;display:flex;align-items:center;gap:10px;";
-  hd.innerHTML='<span style="font-size:22px;">🎉</span><b style="font-size:16px;color:#dfe8f3;">업데이트됨 — v'+ver+'</b><div style="flex:1"></div>';
+  hd.style.cssText="padding:16px 20px;border-bottom:1px solid #DEE3EE;display:flex;align-items:center;gap:10px;";
+  hd.innerHTML='<span style="font-size:22px;">🎉</span><b style="font-size:16px;color:#111827;">업데이트됨 — v'+ver+'</b><div style="flex:1"></div>';
   const close=document.createElement("button"); close.textContent="닫기"; close.style.cssText="padding:4px 14px;";
   hd.appendChild(close);
   const body=document.createElement("div");
-  body.style.cssText="padding:14px 20px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.6;color:#cfe0f0;font-family:ui-monospace,Menlo,monospace;";
+  body.style.cssText="padding:14px 20px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.6;color:#244E75;font-family:ui-monospace,Menlo,monospace;";
   body.textContent=notes||("v"+ver+" 로 업데이트되었습니다.");
   box.appendChild(hd); box.appendChild(body); ov.appendChild(box); document.body.appendChild(ov);
   function done(){ try{document.body.removeChild(ov);}catch(e){} }
@@ -1221,11 +886,11 @@ function passwordPrompt(msg){
     const ov=document.createElement("div");
     ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center;";
     const box=document.createElement("div");
-    box.style.cssText="background:#16202c;border:1px solid #2a3550;border-radius:10px;padding:18px;min-width:300px;box-shadow:0 12px 40px rgba(0,0,0,.55);";
+    box.style.cssText="background:#EEF3FF;border:1px solid #DEE3EE;border-radius:10px;padding:18px;min-width:300px;box-shadow:0 12px 40px rgba(0,0,0,.55);";
     const lbl=document.createElement("div"); lbl.textContent=msg||"비밀번호를 입력하세요:";
-    lbl.style.cssText="margin-bottom:10px;font-size:14px;color:#dfe8f3;";
+    lbl.style.cssText="margin-bottom:10px;font-size:14px;color:#111827;";
     const inp=document.createElement("input"); inp.type="password"; inp.autocomplete="current-password";
-    inp.style.cssText="width:100%;box-sizing:border-box;padding:8px 10px;border-radius:7px;border:1px solid #2a3550;background:#0e1620;color:#dfe8f3;font:inherit;";
+    inp.style.cssText="width:100%;box-sizing:border-box;padding:8px 10px;border-radius:7px;border:1px solid #DEE3EE;background:#E8EEF5;color:#111827;font:inherit;";
     const btns=document.createElement("div"); btns.style.cssText="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;";
     const cancel=document.createElement("button"); cancel.textContent="취소"; cancel.type="button";
     const ok=document.createElement("button"); ok.textContent="로그인"; ok.type="button"; ok.className="primary";
@@ -1244,11 +909,11 @@ function showTempPasswordNotice(){
   if($("pOpTempNotice")) return;
   const ov=document.createElement("div"); ov.id="pOpTempNotice";
   ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99998;display:flex;align-items:center;justify-content:center;";
-  ov.innerHTML='<div style="background:#16202c;border:1px solid #f5b942;border-radius:10px;padding:18px 20px;max-width:560px;box-shadow:0 12px 40px rgba(0,0,0,.55);color:#dfe8f3;">'
+  ov.innerHTML='<div style="background:#EEF3FF;border:1px solid #966608;border-radius:10px;padding:18px 20px;max-width:560px;box-shadow:0 12px 40px rgba(0,0,0,.55);color:#111827;">'
     +'<div style="font-weight:700;font-size:15px;margin-bottom:8px;">🔑 임시 관리자 비밀번호가 만들어졌습니다</div>'
     +'<div style="font-size:13.5px;line-height:1.6;">노드 설정과 되돌릴 수 없는 작업(노드 등록·삭제·업그레이드 설치 등)에는 비밀번호가 필요합니다.<br>'
     +'포탈 서버의 아래 파일에서 임시 비밀번호를 확인하세요:<br>'
-    +'<code style="display:inline-block;margin:6px 0;padding:4px 8px;background:#0e1620;border-radius:6px;word-break:break-all;">'+escAttr(_opInfoPath||"실행 폴더/portal_info.MD")+'</code><br>'
+    +'<code style="display:inline-block;margin:6px 0;padding:4px 8px;background:#E8EEF5;border-radius:6px;word-break:break-all;">'+escAttr(_opInfoPath||"실행 폴더/portal_info.MD")+'</code><br>'
     +'로그인 후 <b>설정 → 보안·감사 → 접속 보안</b>에서 새 비밀번호로 바꾸면 이 안내가 사라집니다.<br>'
     +'<span class="sub">잊었을 때(포탈 서버에서): <code>python3 -m isilon_usage reset-password --portal --data-dir &lt;포탈 데이터 폴더&gt;</code></span></div>'
     +'<div style="margin-top:12px;text-align:right;"><button type="button" id="pOpTempNoticeOk">확인</button></div></div>';
@@ -1346,25 +1011,25 @@ function fmtClock(ts){ if(!ts) return "—"; const d=new Date(ts*1000);
   return d.toLocaleString("ko-KR",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}); }
 function freshClass(ts){ if(!ts) return ""; const s=Date.now()/1000-ts;
   return s<120?"fresh-ok":(s<900?"fresh-warn":"fresh-old"); }
-function capColor(p){ return p>=85?"#ff5c5c":(p>=80?"#f5a623":(p>=70?"#f5d142":"#38d39f")); }  // 70노랑/80주황/85빨강
+function capColor(p){ return p>=85?"#B42318":(p>=70?"#B45309":"#1D4ED8"); }  // 보통 파랑 · 70%+ 주황(주의) · 85%+ 빨강 — 엣지 홈과 같은 기준
 // 원형 게이지(SVG, 외부 라이브러리 0) — 전체 사용률 표시용
 function donutGauge(pct, color, size){
   size = size || 104; pct = Math.max(0, Math.min(100, pct||0));
   const sw = 12, r = (size - sw) / 2, cx = size / 2, cy = size / 2, C = 2 * Math.PI * r;
   const off = (C * (1 - pct / 100)).toFixed(1);
   return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="display:block">
-    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="${sw}"/>
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="rgba(15,23,42,.08)" stroke-width="${sw}"/>
     <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round"
       stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${off}" transform="rotate(-90 ${cx} ${cy})"
       style="transition:stroke-dashoffset .6s ease"/>
-    <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" fill="#fff"
+    <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" fill="#FFFFFF"
       style="font:700 ${Math.round(size*0.23)}px ui-monospace,Menlo,monospace">${pct.toFixed(0)}%</text></svg>`;
 }
 // 지역 스택 바/범례 색(카테고리) — 브랜드 계열 위주로 구분되게
 // 검증된 카테고리 팔레트(dataviz — CVD·대비 통과). 지역 구분용, 순서 고정.
-// 지역 카테고리 팔레트 — dataviz 검증 통과 순서(인접쌍 CVD ΔE≥8·정상시각 ΔE≥19, 표면 #070b14).
+// 지역 카테고리 팔레트 — dataviz 검증 통과 순서(인접쌍 CVD ΔE≥8·정상시각 ΔE≥19, 표면 #F4F5F7).
 // 순서가 CVD 안전장치다 — 임의로 재배열하지 말 것(재배열 시 검증기 재실행).
-const REGION_PAL = ["#3987e5","#d95926","#199e70","#c98500","#d55181","#008300","#9085e9"];
+const REGION_PAL = ["#1D4ED8","#BF4E21","#15803D","#A06A00","#CF386F","#D2F9D2","#7162E3"];
 // 진행 중 스캔의 '집계(sizing)' 단계 진행률(%). 없으면(탐색 단계 등) null.
 function nodeScanPct(n){
   for(const r of ((n && n.roots) || [])){
@@ -1411,7 +1076,7 @@ document.querySelectorAll("#view-nodes .stab").forEach(b=>b.addEventListener("cl
 })();
 
 // 상단 메뉴 표시 선택 — '설정'은 잠금 방지를 위해 항상 표시.
-const NAV_LABELS={dash:"글로벌 대시보드", netmon:"네트워크 모니터링", compare:"경로 비교", nodes:"설정"};
+const NAV_LABELS={dash:"현황", netmon:"네트워크", compare:"비교", nodes:"노드·설정"};
 function applyNavHidden(hidden){
   const hset=new Set(hidden||[]);
   document.querySelectorAll(".navbtn").forEach(b=>{
@@ -1450,7 +1115,7 @@ function _nmSpark(h){
   const max=Math.max.apply(null,vals.concat([1])), w=84, hh=18, n=h.length;
   const path=h.map((x,i)=>{ const xx=(n<=1?0:(i/(n-1))*w);
     const yy=(x.ms!=null?(hh-x.ms/max*hh):hh); return xx.toFixed(1)+","+yy.toFixed(1); }).join(" ");
-  return '<svg width="'+w+'" height="'+hh+'" style="vertical-align:middle"><polyline points="'+path+'" fill="none" stroke="#5cc8ff" stroke-width="1.5"/></svg>';
+  return '<svg width="'+w+'" height="'+hh+'" style="vertical-align:middle"><polyline points="'+path+'" fill="none" stroke="#007AB8" stroke-width="1.5"/></svg>';
 }
 async function loadNetmon(){
   if(_nmInflight) return; _nmInflight=true;
@@ -1478,11 +1143,11 @@ function renderNetmon(nodes){
     const mn=ms.length?Math.round(Math.min.apply(null,ms)):"—", mx=ms.length?Math.round(Math.max.apply(null,ms)):"—";
     const loss=h.length?Math.round(h.filter(x=>!x.up).length/h.length*100):0;
     const stat=n.online?'<span class="badge b-online">🟢 UP</span>':'<span class="badge b-offline">🔴 DOWN</span>';
-    const col=n.latency_ms==null?'#9fb3c8':(n.latency_ms<150?'#7be0aa':(n.latency_ms<600?'#f0c86a':'#ff9a9a'));
+    const col=n.latency_ms==null?'#567696':(n.latency_ms<150?'#166534':(n.latency_ms<600?'#8A3B00':'#8A0F0F'));
     const lat=n.latency_ms!=null?('<b style="color:'+col+'">'+n.latency_ms+' ms</b>'):'<span class="sub">—</span>';
     return '<tr><td>'+stat+'</td><td><b>'+_he(n.id)+'</b></td><td>'+_he(n.region||'—')+'</td><td class="mono sub">'+_he(_nmHost(n.url))+'</td>'
       +'<td class="num">'+lat+'</td><td class="num sub">'+mn+'/'+mx+'</td><td class="num sub">'+loss+'%</td>'
-      +'<td>'+_nmSpark(h)+'</td><td class="sub" style="color:#ff9a9a">'+_he(n.error||'')+'</td></tr>';
+      +'<td>'+_nmSpark(h)+'</td><td class="sub" style="color:#8A0F0F">'+_he(n.error||'')+'</td></tr>';
   }).join("") : '<tr><td colspan="9" class="sub">등록된 노드가 없습니다.</td></tr>';
 }
 function netmonStart(){ if(netmonTimer) return; loadNetmon(); netmonTimer=setInterval(loadNetmon, 5000);
@@ -1550,17 +1215,17 @@ function _drawSpark(cv, series, med, t0, range){
   if(!(ymax>0)) ymax=1;
   const xOf=t=>padL+Math.max(0,Math.min(1,(t-t0)/range))*plotW;
   const yOf=v=>padT+(1-Math.min(v,ymax)/ymax)*plotH;
-  ctx.strokeStyle="rgba(255,255,255,0.06)"; ctx.lineWidth=1;
+  ctx.strokeStyle="rgba(15,23,42,0.06)"; ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(padL,padT+plotH*0.5); ctx.lineTo(W-padR,padT+plotH*0.5); ctx.stroke();
-  if(med!=null){ const ym=yOf(med); ctx.save(); ctx.setLineDash([4,3]); ctx.strokeStyle="#8aa0b8"; ctx.lineWidth=1;
+  if(med!=null){ const ym=yOf(med); ctx.save(); ctx.setLineDash([4,3]); ctx.strokeStyle="#5B7796"; ctx.lineWidth=1;
     ctx.beginPath(); ctx.moveTo(padL,ym); ctx.lineTo(W-padR,ym); ctx.stroke(); ctx.restore(); }
   if(vis.length>1){ ctx.strokeStyle="rgba(120,160,200,0.22)"; ctx.lineWidth=1; ctx.beginPath();
     vis.forEach((p,i)=>{ const x=xOf(p.t), y=yOf(p.ms); i?ctx.lineTo(x,y):ctx.moveTo(x,y); }); ctx.stroke(); }
   const rad=(H>200?3.2:2.2);
-  vis.forEach(p=>{ const x=xOf(p.t), y=yOf(p.ms); let c="#4aa3ff";
-    if(med){ const d=p.ms/med; if(d>=1.5) c="#ff5c5c"; else if(d>=1.2) c="#f5a623"; }
+  vis.forEach(p=>{ const x=xOf(p.t), y=yOf(p.ms); let c="#0070E3";
+    if(med){ const d=p.ms/med; if(d>=1.5) c="#B42318"; else if(d>=1.2) c="#B45309"; }
     ctx.fillStyle=c; ctx.beginPath(); ctx.arc(x,y,rad,0,6.2832); ctx.fill(); });
-  ctx.fillStyle="#7c8aa0"; ctx.font="10px ui-monospace,Menlo,monospace"; ctx.textAlign="left";
+  ctx.fillStyle="#66758D"; ctx.font="10px ui-monospace,Menlo,monospace"; ctx.textAlign="left";
   ctx.fillText(Math.round(ymax)+"ms", padL+1, padT+8);
   cv._pts=vis.map(p=>({x:xOf(p.t), y:yOf(p.ms), t:p.t, ms:p.ms}));
 }
@@ -1573,7 +1238,7 @@ function _nearestPt(pts, mx, my){
 function _phTipEl(){
   let t=$("phTip");
   if(!t){ t=document.createElement("div"); t.id="phTip"; document.body.appendChild(t);
-    t.style.cssText="position:fixed;z-index:9999;background:#0d1622;border:1px solid var(--line);"
+    t.style.cssText="position:fixed;z-index:9999;background:#E7EDF6;border:1px solid var(--line);"
       +"border-radius:6px;padding:4px 9px;font-size:12px;color:var(--text);pointer-events:none;"
       +"white-space:nowrap;box-shadow:0 6px 18px #000b;display:none;"; }
   return t;
@@ -1739,7 +1404,7 @@ function renderPortalDash(){
     const regs=(j.regions||[]).filter(r=>(r.fs_used_bytes||0)>0);
     const tot=regs.reduce((s,r)=>s+(r.fs_used_bytes||0),0);
     $("capStack").innerHTML = (regs.length && tot) ? (
-      '<div style="display:flex; height:12px; border-radius:6px; overflow:hidden; background:rgba(255,255,255,.05);">'
+      '<div style="display:flex; height:12px; border-radius:6px; overflow:hidden; background:rgba(15,23,42,.05);">'
       + regs.map((r,i)=>`<div title="${escAttr(r.region)}: ${fmtBytes(r.fs_used_bytes)}" style="width:${(r.fs_used_bytes/tot*100).toFixed(2)}%; background:${REGION_PAL[i%REGION_PAL.length]}; box-shadow:inset -2px 0 0 var(--panel)"></div>`).join("")
       + '</div><div style="display:flex; gap:14px; flex-wrap:wrap; margin-top:9px;">'
       + regs.map((r,i)=>`<span class="sub" style="display:inline-flex; align-items:center; gap:6px;"><span style="width:9px; height:9px; border-radius:2px; background:${REGION_PAL[i%REGION_PAL.length]};"></span>${escAttr(r.region)} <b style="color:var(--text)">${fmtBytes(r.fs_used_bytes)}</b> ${(r.fs_used_bytes/tot*100).toFixed(0)}%</span>`).join("")
@@ -1795,10 +1460,10 @@ function renderPortalDash(){
       const tl = escAttr(a.label||a.type);
       return a.ok ? (a.health === "ok"
           ? ` <span class="badge b-online" title="${tl} 정상">${lab} ✓</span>`
-          : ` <span class="badge" style="background:#3f3516;color:#f0c86a" title="${tl} 주의">${lab} ⚠</span>`)
+          : ` <span class="badge" style="background:#F4EFE0;color:#8A3B00" title="${tl} 주의">${lab} ⚠</span>`)
         : ` <span class="badge b-offline" title="${tl} 연결 실패">${lab} ✕</span>`;
     }).join("");
-    const arrRows = cfgArr.map(a => `<tr class="rr-${idx}" style="display:none; background:#101a26;"><td></td><td colspan="8" class="sub">${
+    const arrRows = cfgArr.map(a => `<tr class="rr-${idx}" style="display:none; background:#E7EDF5;"><td></td><td colspan="8" class="sub">${
       a.type === "isilon" ? "🟦" : "🟧"} ${_he(a.label||a.type)} ${
       a.ok ? `<b>${_he(a.name||"?")}</b> · ${_he(a.version||"")} · 노드 ${(a.nodes&&a.nodes.online)!=null?_he(a.nodes.online):"?"}/${(a.nodes&&a.nodes.total)!=null?_he(a.nodes.total):"?"} · 용량 ${(a.capacity&&a.capacity.used_pct!=null)?_he(a.capacity.used_pct)+"%":"—"} · 이벤트/알림 ${a.events_unresolved!=null?_he(a.events_unresolved):"—"} · ${a.health==="ok"?"정상":"주의"}`
            : `연결 실패: ${_he(a.error||"")}`}</td></tr>`).join("");
@@ -1806,23 +1471,23 @@ function renderPortalDash(){
       const act=(r.status==="discovering"||r.status==="sizing");
       const startTxt=(act&&r.started_at)?(" · 시작 "+fmtClock(r.started_at)+" · 진행 "+elapsedSpan(r.started_at, r.updated_at)):"";
       const fsTxt=r.fs_total_bytes?(" of "+fmtBytes(r.fs_total_bytes)+" ("+Math.round((r.fs_used_bytes||0)/r.fs_total_bytes*100)+"%)"):"";
-      return `<tr class="rr-${idx}" style="display:none; background:#121a24;"><td></td>
+      return `<tr class="rr-${idx}" style="display:none; background:#FFFFFF;"><td></td>
         <td colspan="8" class="sub mono">📁 ${escAttr(r.root_path)} — 조사 ${fmtBytes(r.capacity_bytes!=null?r.capacity_bytes:r.scanned_bytes)}${(r.capacity_scan_id!=null&&r.capacity_scan_id!==r.scan_id)?(" (마지막 완료 기준 · 최신 스캔 "+fmtBytes(r.scanned_bytes)+")"):(r.capacity_partial?" (부분 값)":"")} · fs ${fmtBytes(r.fs_used_bytes)}${fsTxt} · ${scanProgress(r)}${startTxt}${r.finished_at?(" · 완료 "+ago(r.finished_at)):(r.updated_at?(" · 갱신 "+ago(r.updated_at)):"")}</td></tr>`;
     }).join("");
     const outdated = j.version && n.version && _verCmp(n.version, j.version) < 0;   // 숫자 비교(1.99.9 < 1.99.10), 더 새 엣지는 구버전 아님
     const verBadge = n.version
-      ? ` <span class="pill" title="${outdated?('구버전 — 포탈 v'+escAttr(j.version)):'버전'}" style="color:${outdated?'#f0c86a':'#9fb3c8'};border-color:${outdated?'#6a5a25':'var(--line)'}">v${_he(n.version)}${outdated?' ⬆':''}</span>`
+      ? ` <span class="pill" title="${outdated?('구버전 — 포탈 v'+escAttr(j.version)):'버전'}" style="color:${outdated?'#8A3B00':'#567696'};border-color:${outdated?'#F1EBD7':'var(--line)'}">v${_he(n.version)}${outdated?' ⬆':''}</span>`
       : "";
     const pr=pingResults[n.id];
     const pingB = pr ? (pr.latency_ms!=null
-        ? ` <span class="pill" title="HQ→노드 왕복${pr.error?(' · '+escAttr(pr.error)):''}" style="color:${pr.latency_ms<150?'#7be0aa':(pr.latency_ms<600?'#f0c86a':'#ff9a9a')};border-color:${pr.latency_ms<150?'#2f6f50':(pr.latency_ms<600?'#6a5a25':'#7a3030')}">${pr.latency_ms} ms</span>`
-        : ` <span class="pill" title="${escAttr(pr.error||'실패')}" style="color:#ff9a9a;border-color:#7a3030">✕</span>`) : "";
+        ? ` <span class="pill" title="HQ→노드 왕복${pr.error?(' · '+escAttr(pr.error)):''}" style="color:${pr.latency_ms<150?'#166534':(pr.latency_ms<600?'#8A3B00':'#8A0F0F')};border-color:${pr.latency_ms<150?'#D7EEE3':(pr.latency_ms<600?'#F1EBD7':'#7A3030')}">${pr.latency_ms} ms</span>`
+        : ` <span class="pill" title="${escAttr(pr.error||'실패')}" style="color:#8A0F0F;border-color:#7A3030">✕</span>`) : "";
     // 상태 신선도: 포탈이 이 노드 상태를 마지막으로 받은 지 2분 넘으면 표시(값이 실제와 다를 수 있음을 정직하게)
     const staleB = (n.enabled && n.online && n.last_poll && (Date.now()/1000 - n.last_poll) >= 120)
       ? ` <span class="sub ${freshClass(n.last_poll)}" style="white-space:nowrap;" title="포탈이 이 노드 상태를 마지막으로 받은 시각 — 오래되면 표시 값이 실제와 다를 수 있습니다">⏳ 상태 ${ago(n.last_poll)}</span>` : "";
     const rn=n.running;
     const runLine = rn ?`<div class="sub" style="white-space:nowrap; margin-top:3px;">⏱ ${elapsedSpan(rn.started_at, rn.updated_at)} · 시작 ${fmtClock(rn.started_at)}</div>` : "";
-    const loopBadge = n.auto_restart ? ` <span style="color:#ff5c5c; font-weight:700; white-space:nowrap;" title="완료되면 같은 설정으로 자동 재시작(반복) 중">🔁 반복 동작 중</span>` : "";
+    const loopBadge = n.auto_restart ? ` <span style="color:#B42318; font-weight:700; white-space:nowrap;" title="완료되면 같은 설정으로 자동 재시작(반복) 중">🔁 반복 동작 중</span>` : "";
     // 스캔 진행 바(집계 단계 % 가 있을 때만 — 정직하게)
     const _spct = (n.online && n.active_scans>0) ? nodeScanPct(n) : null;
     const scanBar = (_spct!=null) ? `<div class="capbar" style="height:5px; min-width:0; max-width:170px; margin-top:5px; border-radius:3px;"><i style="width:${_spct}%; background:var(--accent); box-shadow:none;"></i></div><div class="sub" style="margin-top:2px;">집계 진행률 ${_spct}%</div>` : "";
@@ -1833,7 +1498,7 @@ function renderPortalDash(){
       <td class="num">${fmtBytes(n.fs_total_bytes)}</td>
       <td class="sub">${ago(n.last_scan_at)}</td>
       <td>${st}${staleB}${loopBadge}${scanBtn}${pingB}${runLine}${scanBar}</td><td>${open}</td></tr>` + roots +
-      (n.last_error ? `<tr><td colspan="9" class="sub" style="color:#ff9a9a">${escAttr(n.id)}: ${_he(n.last_error)}</td></tr>` : "");
+      (n.last_error ? `<tr><td colspan="9" class="sub" style="color:#8A0F0F">${escAttr(n.id)}: ${_he(n.last_error)}</td></tr>` : "");
   }).join("") : '<tr><td colspan="9" class="sub">표시할 노드가 없습니다.</td></tr>';
   $("nodeRows").querySelectorAll("tr.noderow").forEach(tr=>tr.addEventListener("click",e=>{
     if(e.target.closest("a,button")) return;
@@ -2053,7 +1718,9 @@ async function doAsk(){
   }catch(e){ out.textContent="오류: "+e; }
 }
 if($("askBtn")) $("askBtn").addEventListener("click",doAsk);
-if($("askInput")) $("askInput").addEventListener("keydown",(e)=>{ if(e.key==="Enter") doAsk(); });
+if($("askInput")) $("askInput").addEventListener("keydown",(e)=>{ if(e.key==="Enter") doAsk(); if(e.key==="Escape") $("askOut").innerHTML=""; });
+// 물어보기 답 패널: 바깥을 누르면 닫는다(엣지와 같은 동작)
+document.addEventListener("click",(e)=>{ const box=$("askBox"); if(box && !box.contains(e.target) && $("askOut")) $("askOut").innerHTML=""; });
 
 // 로컬 LLM 설정 로드/저장(설정은 /api/portal/settings)
 function loadAskLlm(){
@@ -2363,7 +2030,7 @@ async function pLoadAudit(){
     $("pAuditMsg").textContent=" 최근 "+j.events.length+"건";
     const box=$("pAuditBox"); box.style.display="";
     box.innerHTML='<table style="width:100%;font-size:12px;"><thead><tr><th style="text-align:left;">시각</th><th style="text-align:left;">동작</th><th>결과</th><th style="text-align:left;">출처</th><th style="text-align:left;">상세</th></tr></thead><tbody>'
-      +j.events.map(e=>`<tr><td class="mono">${new Date(e.ts*1000).toLocaleString("ko-KR")}</td><td class="mono">${esc(e.action)}</td><td style="text-align:center;">${e.ok?"✓":'<span style="color:#ff5c5c">✗</span>'}</td><td class="mono">${esc(e.ip)||"—"}</td><td class="sub">${esc(e.detail)}</td></tr>`).join("")
+      +j.events.map(e=>`<tr><td class="mono">${new Date(e.ts*1000).toLocaleString("ko-KR")}</td><td class="mono">${esc(e.action)}</td><td style="text-align:center;">${e.ok?"✓":'<span style="color:#B42318">✗</span>'}</td><td class="mono">${esc(e.ip)||"—"}</td><td class="sub">${esc(e.detail)}</td></tr>`).join("")
       +"</tbody></table>";
   }catch(e){ $("pAuditMsg").textContent=" 오류: "+e; }
 }
@@ -2640,7 +2307,7 @@ function fbOpen(){
       +'<input id="fbPath" class="inp mono" style="flex:1;" placeholder="/opt" />'
       +'<button id="fbGo">탐색</button></div>'
       +'<div id="fbList" style="max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:4px;"></div>'
-      +'<div class="sub" id="fbErr" style="color:#ff8a8a;margin-top:6px;"></div>'
+      +'<div class="sub" id="fbErr" style="color:#8A0F0F;margin-top:6px;"></div>'
       +'<div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
       +'<span class="sub" id="fbUseLbl">이 폴더를 감시 폴더로:</span>'
       +'<b id="fbCurLbl" class="mono" style="flex:1;min-width:160px;word-break:break-all;"></b>'
@@ -2706,7 +2373,7 @@ function renderPush(p){
     : (fail? `<span style="color:var(--danger)">완료 — 실패 ${fail}대 (사유는 아래 표)</span>` : '<span style="color:var(--ok)">✅ 모두 성공</span>');
   if($("pushTbody")) $("pushTbody").innerHTML=(p.nodes||[]).map(n=>{
     const detail = n.state==="ok" ? ("→ v"+(n.version||"?")) : (n.reason||"");
-    return `<tr style="border-top:1px solid #222c44">`
+    return `<tr style="border-top:1px solid #E1E5F0">`
       +`<td class="mono" style="padding:5px 18px">${esc(n.id)}</td>`
       +`<td class="sub" style="padding:5px 8px">${esc(n.region||"")}</td>`
       +`<td class="mono sub" style="padding:5px 8px">${n.current?("v"+esc(""+n.current)):"—"}</td>`
@@ -2767,7 +2434,7 @@ function renderHist(){
         const res=e.ok?'<span style="color:var(--ok)">✓ 성공</span>':'<span style="color:var(--danger)">✗ 실패</span>';
         const ver=(e.from?("v"+e.from+" → "):"")+(e.to?("v"+e.to):(e.bundle_version?("v"+e.bundle_version):"—"));
         const edges=(e.push_total!=null)?((e.push_ok||0)+"/"+e.push_total):"—";
-        return '<tr style="border-top:1px solid #222c44">'
+        return '<tr style="border-top:1px solid #E1E5F0">'
           +'<td class="mono" style="padding:5px 8px;">'+new Date(e.ts*1000).toLocaleString("ko-KR")+'</td>'
           +'<td style="padding:5px 8px;">'+esc(e.kind||"")+'</td>'
           +'<td class="mono" style="padding:5px 8px;">'+esc(ver)+'</td>'
@@ -2787,12 +2454,12 @@ function showHist(i){
   const ver=(e.from?("v"+e.from+" → "):"")+(e.to||e.bundle_version||"?");
   let html='<div class="sub" style="margin-bottom:8px;">버전 <b>'+esc(ver)+'</b>'+(e.error?(' · <span style="color:var(--danger)">'+esc(e.error)+'</span>'):'')+'</div>';
   const log=(e.log||[]);
-  if(log.length) html+='<div class="sub" style="margin-bottom:4px;">단계 로그</div><pre class="mono" style="background:#0d1219;border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;max-height:240px;overflow:auto;font-size:12px;">'
+  if(log.length) html+='<div class="sub" style="margin-bottom:4px;">단계 로그</div><pre class="mono" style="background:#F7F8FA;border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;max-height:240px;overflow:auto;font-size:12px;">'
     +log.map(l=>new Date(l.t*1000).toLocaleTimeString("ko-KR")+"  "+esc(l.msg)).join("\n")+'</pre>';
   const nodes=(e.nodes||[]);
   if(nodes.length){ html+='<div class="sub" style="margin:8px 0 4px;">엣지별 결과 ('+(e.push_ok||0)+'/'+(e.push_total||nodes.length)+')</div>'
     +'<table style="width:100%;font-size:12px;border-collapse:collapse;"><tbody>'
-    +nodes.map(n=>'<tr style="border-top:1px solid #222c44"><td class="mono" style="padding:4px 8px;">'+esc(n.id||"")+'</td>'
+    +nodes.map(n=>'<tr style="border-top:1px solid #E1E5F0"><td class="mono" style="padding:4px 8px;">'+esc(n.id||"")+'</td>'
       +'<td style="padding:4px 8px;">'+(n.ok?('<span style="color:var(--ok)">✓ v'+esc(n.version||"?")+'</span>'):('<span style="color:var(--danger)">✗ '+esc(n.reason||"실패")+'</span>'))+'</td></tr>').join("")
     +'</tbody></table>'; }
   $("histModalBody").innerHTML=html; m.style.display="flex";
@@ -2847,7 +2514,7 @@ function renderThroughput(){
         const k=String(w), d=(n.win||{})[k]||{};
         return `<div class="card" style="padding:12px 14px;">
           <h2 style="margin:0 0 6px;">${_THRU_LABEL[k]||k+"s"}</h2>
-          <div class="big" style="font-size:20px; color:#7fc8ff;">${_bph(d.bph)}</div>
+          <div class="big" style="font-size:20px; color:#0F558A;">${_bph(d.bph)}</div>
           <div class="sub" style="margin-top:5px;"><b>${fmtBytes(d.bytes||0)}</b> 처리 · ${fmtNum(Math.round(d.files||0))} 파일</div>
         </div>`;
       }).join("")+'</div>';

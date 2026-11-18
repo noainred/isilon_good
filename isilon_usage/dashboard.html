@@ -6,411 +6,73 @@
 <title>NAS Management</title>
 <!-- 탭 파비콘: 헤더 V 마크와 같은 스타일(라운드 사각형·파란 그라데이션)의 N(=NAS). 외부 파일 없이 인라인 SVG. -->
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjNGFhM2ZmIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjN2FkMGZmIi8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3QgeD0iMyIgeT0iMyIgd2lkdGg9IjU4IiBoZWlnaHQ9IjU4IiByeD0iMTQiIGZpbGw9InVybCgjZykiLz48dGV4dCB4PSIzMiIgeT0iMzQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZiIgZm9udC1zaXplPSI0MiIgZm9udC13ZWlnaHQ9IjgwMCIgZmlsbD0iIzA4MjAzYSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZG9taW5hbnQtYmFzZWxpbmU9ImNlbnRyYWwiPk48L3RleHQ+PC9zdmc+" />
-<style>
-  :root {
-    --bg: #0f141b; --panel: #19212c; --panel2: #1f2937; --line: #2b3543;
-    --text: #e6edf3; --muted: #8b98a9; --accent: #4f9cff; --accent2: #38d39f;
-    --warn: #f5a623; --danger: #ff5c5c; --ok: #38d39f;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-      "Noto Sans KR", "Apple SD Gothic Neo", sans-serif; font-size: 14px;
-  }
-  header {
-    padding: 16px 22px; border-bottom: 1px solid var(--line);
-    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
-    background: linear-gradient(180deg,#1a232f,#141a23);
-  }
-  header h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: .2px; }
-  header .root { color: var(--muted); font-family: ui-monospace, Menlo, monospace;
-    font-size: 12.5px; word-break: break-all; }
-  .spacer { flex: 1; }
-  .badge { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
-    border: 1px solid var(--line); white-space: nowrap; }
-  .badge.discovering { background:#16344f; color:#7cc4ff; }
-  .badge.sizing { background:#163f33; color:#65e0b4; }
-  .badge.done { background:#173a2a; color:#52e0a0; }
-  .badge.paused { background:#3f3516; color:#f0c86a; }
-  .badge.error { background:#43201f; color:#ff8b8b; }
-  .wrap { padding: 18px 22px; max-width: 1320px; margin: 0 auto; }
-  .grid { display: grid; gap: 14px; }
-  .cols-3 { grid-template-columns: repeat(3, 1fr); }
-  .cols-2 { grid-template-columns: 1.3fr 1fr; }
-  @media (max-width: 980px){ .cols-3,.cols-2 { grid-template-columns: 1fr; } }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
-    padding: 16px 18px; }
-  .card h2 { font-size: 12.5px; text-transform: uppercase; letter-spacing: .6px;
-    color: var(--muted); margin: 0 0 12px; font-weight: 700; }
-  .kv { display:flex; justify-content: space-between; align-items: baseline;
-    padding: 5px 0; border-bottom: 1px dashed #232e3b; gap: 12px; }
-  .kv:last-child { border-bottom: none; }
-  .kv .k { color: var(--muted); }
-  .kv .v { font-variant-numeric: tabular-nums; font-weight: 600; text-align:right;
-    font-family: ui-monospace, Menlo, monospace; }
-  .big { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
-  .mono { font-family: ui-monospace, Menlo, monospace; }
-  .current {
-    font-family: ui-monospace, Menlo, monospace; font-size: 13px;
-    background:#0d1219; border:1px solid var(--line); border-radius:8px;
-    padding:10px 12px; word-break: break-all; color:#cfe3ff; min-height: 20px;
-  }
-  .bar { height: 12px; background:#0d1219; border-radius: 8px; overflow: hidden;
-    border:1px solid var(--line); }
-  .bar > span { display:block; height:100%; width:0%;
-    background: linear-gradient(90deg, var(--accent), var(--accent2));
-    transition: width .4s ease; }
-  .bar.mem > span { background: linear-gradient(90deg,#4f9cff,#f5a623); }
-  .bar.mem.high > span { background: linear-gradient(90deg,#f5a623,#ff5c5c); }
-  .barlabel { display:flex; justify-content: space-between; margin: 0 0 6px;
-    font-size:12.5px; }
-  .barlabel b { font-variant-numeric: tabular-nums; }
-  table { width:100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align:left; padding: 7px 8px; border-bottom: 1px solid #222c38; }
-  th { color: var(--muted); font-weight:600; font-size:12px; }
-  th.sortable { cursor:pointer; user-select:none; white-space:nowrap; }
-  th.sortable:hover { color: var(--text); }
-  td.num, th.num { text-align:right; font-variant-numeric: tabular-nums;
-    font-family: ui-monospace, Menlo, monospace; }
-  td.path { font-family: ui-monospace, Menlo, monospace; color:#cfe3ff;
-    max-width: 520px; overflow:hidden; text-overflow: ellipsis; white-space: nowrap; }
-  a.topdrill, a.topcrumb, a.piecell, a.piecrumb { color:#9fd0ff; text-decoration:none; }
-  a.topdrill:hover, a.topcrumb:hover, a.piecell:hover, a.piecrumb:hover { text-decoration:underline; }
-  .chip { background:var(--panel2); border:1px solid var(--line); border-radius:999px;
-    padding:4px 9px; cursor:pointer; font-size:12px; user-select:none; }
-  .chip.on { background:#16344f; border-color:#2f6fb0; color:#cfe6ff; font-weight:700; }
-  canvas { width: 100%; height: 90px; display:block; }
-  .legend { display:flex; gap:14px; font-size:12px; color:var(--muted); margin-top:6px; }
-  .dot { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px;
-    vertical-align: middle; }
-  .controls { display:flex; gap:10px; align-items:center; font-size:12.5px; color:var(--muted); }
-  .controls button { background:var(--panel2); color:var(--text); border:1px solid var(--line);
-    border-radius:7px; padding:5px 11px; cursor:pointer; font-size:12.5px; }
-  .controls button:hover { border-color: var(--accent); }
-  button { background:var(--panel2); color:var(--text); border:1px solid var(--line);
-    border-radius:7px; padding:6px 11px; cursor:pointer; font-size:12.5px; }
-  button:hover { border-color: var(--accent); }
-  button:disabled { opacity:.5; cursor:not-allowed; }
-  nav#nav { display:flex; gap:6px; margin-left:18px; }
-  .navbtn { background:transparent; color:var(--muted); border:1px solid transparent;
-    border-radius:7px; padding:6px 12px; cursor:pointer; font-size:13px; font-weight:600; }
-  .navbtn:hover { color:var(--text); }
-  .navbtn.active { background:var(--panel2); color:var(--text); border-color:var(--line); }
-  pre.changelog { white-space:pre-wrap; word-break:break-word; font-family: ui-monospace, Menlo, monospace;
-    font-size:12.5px; line-height:1.6; color:#cfe3ff; background:#0d1219; border:1px solid var(--line);
-    border-radius:8px; padding:14px; max-height:70vh; overflow:auto; }
-  .optsel { background:var(--panel2); color:var(--text); border:1px solid var(--line);
-    border-radius:7px; padding:8px 10px; font-size:13px; }
-  .setgrid { display:grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap:12px; }
-  .subtabs { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px; }
-  .stab { background:var(--panel2); color:var(--muted); border:1px solid var(--line); border-radius:8px; padding:6px 12px; font-size:12.5px; font-weight:700; cursor:pointer; }
-  .stab:hover { color:var(--text); }
-  .stab.active { background:#16344f; color:#cfe6ff; border-color:#2f6fb0; }
-  #settingsCard label { display:flex; flex-direction:column; gap:5px; font-size:12.5px; color:var(--muted); }
-  /* 라벨 줄 수(1~2줄)가 달라도 같은 높이를 잡아 입력칸이 행끼리 줄 맞도록 함 */
-  #settingsCard .setgrid .setlbl { display:block; min-height:2.6em; line-height:1.3; }
-  .setinput { background:var(--panel2); color:var(--text); border:1px solid var(--line);
-    border-radius:7px; padding:8px 10px; font-size:13px; }
-  #settingsCard input:disabled, #settingsCard select:disabled, #settingsCard textarea:disabled { opacity:.5; }
-  .diritem { display:flex; justify-content:space-between; gap:10px; padding:5px 8px;
-    border-radius:6px; cursor:pointer; font-family: ui-monospace, Menlo, monospace;
-    font-size:12.5px; color:#cfe3ff; }
-  .diritem:hover { background:#16202c; }
-  .stopbtn { background:#3a1c1c; border-color:#5a2a2a; color:#ff9b9b; padding:2px 8px; font-size:11.5px; }
-  #startBtn.scanning { background:#7a1f1f; border-color:#c0392b; color:#ffd5d5; cursor:default; }
-  #startBtn.scanning:hover { border-color:#c0392b; }
-  .pill { font-size:11.5px; color:var(--muted); border:1px solid var(--line);
-    border-radius:999px; padding:2px 9px; }
-  .note { color: var(--warn); font-size: 12px; }
-  .err { color: var(--danger); }
-  a { color: var(--accent); }
-  /* ── About / 소개 페이지 ── */
-  .about-hero { border-radius:18px; padding:24px 26px; margin-bottom:16px; position:relative; overflow:hidden;
-    background:linear-gradient(135deg,#1b2740 0%, #131a27 52%, #1d1733 100%);
-    border:1px solid #2c3a57; box-shadow:0 14px 48px rgba(40,80,170,.18); }
-  .about-hero-row { display:flex; align-items:center; gap:18px; }
-  .about-icon { width:66px; height:66px; flex:0 0 66px; border-radius:17px; font-size:34px;
-    display:flex; align-items:center; justify-content:center;
-    background:linear-gradient(135deg,#4f9cff,#38d39f); box-shadow:0 8px 24px rgba(79,156,255,.45); }
-  .about-title { font-size:30px; font-weight:800; letter-spacing:.4px; line-height:1.15;
-    background:linear-gradient(90deg,#dbe7ff,#9fb6e8 70%,#b9a8ff); -webkit-background-clip:text; background-clip:text; color:transparent; }
-  .about-tagline { color:var(--muted); font-size:14px; margin-top:4px; }
-  .about-slogan { margin:18px 0 15px; font-size:15px; color:#e3ebf6; }
-  .about-slogan i { color:#86a8ff; font-style:italic; }
-  .about-badges { display:flex; gap:10px; flex-wrap:wrap; }
-  .about-badge { padding:6px 15px; border-radius:10px; font-size:13px; font-weight:700; border:1px solid; }
-  .about-badge.ver { color:#c9b6ff; border-color:#5b4b8a; background:#241d3a; }
-  .about-badge.stack { color:#7fe3d0; border-color:#2f6a5e; background:#143029; }
-  .about-badge.edition { color:#7ee0a8; border-color:#2f6a48; background:#15301f; }
-  .about-2col { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; }
-  .about-label { color:var(--muted); font-size:12px; font-weight:700; letter-spacing:.7px; text-transform:uppercase; margin-bottom:14px; }
-  .about-author-row { display:flex; align-items:center; gap:14px; }
-  .about-avatar { width:50px; height:50px; flex:0 0 50px; border-radius:50%; color:#fff; font-weight:700; font-size:19px;
-    display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#4f9cff,#6f7bff); }
-  .about-author-name { font-size:17px; font-weight:700; }
-  .about-mail { color:var(--accent); text-decoration:none; font-size:14px; }
-  .about-mail:hover { text-decoration:underline; }
-  .about-copy { font-size:27px; font-weight:800; margin-bottom:3px; }
-  .about-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px 30px; }
-  .about-feat { display:flex; gap:12px; align-items:flex-start; }
-  .about-feat .fi { font-size:20px; line-height:1.25; flex:0 0 24px; }
-  .about-feat b { display:block; font-size:14.5px; margin-bottom:3px; color:var(--text); }
-  .about-feat .sub { display:block; line-height:1.5; margin-top:0; }
-  .about-notice { margin-top:4px; border:1px solid #3a3f63; border-left:3px solid var(--accent); border-radius:12px;
-    padding:16px 18px; background:#161a28; color:#c8d2e0; line-height:1.65; }
-  .about-foot { text-align:center; color:var(--muted); font-size:12px; margin:18px 0 4px; letter-spacing:.3px; }
-  @media (max-width:760px){ .about-2col, .about-grid { grid-template-columns:1fr; } .about-title { font-size:24px; } }
-
-/* ============================================================================
-   The Davinci NAS Management — Refined Theme (drop-in, Claude Design)
-   마크업/JS/DOM id 변경 없음. 클래스·토큰만 재정의(소스 순서로 덮어씀).
-   데이터·동작·색상 임계(capColor 등)는 그대로 유지.
-   ============================================================================ */
-:root{
-  --bg:#0a0e13; --panel:#121a24; --panel2:#182029; --line:#242f3d;
-  --text:#e7edf3; --muted:#8b98a9; --accent:#4f9cff; --accent2:#35d99a;
-  --warn:#f0b429; --danger:#f26d6d; --ok:#35d99a;
-}
-body{
-  background:
-    radial-gradient(1100px 520px at 80% -8%, rgba(53,217,154,.06), transparent 60%),
-    radial-gradient(900px 480px at 10% 2%, rgba(79,156,255,.05), transparent 55%),
-    var(--bg);
-  -webkit-font-smoothing:antialiased;
-}
-header{ padding:18px 24px; background:linear-gradient(180deg,#141c26,#0f151d); border-bottom:1px solid rgba(255,255,255,.06); }
-#brandVer{ background:rgba(255,255,255,.06)!important; color:#8b98a9!important; font-family:ui-monospace,Menlo,monospace; }
-#brandH1 span[style*="background:#16361f"]{ background:transparent!important; color:var(--accent2)!important; padding:0!important; display:inline-flex; align-items:center; gap:6px; }
-#clock{ color:#cdd6df; }
-.navbtn{ border-radius:9px; padding:7px 13px; transition:background .15s,color .15s,border-color .15s; }
-.navbtn.active{ background:color-mix(in srgb, var(--accent) 16%, transparent); color:#dbe9ff; border-color:color-mix(in srgb, var(--accent) 40%, transparent); }
-.wrap{ max-width:1400px; padding:22px 24px 80px; }
-.grid{ gap:16px; }
-.card{ background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.012)); border:1px solid rgba(255,255,255,.07); border-radius:16px; padding:20px 22px; }
-.card h2{ font-size:12px; letter-spacing:.7px; color:var(--muted); font-weight:700; margin:0 0 14px; }
-.big{ font-size:32px; font-weight:700; letter-spacing:-.4px; color:#fff; font-family:ui-monospace,Menlo,"JetBrains Mono",monospace; }
-.sub{ color:var(--muted); font-size:12px; }
-#askCard{ background:linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.015)); border-radius:18px; }
-#askInput{ border-radius:11px!important; padding:13px 16px!important; transition:border-color .15s, box-shadow .15s; }
-#askInput:focus{ outline:none; border-color:color-mix(in srgb, var(--accent2) 55%, transparent)!important; box-shadow:0 0 0 3px rgba(53,217,154,.14); }
-#askOut:not(:empty){ margin-top:14px; padding:14px 16px; border-radius:12px; background:rgba(53,217,154,.07); border:1px solid rgba(53,217,154,.18); color:#d6e6df; line-height:1.6; }
-button{ border-radius:9px; padding:7px 12px; transition:border-color .13s, background .13s, filter .13s; }
-button:hover{ border-color:var(--accent); }
-button.primary{ background:var(--accent2); color:#06231a; border-color:transparent; font-weight:700; }
-button.primary:hover{ filter:brightness(1.08); border-color:transparent; }
-.ssbtn{ border-radius:999px; }
-.chip{ border-radius:999px; padding:5px 11px; }
-.chip.on{ background:color-mix(in srgb, var(--accent) 18%, transparent); border-color:color-mix(in srgb, var(--accent) 45%, transparent); color:#dbe9ff; }
-.inp{ border-radius:9px; }
-.rbtn.active,.stab.active{ background:color-mix(in srgb, var(--accent) 16%, transparent); color:#dbe9ff; border-color:color-mix(in srgb, var(--accent) 40%, transparent); }
-table{ font-size:13px; }
-th,td{ padding:11px 10px; border-bottom:1px solid rgba(255,255,255,.05); }
-th{ font-size:11.5px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); }
-tbody tr{ transition:background .12s; }
-#nodeTable tbody tr:hover,
-#netmonTable tbody tr:hover{ background:rgba(255,255,255,.028); }
-td.num,th.num{ font-family:ui-monospace,Menlo,"JetBrains Mono",monospace; }
-.badge{ display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px; border:1px solid transparent; font-weight:600; }
-.b-online{ background:rgba(53,217,154,.12); color:#6ee7b7; }
-.b-offline{ background:rgba(242,109,109,.12); color:#f9a8a8; }
-.b-scan{ background:rgba(79,156,255,.14); color:#9cc9ff; }
-.capbar{ background:rgba(255,255,255,.06); border:none; border-radius:8px; }
-.capbar > i{ border-radius:8px; box-shadow:0 0 14px rgba(53,217,154,.35); }
-.capbar > b{ font-size:11px; }
-.regcard{ background:rgba(255,255,255,.025); border:1px solid rgba(255,255,255,.07); border-radius:13px; padding:14px 15px; transition:transform .12s, border-color .15s, background .15s; }
-.regcard:hover{ transform:translateY(-2px); border-color:rgba(255,255,255,.16); }
-.regcard.active{ border-color:var(--accent); background:color-mix(in srgb, var(--accent) 10%, rgba(255,255,255,.02)); }
-.regcard .big{ font-size:22px!important; }
-.pill{ border-radius:999px; }
-.reglabel{ color:#9fc2e8; }
-::-webkit-scrollbar{ width:11px; height:11px; }
-::-webkit-scrollbar-thumb{ background:rgba(255,255,255,.1); border-radius:6px; border:3px solid var(--bg); }
-::-webkit-scrollbar-thumb:hover{ background:rgba(255,255,255,.18); }
-
-/* ============================================================================
-   Refined polish v2 (dataviz-informed) — 더 깔끔하고 세련되게. 마크업/JS 무변경.
-   ============================================================================ */
-:root{ --elev:0 1px 2px rgba(0,0,0,.45), 0 10px 30px rgba(0,0,0,.20); }
-body{ letter-spacing:.1px; }
-.card{ box-shadow:var(--elev); border-color:rgba(255,255,255,.06);
-  background:linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.008)); }
-.card h2{ font-size:11px; letter-spacing:.9px; text-transform:uppercase; color:var(--muted); font-weight:600; margin:0 0 16px; }
-.big{ font-variant-numeric:tabular-nums; letter-spacing:-.5px; }
-.sub{ letter-spacing:.15px; }
-.navbtn{ font-weight:600; letter-spacing:.2px; }
-.navbtn.active{ box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent); }
-button{ background:rgba(255,255,255,.045); border-color:rgba(255,255,255,.10); font-weight:600; }
-button:hover{ background:rgba(255,255,255,.09); border-color:rgba(255,255,255,.22); filter:none; }
-button.primary{ background:var(--accent2); border-color:transparent; box-shadow:0 2px 12px rgba(53,217,154,.22); }
-button.primary:hover{ background:var(--accent2); box-shadow:0 3px 16px rgba(53,217,154,.34); }
-th{ font-size:11px; letter-spacing:.5px; font-weight:600; }
-th,td{ border-color:rgba(255,255,255,.05); padding:12px 11px; }
-tbody tr{ transition:background .12s; }
-.capbar{ background:rgba(255,255,255,.05); }
-.capbar > i{ box-shadow:none !important; border-radius:6px; }
-.badge{ font-size:11px; letter-spacing:.2px; padding:3px 10px; }
-.pill{ letter-spacing:.2px; }
-.grid{ gap:14px; }
-#askOut:not(:empty){ background:rgba(53,217,154,.06); border-color:rgba(53,217,154,.16); }
-#iuLangBtn{ background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.12); color:var(--muted);
-  border-radius:8px; padding:6px 11px; font-weight:600; font-size:12px; }
-#iuLangBtn:hover{ color:var(--text); border-color:rgba(255,255,255,.28); }
-
-/* ============================================================================
-   Overview 시안 v3 — Claude Design 'dashboards/overview-upgrade' 디자인 언어.
-   딥네이비+듀얼 글로우 · 모노 마이크로라벨 · KPI 액센트 스트라이프+호버 리프트 ·
-   블루 액션(내비/primary) · 펄스 LIVE 도트.
-   마크업/JS/DOM id 무변경(소스 순서로 덮어씀). 차트 팔레트는 dataviz 검증 통과값.
-   ============================================================================ */
-:root{
-  --bg:#070b14; --panel:#121a2c; --panel2:#1a2338;
-  --panel-grad:linear-gradient(180deg,#141c30 0%,#101728 100%);
-  --line:#253253; --line-soft:rgba(84,110,160,.22);
-  --text:#eaf1fb; --muted:#93a3bf; --faint:#5e6d89;
-  --accent:#3b82f6; --cyan:#22d3ee; --mint:#34e0b4; --accent2:#34e0b4; --ok:#34e0b4;
-  --purple:#a855f7;
-  --mono-ui:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;
-}
-body{
-  background:
-    radial-gradient(1100px 500px at 75% -12%, rgba(59,130,246,.07), transparent 60%),
-    radial-gradient(900px 420px at 12% -8%, rgba(52,224,180,.05), transparent 55%),
-    var(--bg);
-}
-::selection{ background:rgba(59,130,246,.4); }
-
-/* 헤더 — 반투명 블러 탑바 + 브랜드 마크 시안 글로우 */
-header{ background:rgba(10,15,26,.82); backdrop-filter:blur(8px);
-  border-bottom:1px solid var(--line-soft); }
-#brandH1 > span:first-child{
-  background:linear-gradient(135deg,#1d4ed8,#22d3ee)!important; color:#eaf6ff!important;
-  border-radius:11px!important; box-shadow:0 0 18px rgba(34,211,238,.35)!important; }
-#brandVer{ background:transparent!important; border:1px solid var(--line);
-  color:var(--muted)!important; font-size:10.5px!important; letter-spacing:.06em; }
-#brandH1 span[style*="background:#16361f"]{
-  font-family:var(--mono-ui); font-size:11px!important; letter-spacing:.08em;
-  color:var(--mint)!important; }
-#brandH1 span[style*="background:#16361f"]::before{
-  content:""; width:8px; height:8px; border-radius:50%; background:var(--mint);
-  animation:iuPulse 2.2s infinite; }
-@keyframes iuPulse{
-  0%{ box-shadow:0 0 0 0 rgba(52,224,180,.45); }
-  70%{ box-shadow:0 0 0 8px rgba(52,224,180,0); }
-  100%{ box-shadow:0 0 0 0 rgba(52,224,180,0); } }
-
-/* 내비 — 활성 탭은 확신 있는 블루 그라데이션 필 */
-.navbtn:hover{ background:rgba(59,130,246,.1); color:var(--text); }
-.navbtn.active{ color:#fff; background:linear-gradient(180deg,#2563eb,#1d4ed8);
-  border-color:transparent; box-shadow:0 4px 14px rgba(37,99,235,.35); }
-.stab.active,.chip.on{ color:#dbeafe;
-  background:rgba(59,130,246,.16); border-color:rgba(59,130,246,.45); }
-
-/* 카드 — 패널 그라데이션 + 헤어라인, 라벨은 모노 마이크로 타이포 */
-.card{ background:var(--panel-grad); border:1px solid var(--line-soft);
-  border-radius:14px;
-  box-shadow:0 1px 2px rgba(0,0,0,.45), 0 12px 32px rgba(0,0,0,.22); }
-.card h2{ font-family:var(--mono-ui); font-size:10.5px; font-weight:600;
-  letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
-.card h2 .sub,.card h2 .pill,.card h2 button{ font-family:var(--sans);
-  letter-spacing:.15px; text-transform:none; }
-
-/* KPI 타일 — 좌측 액센트 스트라이프 + 호버 리프트(시안 kpi) */
-.grid.cols-3 > .card:has(.big){ position:relative; overflow:hidden;
-  transition:border-color .15s, transform .12s, box-shadow .15s; }
-.grid.cols-3 > .card:has(.big)::before{ content:""; position:absolute; left:0;
-  top:12px; bottom:12px; width:3px; border-radius:3px;
-  background:var(--kpi-accent,var(--accent)); opacity:.9; }
-.grid.cols-3 > .card:has(.big):hover{ border-color:var(--kpi-accent,var(--accent));
-  transform:translateY(-2px); box-shadow:0 10px 26px rgba(0,0,0,.45); }
-.grid.cols-3 > .card:nth-child(1){ --kpi-accent:var(--cyan); }
-.grid.cols-3 > .card:nth-child(2){ --kpi-accent:var(--accent); }
-.grid.cols-3 > .card:nth-child(3){ --kpi-accent:var(--purple); }
-.big{ font-family:var(--sans); font-size:28px; font-weight:800;
-  letter-spacing:-.01em; color:#fff; }
-
-/* 버튼 — primary = 블루 그라데이션(시안의 액션 색) */
-button.primary{ background:linear-gradient(180deg,#2563eb,#1d4ed8); color:#fff;
-  border-color:transparent; box-shadow:0 4px 14px rgba(37,99,235,.30); }
-button.primary:hover{ background:linear-gradient(180deg,#2f6cf0,#2153e0);
-  box-shadow:0 5px 18px rgba(37,99,235,.42); filter:none; }
-
-/* 표 — 모노 마이크로 헤더 + 헤어라인 */
-th{ font-family:var(--mono-ui); font-size:10.5px; letter-spacing:.09em; color:var(--muted); }
-th,td{ border-color:rgba(84,110,160,.14); }
-
-/* 칩·필·상태 배지 — 모노 캡슐(시안 chip/pill/st) */
-.chip,.pill{ font-family:var(--mono-ui); letter-spacing:.05em;
-  background:rgba(13,19,33,.6); border-color:var(--line); }
-.pill{ font-size:10.5px; } .chip{ font-size:11px; }
-.badge{ font-family:var(--mono-ui); letter-spacing:.04em; }
-
-/* 진행 바·현재 경로 — 얇고 둥근 트랙, 콘솔 톤 */
-.bar{ height:10px; background:rgba(94,109,137,.18); border:none; border-radius:6px; }
-.bar > span{ border-radius:6px; }
-.kv{ border-bottom:1px solid rgba(84,110,160,.12); }
-.current{ background:rgba(13,19,33,.75); border-color:var(--line); }
-pre.changelog{ background:rgba(13,19,33,.75); }
-
-/* 입력 포커스 — 블루 링 */
-.setinput:focus,.optsel:focus{ outline:none;
-  border-color:rgba(59,130,246,.55); box-shadow:0 0 0 3px rgba(59,130,246,.15); }
-
-/* 스크롤바 — 더 은은하게 */
-::-webkit-scrollbar-thumb{ background:rgba(84,110,160,.28); border:3px solid #070b14; }
-::-webkit-scrollbar-thumb:hover{ background:rgba(84,110,160,.45); }
-</style>
+<link rel="stylesheet" href="/theme.css" />
 <script src="/i18n.js"></script>
 </head>
 <body>
-<header>
-  <div>
-    <h1 style="display:flex;align-items:center;gap:12px;margin:0;">
-      <span style="width:46px;height:46px;border-radius:12px;background:linear-gradient(135deg,#4aa3ff,#7ad0ff);display:inline-flex;align-items:center;justify-content:center;font-size:22px;font-weight:800;color:#08203a;box-shadow:0 4px 14px rgba(74,163,255,.35);flex:none;">V</span>
-      <span style="display:inline-flex;flex-direction:column;gap:4px;">
-        <span style="display:inline-flex;flex-direction:column;line-height:1.14;">
-          <span style="font-size:21px;font-weight:800;">The Davinci</span>
-          <span style="font-size:21px;font-weight:800;">NAS Management <span id="nodeTag" class="pill" style="display:none; font-size:13px; vertical-align:middle;"></span></span>
-        </span>
-        <span style="display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;">
-          <span id="dashVer" style="background:#14464a;color:#7fffd4;padding:1px 9px;border-radius:11px;font-size:12px;font-weight:700;">v—</span>
-          <span style="background:#16361f;color:#5cff8f;padding:1px 9px;border-radius:11px;font-size:12px;font-weight:700;letter-spacing:.5px;">LIVE</span>
-        </span>
-      </span>
-    </h1>
-    <div class="root" id="rootPath" style="display:none;">대상 경로 로딩 중…</div>
+<aside id="sidebar" aria-label="주 메뉴">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">D</span>
+    <span style="display:flex; flex-direction:column; min-width:0;">
+      <span class="brand-name">Davinci NAS</span>
+      <span class="brand-sub">엣지 <span id="nodeTag" style="display:none;"></span></span>
+    </span>
   </div>
-  <nav id="nav">
-    <button class="navbtn active" data-view="summary">🏠 Summary</button>
-    <button class="navbtn" data-view="depth">🧭 대상 분석</button>
-    <button class="navbtn" data-view="trouble">🔧 트러블슈팅</button>
-    <button class="navbtn" data-view="throughput">📈 처리량 추이</button>
-    <button class="navbtn" data-view="trends">📉 추세·비교</button>
-    <button class="navbtn" data-view="report">📊 분석 리포트</button>
-    <button class="navbtn" data-view="analysis">📁 디렉터리 분석</button>
-    <button class="navbtn" data-view="scans">📋 스캔 이력</button>
-    <button class="navbtn" data-view="settings">⚙ 설정</button>
-    <button class="navbtn" data-view="extra">🧩 추가 기능</button>
-    <button class="navbtn" data-view="gentest">🧪 테스트 데이터</button>
+  <nav class="side-nav" id="sideNav">
+    <button type="button" class="sidebtn" data-group="home"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>홈</button>
+    <button type="button" class="sidebtn" data-group="scan"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M10 8.5v7l6-3.5z"/></svg>스캔<span class="cnt" id="scanCnt"></span></button>
+    <button type="button" class="sidebtn" data-group="explore"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg>탐색</button>
+    <button type="button" class="sidebtn" data-group="report"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></svg>리포트</button>
+    <button type="button" class="sidebtn" data-group="tools"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>도구</button>
   </nav>
-  <div class="spacer"></div>
-  <span class="pill" id="verPill" title="앱 버전">v–</span>
-  <span class="pill" id="backendPill">backend</span>
-  <span class="pill" id="psutilPill"></span>
-  <span class="pill" id="lockPill" title="작업 보호" style="cursor:pointer; display:none;"></span>
-  <span class="badge discovering" id="statusBadge">상태</span>
+  <div class="side-foot">
+    <button type="button" class="sidebtn" data-group="settings"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>설정</button>
+    <div class="side-ver"><span id="dashVer">v—</span><span id="verPill" style="display:none;">v–</span></div>
+  </div>
+</aside>
+<header id="topbar">
+  <div id="askBox">
+    <label class="askfield" title="문장으로 물어보면 분석해서 답합니다">
+      <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <span style="position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%);">물어보기</span>
+      <input id="askInput" type="text" autocomplete="off" placeholder="물어보세요 — 예: 제일 큰 폴더? · 1년 넘게 안 바뀐 데이터는 얼마나 돼? · 누가 제일 많이 써?" />
+      <span id="askLlmTag" class="pill" style="display:none;">LLM</span>
+    </label>
+    <button id="askBtn" class="primary">질문</button>
+    <div id="askOut" aria-live="polite"></div>
+  </div>
+  <div class="tb-status">
+    <span class="badge discovering" id="statusBadge">상태</span>
+    <span class="pill" id="backendPill" title="스캔 방식·용량 기준">backend</span>
+    <span class="pill" id="psutilPill" title="자원 측정 방식"></span>
+    <span class="pill" id="lockPill" title="작업 보호" style="cursor:pointer; display:none;"></span>
+  </div>
   <div class="controls">
     <button id="refreshBtn">새로고침</button>
     <label><input type="checkbox" id="autoChk" checked /> <span id="autoLabel">자동(1.5s)</span></label>
   </div>
+  <div class="root" id="rootPath" style="display:none;">대상 경로 로딩 중…</div>
 </header>
+<nav id="subnav" aria-label="하위 메뉴">
+  <button class="navbtn" data-group="home" data-view="summary">홈</button>
+  <button class="navbtn" data-group="scan" data-view="scanrun">새 스캔·진행</button>
+  <button class="navbtn" data-group="scan" data-view="scans">지난 스캔</button>
+  <button class="navbtn" data-group="scan" data-view="throughput">처리량</button>
+  <button class="navbtn" data-group="explore" data-view="analysis">디렉터리 분석</button>
+  <button class="navbtn" data-group="report" data-view="report">분석 리포트</button>
+  <button class="navbtn" data-group="report" data-view="trends">추세·비교</button>
+  <button class="navbtn" data-group="tools" data-view="depth">대상 분석</button>
+  <button class="navbtn" data-group="tools" data-view="trouble">트러블슈팅</button>
+  <button class="navbtn" data-group="tools" data-view="tune">튜닝 점검</button>
+  <button class="navbtn" data-group="tools" data-view="extra">추가 기능</button>
+  <button class="navbtn" data-group="tools" data-view="gentest">테스트 데이터</button>
+  <button class="navbtn" data-group="settings" data-view="settings">설정</button>
+</nav>
 
 <!-- 분석 화면(여기로 JS 가 파이·상위 디렉터리·드릴다운·추세·비교·오류 카드를 옮긴다) -->
 <div class="wrap view" id="view-analysis" style="display:none;">
   <div id="analysisNotice" class="card"
-       style="display:none; margin-bottom:14px; border-color:var(--warn); background:#2a2310; color:#f0d9a0;">
+       style="display:none; margin-bottom:14px; border-color:var(--warn); background:#F5F1E5; color:#6A5011;">
     ⚠ <b>스캔 진행 중</b> — 집계가 끝나기 전이라 재귀 용량·비율·파일 수 등 일부 값은
     <b>임시 표시(직속 용량 기준)</b>입니다. 스캔이 <b>완료</b>되면 정확한 값으로 바뀝니다.
   </div>
@@ -420,56 +82,27 @@ pre.changelog{ background:rgba(13,19,33,.75); }
 <div class="wrap view" id="view-trends" style="display:none;"></div>
 
 <div class="wrap view" id="view-summary">
-  <!-- 💬 자연어 질의응답 (맨 위) -->
-  <div class="card" id="askCard" style="margin-bottom:14px;">
-    <h2 style="margin:0 0 8px;">💬 물어보기 <span class="sub" style="font-weight:400;">— 문장으로 물어보면 분석해서 답합니다 <span id="askLlmTag" class="pill" style="display:none;">LLM</span></span></h2>
-    <div style="display:flex; gap:8px; flex-wrap:wrap;">
-      <input id="askInput" type="text" autocomplete="off"
-             placeholder="예: 제일 큰 디렉터리? · 30일 넘게 안 바뀐 데이터 얼마나 돼? · 누가 제일 많이 써?"
-             style="flex:1; min-width:280px; padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:var(--panel2); color:var(--text); font:inherit;" />
-      <button id="askBtn" class="primary">질문</button>
-    </div>
-    <div id="askOut" style="margin-top:10px; line-height:1.55; min-height:1.2em; color:var(--text);"></div>
-  </div>
-  <!-- 자원 모니터링 -->
-  <div class="grid cols-3" style="margin-bottom:14px;">
-    <div class="card">
-      <h2>서버 메모리</h2>
-      <div class="big" id="memPct">—</div>
-      <div class="sub" id="memDetail">— / —</div>
-      <div class="bar mem" style="margin-top:10px;"><span id="memBar"></span></div>
-      <canvas id="memChart" width="380" height="90" style="margin-top:12px;"></canvas>
-      <div class="legend"><span><span class="dot" style="background:#f5a623"></span>메모리 사용률(%)</span></div>
-      <div class="kv" style="margin-top:8px;"><span class="k">스왑 사용</span><span class="v" id="swapUsed">0</span></div>
-    </div>
-
-    <div class="card">
-      <h2>측정 프로세스 (CPU · 메모리)</h2>
-      <div class="big" id="duRss">—</div>
-      <div class="sub" id="duRssNote">du 프로세스 RSS</div>
-      <canvas id="rssChart" width="380" height="90" style="margin-top:12px;"></canvas>
-      <div class="legend">
-        <span><span class="dot" style="background:#4f9cff"></span>스캐너 프로세스</span>
-        <span><span class="dot" style="background:#38d39f"></span>du 프로세스</span>
+  <h1 class="page-title">홈</h1>
+  <p class="page-desc">지금 얼마나 찼는지, 무엇이 돌고 있는지, 무엇을 봐야 하는지 순서대로 보여 줍니다.</p>
+  <section class="kpis" aria-label="핵심 수치">
+    <div class="kpi"><div class="kl">조사된 용량</div><div class="kv2" id="kpiCap">—</div><div class="ks" id="kpiCapSub">마지막 완료 스캔 기준</div></div>
+    <div class="kpi"><div class="kl">파일시스템 사용률</div><div class="kv2" id="kpiFs">—</div><div class="bar"><span id="kpiFsBar"></span></div><div class="ks" id="kpiFsSub"></div></div>
+    <div class="kpi"><div class="kl">파일 수</div><div class="kv2" id="kpiFiles">—</div><div class="ks" id="kpiFilesSub"></div></div>
+    <div class="kpi"><div class="kl">스캔</div><div class="kv2" id="kpiScans">—</div><div class="ks" id="kpiScansSub"></div></div>
+  </section>
+  <div style="display:flex; flex-wrap:wrap; gap:16px; margin-bottom:16px;">
+    <section class="card" style="flex:3 1 460px; min-width:0;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+        <h2 style="margin:0;">진행 중인 스캔</h2>
+        <button type="button" class="linkbtn" data-goview="scanrun">스캔 화면으로</button>
       </div>
-      <div class="kv" style="margin-top:8px;"><span class="k" id="parWorkersK" style="white-space:nowrap;">⚡ Multi Scan Thread</span><span class="v" id="parWorkers" style="white-space:nowrap;">—</span></div>
-      <div class="kv"><span class="k">스캐너 CPU · RSS</span><span class="v"><span id="scanCpu">0%</span> · <span id="scanRss">0 B</span></span></div>
-      <div class="kv"><span class="k">du 프로세스 CPU · RSS</span><span class="v"><span id="duCpu">—</span> · <span id="duRssRow">0 B</span></span></div>
-      <div class="kv"><span class="k">최대(peak) du / 스캐너</span><span class="v" id="peakRss">0 B / 0 B</span></div>
-    </div>
-
-    <div class="card">
-      <h2>CPU · 디스크</h2>
-      <div class="big" id="cpuPct">—</div>
-      <div class="sub">CPU 사용률 · load1 <span id="load1">0</span></div>
-      <div class="kv" style="margin-top:10px;"><span class="k">파일시스템 전체</span><span class="v" id="fsTotal">—</span></div>
-      <div class="kv"><span class="k">파일시스템 사용</span><span class="v" id="fsUsed">—</span></div>
-      <div class="kv"><span class="k">파일시스템 여유</span><span class="v" id="fsFree">—</span></div>
-      <div class="kv"><span class="k">스캐너 PID</span><span class="v" id="pid">—</span></div>
-      <div class="kv"><span class="k">시간당 처리용량</span><span class="v" style="display:inline-flex; align-items:center; gap:6px; white-space:nowrap;"><span id="thruPerHr">—</span><button id="thruMoreBtn" title="시작부터 지금까지 1시간 단위 처리량" style="padding:1px 7px; font-size:11px;">More</button></span></div>
-    </div>
+      <div id="homeRuns" style="margin-top:8px;"></div>
+    </section>
+    <section class="card" style="flex:2 1 320px; min-width:0;">
+      <h2 style="margin:0 0 4px;">확인이 필요한 항목 <span class="sub" id="attnCnt"></span></h2>
+      <div id="homeAttn"></div>
+    </section>
   </div>
-
   <!-- 디스크 사용량 파이(클릭해서 점점 더 깊이 드릴다운) -->
   <div class="card" id="pieCard" style="margin-bottom:14px;">
     <h2>디스크 사용량 파이 — 디렉터리를 클릭해 더 깊이 들여다보기</h2>
@@ -488,12 +121,12 @@ pre.changelog{ background:rgba(13,19,33,.75); }
   <div class="card" id="secTreemap" style="margin-bottom:14px;">
     <h2>디스크 사용량 트리맵 — 면적이 곧 용량(클릭해 더 깊이)</h2>
     <div class="sub" style="margin-bottom:8px;">위 파이·아래 상위 디렉터리 표와 <b>같은 위치·같은 데이터</b>를 공유합니다(파이의 ‘🏠 루트/브레드크럼’으로 이동). 사각형을 클릭하면 그 디렉터리로 내려갑니다.</div>
-    <canvas id="tmChart" width="760" height="400" style="width:100%; height:auto; max-width:760px; cursor:pointer; background:#0f141b; border-radius:8px;"></canvas>
+    <canvas id="tmChart" width="760" height="400" style="width:100%; height:auto; max-width:760px; cursor:pointer; background:#F4F5F7; border-radius:8px;"></canvas>
     <div class="sub" id="tmNote" style="margin-top:8px;">색상은 디렉터리 구분용입니다. (디렉터리 단위 ‘나이’ 집계가 DB에 없어, 나이별 색상은 현재 데이터로 제공하지 않습니다.)</div>
   </div>
 
   <!-- 설정 잠김 안내(설정 화면에서 로그인 세션이 없을 때) -->
-  <div id="roBanner" class="card" style="display:none; margin-bottom:14px; border-color:var(--warn); background:#2a2410;">
+  <div id="roBanner" class="card" style="display:none; margin-bottom:14px; border-color:var(--warn); background:#F5F1E5;">
     <b>🔒 설정 잠김</b> — 설정 변경은 <b>로그인</b> 후 사용할 수 있습니다(세션 만료).
     스캔 시작·중지 등 일반 작업은 로그인 없이 됩니다.
     <button id="roLoginBtn" style="margin-left:8px; border-color:var(--accent2);">🔑 로그인</button>
@@ -507,8 +140,8 @@ pre.changelog{ background:rgba(13,19,33,.75); }
 
   <!-- 전체 용량 관리 개요 -->
   <div class="card" style="margin-bottom:14px;">
-    <h2>전체 용량 관리 개요 (관리 DB)</h2>
-    <div class="grid cols-3" style="gap:14px; margin-bottom:10px;">
+    <h2>저장소별 현황 <span class="sub">— 용량은 각 저장소의 마지막 완료 스캔 값입니다</span></h2>
+    <div class="grid cols-3" style="gap:14px; margin-bottom:10px; display:none;">
       <div><div class="big" id="ovTotal">0 B</div><div class="sub">총 조사 용량 · 루트별 최신 스캔 합계</div></div>
       <div><div class="big" id="ovRoots">0</div><div class="sub">관리 중 루트 수</div></div>
       <div><div class="big" id="ovScans">0</div><div class="sub">전체 스캔 수 · 진행중 <span id="ovActive">0</span></div></div>
@@ -538,81 +171,6 @@ pre.changelog{ background:rgba(13,19,33,.75); }
       </tr></thead>
       <tbody id="nasBody"><tr><td colspan="8" style="color:var(--muted)">로딩 중…</td></tr></tbody>
     </table>
-  </div>
-
-  <!-- 새 스캔 시작 (웹에서 디렉터리 지정) -->
-  <div class="card" id="startCard" style="margin-bottom:14px; display:none;">
-    <h2>새 스캔 시작 — 조사할 디렉터리 지정</h2>
-    <div class="sub" id="scanDisabledMsg" style="display:none; color:var(--warn);">
-      이 서버는 웹 스캔이 비활성화되어 있습니다. <code>serve</code> 또는 <code>run</code> 으로 실행하세요.
-    </div>
-
-    <div id="startForm">
-      <!-- 디렉터리 선택은 공유 모달(dirPickerModal)로 통일 — 각 경로 입력란의 📁 버튼으로 연다. -->
-
-      <div style="display:flex; gap:14px; align-items:flex-end; flex-wrap:wrap;">
-        <div id="scanInputs" style="display:flex; gap:14px; align-items:flex-end; flex-wrap:wrap; flex:1;">
-        <div style="flex:1; min-width:300px;">
-          <div class="sub" style="margin-bottom:4px;">스캔할 디렉터리</div>
-          <span style="display:flex; gap:6px; align-items:center;">
-          <input id="scanPath" class="mono"
-                 style="flex:1; min-width:0; background:#0d1219; color:#cfe3ff; border:1px solid var(--accent); border-radius:7px; padding:9px 11px; font-size:14px;"
-                 placeholder="경로 입력 또는 📁 로 탐색" />
-          <button type="button" class="dirbtn" data-target="scanPath" title="폴더 탐색으로 선택" style="padding:9px 12px;">📁</button>
-          </span>
-        </div>
-        <div>
-          <div class="sub" style="margin-bottom:4px;">백엔드</div>
-          <select id="optBackend" class="optsel">
-            <option value="native">native (빠름·저메모리)</option>
-            <option value="du">du (du 프로세스 메모리 표시)</option>
-          </select>
-        </div>
-        <div>
-          <div class="sub" style="margin-bottom:4px;">엔진</div>
-          <select id="optEngine" class="optsel" title="threads=상세 트리, pscan=멀티프로세스로 빠른 용량(루트+1단계)">
-            <option value="threads">threads (상세 트리)</option>
-            <option value="pscan">pscan (멀티프로세스·빠른 용량)</option>
-          </select>
-        </div>
-        <div>
-          <div class="sub" style="margin-bottom:4px;">용량 기준</div>
-          <select id="optSize" class="optsel">
-            <option value="disk">디스크 점유(du 기본)</option>
-            <option value="apparent">논리 크기</option>
-          </select>
-        </div>
-        <label class="sub" style="display:flex; align-items:center; gap:6px; padding-bottom:9px;">
-          <input type="checkbox" id="optOFS" /> 한 파일시스템(-x)
-        </label>
-        <label class="sub" style="display:flex; align-items:center; gap:6px; padding-bottom:9px;"
-               title="단일/멀티프로세스/2단 병렬을 짧게 측정해 가장 빠른 방법을 자동으로 고른 뒤 스캔을 시작합니다(엔진·워커 자동).">
-          <input type="checkbox" id="optAutotune" /> 🔬 오토튜닝(최적 방법 자동·기본 꺼짐)
-        </label>
-        <label class="sub" style="display:flex; align-items:center; gap:6px; padding-bottom:9px;"
-               title="이 스캔이 정상 완료(done)되면 같은 경로·설정으로 자동으로 새 스캔을 시작합니다(반복). 스캔을 '중지'하면 반복이 멈춥니다.">
-          <input type="checkbox" id="optAutoRestart" /> 🔁 완료 후 자동 재시작(같은 설정 반복)
-        </label>
-        </div><!-- /scanInputs -->
-        <button id="startBtn" style="border-color:var(--accent2); color:#cfe; font-weight:700; padding:9px 16px;">
-          ▶ 이 디렉터리 스캔 시작
-        </button>
-      </div>
-      <div id="startMsg" class="sub" style="margin-top:10px;"></div>
-      <div id="lastScanNote" class="sub" style="margin-top:4px; opacity:.85;"></div>
-    </div>
-  </div>
-
-  <!-- 오토튜닝 진행 (첫 스캔 시 최적 방법 자동 측정 → 자동 시작) -->
-  <div class="card" id="autotuneCard" style="margin-bottom:14px; display:none; border:1px solid var(--accent2);">
-    <h2 style="margin-top:0;">🔬 오토튜닝 — 이 경로에 가장 빠른 스캔 방법을 찾는 중</h2>
-    <div class="sub" style="margin-bottom:10px;">
-      같은 영역에서 <b>단일</b> · <b>멀티프로세스</b>(GIL 우회) · <b>2단 병렬</b>(프로세스×스레드,
-      NFS 왕복 지연 은닉)을 각각 짧게 시험해 <b>실측으로</b> 가장 빠른 방법을 고른 뒤, 그 설정으로
-      본 스캔을 자동 시작합니다. <b>읽기 전용 측정</b>이라 데이터에 영향이 없습니다.
-    </div>
-    <div id="autotuneSteps"></div>
-    <div id="autotuneResult" class="sub" style="margin-top:10px;"></div>
   </div>
 
   <!-- 스캔 선택 (스캔 중에는 숨김) -->
@@ -894,7 +452,7 @@ pre.changelog{ background:rgba(13,19,33,.75); }
 
       <div data-scat="alert" style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px;">
         <div class="sub" style="margin-bottom:6px;">예약 스캔(반복) — 기존에 스캔한 루트를 골라 “시작 + 반복주기”로 자동 스캔</div>
-        <div id="schedLockMsg" style="display:none; margin-bottom:8px; padding:9px 12px; border-radius:8px; border:1px solid #7a3030; background:#2a1414; color:#ff8a8a; font-weight:700;">
+        <div id="schedLockMsg" style="display:none; margin-bottom:8px; padding:9px 12px; border-radius:8px; border:1px solid #7A3030; background:#F3E6E6; color:#8A0F0F; font-weight:700;">
           🔁 <b>반복 스캔이 켜져 있습니다</b> — 완료 후 자동 재시작이 도는 동안에는 예약 스캔을 설정할 수 없습니다.
           <span style="font-weight:400;">반복을 끄려면 위 ‘전체 용량 관리 개요’에서 해당 스캔을 <b>‘중지’</b>하세요.</span>
         </div>
@@ -990,22 +548,188 @@ pre.changelog{ background:rgba(13,19,33,.75); }
       <div data-scat="history" id="histPane" style="display:none;"></div>
 
       <div id="settingsSaveRow" style="display:flex; gap:12px; align-items:center; margin-top:12px; flex-wrap:wrap;">
-        <button id="saveSettingsBtn" style="border-color:var(--accent2); color:#cfe; font-weight:700; padding:8px 16px;">설정 저장</button>
+        <button id="saveSettingsBtn" class="primary" style="min-height:40px; padding:0 18px;">설정 저장</button>
         <button id="reloadSettingsBtn">되돌리기(다시 불러오기)</button>
         <span class="sub" id="settingsMsg"></span>
       </div>
       <div class="sub" id="serverInfo" data-scat="general" style="margin-top:12px; border-top:1px solid var(--line); padding-top:10px;"></div>
       <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--line); text-align:center; font-size:11.5px; color:var(--muted); letter-spacing:.4px;">
-        ✦ Crafted with care by <b style="color:#cfe6ff; font-weight:800; letter-spacing:.6px; text-shadow:0 0 10px rgba(124,196,255,.45);">JunHo&nbsp;Park</b> ✦ <span style="opacity:.6;">© 2026</span>
+        ✦ Crafted with care by <b style="color:#1E3A8A; font-weight:800; letter-spacing:.6px; text-shadow:0 0 10px rgba(124,196,255,.45);">JunHo&nbsp;Park</b> ✦ <span style="opacity:.6;">© 2026</span>
       </div>
     </div>
   </details>
 
+  <!-- 상위 디렉터리 -->
+  <div class="card" id="secTopDirs">
+    <h2>용량 상위 디렉터리 (실시간)</h2>
+    <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; align-items:center;">
+      <button id="topRootBtn" title="검색 루트로">🏠 루트</button>
+      <span id="topCrumb" class="sub mono" style="flex:1; word-break:break-all;">(루트)</span>
+      <label class="sub" style="display:flex; gap:6px; align-items:center;" title="검색 루트(또는 현재 위치) 기준 몇 번째 자식을 볼지 선택">깊이
+        <select id="topDepth" class="optsel"></select>
+      </label>
+    </div>
+    <table id="topTable">
+      <thead><tr>
+        <th>#</th>
+        <th class="sortable" data-topsort="path" data-label="경로">경로</th>
+        <th class="num sortable" data-topsort="depth" data-label="깊이">깊이</th>
+        <th class="num sortable" data-topsort="size" data-label="재귀 용량">재귀 용량</th>
+        <th class="num sortable" data-topsort="own" data-label="직접 용량">직접 용량</th>
+        <th class="num sortable" data-topsort="files" data-label="파일 수(재귀)">파일 수(재귀)</th>
+        <th class="num sortable" data-topsort="subdirs" data-label="하위디렉터리">하위디렉터리</th>
+        <th>상태</th>
+      </tr></thead>
+      <tbody id="topBody"><tr><td colspan="8" style="color:var(--muted)">로딩 중…</td></tr></tbody>
+    </table>
+    <div class="sub" id="topNote" style="margin-top:8px;"></div>
+  </div>
+
+  <!-- 디렉터리 탐색(드릴다운) + 검색 -->
+  <div class="card" id="secTree" style="margin-top:14px;">
+    <h2>디렉터리 탐색 (드릴다운) · 검색</h2>
+    <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; align-items:center;">
+      <button id="treeRoot">🏠 루트</button>
+      <span id="treeCrumb" class="sub mono" style="flex:1; word-break:break-all;">—</span>
+      <input id="treeSearch" class="mono" style="background:#F7F8FA; color:#1F2937; border:1px solid var(--line); border-radius:7px; padding:6px 10px; min-width:200px;" placeholder="경로 검색 후 Enter" />
+    </div>
+    <table>
+      <thead><tr><th>디렉터리</th><th class="num">재귀 용량</th><th class="num">비중</th><th class="num">파일(재귀)</th><th class="num">하위</th><th></th></tr></thead>
+      <tbody id="treeBody"><tr><td colspan="6" class="sub">스캔을 선택하면 표시됩니다…</td></tr></tbody>
+    </table>
+    <div class="sub" id="treeNote" style="margin-top:6px;"></div>
+  </div>
+
+  <!-- 용량 추세 · 스캔 비교 (스캔 중에는 숨김) -->
+  <div class="grid cols-2" id="trendDiffRow" style="margin-top:14px;">
+    <div class="card">
+      <h2>용량 추세 (선택 스캔의 루트)</h2>
+      <canvas id="trendChart" width="560" height="120"></canvas>
+      <div class="sub" id="trendNote" style="margin-top:6px;">같은 루트의 과거 스캔별 조사 용량</div>
+    </div>
+    <div class="card">
+      <h2>스캔 비교 — 변경 많은 폴더 Top 10</h2>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+        <span class="sub">기준</span><select id="diffBase" class="optsel"></select>
+        <span class="sub">→ 대상</span><select id="diffTarget" class="optsel"></select>
+        <button id="diffRun">비교</button>
+      </div>
+      <div class="sub" id="diffSummary"></div>
+      <table><thead><tr><th>디렉터리</th><th class="num">크기 변화</th><th class="num">파일수 변화</th></tr></thead>
+        <tbody id="diffBody"><tr><td colspan="3" class="sub">같은 루트의 두 스캔을 골라 비교하세요. 행을 클릭하면 그 폴더의 변화 이력을 봅니다.</td></tr></tbody></table>
+      <div style="margin-top:10px; border-top:1px solid var(--line); padding-top:8px;">
+        <div class="sub" style="margin-bottom:6px;">📂 특정 폴더 변화 이력 — 경로를 입력(또는 위 표의 행 클릭)하면 스캔별 <b>크기·파일수</b> 변화를 보여줍니다.</div>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+          <input id="fhPath" class="mono" style="flex:1; min-width:240px; background:#F7F8FA; color:#1F2937; border:1px solid var(--line); border-radius:7px; padding:6px 9px;" placeholder="예: /mnt/isilon/ifs/project" />
+          <button type="button" class="dirbtn" data-target="fhPath" title="폴더 탐색으로 선택" style="padding:6px 10px;">📁</button>
+          <button id="fhRun">이력 보기</button>
+        </div>
+        <div id="fhOut" class="sub">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 오류 디렉터리 -->
+  <details class="card" id="errCard" style="margin-top:14px;">
+    <summary style="cursor:pointer; font-size:12.5px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); font-weight:700;">접근 불가(오류) 디렉터리 <span id="errCount">0</span>건</summary>
+    <table style="margin-top:10px;"><thead><tr><th>경로</th><th>오류</th></tr></thead>
+      <tbody id="errBody"></tbody></table>
+  </details>
+
+  <div class="sub" style="margin-top:14px; text-align:right;">
+    마지막 업데이트: <span id="lastUpd">—</span> · <span id="errLine" class="err"></span>
+  </div>
+</div>
+
+<!-- 설정 페이지(여기로 #settingsCard 를 JS 가 옮긴다) -->
+<!-- 스캔 > 새 스캔·진행: 새 스캔 시작·오토튜닝·현재 진행·서버 자원 -->
+<div class="wrap view" id="view-scanrun" style="display:none;">
+  <h1 class="page-title">새 스캔·진행</h1>
+  <p class="page-desc">새로 시작하고, 돌고 있는 스캔을 지켜봅니다. 지난 결과는 ‘지난 스캔’, 속도 기록은 ‘처리량’에 있습니다.</p>
+  <!-- 새 스캔 시작 (웹에서 디렉터리 지정) -->
+  <div class="card" id="startCard" style="margin-bottom:14px; display:none;">
+    <h2>새 스캔</h2>
+    <div class="sub" id="scanDisabledMsg" style="display:none; color:var(--warn);">
+      이 서버는 웹 스캔이 비활성화되어 있습니다. <code>serve</code> 또는 <code>run</code> 으로 실행하세요.
+    </div>
+
+    <div id="startForm">
+      <!-- 디렉터리 선택은 공유 모달(dirPickerModal)로 통일 — 각 경로 입력란의 📁 버튼으로 연다. -->
+
+      <div id="scanInputs" style="display:flex; flex-direction:column; gap:20px;">
+        <div class="scan-step">
+          <label for="scanPath" class="step-title"><span class="stepno">1</span>어디를 조사할까요?</label>
+          <span style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <input id="scanPath" class="mono setinput" style="flex:1 1 280px; min-width:0; min-height:44px; font-size:14px;"
+                   placeholder="경로 입력 또는 '찾아보기'로 선택" />
+            <button type="button" class="dirbtn" data-target="scanPath" title="폴더 탐색으로 선택" style="min-height:44px;">찾아보기</button>
+          </span>
+        </div>
+        <div class="scan-step">
+          <div class="step-title" id="scanMethodLbl"><span class="stepno">2</span>어떤 방식으로 할까요?</div>
+          <div id="scanMethods" role="group" aria-labelledby="scanMethodLbl" class="methods">
+            <button type="button" class="method" data-method="auto"><span class="mdot"></span><span><b>자동 추천</b> <span class="mtag">권장</span><span class="mdesc">잠깐 시험해 보고 이 경로에서 가장 빠른 방식을 골라 시작합니다.</span></span></button>
+            <button type="button" class="method" data-method="fast"><span class="mdot"></span><span><b>빠르게</b><span class="mdesc">여러 프로세스로 동시에 셉니다(pscan). 아주 큰 저장소용 — 결과는 루트와 바로 아래 폴더까지이고, 멈추면 처음부터 다시 합니다.</span></span></button>
+            <button type="button" class="method" data-method="detail"><span class="mdot"></span><span><b>꼼꼼하게</b><span class="mdesc">폴더별 상세 기록을 남기고(threads), 멈춘 곳부터 이어서 할 수 있습니다.</span></span></button>
+          </div>
+        </div>
+        <details class="scan-step" id="scanAdv">
+          <summary class="step-title"><span class="stepno">3</span>세부 옵션 <span class="sub" style="font-weight:400;">— 보통은 그대로 두면 됩니다 · <span id="scanAdvSum"></span></span></summary>
+          <div style="display:flex; gap:14px; align-items:flex-end; flex-wrap:wrap; margin-top:12px;">
+            <label class="sub" style="display:flex; flex-direction:column; gap:4px;">백엔드
+              <select id="optBackend" class="optsel">
+                <option value="native">native (빠름·저메모리)</option>
+                <option value="du">du (du 프로세스 메모리 표시)</option>
+              </select></label>
+            <label class="sub" style="display:flex; flex-direction:column; gap:4px;">엔진
+              <select id="optEngine" class="optsel" title="threads=상세 트리, pscan=멀티프로세스로 빠른 용량(루트+1단계)">
+                <option value="threads">threads (상세 트리)</option>
+                <option value="pscan">pscan (멀티프로세스·빠른 용량)</option>
+              </select></label>
+            <label class="sub" style="display:flex; flex-direction:column; gap:4px;">용량 기준
+              <select id="optSize" class="optsel">
+                <option value="disk">디스크 점유(du 기본)</option>
+                <option value="apparent">논리 크기</option>
+              </select></label>
+            <label class="sub" style="display:flex; align-items:center; gap:6px; min-height:38px;">
+              <input type="checkbox" id="optOFS" /> 한 파일시스템만(-x)
+            </label>
+            <label class="sub" style="display:flex; align-items:center; gap:6px; min-height:38px;"
+                   title="단일/멀티프로세스/2단 병렬을 짧게 측정해 가장 빠른 방법을 자동으로 고른 뒤 스캔을 시작합니다(엔진·워커 자동).">
+              <input type="checkbox" id="optAutotune" /> 오토튜닝(최적 방법 자동 측정)
+            </label>
+            <label class="sub" style="display:flex; align-items:center; gap:6px; min-height:38px;"
+                   title="이 스캔이 정상 완료(done)되면 같은 경로·설정으로 자동으로 새 스캔을 시작합니다(반복). 스캔을 '중지'하면 반복이 멈춥니다.">
+              <input type="checkbox" id="optAutoRestart" /> 완료 후 자동 재시작(같은 설정 반복)
+            </label>
+          </div>
+        </details>
+        <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding-top:16px; border-top:1px solid var(--line);">
+          <button id="startBtn" class="primary" style="min-height:46px; padding:0 22px; font-size:15px;">▶ 이 디렉터리 스캔 시작</button>
+        </div>
+      </div><!-- /scanInputs -->
+      <div id="startMsg" class="sub" style="margin-top:10px;"></div>
+      <div id="lastScanNote" class="sub" style="margin-top:4px; opacity:.85;"></div>
+    </div>
+  </div>
+
+  <!-- 오토튜닝 진행 (첫 스캔 시 최적 방법 자동 측정 → 자동 시작) -->
+  <div class="card" id="autotuneCard" style="margin-bottom:14px; display:none; border:1px solid var(--accent2);">
+    <h2 style="margin-top:0;">🔬 오토튜닝 — 이 경로에 가장 빠른 스캔 방법을 찾는 중</h2>
+    <div class="sub" style="margin-bottom:10px;">
+      같은 영역에서 <b>단일</b> · <b>멀티프로세스</b>(GIL 우회) · <b>2단 병렬</b>(프로세스×스레드,
+      NFS 왕복 지연 은닉)을 각각 짧게 시험해 <b>실측으로</b> 가장 빠른 방법을 고른 뒤, 그 설정으로
+      본 스캔을 자동 시작합니다. <b>읽기 전용 측정</b>이라 데이터에 영향이 없습니다.
+    </div>
+    <div id="autotuneSteps"></div>
+    <div id="autotuneResult" class="sub" style="margin-top:10px;"></div>
+  </div>
+
   <!-- 진행 상태 -->
-  <div class="grid cols-2" style="margin-bottom:14px;">
+  <div class="grid cols-2" id="progressRow" style="margin-bottom:14px;">
     <div class="card">
       <h2>현재 진행 상황</h2>
-      <div class="sub" id="progNotice" style="display:none; margin-bottom:8px; color:#7cc4ff;">
+      <div class="sub" id="progNotice" style="display:none; margin-bottom:8px; color:#1E3A8A;">
         🔎 탐색 단계 — 모든 디렉터리를 먼저 찾은 뒤, 집계(재귀 용량 계산)가 시작됩니다. 그때까지 ‘집계 완료/ETA’는 0/—로 표시됩니다.
       </div>
       <div class="sub" style="margin-bottom:6px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
@@ -1057,89 +781,48 @@ pre.changelog{ background:rgba(13,19,33,.75); }
     </div>
   </div>
 
-  <!-- 상위 디렉터리 -->
-  <div class="card" id="secTopDirs">
-    <h2>용량 상위 디렉터리 (실시간)</h2>
-    <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; align-items:center;">
-      <button id="topRootBtn" title="검색 루트로">🏠 루트</button>
-      <span id="topCrumb" class="sub mono" style="flex:1; word-break:break-all;">(루트)</span>
-      <label class="sub" style="display:flex; gap:6px; align-items:center;" title="검색 루트(또는 현재 위치) 기준 몇 번째 자식을 볼지 선택">깊이
-        <select id="topDepth" class="optsel"></select>
-      </label>
-    </div>
-    <table id="topTable">
-      <thead><tr>
-        <th>#</th>
-        <th class="sortable" data-topsort="path" data-label="경로">경로</th>
-        <th class="num sortable" data-topsort="depth" data-label="깊이">깊이</th>
-        <th class="num sortable" data-topsort="size" data-label="재귀 용량">재귀 용량</th>
-        <th class="num sortable" data-topsort="own" data-label="직접 용량">직접 용량</th>
-        <th class="num sortable" data-topsort="files" data-label="파일 수(재귀)">파일 수(재귀)</th>
-        <th class="num sortable" data-topsort="subdirs" data-label="하위디렉터리">하위디렉터리</th>
-        <th>상태</th>
-      </tr></thead>
-      <tbody id="topBody"><tr><td colspan="8" style="color:var(--muted)">로딩 중…</td></tr></tbody>
-    </table>
-    <div class="sub" id="topNote" style="margin-top:8px;"></div>
-  </div>
-
-  <!-- 디렉터리 탐색(드릴다운) + 검색 -->
-  <div class="card" id="secTree" style="margin-top:14px;">
-    <h2>디렉터리 탐색 (드릴다운) · 검색</h2>
-    <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; align-items:center;">
-      <button id="treeRoot">🏠 루트</button>
-      <span id="treeCrumb" class="sub mono" style="flex:1; word-break:break-all;">—</span>
-      <input id="treeSearch" class="mono" style="background:#0d1219; color:#cfe3ff; border:1px solid var(--line); border-radius:7px; padding:6px 10px; min-width:200px;" placeholder="경로 검색 후 Enter" />
-    </div>
-    <table>
-      <thead><tr><th>디렉터리</th><th class="num">재귀 용량</th><th class="num">비중</th><th class="num">파일(재귀)</th><th class="num">하위</th><th></th></tr></thead>
-      <tbody id="treeBody"><tr><td colspan="6" class="sub">스캔을 선택하면 표시됩니다…</td></tr></tbody>
-    </table>
-    <div class="sub" id="treeNote" style="margin-top:6px;"></div>
-  </div>
-
-  <!-- 용량 추세 · 스캔 비교 (스캔 중에는 숨김) -->
-  <div class="grid cols-2" id="trendDiffRow" style="margin-top:14px;">
+  <!-- 자원 모니터링 -->
+  <h2 class="sec-title">서버 자원 <span class="sub">— 스캔하는 이 서버의 메모리·CPU·디스크</span></h2>
+  <div class="grid cols-3" id="resRow" style="margin-bottom:14px;">
     <div class="card">
-      <h2>용량 추세 (선택 스캔의 루트)</h2>
-      <canvas id="trendChart" width="560" height="120"></canvas>
-      <div class="sub" id="trendNote" style="margin-top:6px;">같은 루트의 과거 스캔별 조사 용량</div>
+      <h2>서버 메모리</h2>
+      <div class="big" id="memPct">—</div>
+      <div class="sub" id="memDetail">— / —</div>
+      <div class="bar mem" style="margin-top:10px;"><span id="memBar"></span></div>
+      <canvas id="memChart" width="380" height="90" style="margin-top:12px;"></canvas>
+      <div class="legend"><span><span class="dot" style="background:#B45309"></span>메모리 사용률(%)</span></div>
+      <div class="kv" style="margin-top:8px;"><span class="k">스왑 사용</span><span class="v" id="swapUsed">0</span></div>
     </div>
+
     <div class="card">
-      <h2>스캔 비교 — 변경 많은 폴더 Top 10</h2>
-      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
-        <span class="sub">기준</span><select id="diffBase" class="optsel"></select>
-        <span class="sub">→ 대상</span><select id="diffTarget" class="optsel"></select>
-        <button id="diffRun">비교</button>
+      <h2>측정 프로세스 (CPU · 메모리)</h2>
+      <div class="big" id="duRss">—</div>
+      <div class="sub" id="duRssNote">du 프로세스 RSS</div>
+      <canvas id="rssChart" width="380" height="90" style="margin-top:12px;"></canvas>
+      <div class="legend">
+        <span><span class="dot" style="background:#1D4ED8"></span>스캐너 프로세스</span>
+        <span><span class="dot" style="background:#15803D"></span>du 프로세스</span>
       </div>
-      <div class="sub" id="diffSummary"></div>
-      <table><thead><tr><th>디렉터리</th><th class="num">크기 변화</th><th class="num">파일수 변화</th></tr></thead>
-        <tbody id="diffBody"><tr><td colspan="3" class="sub">같은 루트의 두 스캔을 골라 비교하세요. 행을 클릭하면 그 폴더의 변화 이력을 봅니다.</td></tr></tbody></table>
-      <div style="margin-top:10px; border-top:1px solid var(--line); padding-top:8px;">
-        <div class="sub" style="margin-bottom:6px;">📂 특정 폴더 변화 이력 — 경로를 입력(또는 위 표의 행 클릭)하면 스캔별 <b>크기·파일수</b> 변화를 보여줍니다.</div>
-        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
-          <input id="fhPath" class="mono" style="flex:1; min-width:240px; background:#0d1219; color:#cfe3ff; border:1px solid var(--line); border-radius:7px; padding:6px 9px;" placeholder="예: /mnt/isilon/ifs/project" />
-          <button type="button" class="dirbtn" data-target="fhPath" title="폴더 탐색으로 선택" style="padding:6px 10px;">📁</button>
-          <button id="fhRun">이력 보기</button>
-        </div>
-        <div id="fhOut" class="sub">—</div>
-      </div>
+      <div class="kv" style="margin-top:8px;"><span class="k" id="parWorkersK" style="white-space:nowrap;">⚡ Multi Scan Thread</span><span class="v" id="parWorkers" style="white-space:nowrap;">—</span></div>
+      <div class="kv"><span class="k">스캐너 CPU · RSS</span><span class="v"><span id="scanCpu">0%</span> · <span id="scanRss">0 B</span></span></div>
+      <div class="kv"><span class="k">du 프로세스 CPU · RSS</span><span class="v"><span id="duCpu">—</span> · <span id="duRssRow">0 B</span></span></div>
+      <div class="kv"><span class="k">최대(peak) du / 스캐너</span><span class="v" id="peakRss">0 B / 0 B</span></div>
+    </div>
+
+    <div class="card">
+      <h2>CPU · 디스크</h2>
+      <div class="big" id="cpuPct">—</div>
+      <div class="sub">CPU 사용률 · load1 <span id="load1">0</span></div>
+      <div class="kv" style="margin-top:10px;"><span class="k">파일시스템 전체</span><span class="v" id="fsTotal">—</span></div>
+      <div class="kv"><span class="k">파일시스템 사용</span><span class="v" id="fsUsed">—</span></div>
+      <div class="kv"><span class="k">파일시스템 여유</span><span class="v" id="fsFree">—</span></div>
+      <div class="kv"><span class="k">스캐너 PID</span><span class="v" id="pid">—</span></div>
+      <div class="kv"><span class="k">시간당 처리용량</span><span class="v" style="display:inline-flex; align-items:center; gap:6px; white-space:nowrap;"><span id="thruPerHr">—</span><button id="thruMoreBtn" title="시작부터 지금까지 1시간 단위 처리량" style="padding:1px 7px; font-size:11px;">More</button></span></div>
     </div>
   </div>
 
-  <!-- 오류 디렉터리 -->
-  <details class="card" id="errCard" style="margin-top:14px;">
-    <summary style="cursor:pointer; font-size:12.5px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); font-weight:700;">접근 불가(오류) 디렉터리 <span id="errCount">0</span>건</summary>
-    <table style="margin-top:10px;"><thead><tr><th>경로</th><th>오류</th></tr></thead>
-      <tbody id="errBody"></tbody></table>
-  </details>
-
-  <div class="sub" style="margin-top:14px; text-align:right;">
-    마지막 업데이트: <span id="lastUpd">—</span> · <span id="errLine" class="err"></span>
-  </div>
 </div>
 
-<!-- 설정 페이지(여기로 #settingsCard 를 JS 가 옮긴다) -->
 <div class="wrap view" id="view-settings" style="display:none;">
   <h2 style="margin:0 0 14px;">⚙ 설정</h2>
 </div>
@@ -1233,7 +916,7 @@ pre.changelog{ background:rgba(13,19,33,.75); }
     <div class="kv" style="margin-top:12px;"><span class="k">생성 예정</span>
       <span class="v" id="gtPlan">—</span></div>
     <div style="margin-top:12px; display:flex; gap:8px; align-items:center;">
-      <button id="gtStart" style="border-color:var(--accent2); color:#cfe; font-weight:700; padding:8px 16px;">생성 시작</button>
+      <button id="gtStart" style="border-color:var(--accent2); color:#0B6547; font-weight:700; padding:8px 16px;">생성 시작</button>
       <button id="gtStop" style="display:none;">중지</button>
       <span id="gtMsg" class="sub"></span>
     </div>
@@ -1261,7 +944,7 @@ pre.changelog{ background:rgba(13,19,33,.75); }
     </label>
 
     <!-- ★ 샘플 수집 시간(시간/분/초): 디렉터리가 너무 많아도 이 시간만 보고 멈춤 -->
-    <div class="card" style="margin-top:12px; border-color:var(--accent2); background:#0e1a1e;">
+    <div class="card" style="margin-top:12px; border-color:var(--accent2); background:#E9F2F5;">
       <div style="font-weight:700; margin-bottom:8px;">⏱ 샘플 수집 시간 — 이 시간 동안만 측정하고 그 데이터로 분석</div>
       <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
         <label>시간 <input id="depH" type="number" min="0" max="999" value="0" class="setinput" style="width:80px;" /></label>
@@ -1288,7 +971,7 @@ pre.changelog{ background:rgba(13,19,33,.75); }
     </details>
 
     <div style="margin-top:12px; display:flex; gap:8px; align-items:center;">
-      <button id="depStartBtn" style="border-color:var(--accent2); color:#cfe; font-weight:700; padding:8px 16px;">분석 시작</button>
+      <button id="depStartBtn" style="border-color:var(--accent2); color:#0B6547; font-weight:700; padding:8px 16px;">분석 시작</button>
       <button id="depStopBtn" style="display:none;">중지</button>
       <span id="depMsg" class="sub"></span>
     </div>
@@ -1324,13 +1007,13 @@ pre.changelog{ background:rgba(13,19,33,.75); }
       약 1초간 들여다보며 <b>워커가 지금 어느 구간</b>(디렉터리 읽기/파일 stat/DB/유휴)에 있고,
       <b>CPU·메모리·디스크·NAS</b> 중 무엇이 제약인지, <b>처리량·대기 일감</b>은 어떤지 진단합니다.</p>
     <div style="display:flex; gap:8px; align-items:center;">
-      <button id="tsRun" style="border-color:var(--accent2); color:#cfe; font-weight:700; padding:8px 16px;">지금 진단</button>
+      <button id="tsRun" style="border-color:var(--accent2); color:#0B6547; font-weight:700; padding:8px 16px;">지금 진단</button>
       <label title="켜두면 새로고침·탭 이동에도 계속 갱신하며 이력을 저장합니다"><input type="checkbox" id="tsAuto" /> 자동(켜두면 계속 갱신·저장)</label>
       <span id="tsMsg" class="sub"></span>
     </div>
   </div>
 
-  <div id="tsIdleNotice" class="card" style="display:none; margin-top:14px; border-color:var(--warn); background:#2a2310; color:#f0d9a0;">
+  <div id="tsIdleNotice" class="card" style="display:none; margin-top:14px; border-color:var(--warn); background:#F5F1E5; color:#6A5011;">
     ⚠ <b>실행 중인 스캔이 없습니다.</b> 실시간 진단(판정·자원·디렉터리 읽기 속도 차트)은
     <b>스캔이 도는 동안</b>에만 표시됩니다. 그래서 지금은 아래 <b>진단 이력(로그)</b>만 보입니다.
     <div class="sub" style="margin-top:6px;">· 지난 <b>시간당 처리량(TB/GB·파일·디렉터리)</b> 차트는 스캔이 없어도 볼 수 있습니다 →</div>
@@ -1360,7 +1043,7 @@ pre.changelog{ background:rgba(13,19,33,.75); }
       <div id="tsRates" class="mono" style="line-height:1.9; margin-top:8px;"></div>
       <div style="margin-top:8px;">
         <div class="sub" id="tsRateLegend" style="margin-bottom:4px;">디렉터리 읽기 속도 변화 — <b>자동</b>을 켜면 누적됩니다.</div>
-        <canvas id="tsRateChart" width="1040" height="150" style="width:100%; background:#0c1116; border-radius:6px;"></canvas>
+        <canvas id="tsRateChart" width="1040" height="150" style="width:100%; background:#F7F8FA; border-radius:6px;"></canvas>
       </div>
     </div>
 
@@ -1418,7 +1101,7 @@ pre.changelog{ background:rgba(13,19,33,.75); }
       <input id="tunePath" type="text" class="setinput mono" style="flex:1; min-width:200px;"
              placeholder="대상 경로(선택) — NFS 마운트 식별용. 비우면 허용 경로 사용" />
       <button type="button" class="dirbtn" data-target="tunePath" title="폴더 탐색으로 선택" style="padding:8px 12px;">📁</button>
-      <button id="tuneRun" style="border-color:var(--accent2); color:#cfe; font-weight:700; padding:8px 16px;">점검 실행</button>
+      <button id="tuneRun" style="border-color:var(--accent2); color:#0B6547; font-weight:700; padding:8px 16px;">점검 실행</button>
       <span id="tuneMsg" class="sub"></span>
     </div>
   </div>
@@ -1452,20 +1135,20 @@ pre.changelog{ background:rgba(13,19,33,.75); }
   <div class="card" style="margin-top:14px;">
     <h3 style="margin:0 0 6px;">처리 용량 (버킷당, TB/GB)</h3>
     <div class="sub" id="tpBytesLegend" style="margin-bottom:4px;">—</div>
-    <canvas id="tpBytesChart" width="1040" height="130" style="width:100%; background:#0c1116; border-radius:6px;"></canvas>
+    <canvas id="tpBytesChart" width="1040" height="130" style="width:100%; background:#F7F8FA; border-radius:6px;"></canvas>
   </div>
   <div class="card" style="margin-top:14px;">
     <h3 style="margin:0 0 6px;">처리 파일 수 (버킷당)</h3>
     <div class="sub" id="tpFilesLegend" style="margin-bottom:4px;">—</div>
-    <canvas id="tpFilesChart" width="1040" height="130" style="width:100%; background:#0c1116; border-radius:6px;"></canvas>
+    <canvas id="tpFilesChart" width="1040" height="130" style="width:100%; background:#F7F8FA; border-radius:6px;"></canvas>
   </div>
   <div class="card" style="margin-top:14px;">
     <h3 style="margin:0 0 6px;">처리 디렉터리 수 (버킷당)</h3>
     <div class="sub" id="tpDirsLegend" style="margin-bottom:4px;">—</div>
-    <canvas id="tpDirsChart" width="1040" height="130" style="width:100%; background:#0c1116; border-radius:6px;"></canvas>
+    <canvas id="tpDirsChart" width="1040" height="130" style="width:100%; background:#F7F8FA; border-radius:6px;"></canvas>
   </div>
   <div id="tpTooltip" style="display:none; position:fixed; z-index:1000; pointer-events:none;
-       background:#0d1219; border:1px solid var(--line); border-radius:6px; padding:6px 10px;
+       background:#F7F8FA; border:1px solid var(--line); border-radius:6px; padding:6px 10px;
        font-size:12px; line-height:1.6; color:var(--text); box-shadow:0 2px 10px rgba(0,0,0,.55);"></div>
 </div>
 
@@ -1569,11 +1252,11 @@ pre.changelog{ background:rgba(13,19,33,.75); }
         <input id="upgSecs" class="inp" type="number" min="10" value="60" style="width:84px;" /></label>
       <button id="upgSaveBtn">설정 저장</button>
       <button id="upgCheckBtn" class="primary">🔄 지금 확인</button>
-      <button id="upgInstallBtn" style="display:none; border-color:var(--warn); color:#ffd591;">⬆ 지금 업그레이드</button>
+      <button id="upgInstallBtn" style="display:none; border-color:var(--warn); color:#774F0D;">⬆ 지금 업그레이드</button>
       <span id="upgMsg" class="sub"></span>
     </div>
     <div id="upgLog" class="sub mono" style="display:none; max-height:170px; overflow:auto;
-      background:#0d1219; border:1px solid var(--line); border-radius:8px; padding:8px; white-space:pre-wrap;"></div>
+      background:#F7F8FA; border:1px solid var(--line); border-radius:8px; padding:8px; white-space:pre-wrap;"></div>
   </div>
   <div class="card">
     <h2>버전 기록 (Version History)</h2>
@@ -1597,13 +1280,13 @@ pre.changelog{ background:rgba(13,19,33,.75); }
       <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
         <button id="browseUp" type="button" title="상위 폴더">⬆ 위로</button>
         <input id="browsePath" class="mono"
-               style="flex:1; min-width:240px; background:#0d1219; color:#cfe3ff; border:1px solid var(--line); border-radius:7px; padding:7px 10px;"
+               style="flex:1; min-width:240px; background:#F7F8FA; color:#1F2937; border:1px solid var(--line); border-radius:7px; padding:7px 10px;"
                placeholder="/mnt/isilon/ifs" />
         <button id="browseGo" type="button">탐색</button>
         <button id="browsePick" type="button" class="primary" style="border-color:var(--accent2);">이 디렉터리 선택 ↓</button>
       </div>
       <div id="browseList"
-           style="max-height:300px; overflow:auto; border:1px solid var(--line); border-radius:8px; background:#0d1219; padding:6px; margin-bottom:8px;">
+           style="max-height:300px; overflow:auto; border:1px solid var(--line); border-radius:8px; background:#F7F8FA; padding:6px; margin-bottom:8px;">
         <span class="sub">상단에 경로를 입력하고 “탐색”을 누르세요.</span>
       </div>
       <div class="sub err" id="browseErr"></div>
@@ -1630,7 +1313,7 @@ function showToast(msg, ms) {
     t = document.createElement("div");
     t.id = "opToast";
     t.style.cssText = "position:fixed; top:16px; left:50%; transform:translateX(-50%);"
-      + "background:#11304a; color:#e8f0ff; border:1px solid #4f9cff; padding:10px 18px;"
+      + "background:#DCEBF7; color:#0F3A8A; border:1px solid #1D4ED8; padding:10px 18px;"
       + "border-radius:10px; z-index:9999; font-weight:700; box-shadow:0 8px 28px rgba(0,0,0,.45);";
     document.body.appendChild(t);
   }
@@ -1711,11 +1394,11 @@ function passwordPrompt(msg) {
     const ov = document.createElement("div");
     ov.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center;";
     const box = document.createElement("div");
-    box.style.cssText = "background:#16202c;border:1px solid #2a3550;border-radius:10px;padding:18px;min-width:300px;box-shadow:0 12px 40px rgba(0,0,0,.55);";
+    box.style.cssText = "background:#EEF3FF;border:1px solid #DEE3EE;border-radius:10px;padding:18px;min-width:300px;box-shadow:0 12px 40px rgba(0,0,0,.55);";
     const lbl = document.createElement("div"); lbl.textContent = msg || "비밀번호를 입력하세요:";
-    lbl.style.cssText = "margin-bottom:10px;font-size:14px;color:#dfe8f3;";
+    lbl.style.cssText = "margin-bottom:10px;font-size:14px;color:#111827;";
     const inp = document.createElement("input"); inp.type = "password"; inp.autocomplete = "current-password";
-    inp.style.cssText = "width:100%;box-sizing:border-box;padding:8px 10px;border-radius:7px;border:1px solid #2a3550;background:#0e1620;color:#dfe8f3;font:inherit;";
+    inp.style.cssText = "width:100%;box-sizing:border-box;padding:8px 10px;border-radius:7px;border:1px solid #DEE3EE;background:#E8EEF5;color:#111827;font:inherit;";
     const btns = document.createElement("div"); btns.style.cssText = "margin-top:12px;display:flex;gap:8px;justify-content:flex-end;";
     const cancel = document.createElement("button"); cancel.textContent = "취소"; cancel.type = "button";
     const ok = document.createElement("button"); ok.textContent = "로그인"; ok.type = "button";
@@ -1767,11 +1450,11 @@ function showTempPasswordNotice(force) {
   const ov = document.createElement("div");
   ov.id = "opTempNotice";
   ov.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99998;display:flex;align-items:center;justify-content:center;";
-  ov.innerHTML = '<div style="background:#16202c;border:1px solid #f5b942;border-radius:10px;padding:18px 20px;max-width:560px;box-shadow:0 12px 40px rgba(0,0,0,.55);color:#dfe8f3;">'
+  ov.innerHTML = '<div style="background:#EEF3FF;border:1px solid #966608;border-radius:10px;padding:18px 20px;max-width:560px;box-shadow:0 12px 40px rgba(0,0,0,.55);color:#111827;">'
     + '<div style="font-weight:700;font-size:15px;margin-bottom:8px;">🔑 임시 관리자 비밀번호가 만들어졌습니다</div>'
     + '<div style="font-size:13.5px;line-height:1.6;">설정과 되돌릴 수 없는 작업(삭제·정리·업그레이드 설치)에는 비밀번호가 필요합니다.<br>'
     + '서버의 아래 파일에서 임시 비밀번호를 확인하세요:<br>'
-    + '<code style="display:inline-block;margin:6px 0;padding:4px 8px;background:#0e1620;border-radius:6px;word-break:break-all;">' + escHtml(_opInfoPath || "실행 폴더/info.MD") + '</code><br>'
+    + '<code style="display:inline-block;margin:6px 0;padding:4px 8px;background:#E8EEF5;border-radius:6px;word-break:break-all;">' + escHtml(_opInfoPath || "실행 폴더/info.MD") + '</code><br>'
     + '로그인 후 <b>설정 → 작업 보호</b>에서 새 비밀번호로 바꾸면 이 안내가 사라집니다.<br>'
     + '<span class="sub">잊었을 때(서버에서): <code>python3 -m isilon_usage reset-password --data-dir &lt;데이터 폴더&gt;</code></span></div>'
     + '<div style="margin-top:12px;text-align:right;"><button type="button" id="opTempNoticeOk">확인</button></div></div>';
@@ -1853,7 +1536,7 @@ function drawSeries(canvas, points, opts) {
   const W = canvas.width, H = canvas.height;
   ctx.clearRect(0, 0, W, H);
   // 격자
-  ctx.strokeStyle = "#202a36"; ctx.lineWidth = 1;
+  ctx.strokeStyle = "#E5EAEF"; ctx.lineWidth = 1;
   for (let g = 0; g <= 4; g++) {
     const y = (H - 2) * g / 4 + 1;
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
@@ -1893,7 +1576,7 @@ function renderCurrentDir() {
     $("currentDir").innerHTML =
       `<div class="sub" style="margin-bottom:5px;">⚡ ${wd.length}개 워커가 동시에 탐색 중` +
       `${all ? "" : ` · 상위 ${shown.length}개 표시${more > 0 ? `, 외 ${more}개` : ""}`}</div>` +
-      shown.map(p => `<div style="font-size:12px; color:#cfe3ff; word-break:break-all; padding:1px 0;">• ${escHtml(p)}</div>`).join("");
+      shown.map(p => `<div style="font-size:12px; color:#1F2937; word-break:break-all; padding:1px 0;">• ${escHtml(p)}</div>`).join("");
   } else {
     $("currentDir").textContent = (wd[0] || _lastCur) || (_lastStatus === "done" ? "✅ 스캔 완료" : "—");
   }
@@ -1996,6 +1679,7 @@ async function loadSettings() {
         if ($("optAutoRestart")) $("optAutoRestart").checked = !!ls.auto_restart;
         if ($("scanPath") && ls.path && !$("scanPath").value) $("scanPath").value = ls.path;
       }
+      syncScanMethod();   // 지난 설정으로 채운 값에 '방식' 표시를 맞춘다
       const lsNote = $("lastScanNote");
       if (lsNote && ls) {
         const t = ls.ts ? new Date(ls.ts * 1000).toLocaleString("ko-KR") : "";
@@ -2251,7 +1935,7 @@ function depRender(r) {
   let rows = "";
   r.levels.forEach(L => {
     const w = Math.round(L.dirs / maxDirs * 100);
-    const hot = (L.depth === r.suggested_fold_depth) ? ' style="background:#0e1e12;"' : '';
+    const hot = (L.depth === r.suggested_fold_depth) ? ' style="background:#E9F5EC;"' : '';
     rows += '<tr' + hot + '>'
       + '<td style="padding:4px 8px;">' + L.depth + '</td>'
       + '<td style="padding:4px 8px;">' + fmtNum(L.dirs) + '</td>'
@@ -2269,7 +1953,7 @@ function depRender(r) {
   const fold = r.suggested_fold_depth;
   if (fold) {
     const kv = (r.levels.find(L => L.depth === fold) || {}).cumulative;
-    $("depSuggest").innerHTML = '<div class="card" style="border-color:var(--ok); background:#0e1e12;">'
+    $("depSuggest").innerHTML = '<div class="card" style="border-color:var(--ok); background:#E9F5EC;">'
       + '▶ 추천 <b style="font-size:1.1em;">fold-depth ' + fold + '</b>' + (kv != null ? ' (보존 행 ≈ <b>' + fmtNum(kv) + '</b>개)' : '')
       + ' &nbsp; <button id="depApply">이 값으로 설정에 적용</button>'
       + '<div class="sub mono" style="margin-top:8px;">python3 -m isilon_usage scan ' + escHtml(r.root || "")
@@ -2350,7 +2034,7 @@ function tsRender(j) {
   let aggHtml = "";
   if (j.aggregating) {     // 집계(용량 합산) 단계 — 탐색 워커가 없어 속도/워커가 0인 게 정상
     const pct = Math.round(j.agg_pct || 0);
-    aggHtml = '<div style="margin:0 0 8px; padding:8px 10px; border:1px solid var(--accent2); border-radius:6px; background:#0e1a1e;">'
+    aggHtml = '<div style="margin:0 0 8px; padding:8px 10px; border:1px solid var(--accent2); border-radius:6px; background:#E9F2F5;">'
       + '<b>📦 집계(용량 합산) 단계 — ' + pct + '%</b> '
       + '<span class="sub">' + fmtNum(j.agg_done || 0) + ' / ' + fmtNum(j.agg_total || 0) + ' 디렉터리 · ' + (Math.round((j.rate_agg || 0) * 10) / 10) + '/초</span>'
       + '<div class="bar" style="height:10px; margin-top:6px;"><span style="width:' + pct + '%"></span></div>'
@@ -2418,8 +2102,8 @@ function tsDrawRateChart() {
   const pts = (_tsWindowSec <= 600) ? tsWindowed()
             : _tsServerSamples.filter(p => p.t >= Date.now() / 1000 - _tsWindowSec);
   drawSeries(cv, pts, {lines: [
-    {get: p => p.rd, color: "#3987e5"},   // 디렉터리/초 (주) — dataviz 검증 쌍
-    {get: p => p.rf, color: "#199e70"},   // 파일/초 (보조)
+    {get: p => p.rd, color: "#1D4ED8"},   // 디렉터리/초 (주) — dataviz 검증 쌍
+    {get: p => p.rf, color: "#15803D"},   // 파일/초 (보조)
   ]});
   const last = pts[pts.length - 1] || {rd: 0, rf: 0};
   const peakD = Math.max(0, ...pts.map(p => p.rd));
@@ -2428,8 +2112,8 @@ function tsDrawRateChart() {
               : (_tsWindowSec >= 60 ? (_tsWindowSec / 60) + "분" : _tsWindowSec + "초");
   const src = _tsWindowSec > 600 ? "서버 저장(metrics.db)" : "라이브";
   if ($("tsRateLegend")) $("tsRateLegend").innerHTML =
-    '<span style="color:#3987e5">●</span> 디렉터리 <b>' + Math.round(last.rd) + '</b>/s (피크 ' + Math.round(peakD) + ') · '
-    + '<span style="color:#199e70">●</span> 파일 <b>' + Math.round(last.rf) + '</b>/s (피크 ' + Math.round(peakF) + ')'
+    '<span style="color:#1D4ED8">●</span> 디렉터리 <b>' + Math.round(last.rd) + '</b>/s (피크 ' + Math.round(peakD) + ') · '
+    + '<span style="color:#15803D">●</span> 파일 <b>' + Math.round(last.rf) + '</b>/s (피크 ' + Math.round(peakF) + ')'
     + ' <span class="sub">— 최근 ' + wlabel + ' · ' + pts.length + '표본 · ' + src + '</span>';
 }
 function tsSetRange(sec, pollMs) {
@@ -2437,7 +2121,7 @@ function tsSetRange(sec, pollMs) {
   document.querySelectorAll(".tsRangeBtn").forEach(b => {
     const on = parseInt(b.dataset.sec) === sec;
     b.style.background = on ? "var(--accent2)" : "";
-    b.style.color = on ? "#06231a" : "";
+    b.style.color = on ? "#E4FAF3" : "";
     b.style.fontWeight = on ? "700" : "";
   });
   if (sec > 600) tsLoadServerSamples();   // 긴 구간 → 서버 24h 표본 로드
@@ -2486,9 +2170,9 @@ if ($("tsHistClear")) $("tsHistClear").addEventListener("click", tsHistClear);
 // ---- 처리량 추이(버킷별 처리 용량/파일/디렉터리) ----
 let _tpBucket = 60, _tpAutoTimer = null, _tpBuckets = [];
 const TP_CHARTS = [
-  {cv: "tpBytesChart", get: b => b.bytes, color: "#3987e5"},
-  {cv: "tpFilesChart", get: b => b.files, color: "#199e70"},
-  {cv: "tpDirsChart", get: b => b.dirs, color: "#f5a623"},
+  {cv: "tpBytesChart", get: b => b.bytes, color: "#1D4ED8"},
+  {cv: "tpFilesChart", get: b => b.files, color: "#15803D"},
+  {cv: "tpDirsChart", get: b => b.dirs, color: "#B45309"},
 ];
 function tpLabel() { return _tpBucket >= 3600 ? (_tpBucket / 3600) + "시간" : (_tpBucket / 60) + "분"; }
 function tpFmtTime(epoch) {
@@ -2504,7 +2188,7 @@ function tpDrawCharts(markIdx) {
     if (markIdx != null && n && _tpBuckets[markIdx]) {     // 호버 위치 세로선 + 점
       const ctx = cv.getContext("2d");
       const x = n === 1 ? cv.width : cv.width * markIdx / (n - 1);
-      ctx.strokeStyle = "rgba(255,255,255,.35)"; ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(15,23,42,.35)"; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, cv.height); ctx.stroke();
       const vals = _tpBuckets.map(c.get), max = Math.max(1, ...vals);
       const y = cv.height - 2 - (cv.height - 4) * Math.min(c.get(_tpBuckets[markIdx]), max) / max;
@@ -2523,9 +2207,9 @@ function tpHoverAt(ev, cv) {
   tpDrawCharts(i);
   const tip = $("tpTooltip"); if (!tip) return;
   tip.innerHTML = '<b>' + tpFmtTime(b.t) + '</b> <span class="sub">(' + tpLabel() + ' 버킷)</span><br>'
-    + '<span style="color:#3987e5">●</span> 용량 ' + fmtBytes(b.bytes) + '<br>'
-    + '<span style="color:#199e70">●</span> 파일 ' + fmtNum(Math.round(b.files)) + '<br>'
-    + '<span style="color:#f5a623">● 디렉터리 ' + fmtNum(Math.round(b.dirs)) + '</span>';
+    + '<span style="color:#1D4ED8">●</span> 용량 ' + fmtBytes(b.bytes) + '<br>'
+    + '<span style="color:#15803D">●</span> 파일 ' + fmtNum(Math.round(b.files)) + '<br>'
+    + '<span style="color:#B45309">● 디렉터리 ' + fmtNum(Math.round(b.dirs)) + '</span>';
   tip.style.display = "block";
   let lx = ev.clientX + 14; if (lx + 190 > window.innerWidth) lx = ev.clientX - 200;
   tip.style.left = lx + "px"; tip.style.top = Math.min(ev.clientY + 14, window.innerHeight - 96) + "px";
@@ -2558,16 +2242,16 @@ function tpRender(j) {
   tpDrawCharts(null);
   const last = bks[bks.length - 1] || {bytes: 0, files: 0, dirs: 0};
   const pk = k => Math.max(0, ...bks.map(p => p[k]));
-  $("tpBytesLegend").innerHTML = '<span style="color:#3987e5">●</span> 최근 ' + lab + ': <b>' + fmtBytes(last.bytes) + '</b> · 최대 ' + fmtBytes(pk("bytes")) + ' / 버킷';
-  $("tpFilesLegend").innerHTML = '<span style="color:#199e70">●</span> 최근 ' + lab + ': <b>' + fmtNum(Math.round(last.files)) + '</b> 파일 · 최대 ' + fmtNum(Math.round(pk("files")));
-  $("tpDirsLegend").innerHTML = '최근 ' + lab + ': <b style="color:#f5a623">' + fmtNum(Math.round(last.dirs)) + '</b> 디렉터리 · 최대 ' + fmtNum(Math.round(pk("dirs")));
+  $("tpBytesLegend").innerHTML = '<span style="color:#1D4ED8">●</span> 최근 ' + lab + ': <b>' + fmtBytes(last.bytes) + '</b> · 최대 ' + fmtBytes(pk("bytes")) + ' / 버킷';
+  $("tpFilesLegend").innerHTML = '<span style="color:#15803D">●</span> 최근 ' + lab + ': <b>' + fmtNum(Math.round(last.files)) + '</b> 파일 · 최대 ' + fmtNum(Math.round(pk("files")));
+  $("tpDirsLegend").innerHTML = '최근 ' + lab + ': <b style="color:#B45309">' + fmtNum(Math.round(last.dirs)) + '</b> 디렉터리 · 최대 ' + fmtNum(Math.round(pk("dirs")));
 }
 function tpSetBucket(bk) {
   _tpBucket = bk;
   document.querySelectorAll(".tpBtn").forEach(b => {
     const on = parseInt(b.dataset.bk) === bk;
     b.style.background = on ? "var(--accent2)" : "";
-    b.style.color = on ? "#06231a" : "";
+    b.style.color = on ? "#E4FAF3" : "";
     b.style.fontWeight = on ? "700" : "";
   });
   tpLoad();
@@ -2829,13 +2513,43 @@ function updateStartButton(runningCount) {
   const bs = $("browseSection");
   if (bs) bs.style.display = scanning ? "none" : "block";
   const si = $("scanInputs");
-  if (si) si.style.display = scanning ? "none" : "flex";
+  if (si) si.style.display = scanning ? "none" : "flex";   // (세로 배치 — flex-direction:column 은 인라인 스타일)
   // '디렉터리 분석' 화면의 스캔 선택기는 스캔 중에도 항상 보이게 — 과거 회차(#번호)를 불러와 분석.
   const ssc = $("scanSelectCard");
   if (ssc) ssc.style.display = "flex";
   const tdr = $("trendDiffRow");
   if (tdr) tdr.style.display = scanning ? "none" : "grid";
 }
+
+// ── 새 스캔 '방식' 선택(자동 추천/빠르게/꼼꼼하게) — 실제 값은 세부 옵션(엔진·오토튜닝)이 단일 소스 ──
+function _scanMethodNow() {
+  if ($("optAutotune") && $("optAutotune").checked) return "auto";
+  return ($("optEngine") && $("optEngine").value === "pscan") ? "fast" : "detail";
+}
+function syncScanMethod() {
+  const m = _scanMethodNow();
+  document.querySelectorAll("#scanMethods .method").forEach(b => {
+    const on = b.dataset.method === m;
+    b.classList.toggle("on", on); b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  const sum = $("scanAdvSum");
+  if (sum) {
+    const sz = $("optSize") ? ($("optSize").value === "apparent" ? "논리 크기" : "디스크 점유") : "";
+    sum.textContent = "엔진 " + ($("optEngine") ? $("optEngine").value : "?") + " · " + sz
+      + ($("optOFS") && $("optOFS").checked ? " · 한 파일시스템만" : "")
+      + ($("optAutoRestart") && $("optAutoRestart").checked ? " · 완료 후 반복" : "");
+  }
+}
+document.querySelectorAll("#scanMethods .method").forEach(b => b.addEventListener("click", () => {
+  const m = b.dataset.method;
+  if ($("optAutotune")) $("optAutotune").checked = (m === "auto");
+  if (m !== "auto" && $("optEngine")) $("optEngine").value = (m === "fast") ? "pscan" : "threads";
+  syncScanMethod();
+}));
+["optEngine", "optAutotune", "optSize", "optOFS", "optAutoRestart", "optBackend"].forEach(id => {
+  if ($(id)) $(id).addEventListener("change", syncScanMethod);
+});
+syncScanMethod();
 
 // 서버가 'outside_base'(지정 경로 밖)를 주면 컨펌을 받는다. 진행이면 true.
 function confirmOutside(j) {
@@ -3032,10 +2746,18 @@ async function scanAction(action, id) {
 // ---- 디스크 사용량 파이(클릭 드릴다운) ----
 let piePath = [];        // 파이 드릴다운 스택 [{id,name,depth}] — 마지막이 현재 위치
 let pieHit = [];         // 캔버스 클릭 히트테스트용 슬라이스 각도
-// 파이/트리맵 카테고리 팔레트 — dataviz 검증 통과 8슬롯(인접쌍 CVD ΔE≥8.4, 표면 #070b14).
+// 파이/트리맵 카테고리 팔레트 — 라이트 테마(흰 카드) 기준 dataviz 검증 통과 8슬롯
+// (인접쌍 CVD ΔE≥9.1, 정상시 ΔE≥19.6; 일부 슬롯은 대비 3:1 미만이라 범례·수치 라벨로 보완).
 // 순서가 CVD 안전장치다 — 임의로 재배열하지 말 것(재배열 시 검증기 재실행).
-const PIE_COLORS = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181",
-                    "#008300", "#9085e9", "#e66767"];
+const PIE_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4",
+                    "#008300", "#6250d6", "#e34948"];
+function _inkOn(hex) {   // 칸 색 위에 올릴 글자색: 밝은 칸엔 진한 글자, 어두운 칸엔 흰 글자(대비 큰 쪽)
+  const h = String(hex || "").replace("#", "");
+  if (h.length !== 6) return "#111827";
+  const c = [0, 2, 4].map(i => { const v = parseInt(h.substr(i, 2), 16) / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+  const L = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  return (1.05 / (L + 0.05)) >= ((L + 0.05) / 0.05) ? "#FFFFFF" : "#111827";
+}
 
 // /api/topdirs 요청 공유: 파이(loadPie)와 상위 디렉터리(loadTopDirs)가 같은 조건이면 한 요청을 같이 쓰고,
 // 같은 URL 의 느린 요청이 끝나기 전에 또 보내지 않는다. 늦게 온 응답은 요청 순번(seq)으로 버린다 —
@@ -3068,7 +2790,7 @@ async function loadPie() {
 function renderPieCrumb(sizeBytes) {
   const el = $("pieCrumb");
   const szTxt = sizeBytes > 0
-    ? ` · <b style="color:#cfe3ff" title="현재 위치의 재귀 사용 용량">${fmtBytes(sizeBytes)}</b>` : "";
+    ? ` · <b style="color:#1F2937" title="현재 위치의 재귀 사용 용량">${fmtBytes(sizeBytes)}</b>` : "";
   if (!piePath.length) { el.innerHTML = "(루트)" + szTxt; return; }
   el.innerHTML = "🏠 / " + piePath.map((c, i) =>
     `<a href="#" class="piecrumb" data-i="${i}">${escHtml(c.name)}</a>`).join(" / ") + szTxt;
@@ -3086,7 +2808,7 @@ function drawPie(canvas, slices, denom) {
   ctx.clearRect(0, 0, W, H);
   pieHit = [];
   if (!slices.length) {
-    ctx.strokeStyle = "#2a3744"; ctx.lineWidth = 2;
+    ctx.strokeStyle = "#E2E7ED"; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI); ctx.stroke();
     return;
   }
@@ -3095,7 +2817,7 @@ function drawPie(canvas, slices, denom) {
     const a1 = a0 + (s.bytes / denom) * 2 * Math.PI;
     ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, r, a0, a1); ctx.closePath();
     ctx.fillStyle = s.color; ctx.fill();
-    ctx.strokeStyle = "#0f141b"; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.strokeStyle = "#F4F5F7"; ctx.lineWidth = 1.5; ctx.stroke();
     pieHit.push({a0: a0, a1: a1, slice: s});
     a0 = a1;
   });
@@ -3118,8 +2840,8 @@ function renderPie(j) {
     const shownChild = slices.reduce((a, s) => a + s.bytes, 0);
     const others = Math.max(0, (total - ownB) - shownChild);
     const restCount = Math.max(0, subCount - slices.length);
-    if (others > 0) slices.push({label: `기타(하위 ${fmtNum(restCount)}개)`, bytes: others, drill: false, color: "#64748b"});
-    if (ownB > 0) slices.push({label: "(이 폴더의 파일)", bytes: ownB, drill: false, color: "#3a4759"});
+    if (others > 0) slices.push({label: `기타(하위 ${fmtNum(restCount)}개)`, bytes: others, drill: false, color: "#64748B"});
+    if (ownB > 0) slices.push({label: "(이 폴더의 파일)", bytes: ownB, drill: false, color: "#DEE3E9"});
   }
   const denom = slices.reduce((a, s) => a + s.bytes, 0) || 1;
   $("pieSummary").textContent = parent
@@ -3199,17 +2921,17 @@ function tmSquarify(items, X, Y, W, H) {   // Bruls/Huizing/van Wijk squarified 
 function drawTreemap(canvas, slices, denom) {
   const ctx = canvas.getContext("2d"), W = canvas.width, H = canvas.height;
   ctx.clearRect(0, 0, W, H); tmHit = [];
-  if (!slices.length) { ctx.strokeStyle = "#2a3744"; ctx.strokeRect(1, 1, W - 2, H - 2); return; }
+  if (!slices.length) { ctx.strokeStyle = "#E2E7ED"; ctx.strokeRect(1, 1, W - 2, H - 2); return; }
   tmSquarify(slices, 0, 0, W, H).forEach(rc => {
     const s = rc.s;
     ctx.fillStyle = s.color; ctx.fillRect(rc.x, rc.y, rc.w, rc.h);
-    ctx.strokeStyle = "#0f141b"; ctx.lineWidth = 1; ctx.strokeRect(rc.x, rc.y, rc.w, rc.h);
+    ctx.strokeStyle = "#FFFFFF"; ctx.lineWidth = 2; ctx.strokeRect(rc.x, rc.y, rc.w, rc.h);
     tmHit.push({x: rc.x, y: rc.y, w: rc.w, h: rc.h, slice: s});
     if (rc.w > 50 && rc.h > 24) {       // 공간 충분할 때만 라벨(클리핑)
       ctx.save(); ctx.beginPath(); ctx.rect(rc.x + 2, rc.y + 2, rc.w - 4, rc.h - 4); ctx.clip();
-      ctx.fillStyle = "#fff"; ctx.font = "11px system-ui,sans-serif";
-      ctx.fillText(s.label, rc.x + 5, rc.y + 15);
-      ctx.fillStyle = "rgba(255,255,255,.85)";
+      ctx.fillStyle = _inkOn(s.color); ctx.font = "600 12px system-ui,sans-serif";
+      ctx.fillText(s.label, rc.x + 6, rc.y + 16);
+      ctx.font = "12px system-ui,sans-serif";
       ctx.fillText(fmtBytes(s.bytes) + " · " + (s.bytes / denom * 100).toFixed(0) + "%", rc.x + 5, rc.y + 28);
       ctx.restore();
     }
@@ -3259,7 +2981,7 @@ function renderTopCrumb(sizeBytes) {
   const el = $("topCrumb");
   // 현재 위치(루트 또는 드릴 위치)의 재귀 사용 용량을 경로 뒤에 표시
   const szTxt = sizeBytes > 0
-    ? ` · <b style="color:#cfe3ff" title="현재 위치의 재귀 사용 용량">${fmtBytes(sizeBytes)}</b>` : "";
+    ? ` · <b style="color:#1F2937" title="현재 위치의 재귀 사용 용량">${fmtBytes(sizeBytes)}</b>` : "";
   if (!topPath.length) { el.innerHTML = "(루트)" + szTxt; return; }
   el.innerHTML = "🏠 / " + topPath.map((c, i) =>
     `<a href="#" class="topcrumb" data-i="${i}">${escHtml(c.name)}</a>`).join(" / ") + szTxt;
@@ -3388,7 +3110,7 @@ let allScans = [];
 function drawTrend(rootPath) {
   const pts = allScans.filter(s => s.root_path === rootPath && s.scanned_bytes != null)
     .sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
-  drawSeries($("trendChart"), pts, {lines: [{get: s => s.scanned_bytes || 0, color: "#38d39f"}]});
+  drawSeries($("trendChart"), pts, {lines: [{get: s => s.scanned_bytes || 0, color: "#15803D"}]});
   $("trendNote").textContent = pts.length
     ? `${rootPath} — ${pts.length}회 스캔, 최신 ${fmtBytes(pts[pts.length-1].scanned_bytes)}`
     : "같은 루트의 과거 스캔이 없습니다.";
@@ -3555,8 +3277,8 @@ async function runDiff() {
       const up = r.delta >= 0, fd = r.files_delta || 0, fu = fd >= 0;
       return `<tr class="fhrow" data-fhpath="${encodeURIComponent(r.path)}" style="cursor:pointer">
         <td class="mono" title="${escHtml(r.path)}" style="max-width:300px; overflow:hidden; text-overflow:ellipsis;">${escHtml(r.path)}</td>
-        <td class="num" style="color:${up?'#ff8b8b':'#65e0b4'}">${up?'+':'−'}${fmtBytes(Math.abs(r.delta))}</td>
-        <td class="num" style="color:${fd===0?'var(--muted)':(fu?'#ff8b8b':'#65e0b4')}">${fd===0?'0':(fu?'+':'−')+fmtNum(Math.abs(fd))}</td></tr>`;
+        <td class="num" style="color:${up?'#B42318':'#166534'}">${up?'+':'−'}${fmtBytes(Math.abs(r.delta))}</td>
+        <td class="num" style="color:${fd===0?'var(--muted)':(fu?'#B42318':'#166534')}">${fd===0?'0':(fu?'+':'−')+fmtNum(Math.abs(fd))}</td></tr>`;
     }).join("") || '<tr><td colspan="3" class="sub">변화 없음</td></tr>';
     $("diffBody").querySelectorAll("tr.fhrow").forEach(tr =>
       tr.addEventListener("click", () => {
@@ -3578,8 +3300,8 @@ async function loadFolderHistory(p) {
     if (!j.points || !j.points.length) { $("fhOut").innerHTML = '<span class="sub">이 경로를 가진 완료 스캔이 없습니다(경로가 정확한지 확인하세요).</span>'; return; }
     const rows = j.points.map(pt => {
       const bd = pt.bytes_delta||0, fd = pt.files_delta||0;
-      const bcol = bd>0?'#ff8b8b':(bd<0?'#65e0b4':'var(--muted)');
-      const fcol = fd>0?'#ff8b8b':(fd<0?'#65e0b4':'var(--muted)');
+      const bcol = bd>0?'#B42318':(bd<0?'#166534':'var(--muted)');
+      const fcol = fd>0?'#B42318':(fd<0?'#166534':'var(--muted)');
       const when = pt.started_at ? new Date(pt.started_at*1000).toLocaleString("ko-KR") : "";
       return `<tr><td>#${pt.scan_id}</td><td class="sub">${when}</td>
         <td class="num">${fmtBytes(pt.total_bytes)}</td>
@@ -3632,7 +3354,7 @@ function renderSchChain() {
   box.style.display = "";
   list.innerHTML = schPaths.map((p, i) =>
     `<span class="chip on" style="cursor:default;">${i + 1}. <span class="mono">${escHtml(p)}</span> ` +
-    `<a href="#" data-chdel="${i}" title="제거" style="color:#ff9a9a; text-decoration:none;">✕</a></span>`
+    `<a href="#" data-chdel="${i}" title="제거" style="color:#8A0F0F; text-decoration:none;">✕</a></span>`
   ).join(' <span class="sub">→</span> ');
   list.querySelectorAll("a[data-chdel]").forEach(a => a.addEventListener("click", e => {
     e.preventDefault(); schPaths.splice(parseInt(a.dataset.chdel), 1); renderSchChain();
@@ -3744,6 +3466,132 @@ function updateScheduleLock() {
   if (msg) msg.style.display = locked ? "block" : "none";
   if (wrap) { wrap.style.opacity = locked ? "0.4" : ""; wrap.style.pointerEvents = locked ? "none" : ""; }
 }
+// ── 홈: 핵심 수치·진행 중인 스캔·확인이 필요한 항목 — 같은 /api/scans 응답(overall)에서 계산(단일 소스) ──
+function _fsTotals(roots) {
+  // 같은 파일시스템을 여러 루트가 공유하면 한 번만 센다(마운트 출처 fs_source, 없으면 전체 용량으로 묶음).
+  const seen = new Map();
+  roots.forEach(r => {
+    if (!r.fs_total_bytes) return;
+    const k = r.fs_source || ("t:" + r.fs_total_bytes);
+    const cur = seen.get(k);
+    if (!cur || (r.updated_at || 0) > (cur.updated_at || 0)) seen.set(k, r);
+  });
+  let total = 0, used = 0;
+  seen.forEach(r => { total += r.fs_total_bytes || 0; used += r.fs_used_bytes || 0; });
+  return {total, used};
+}
+const _ICO = {
+  warn: '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4 2.5 20h19zM12 10v4M12 17h.01"/></svg>',
+  pause: '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6v12M15 6v12"/></svg>',
+  bad: '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></svg>',
+  info: '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>',
+  ok: '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5L16 9.5"/></svg>',
+};
+function _fmtKoCount(n) {   // 큰 개수를 '14.4억 개'·'3,820만 개'처럼(정확한 값은 title 로)
+  n = Number(n) || 0;
+  if (n >= 1e8) return (n / 1e8).toFixed(n >= 1e10 ? 0 : 1).replace(/\.0$/, "") + "억 개";
+  if (n >= 1e4) return fmtNum(Math.round(n / 1e4)) + "만 개";
+  return fmtNum(n) + "개";
+}
+function _elapsedKo(sec) {
+  if (sec == null || !isFinite(sec) || sec < 0) return "—";
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+  return h ? (h + "시간 " + m + "분") : (m ? (m + "분") : (Math.floor(sec) + "초"));
+}
+function renderHome(o, j) {
+  const roots = o.roots || [];
+  const cap = (o.total_capacity_bytes != null) ? o.total_capacity_bytes : o.total_scanned_bytes;
+  $("kpiCap").textContent = roots.length ? fmtBytes(cap) : "—";
+  const partial = roots.filter(r => r.capacity_partial).length;
+  $("kpiCapSub").textContent = roots.length
+    ? ("저장소 " + fmtNum(roots.length) + "개 · 마지막 완료 스캔 기준" + (partial ? (" · " + partial + "개는 부분 값") : ""))
+    : "아직 스캔한 저장소가 없습니다";
+  const fs = _fsTotals(roots);
+  const pct = fs.total ? (fs.used / fs.total * 100) : null;
+  $("kpiFs").textContent = (pct == null) ? "—" : (pct.toFixed(pct < 10 ? 1 : 0) + "%");
+  $("kpiFsBar").style.width = (pct == null) ? "0%" : Math.min(100, pct).toFixed(1) + "%";
+  // 사용률 색 기준은 포탈(capColor)과 같다: 보통 파랑 · 70%+ 주황 · 85%+ 빨강
+  $("kpiFsBar").style.background = (pct == null) ? "" : (pct >= 85 ? "var(--danger)" : (pct >= 70 ? "var(--warn)" : ""));
+  $("kpiFsSub").textContent = fs.total ? ("전체 " + fmtBytes(fs.total) + " 중 " + fmtBytes(fs.used) + " 사용") : "파일시스템 정보 없음";
+  const files = roots.reduce((a, r) => a + ((r.capacity_files != null && !r.capacity_partial) ? r.capacity_files : (r.total_files || 0)), 0);
+  $("kpiFiles").textContent = roots.length ? _fmtKoCount(files) : "—";
+  $("kpiFiles").title = fmtNum(files) + "개";
+  $("kpiFilesSub").textContent = roots.length ? "저장소별 마지막 스캔 합계" : "";
+  const running = roots.filter(r => runningSet.has(r.scan_id));
+  const paused = roots.filter(r => r.status === "paused" && !runningSet.has(r.scan_id));
+  $("kpiScans").textContent = running.length ? ("진행 " + running.length + "건") : "대기";
+  $("kpiScansSub").textContent = "전체 " + fmtNum(o.scan_count || 0) + "건" + (paused.length ? (" · 멈춤 " + paused.length + "건") : "");
+  const cnt = $("scanCnt"); if (cnt) cnt.textContent = (running.length + paused.length) ? String(running.length + paused.length) : "";
+
+  // 진행 중인 스캔(+ 멈춘 스캔)
+  const runHtml = running.map(r => {
+    const disc = (r.status === "discovering" || r.phase === "discovering");
+    const t = r.total_dirs || 0, p = r.processed_dirs || 0;
+    const pc = (!disc && t) ? Math.min(100, p / t * 100) : null;
+    const el = r.started_at ? ((r.updated_at || Date.now() / 1000) - r.started_at) : null;
+    return `<div class="runcard">
+      <div style="display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px; align-items:baseline;">
+        <span class="mono" style="font-weight:600; overflow-wrap:anywhere;">${escHtml(r.root_path)}</span>
+        <span class="sub">#${r.scan_id} · ${_elapsedKo(el)} 경과</span>
+      </div>
+      <div class="steps">
+        <span class="${disc ? "on" : "done"}">1 폴더 찾기${disc ? " " + fmtNum(r.discovered_dirs || 0) + "개" : " ✓"}</span><span class="sep"></span>
+        <span class="${disc ? "" : "on"}">2 용량 집계${pc != null ? " " + pc.toFixed(0) + "%" : ""}</span><span class="sep"></span>
+        <span>3 완료</span>
+      </div>
+      ${pc != null ? `<div class="bar" role="img" aria-label="집계 진행률 ${pc.toFixed(0)}%"><span style="width:${pc.toFixed(1)}%"></span></div>` : ""}
+      <div class="sub">지금까지 ${fmtBytes(r.scanned_bytes)} · 파일 ${fmtNum(r.total_files || 0)}개${t ? " · 폴더 " + fmtNum(p) + " / " + fmtNum(t) : ""}</div>
+      ${canMutate() ? `<div><button class="stopbtn" data-hstop="${r.scan_id}">중지</button></div>` : ""}
+    </div>`;
+  }).join("");
+  const pausedHtml = paused.map(r => {
+    const sc = (allScans || []).find(x => x.id === r.scan_id) || {};
+    const why = sc.note || sc.error || "";
+    return `<div class="runcard paused">
+      <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+        <span class="mono" style="font-weight:600; overflow-wrap:anywhere;">${escHtml(r.root_path)}</span>
+        <span class="badge paused">${_ICO.pause} 일시정지</span>
+        <span class="sub">#${r.scan_id}</span>
+      </div>
+      ${why ? `<div class="sub"><b style="color:var(--text)">멈춘 이유</b> ${escHtml(why)}</div>` : ""}
+      ${canMutate() ? `<div><button class="primary" data-hresume="${r.scan_id}">이어서 하기</button></div>` : ""}
+    </div>`;
+  }).join("");
+  const hr = $("homeRuns");
+  hr.innerHTML = (runHtml + pausedHtml) || '<div class="sub" style="padding:8px 0;">지금 진행 중인 스캔이 없습니다. <button type="button" class="linkbtn" data-goview="scanrun">새 스캔 시작</button></div>';
+  hr.querySelectorAll("button[data-hstop]").forEach(b => b.addEventListener("click", () => stopScan(parseInt(b.dataset.hstop))));
+  hr.querySelectorAll("button[data-hresume]").forEach(b => b.addEventListener("click", () => scanAction("resume", parseInt(b.dataset.hresume))));
+
+  // 확인이 필요한 항목 — 데이터로 확인되는 것만(추측해서 만들지 않는다)
+  const items = [];
+  roots.forEach(r => {
+    if (r.fs_total_bytes && r.fs_used_bytes / r.fs_total_bytes >= 0.85) {
+      const free = r.fs_total_bytes - r.fs_used_bytes;
+      items.push({k: "warn", t: escHtml(r.root_path) + " 여유 공간 " + (free / r.fs_total_bytes * 100).toFixed(0) + "%",
+                  d: "남은 공간 " + fmtBytes(free) + " (전체 " + fmtBytes(r.fs_total_bytes) + ")", go: "analysis", gl: "큰 폴더부터 보기"});
+    }
+    if (r.status === "error" && !runningSet.has(r.scan_id)) {
+      const sc = (allScans || []).find(x => x.id === r.scan_id) || {};
+      items.push({k: "bad", t: escHtml(r.root_path) + " 마지막 스캔이 오류로 끝났습니다",
+                  d: escHtml(sc.error || sc.note || "자세한 내용은 지난 스캔에서 확인하세요."), go: "scans", gl: "지난 스캔 보기"});
+    }
+    if (r.capacity_partial && !runningSet.has(r.scan_id) && r.status !== "error") {
+      items.push({k: "info", t: escHtml(r.root_path) + " 완료된 스캔이 아직 없습니다",
+                  d: "용량은 지금까지 센 부분 값입니다. 끝까지 스캔하면 정확한 값으로 바뀝니다.", go: "scanrun", gl: "스캔하기"});
+    }
+    if (!r.capacity_partial && r.capacity_finished_at && (Date.now() / 1000 - r.capacity_finished_at) > 14 * 86400) {
+      items.push({k: "info", t: escHtml(r.root_path) + " 결과가 " + Math.floor((Date.now() / 1000 - r.capacity_finished_at) / 86400) + "일 전 것입니다",
+                  d: "마지막 완료 스캔 이후 바뀐 내용은 반영돼 있지 않습니다.", go: "scanrun", gl: "다시 스캔"});
+    }
+  });
+  if (_opTemp) items.unshift({k: "warn", t: "임시 관리자 비밀번호를 쓰고 있습니다", d: "설정에서 비밀번호를 바꾸세요.", go: "settings", gl: "설정으로"});
+  $("attnCnt").textContent = items.length ? String(items.length) : "";
+  $("homeAttn").innerHTML = items.length ? items.map(it => `<div class="attn-item">
+      <span class="attn-ico ${it.k}">${_ICO[it.k] || _ICO.info}</span>
+      <div style="min-width:0;"><div class="attn-t" style="overflow-wrap:anywhere;">${it.t}</div><div class="attn-d">${it.d}</div>
+      <button type="button" class="linkbtn" data-goview="${it.go}">${it.gl}</button></div></div>`).join("")
+    : `<div class="attn-item"><span class="attn-ico ok">${_ICO.ok}</span><div><div class="attn-t">모두 정상입니다</div><div class="attn-d">여유 공간 부족·멈춘 스캔·오류가 없습니다.</div></div></div>`;
+}
 function renderOverview(j) {
   if (j.version) {
     $("verPill").textContent = "v" + j.version;
@@ -3759,6 +3607,7 @@ function renderOverview(j) {
   $("ovRoots").textContent = fmtNum(o.root_count);
   $("ovScans").textContent = fmtNum(o.scan_count);
   $("ovActive").textContent = fmtNum(o.active_scans);
+  try { renderHome(o, j); } catch (e) { console.warn("renderHome", e); }
 
   // 웹 스캔 가능 여부 / 실행 중 스캔 / 허용 경로
   runningSet = new Set(j.running || []);
@@ -3807,7 +3656,7 @@ function renderOverview(j) {
       const el = (r.started_at && endt) ? (endt - r.started_at) : null;
       const running = runningSet.has(r.scan_id);
       const loop = autoRestartSet.has(r.scan_id);   // 완료 후 자동 재시작(반복) 중
-      const loopBadge = loop ? ` <span style="color:#ff5c5c; font-weight:700; white-space:nowrap;" title="완료되면 같은 설정으로 자동 재시작됩니다(반복). 끄려면 '중지'.">🔁 반복 동작 중</span>` : "";
+      const loopBadge = loop ? ` <span style="color:#B42318; font-weight:700; white-space:nowrap;" title="완료되면 같은 설정으로 자동 재시작됩니다(반복). 끄려면 '중지'.">🔁 반복 동작 중</span>` : "";
       let act = `<a href="#" class="goScan" data-scan="${r.scan_id}">#${r.scan_id}</a>`;
       if (canMutate()) {
         if (running) act += ` <button class="stopbtn" data-stop="${r.scan_id}">중지</button>`;
@@ -3886,23 +3735,23 @@ function selectScan(id) {
 function renderArrayHtml(a) {
   if (!a || a.configured === false) return "";
   const label = a.label || (a.type === "powerstore" ? "Dell PowerStore" : "Isilon (OneFS)");
-  if (!a.ok) return `<div style="padding:8px 0; border-bottom:1px solid #222c38;"><span class="sub">${escHtml(label)}</span> <span class="err">연결 실패: ${escHtml(a.error || "")}</span></div>`;
+  if (!a.ok) return `<div style="padding:8px 0; border-bottom:1px solid #EEF0F3;"><span class="sub">${escHtml(label)}</span> <span class="err">연결 실패: ${escHtml(a.error || "")}</span></div>`;
   const cap = a.capacity || {}, nd = a.nodes || {};
   const health = a.health === "ok" ? '<span class="badge done">정상</span>'
-    : a.health === "critical" ? '<span class="badge" style="background:#5a1f1f; color:#ffb3b3;">위험</span>'
+    : a.health === "critical" ? '<span class="badge" style="background:#F2DADA; color:#8A0F0F;">위험</span>'
     : '<span class="badge paused">주의</span>';
   const _esc = s => String(s == null ? "" : s).replace(/[<>&"]/g,
     c => ({"<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;"}[c]));
   let alarmHtml = "";
   if (a.alarms && a.alarms.length) {
     const sevKo = {emergency: "긴급", critical: "심각", warning: "경고", information: "정보", info: "정보"};
-    const sevCol = {emergency: "#ff5c5c", critical: "#ff5c5c", warning: "#f5a623"};
+    const sevCol = {emergency: "#B42318", critical: "#B42318", warning: "#B45309"};
     const bs = a.events_by_severity || {};
     const order = ["emergency", "critical", "warning", "information", "info"];
     const summary = order.filter(k => bs[k]).map(k => `${sevKo[k] || k} ${bs[k]}`).join(" · ");
     alarmHtml = `<details style="margin-top:6px;"><summary class="sub" style="cursor:pointer;">⚠ 활성 알람 ${a.alarms.length}건${summary ? " (" + summary + ")" : ""}</summary>`
       + '<table style="width:100%; font-size:12px; margin-top:4px;"><tbody>'
-      + a.alarms.map(al => `<tr><td style="white-space:nowrap; vertical-align:top;"><b style="color:${sevCol[al.severity] || "#9bb"}">${sevKo[al.severity] || al.severity}</b></td>`
+      + a.alarms.map(al => `<tr><td style="white-space:nowrap; vertical-align:top;"><b style="color:${sevCol[al.severity] || "#537C7C"}">${sevKo[al.severity] || al.severity}</b></td>`
         + `<td>${_esc(al.message)}</td>`
         + `<td class="sub" style="white-space:nowrap; vertical-align:top;">${al.time ? new Date(al.time * 1000).toLocaleString("ko-KR") : ""}</td></tr>`).join("")
       + "</tbody></table></details>";
@@ -3916,7 +3765,7 @@ function renderArrayHtml(a) {
       <div class="bar"><span style="width:${pct || 0}%"></span></div>
       <div class="sub">사용 ${fmtBytes(cap.used)} / 전체 ${fmtBytes(cap.total)} · 여유 ${fmtBytes(cap.avail)}</div></div>`;
   }
-  return `<div style="padding:8px 0; border-bottom:1px solid #222c38;">
+  return `<div style="padding:8px 0; border-bottom:1px solid #EEF0F3;">
     <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center;">
       <div><span class="sub">${escHtml(label)}</span> <b style="font-size:15px;">${escHtml(a.name || "?")}</b> <span class="sub">${escHtml(a.version || "")}</span> ${health}</div>
       <div class="sub">노드 ${onl} / ${tot}</div><div class="sub">미해결 이벤트/알림 ${ev}</div>
@@ -4358,11 +4207,11 @@ function render(d) {
   // 차트
   lastSeries = rs.series || [];
   drawSeries($("memChart"), lastSeries,
-    {max: 100, lines: [{get: s => s.mem_percent || 0, color: "#f5a623"}]});
+    {max: 100, lines: [{get: s => s.mem_percent || 0, color: "#B45309"}]});
   drawSeries($("rssChart"), lastSeries,
     {lines: [
-      {get: s => s.scanner_rss || 0, color: "#4f9cff"},
-      {get: s => s.du_rss || 0, color: "#38d39f"},
+      {get: s => s.scanner_rss || 0, color: "#1D4ED8"},
+      {get: s => s.du_rss || 0, color: "#15803D"},
     ]});
 
   // 상위 디렉터리(깊이 선택·클릭 드릴다운·정렬은 loadTopDirs 가 담당)
@@ -4488,12 +4337,12 @@ function renderDups(j) {
   if (!j || !j.ok) { out.innerHTML = '<span class="err">' + escHtml((j && j.error) || "조회 실패") + "</span>"; return; }
   const gs = j.groups || [];
   const head = '<div style="margin-bottom:8px;">📂 <span class="mono">' + escHtml(j.root)
-    + '</span> · 회수 가능 <b style="color:#7be0aa">' + fmtBytes(j.total_recoverable) + "</b>"
+    + '</span> · 회수 가능 <b style="color:#166534">' + fmtBytes(j.total_recoverable) + "</b>"
     + " · 중복 그룹 <b>" + fmtNum(j.group_count) + "</b> · 중복 파일 " + fmtNum(j.dup_file_count)
     + (j.truncated ? ' · <span class="err">상한 도달로 잘림(스캔 ' + fmtNum(j.scanned_files) + "개)</span>" : "") + "</div>";
   if (!gs.length) { out.innerHTML = head + '<span class="sub">중복 파일이 없습니다.</span>'; return; }
   const rows = gs.map(g => "<tr><td class=\"num\">" + fmtBytes(g.size) + "</td><td class=\"num\">" + g.count
-    + '개</td><td class="num" style="color:#7be0aa">' + fmtBytes(g.recoverable) + "</td>"
+    + '개</td><td class="num" style="color:#166534">' + fmtBytes(g.recoverable) + "</td>"
     + '<td class="mono" style="font-size:12px; word-break:break-all;">'
     + (g.paths || []).map(p => escHtml(p)).join("<br>")
     + (g.count > (g.paths || []).length ? ('<br><span class="sub">… 외 ' + (g.count - g.paths.length) + "개</span>") : "")
@@ -4526,7 +4375,7 @@ function renderCold(j) {
   const tops = j.top_dirs || [];
   const head = '<div style="margin-bottom:8px;">❄ <span class="mono">' + escHtml(j.root) + "</span> · 기준 <b>"
     + escHtml(j.field) + " > " + fmtNum(j.days) + "일</b>" + (j.min_size ? " · ≥" + fmtBytes(j.min_size) : "")
-    + ' · 콜드 <b style="color:#8fd0ff">' + fmtBytes(j.total_cold_bytes) + "</b> · 파일 "
+    + ' · 콜드 <b style="color:#0F568A">' + fmtBytes(j.total_cold_bytes) + "</b> · 파일 "
     + fmtNum(j.cold_file_count) + "개 · 가장 오래됨 " + fmtNum(j.oldest_age_days) + "일"
     + (j.truncated ? ' · <span class="err">상한 도달로 잘림(스캔 ' + fmtNum(j.scanned_files) + "개)</span>" : "") + "</div>";
   // atime 기준일 때 noatime 마운트 신뢰도 경고(/api/atime 과 같은 정책 — 단일 소스).
@@ -4820,7 +4669,16 @@ function setShowCat(cat) {
     });
   }
 })();
-const VIEWS = ["summary", "analysis", "depth", "trouble", "tune", "throughput", "trends", "report", "scans", "settings", "gentest", "extra"];
+const VIEWS = ["summary", "scanrun", "analysis", "depth", "trouble", "tune", "throughput", "trends", "report", "scans", "settings", "gentest", "extra"];
+// 왼쪽 메뉴(그룹) → 하위 탭(뷰). 메뉴는 5개+설정으로 묶고, 화면(뷰)과 해시 주소(#summary 등)는 예전 그대로 둔다.
+const VIEW_GROUP = {summary: "home", scanrun: "scan", scans: "scan", throughput: "scan", analysis: "explore",
+  report: "report", trends: "report", depth: "tools", trouble: "tools", tune: "tools", extra: "tools",
+  gentest: "tools", settings: "settings"};
+const _groupLast = {};   // 메뉴별로 마지막에 본 하위 탭(다시 누르면 그 탭으로)
+function showGroup(g) {
+  const first = Object.keys(VIEW_GROUP).find(v => VIEW_GROUP[v] === g) || "summary";
+  showView(_groupLast[g] || first);
+}
 let changelogLoaded = false;
 // 스캔 선택기(+CSV/JSON)와 '진행 중' 배너는 화면마다 복제하지 않고 '단일 요소'를 공유한다.
 // '디렉터리 분석'과 '분석 리포트'가 같은 선택 스캔·같은 배너 정책을 쓰도록, 활성 뷰로 그
@@ -4839,7 +4697,21 @@ function showView(name) {
     const el = $("view-" + v);
     if (el) el.style.display = (v === name) ? "block" : "none";
   });
-  document.querySelectorAll(".navbtn").forEach(b => b.classList.toggle("active", b.dataset.view === name));
+  const grp = VIEW_GROUP[name] || "home";
+  _groupLast[grp] = name;
+  document.querySelectorAll(".navbtn").forEach(b => {
+    b.classList.toggle("active", b.dataset.view === name);
+    if (b.dataset.group) b.hidden = (b.dataset.group !== grp);
+  });
+  document.querySelectorAll(".sidebtn").forEach(b => {
+    const on = b.dataset.group === grp;
+    b.classList.toggle("active", on);
+    if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  });
+  // 하위 탭이 하나뿐인 메뉴(홈·탐색·설정)는 탭 줄을 숨긴다.
+  const sn = $("subnav");
+  if (sn) sn.classList.toggle("hidden", Object.keys(VIEW_GROUP).filter(v => VIEW_GROUP[v] === grp).length < 2);
+  window.scrollTo(0, 0);
   try { history.replaceState(null, "", "#" + name); } catch (e) { location.hash = name; }
   if (name === "extra" && $("atPath")) setTimeout(() => $("atPath").focus(), 20);
   if (name === "settings" && !_opLoggedIn()) {   // 설정 진입 = 인증(없으면 처음 비밀번호 만들기)
@@ -4857,6 +4729,18 @@ function showView(name) {
   if (name === "throughput") { if (typeof tpLoad === "function") tpLoad(); }
 }
 document.querySelectorAll(".navbtn").forEach(b => b.addEventListener("click", () => showView(b.dataset.view)));
+document.querySelectorAll(".sidebtn").forEach(b => b.addEventListener("click", () => showGroup(b.dataset.group)));
+// 화면 안의 '…화면으로' 버튼(data-goview) — 해당 뷰로 이동
+document.addEventListener("click", (e) => {
+  const t = e.target.closest ? e.target.closest("[data-goview]") : null;
+  if (t) { e.preventDefault(); showView(t.dataset.goview); }
+});
+// 물어보기 답 패널: 바깥을 누르거나 Esc 로 닫는다
+document.addEventListener("click", (e) => {
+  const box = $("askBox");
+  if (box && !box.contains(e.target) && $("askOut")) $("askOut").innerHTML = "";
+});
+if ($("askInput")) $("askInput").addEventListener("keydown", (e) => { if (e.key === "Escape") $("askOut").innerHTML = ""; });
 window.addEventListener("hashchange", () => {
   const v = location.hash.slice(1);
   if (VIEWS.includes(v)) showView(v);
@@ -4972,14 +4856,14 @@ function showUpdatePopup(ver, notes) {
   const ov = document.createElement("div");
   ov.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;";
   const box = document.createElement("div");
-  box.style.cssText = "background:#16202c;border:1px solid #2a3550;border-radius:12px;max-width:640px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 16px 50px rgba(0,0,0,.6);";
+  box.style.cssText = "background:#EEF3FF;border:1px solid #DEE3EE;border-radius:12px;max-width:640px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 16px 50px rgba(0,0,0,.6);";
   const hd = document.createElement("div");
-  hd.style.cssText = "padding:16px 20px;border-bottom:1px solid #2a3550;display:flex;align-items:center;gap:10px;";
-  hd.innerHTML = '<span style="font-size:22px;">🎉</span><b style="font-size:16px;color:#dfe8f3;">업데이트됨 — v' + ver + '</b><div style="flex:1"></div>';
+  hd.style.cssText = "padding:16px 20px;border-bottom:1px solid #DEE3EE;display:flex;align-items:center;gap:10px;";
+  hd.innerHTML = '<span style="font-size:22px;">🎉</span><b style="font-size:16px;color:#111827;">업데이트됨 — v' + ver + '</b><div style="flex:1"></div>';
   const close = document.createElement("button"); close.textContent = "닫기"; close.style.cssText = "padding:4px 14px;";
   hd.appendChild(close);
   const body = document.createElement("div");
-  body.style.cssText = "padding:14px 20px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.6;color:#cfe0f0;font-family:ui-monospace,Menlo,monospace;";
+  body.style.cssText = "padding:14px 20px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.6;color:#244E75;font-family:ui-monospace,Menlo,monospace;";
   body.textContent = notes || ("v" + ver + " 로 업데이트되었습니다. 자세한 변경 내용은 ‘📖 버전 기록’을 보세요.");
   box.appendChild(hd); box.appendChild(body); ov.appendChild(box); document.body.appendChild(ov);
   function done() { try { document.body.removeChild(ov); } catch (e) {} }
