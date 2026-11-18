@@ -132,6 +132,10 @@ def init_manager(data_dir: str) -> str:
         dbmod.ensure_column(conn, "scans", "paused_by", "TEXT")
         # 마운트 출처(포탈이 같은 파일시스템 식별 — 크기만 같은 다른 볼륨을 하나로 합치지 않게)
         dbmod.ensure_column(conn, "scans", "fs_source", "TEXT")
+        # 모든 세션의 '활성' 작업 시간(일시정지 갭 제외) — 남은 시간 추정이 쉬던 시간까지 경과로 치지 않게
+        dbmod.ensure_column(conn, "scans", "active_elapsed", "REAL")
+        dbmod.ensure_column(conn, "scans", "sizing_from_active", "REAL")
+        dbmod.ensure_column(conn, "scans", "sizing_from_processed", "INTEGER")
         conn.execute(f"PRAGMA user_version={int(SCHEMA_VERSION)}")
         conn.commit()
     finally:
@@ -179,7 +183,7 @@ def register_scan(
                  status, phase, started_at, updated_at, app_version)
             VALUES (?,?,?,?,?,?,'discovering','discovering',?,?,?)
             """,
-            (os.path.abspath(db_path), os.path.basename(db_path), root_path,
+            (os.path.abspath(db_path), os.path.basename(db_path), dbmod.db_text(root_path),
              host, backend, size_mode, now, now, __version__),
         )
         conn.commit()
@@ -256,7 +260,9 @@ def prune_scans(data_dir: str, *, keep_per_root: Optional[int] = None,
 
     keep_per_root: 루트별로 최신 N개만 남기고 나머지 삭제.
     older_than_days: 그보다 오래된(완료/오류) 스캔 삭제.
-    실행 중(running_ids)인 스캔은 건너뛴다.
+    실행 중(running_ids)인 스캔과, 상태가 진행 중(discovering/sizing — 다른 프로세스가 돌리는 것 포함)·
+    일시정지(paused — 이어서 할 수 있음)인 스캔은 어떤 규칙에서도 지우지 않는다(예전엔 keep_per_root 가
+    상태를 보지 않아 진행 중·일시정지 스캔의 DB 까지 지웠다).
     """
     running = set(running_ids or [])
     conn = dbmod.connect(manager_db_path(data_dir))
@@ -286,9 +292,12 @@ def prune_scans(data_dir: str, *, keep_per_root: Optional[int] = None,
         cutoff = time.time() - older_than_days * 86400
         for r in rows:
             ts = r["finished_at"] or r["started_at"] or 0
-            if ts and ts < cutoff and r["status"] in ("done", "error", "paused"):
+            if ts and ts < cutoff and r["status"] in ("done", "error"):
                 to_delete.add(r["id"])
 
+    for r in rows:
+        if r["status"] in ("discovering", "sizing", "paused"):
+            protected.add(r["id"])
     deleted = []
     for sid in sorted(to_delete - protected):
         if sid in running:
@@ -298,7 +307,7 @@ def prune_scans(data_dir: str, *, keep_per_root: Optional[int] = None,
     return {"ok": True, "deleted": deleted, "count": len(deleted)}
 
 
-def estimate_eta_seconds(phase, processed, total_dirs, discovered, elapsed):
+def estimate_eta_seconds(phase, processed, total_dirs, discovered, elapsed, prev_total_dirs=None, already=0):
     """남은 시간(초) 추정 — 집계(sizing) 단계에서만: 지금까지의 처리 속도로 남은 디렉터리를 나눈다.
 
     대시보드 '요약'·홈 카드·포탈이 모두 이 함수 하나를 쓴다(단일 소스). 폴더 찾기(discovering) 단계는
@@ -310,10 +319,81 @@ def estimate_eta_seconds(phase, processed, total_dirs, discovered, elapsed):
         total = int(total_dirs or 0) or int(discovered or 0)
     except (TypeError, ValueError):
         return None
+    if phase == "discovering":
+        # 1단계(폴더 찾기)는 전체 폴더 수를 아직 모른다. 같은 경로를 전에 끝까지 스캔했으면 그때의 전체 폴더 수를
+        # 기준으로 추정한다(실제 스캔은 시간 대부분이 이 단계라, 이게 없으면 남은 시간을 거의 볼 수 없었다).
+        # 지금까지 훑은 폴더가 이전 전체보다 많으면(트리가 커짐) 추정하지 않는다. 2단계(집계)는 짧아 더하지 않는다.
+        try:
+            prev = int(prev_total_dirs or 0)
+            done_dirs = int(discovered or 0)
+        except (TypeError, ValueError):
+            return None
+        if prev <= 0 or done_dirs <= 0 or elapsed <= 0 or done_dirs >= prev:
+            return None
+        if done_dirs < max(20, prev * 0.005):   # 시작 직후 몇 개만 보고 낸 추정은 크게 튄다(실측: 폴더 1개 → 1227초)
+            return None
+        return (prev - done_dirs) / (done_dirs / elapsed)
     if phase != "sizing" or processed <= 0 or elapsed <= 0:
         return None
+    # processed·elapsed 는 집계 단계 구간(sizing_window)일 수 있다 — 남은 수는 단계 시작 전에 이미 처리한 것(already)까지 뺀다
     rate = processed / elapsed
-    return max(total - processed, 0) / rate if rate > 0 else None
+    return max(total - processed - int(already or 0), 0) / rate if rate > 0 else None
+
+
+def sizing_window(s: dict, active: float):
+    """집계 단계면 (그 단계에서 처리한 수, 그 단계의 활성 경과)를, 아니면 (처리 수, 전체 활성 경과)를 돌려준다.
+
+    1단계가 몇 시간 걸린 스캔에서 2단계 속도를 '스캔 시작부터'로 나누면 짧은 집계 단계에 '약 50시간' 같은
+    값이 나왔다 — 집계에 들어설 때의 활성 시간·처리 수를 빼고 계산한다(기록이 없으면 예전 방식)."""
+    processed = int(s.get("processed_dirs") or 0)
+    if s.get("phase") == "sizing" and s.get("sizing_from_active") is not None:
+        try:
+            return (max(0, processed - int(s.get("sizing_from_processed") or 0)),
+                    max(0.0, float(active) - float(s.get("sizing_from_active") or 0)))
+        except (TypeError, ValueError):
+            pass
+    return processed, active
+
+
+def prev_total_dirs(conn, root_path, exclude_id=None):
+    """같은 루트의 마지막 완료 스캔의 전체 폴더 수(없으면 None) — 1단계 남은 시간 추정의 기준."""
+    try:
+        r = conn.execute("SELECT total_dirs FROM scans WHERE root_path=? AND status='done' AND id<>? "
+                         "AND total_dirs>0 ORDER BY id DESC LIMIT 1", (root_path, int(exclude_id or -1))).fetchone()
+    except Exception:  # noqa: BLE001
+        return None
+    return int(r[0]) if r else None
+
+
+def active_elapsed(s: dict, now_ts: float) -> float:
+    """스캔의 활성 경과 시간(초). 스캐너가 기록한 active_elapsed(일시정지 갭 제외)가 있으면 그것 + 마지막 기록 뒤
+    흐른 시간(진행 중일 때만), 없으면(구버전 기록) 시작부터 지금까지."""
+    try:
+        act = float(s.get("active_elapsed") or 0)
+    except (TypeError, ValueError):
+        act = 0.0
+    if act > 0:
+        up = float(s.get("updated_at") or now_ts)
+        return act + (max(0.0, now_ts - up) if s.get("status") in ("discovering", "sizing") else 0.0)
+    return max(0.0, now_ts - float(s.get("started_at") or now_ts))
+
+
+def _nested_roots(paths) -> Dict[str, str]:
+    """다른 루트 안에 든 루트 → 그것을 품은 가장 바깥 루트. (/ifs/data 와 /ifs/data/proj 를 둘 다 스캔하면
+    proj 용량이 합계에 두 번 들어갔다 — 2026-11 리뷰.) 경로 구분자 경계로만 판단한다(/ifs/data2 는 별개)."""
+    norm = {p: (str(p).rstrip("/") or "/") for p in paths}
+    out: Dict[str, str] = {}
+    for p, n in norm.items():
+        best = None
+        for q, m in norm.items():
+            if q == p or m == n:
+                continue
+            pref = "/" if m == "/" else m + "/"
+            if n.startswith(pref) and (best is None or len(norm[best]) > len(m)):
+                best = q
+        if best is not None:
+            out[p] = best
+    return out
 
 
 def overall_capacity(conn) -> dict:
@@ -323,7 +403,7 @@ def overall_capacity(conn) -> dict:
       - 활동(status·phase·진행 카운터·scanned_bytes·시각) = 그 루트의 '가장 최근' 스캔 — 진행 중 표시·처리량용
       - 용량(capacity_*) = 그 루트의 '마지막 완료(done)' 스캔 — 완료 스캔이 없으면 최신 스캔 값(capacity_partial)
     예전엔 최신 스캔을 상태와 무관하게 용량으로 써서, 멈춤·오류·진행 중인 부분 결과(예: 7바이트)가 그 루트의
-    용량으로 표시·합산됐다. total_capacity_bytes = 용량 합(화면·포탈의 '조사 용량'), total_scanned_bytes = 최신
+    용량으로 표시·합산됐다. total_capacity_bytes = 용량 합(다른 루트 안에 든 루트 제외 · 화면·포탈의 '조사 용량'), total_scanned_bytes = 최신
     스캔 합(진행량 — 처리량 시계열이 쓰므로 의미를 바꾸지 않는다).
     """
     scans = conn.execute("SELECT * FROM scans ORDER BY id DESC").fetchall()
@@ -340,14 +420,19 @@ def overall_capacity(conn) -> dict:
     total_scanned = 0
     total_capacity = 0
     now_ts = time.time()
+    nested = _nested_roots(latest_by_root.keys())
     for rp, s in latest_by_root.items():
         cap = done_by_root.get(rp) or s
         cap_bytes = int(cap.get("scanned_bytes") or 0)
-        eta = (estimate_eta_seconds(s.get("phase"), s.get("processed_dirs"), s.get("total_dirs"),
-                                    s.get("discovered_dirs"), now_ts - float(s.get("started_at") or now_ts))
+        prev_total = (int(cap.get("total_dirs") or 0) or None) if (cap is not s and cap.get("status") == "done") else None
+        _p, _e = sizing_window(s, active_elapsed(s, now_ts))
+        eta = (estimate_eta_seconds(s.get("phase"), _p, s.get("total_dirs"), s.get("discovered_dirs"), _e, prev_total,
+                                    already=int(s.get("sizing_from_processed") or 0))
                if s["status"] in ("discovering", "sizing") else None)
+        eta_basis = (("prev_scan" if s.get("phase") == "discovering" else "rate") if eta is not None else None)
         total_scanned += s.get("scanned_bytes") or 0
-        total_capacity += cap_bytes
+        if rp not in nested:      # 다른 루트 안에 든 루트는 바깥 루트 용량에 이미 포함 — 두 번 세지 않는다
+            total_capacity += cap_bytes
         roots.append({
             "scan_id": s["id"],
             "root_path": rp,
@@ -375,6 +460,8 @@ def overall_capacity(conn) -> dict:
             # 진행 중이면 남은 시간(초)과 끝날 시각(epoch) 추정 — 상태 화면 '요약'과 같은 계산
             "eta_seconds": eta,
             "eta_at": (now_ts + eta) if eta is not None else None,
+            "eta_basis": eta_basis,     # prev_scan = 폴더 찾기 중, 이전 완료 스캔의 전체 폴더 수 기준 추정
+            "nested_in": nested.get(rp),   # 이 루트를 품은 다른 스캔 루트(있으면 합계에서 빠짐)
         })
     roots.sort(key=lambda x: x["capacity_bytes"], reverse=True)
 

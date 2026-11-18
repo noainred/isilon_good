@@ -197,7 +197,7 @@
     "지금 진행 중인 스캔이 없습니다.": "No scan is running now.", "새 스캔 시작": "Start a new scan",
     "큰 폴더부터 보기": "Show largest folders", "지난 스캔 보기": "Show past scans", "다시 스캔": "Rescan", "스캔하기": "Scan",
     "현황": "Overview", "네트워크": "Network", "노드·설정": "Nodes & Settings",
-    "남은 시간": "Time left", "완료 예상": "Expected finish", "완료 예상 시간": "Expected finish time", "계산 전": "not yet", "(포탈 추정)": "(portal estimate)",
+    "⬆ 상위 폴더로": "⬆ Up one folder", "에 포함 · 합계 제외": "contains this · excluded from total", "에 포함(합계 제외)": "contains this (excluded from total)", "남은 시간": "Time left", "완료 예상": "Expected finish", "완료 예상 시간": "Expected finish time", "계산 전": "not yet", "(포탈 추정)": "(portal estimate)",
     "모든 데이터센터의 저장소를 한 화면에서 봅니다.": "All data-center storage on one screen.",
     "포탈이 이 노드 상태를 마지막으로 받은 시각 — 오래되면 표시 값이 실제와 다를 수 있습니다":
       "When the portal last received this node's status — if old, the values shown may differ from the node"

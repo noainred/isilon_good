@@ -385,7 +385,7 @@ class Scanner:
         self.backend = backend
         self.size_mode = size_mode
         self.one_file_system = one_file_system
-        self.batch_size = batch_size
+        self.batch_size = max(1, int(batch_size or 1))   # 0 이면 LIMIT 0 으로 아무것도 못 집어 내부 오류로 끝났다
         self.workers = max(1, int(workers))
         self.resume = resume
         self.check_readonly = bool(check_readonly)
@@ -731,6 +731,9 @@ class Scanner:
             }
             if self._fs_source:
                 fields["fs_source"] = self._fs_source
+            fields["active_elapsed"] = self._elapsed_accum   # 남은 시간 추정용 활성 시간(일시정지 갭 제외)
+            if getattr(self, "_sizing_from", None) is not None:
+                fields["sizing_from_active"], fields["sizing_from_processed"] = self._sizing_from
             if finished:
                 fields["finished_at"] = time.time()
             elif self._clear_finished:
@@ -1719,7 +1722,13 @@ class Scanner:
         부풀었다 — 지금은 긴 읽기 스냅샷 자체가 없다.
         """
         self._status = "sizing"; self._phase = "sizing"
-        dbmod.update_run(conn, self.run_id, status="sizing", phase="sizing")
+        # 집계 단계 시작 지점(활성 시간·처리 수) — 이 단계의 남은 시간을 이 단계 속도로 계산하도록
+        self._sizing_from = (self._elapsed_accum, self._processed)
+        try:
+            dbmod.update_run(conn, self.run_id, status="sizing", phase="sizing",
+                             sizing_from_active=self._elapsed_accum, sizing_from_processed=self._processed)
+        except Exception:  # noqa: BLE001 — 구버전 DB(컬럼 없음)는 예전 방식
+            dbmod.update_run(conn, self.run_id, status="sizing", phase="sizing")
         conn.commit()
         self._update_manager(force=True)   # 매니저 DB 도 '집계 중'으로 즉시 반영(self._status 동기화)
 

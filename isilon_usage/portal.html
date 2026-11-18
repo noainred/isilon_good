@@ -323,6 +323,10 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
 .portal details.card > summary{ min-height:32px; }
 .eta-line{ display:flex; flex-wrap:wrap; gap:4px 20px; font-size:13px; color:var(--muted); }
 .eta-line b{ color:var(--text); font-weight:600; }
+.inp[readonly]{ background:var(--panel2); color:var(--muted); cursor:not-allowed; }
+/* 좁은 화면: 넓은 표는 카드 안에서만 가로 스크롤(페이지 전체가 옆으로 밀리지 않게), 격자 칸은 내용 때문에 늘어나지 않게 */
+.grid > *, .kpis > *{ min-width:0; }
+@media (max-width:900px){ .card{ overflow-x:auto; } }
 </style>
 <!-- THEME:END -->
 <script src="/i18n.js"></script>
@@ -393,7 +397,7 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
         <tbody id="runAllBody"><tr><td colspan="6" class="sub">불러오는 중…</td></tr></tbody>
       </table>
     </div>
-    <div class="sub" style="margin-top:6px;">시간은 모두 <b>포탈(메인) 시계·시간대 기준</b>입니다 — 엣지마다 시계가 달라도 엣지의 절대 시각은 쓰지 않고 ‘남은 시간’만 받아 포탈이 받은 시각에 더합니다. 계산은 엣지 대시보드와 같습니다(집계 단계의 처리 속도). 폴더 찾기(1단계) 중에는 전체 폴더 수를 몰라 아직 계산하지 않습니다.</div>
+    <div class="sub" style="margin-top:6px;">시간은 모두 <b>포탈(메인) 시계·시간대 기준</b>입니다 — 엣지마다 시계가 달라도 엣지의 절대 시각은 쓰지 않고 ‘남은 시간’만 받아 포탈이 받은 시각에 더합니다. 계산은 엣지 대시보드와 같습니다(집계 단계의 처리 속도). 폴더 찾기(1단계) 중에는 같은 경로의 지난 완료 스캔 폴더 수를 기준으로 추정하고, 그 기록이 없으면 계산하지 않습니다.</div>
   </div>
 
   <div class="card" style="margin-bottom:14px;">
@@ -1115,7 +1119,7 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
   <div class="card">
     <h2>통합 디렉터리 매트릭스 — 행=디렉터리, 열=노드 · 클릭하면 더 깊이</h2>
     <div style="display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; align-items:center;">
-      <button id="cmpRoot">🏠 루트로</button>
+      <button id="cmpRoot" title="한 단계 위 폴더로">⬆ 상위 폴더로</button>
       <span id="cmpCrumb" class="sub mono" style="flex:1; word-break:break-all;">—</span>
     </div>
     <div style="overflow:auto;"><table id="cmpMatrix">
@@ -1399,6 +1403,9 @@ window.fetch=async function(url,opts){
   const u=(typeof url==="string")?url:"";
   if(m==="POST" && u.indexOf("/api/portal/login")<0){
     opts.headers=Object.assign({},opts.headers||{},{"X-Op-Token":_opToken()});
+    // 문자열 본문인데 Content-Type 이 없으면 JSON 으로 표시(서버는 JSON 이 아닌 본문을 거부 — 사이트 간 위조 방지)
+    if (typeof opts.body === "string" && !Object.keys(opts.headers).some(k => k.toLowerCase() === "content-type"))
+      opts.headers["Content-Type"] = "application/json";
     let res=await _origFetch(url,opts);
     if(res.status===401){
       let j401={}; try{ j401=await res.clone().json(); }catch(e){}
@@ -1805,7 +1812,8 @@ function renderRunAll(j){
     return `<tr><td class="mono">${_he(r.node)}</td><td>${_he(r.region||"—")}</td>
       <td class="mono" style="max-width:360px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escAttr(r.root_path||"")}">${_he(r.root_path||"")}</td>
       <td>${stage}</td><td class="num">${left==null?"—":("약 "+fmtDur(left))}</td>
-      <td>${r.eta_at?("<b>"+fmtEtaAt(r.eta_at)+"</b>"+(r.eta_by_portal?' <span class="sub" title="구버전 엣지 — 포탈이 같은 계산으로 추정">(포탈 추정)</span>':"")):'<span class="sub">계산 전</span>'}</td></tr>`;
+      <td>${r.eta_at?("<b>"+fmtEtaAt(r.eta_at)+"</b>"+(r.eta_by_portal?' <span class="sub" title="구버전 엣지 — 포탈이 같은 계산으로 추정">(포탈 추정)</span>':"")
+        +(r.eta_basis==="prev_scan"?' <span class="sub" title="폴더 찾기 중 — 같은 경로의 지난 완료 스캔 폴더 수 기준">(이전 스캔 기준)</span>':"")):'<span class="sub">계산 전</span>'}</td></tr>`;
   }).join("") : '<tr><td colspan="6" class="sub">지금 진행 중인 스캔이 없습니다.</td></tr>';
 }
 function scanElapsed(n){ const rn=n&&n.running; if(!rn) return 0;   // 진행 중 스캔 경과(초, 라이브)
@@ -1830,6 +1838,8 @@ function _verCmp(a,b){   // "1.99.10" 형식 버전 비교: 음수=a<b
 }
 function renderPortalDash(){
   const j=pOverview; if(!j) return;
+  // 고른 지역이 사라졌으면(그 지역 마지막 노드 삭제·지역명 변경) 필터를 푼다 — 다시 누를 카드가 없어 빈 표에 갇혔다
+  if(regionFilter && !(j.regions||[]).some(r=>r.region===regionFilter)) regionFilter="";
   if(j.version){ const _bv=document.getElementById("brandVer"); if(_bv) _bv.textContent="v"+j.version; }
   const t=j.totals||{};
   $("kUsed").textContent=fmtBytes(t.used_bytes); $("kStorages").textContent=fmtNum(t.storages);
@@ -1923,7 +1933,7 @@ function renderPortalDash(){
         +(r.eta_at?(" · 남은 약 "+fmtDur(etaLeft(r.eta_at))+" · 완료 예상 "+fmtEtaAt(r.eta_at)):"")):"";
       const fsTxt=r.fs_total_bytes?(" of "+fmtBytes(r.fs_total_bytes)+" ("+Math.round((r.fs_used_bytes||0)/r.fs_total_bytes*100)+"%)"):"";
       return `<tr class="rr-${idx}" style="display:none; background:#FFFFFF;"><td></td>
-        <td colspan="8" class="sub mono">📁 ${escAttr(r.root_path)} — 조사 ${fmtBytes(r.capacity_bytes!=null?r.capacity_bytes:r.scanned_bytes)}${(r.capacity_scan_id!=null&&r.capacity_scan_id!==r.scan_id)?(" (마지막 완료 기준 · 최신 스캔 "+fmtBytes(r.scanned_bytes)+")"):(r.capacity_partial?" (부분 값)":"")} · fs ${fmtBytes(r.fs_used_bytes)}${fsTxt} · ${scanProgress(r)}${startTxt}${r.finished_at?(" · 완료 "+ago(r.finished_at)):(r.updated_at?(" · 갱신 "+ago(r.updated_at)):"")}</td></tr>`;
+        <td colspan="8" class="sub mono">📁 ${escAttr(r.root_path)} — 조사 ${fmtBytes(r.capacity_bytes!=null?r.capacity_bytes:r.scanned_bytes)}${(r.capacity_scan_id!=null&&r.capacity_scan_id!==r.scan_id)?(" (마지막 완료 기준 · 최신 스캔 "+fmtBytes(r.scanned_bytes)+")"):(r.capacity_partial?" (부분 값)":"")}${r.nested_in?(" · ⊂ "+escAttr(r.nested_in)+" 에 포함(합계 제외)"):""} · fs ${fmtBytes(r.fs_used_bytes)}${fsTxt} · ${scanProgress(r)}${startTxt}${r.finished_at?(" · 완료 "+ago(r.finished_at)):(r.updated_at?(" · 갱신 "+ago(r.updated_at)):"")}</td></tr>`;
     }).join("");
     const outdated = j.version && n.version && _verCmp(n.version, j.version) < 0;   // 숫자 비교(1.99.9 < 1.99.10), 더 새 엣지는 구버전 아님
     const verBadge = n.version
@@ -2026,6 +2036,8 @@ function renderNodeHeader(){
   } else $("ndAlert").style.display="none";
 }
 function fillNodeForm(n){
+  // 등록된 노드의 이름은 여기서 바꿀 수 없다(바꾸면 저장 시 같은 엣지가 새 이름으로 하나 더 생겼다)
+  $("nId").readOnly=true; $("nId").title="이름은 바꿀 수 없습니다 — 새 이름이 필요하면 ‘＋ 새 노드’로 추가한 뒤 이 노드를 삭제하세요";
   $("nId").value=n.id; $("nRegion").value=n.region||""; $("nUrl").value=n.url; $("nToken").value="";
   $("nAliasLocal").value=n.alias_local||""; $("nAliasLogical").value=n.alias_logical||"";
   $("nUnit").value=n.unit||"minute"; $("nEvery").value=n.every||n.interval_minutes||30;
@@ -2040,6 +2052,7 @@ function selectNode(id){
 function newNodeForm(){
   _selNode=null;
   ["nId","nRegion","nUrl","nToken","nAliasLocal","nAliasLogical"].forEach(k=>{ $(k).value=""; });
+  $("nId").readOnly=false; $("nId").title="";
   $("nUnit").value="minute"; $("nEvery").value=30; $("nMode").value="both"; $("nEnabled").checked=true;
   nWsel=new Set([1]); buildNW(); updateNUnit(); $("nodeMsg").textContent="";
   renderNodeHeader();
@@ -2361,7 +2374,7 @@ $("csvFile").addEventListener("change", async (e)=>{
   const f = e.target.files && e.target.files[0]; if(!f) return;
   try { $("csvText").value = await f.text();
         $("csvMsg").textContent = `파일 ‘${f.name}’ 불러옴 — ‘가져오기’를 누르세요.`; }   // textContent — 이스케이프 불필요
-  catch(err){ $("csvMsg").innerHTML = '<span class="err">파일 읽기 실패: '+err+'</span>'; }
+  catch(err){ $("csvMsg").innerHTML = '<span class="err">파일 읽기 실패: '+_he(String(err))+'</span>'; }
 });
 const CSV_SAMPLE = "id,url,region,token,alias_local,alias_logical\n"
   + "dc-seoul,http://10.1.1.5:8765,아시아/서울,TOKEN1,/mnt/isilon/data,/data\n"
@@ -2421,6 +2434,7 @@ function renderCompare(j){
   const all=(j.rows||[]); const found=all.filter(r=>r.found);
   const maxB = found.reduce((a,r)=>Math.max(a,r.total_bytes),0) || 1;
   $("cmpRows").innerHTML = all.length ? all.map(r=>{
+    if(!r.found && r.folded_at) return `<tr><td><b>${_he(r.id)}</b></td><td>${_he(r.region||"—")}</td><td class="num sub">—</td><td class="num">—</td><td class="num">—</td><td><span class="badge" title="이 노드는 스캔 시 폴더 깊이 접기(fold)로 이 깊이의 행을 따로 저장하지 않았습니다 — 용량은 ${escAttr(r.folded_at)} 합계에 들어 있습니다">접힘 · 상위 폴더에 합산</span></td></tr>`;
     if(!r.found) return `<tr><td><b>${_he(r.id)}</b></td><td>${_he(r.region||"—")}</td><td class="num miss">없음</td><td class="num">—</td><td class="num">—</td><td><span class="badge b-offline">미스캔/누락</span></td></tr>`;
     const pct=r.total_bytes/maxB*100, drift=pct<85;
     return `<tr><td><b>${_he(r.id)}</b></td><td>${_he(r.region||"—")}</td>
@@ -2433,19 +2447,21 @@ function renderCompare(j){
 function renderMatrix(j){
   const nodes=j.nodes||[], kids=j.children||[];
   $("cmpMHead").innerHTML = "<tr><th>디렉터리</th>"+nodes.map(n=>`<th class="num">${escAttr(n)}</th>`).join("")+"</tr>";
-  if(!kids.length){ $("cmpMBody").innerHTML = `<tr><td colspan="${nodes.length+1}" class="sub">하위 디렉터리가 없습니다(집계 완료 복제본 필요).</td></tr>`; return; }
+  const fn=(j.folded_nodes||[]);
+  const foldNote = fn.length ? ` · 접힘(fold)으로 이 깊이 아래 행이 없는 노드: ${fn.map(_he).join(", ")} — 누락이 아니라 상위 폴더 합계에 들어 있습니다` : "";
+  if(!kids.length){ $("cmpMBody").innerHTML = `<tr><td colspan="${nodes.length+1}" class="sub">하위 디렉터리가 없습니다(집계 완료 복제본 필요)${foldNote}.</td></tr>`; return; }
   $("cmpMBody").innerHTML = kids.map(k=>{
     const present=nodes.map(n=>k.vals[n]).filter(v=>v!==undefined&&v!==null).sort((a,b)=>a-b);
     const med = present.length? present[Math.floor(present.length/2)] : 0;
     const name = (k.subdir_count>0) ? `<a href="#" class="link cmpdrill" data-name="${escAttr(k.name)}">${escAttr(k.name)}</a>` : escAttr(k.name);
     const cells = nodes.map(n=>{
       const v=k.vals[n];
-      if(v===undefined||v===null) return '<td class="num miss">없음</td>';
+      if(v===undefined||v===null) return fn.includes(n) ? '<td class="num sub" title="이 노드는 이 깊이부터 접혀(fold) 행이 없습니다 — 상위 폴더 합계에 들어 있음">접힘</td>' : '<td class="num miss">없음</td>';
       const off = med>0? Math.abs(v-med)/med : 0;
       return `<td class="num ${off>0.15?'warn':''}">${fmtBytes(v)}</td>`;
     }).join("");
     return `<tr><td class="mono">${name}</td>${cells}</tr>`;
-  }).join("");
+  }).join("") + (fn.length ? `<tr><td colspan="${nodes.length+1}" class="sub">${foldNote.replace(/^ · /,"")}</td></tr>` : "");
   $("cmpMBody").querySelectorAll("a.cmpdrill").forEach(a=>a.addEventListener("click",e=>{
     e.preventDefault(); loadCompare(cmpCur.replace(/\/+$/,"")+"/"+a.dataset.name); }));
 }
@@ -2953,7 +2969,7 @@ async function loadHistory(){
     const j=await r.json();
     window._histEvents=(j&&j.events)||[]; window._histVer=j.version; window._histLimit=20;
     renderHist();
-  }catch(e){ box.innerHTML='<span class="sub">불러오기 실패: '+e+'</span>'; }
+  }catch(e){ box.innerHTML='<span class="sub">불러오기 실패: '+ _he(String(e)) +'</span>'; }
 }
 // 기본 20줄만 보이고, '더 보기'를 누르면 나머지를 펼친다.
 function renderHist(){

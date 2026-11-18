@@ -13,9 +13,11 @@ import os
 import re
 import shutil
 import sys
+import subprocess
 import tarfile
 import time
 import zipfile
+import zlib
 from typing import Dict, Optional, Tuple
 
 from . import netutil
@@ -161,6 +163,39 @@ def _members_from_tar(tf) -> Dict[str, bytes]:
     return out
 
 
+# 설치할 패키지에 반드시 있어야 하는 파일 — 하나라도 없으면 설치하지 않는다(예전엔 __init__.py 만 든 묶음도
+# 설치돼 서비스가 'No module named isilon_usage.__main__' 로 뜨지 못했다).
+REQUIRED_MEMBERS = ("__init__.py", "__main__.py", "cli.py", "server.py", "scanner.py", "db.py", "manager.py",
+                    "dashboard.html")
+# 읽다가 날 수 있는 '깨진 묶음' 예외 — 잘린 gzip(EOFError)·손상(zlib.error)도 실패로 돌려준다
+# (예전엔 새어 나가 감시 폴더 루프가 매 주기 같은 파일에서 죽고 인터넷 업그레이드 점검까지 건너뛰었다).
+_READ_ERRORS = (OSError, tarfile.TarError, zipfile.BadZipFile, ValueError, EOFError, zlib.error)
+
+
+def _gunzip_checked(data: bytes) -> bytes:
+    """gzip 묶음을 끝까지 풀어 CRC·길이를 확인한다(tarfile 은 tar 끝에서 멈춰 손상된 내용을 그대로 받았다).
+    풀린 크기는 MAX_BUNDLE_BYTES 로 제한(압축 폭탄 방지)."""
+    d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    out = d.decompress(data, MAX_BUNDLE_BYTES + 1)
+    if len(out) > MAX_BUNDLE_BYTES or d.unconsumed_tail:
+        raise ValueError("묶음이 너무 큼")
+    out += d.flush()
+    if not d.eof:
+        raise EOFError("압축 묶음이 끝나기 전에 잘림")
+    return out
+
+
+def _tar_members_from_bytes(data: bytes) -> Dict[str, bytes]:
+    import io
+    raw = _gunzip_checked(data) if data[:2] == b"\x1f\x8b" else data
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as tf:
+        return _members_from_tar(tf)
+
+
+def missing_members(members: Dict[str, bytes]) -> list:
+    return [m for m in REQUIRED_MEMBERS if m not in members]
+
+
 def read_package_members(archive_path: str) -> Dict[str, bytes]:
     """아카이브에서 'isilon_usage/<...>' 파일을 {상대경로: bytes} 로 읽는다(안전·상한)."""
     if archive_path.endswith(".zip"):
@@ -179,8 +214,11 @@ def read_package_members(archive_path: str) -> Dict[str, bytes]:
                 out[rel] = data
                 total += len(data)
         return out
-    with tarfile.open(archive_path, "r:*") as tf:
-        return _members_from_tar(tf)
+    with open(archive_path, "rb") as fh:
+        data = fh.read(MAX_BUNDLE_BYTES + 1)
+    if len(data) > MAX_BUNDLE_BYTES:
+        raise ValueError("아카이브가 너무 큼")
+    return _tar_members_from_bytes(data)
 
 
 def members_version(members: Dict[str, bytes]) -> Optional[Tuple[int, int, int]]:
@@ -218,6 +256,17 @@ def apply_package(members: Dict[str, bytes], code_dir: str) -> str:
             os.replace(backup, pkg)        # 롤백
         shutil.rmtree(staging, ignore_errors=True)
         raise
+    # 설치 후 확인: 새 코드로 핵심 모듈을 실제로 불러 본다 — 실패하면 옛 코드로 되돌린다(서비스가 못 뜨는 것 방지)
+    err = _smoke_test(code_dir)
+    if err:
+        bad = "%s.bad.%d" % (pkg, ts)
+        try:
+            os.replace(pkg, bad)
+            if had_old:
+                os.replace(backup, pkg)
+        except OSError:
+            pass
+        raise OSError("새 코드 확인 실패(옛 코드로 되돌림): %s" % err)
     try:
         prune_package_backups(code_dir, keep=3)
     except Exception:  # noqa: BLE001 — 정리는 베스트 에포트
@@ -225,15 +274,30 @@ def apply_package(members: Dict[str, bytes], code_dir: str) -> str:
     return backup if had_old else ""
 
 
+def _smoke_test(code_dir: str):
+    """code_dir 의 isilon_usage 를 별도 파이썬으로 불러 본다. 문제 없으면 None, 아니면 오류 문자열."""
+    try:
+        r = subprocess.run([sys.executable, "-c", "import isilon_usage.cli, isilon_usage.server, isilon_usage.scanner"],
+                           cwd=code_dir, env=dict(os.environ, PYTHONPATH=code_dir),
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+    except Exception as exc:  # noqa: BLE001
+        return str(exc)
+    if r.returncode != 0:
+        return r.stdout.decode("utf-8", "replace")[-300:]
+    return None
+
+
 def upgrade_from_archive(archive_path: str, code_dir: str, current_version: str) -> dict:
     """아카이브가 현재보다 새 버전이면 패키지를 교체한다(재시작은 호출 측에서)."""
     try:
         members = read_package_members(archive_path)
-    except (OSError, tarfile.TarError, zipfile.BadZipFile, ValueError) as exc:
+    except _READ_ERRORS as exc:
         return {"ok": False, "reason": "아카이브 읽기 실패: %s" % exc}
     new_v = members_version(members)
     if not new_v:
         return {"ok": False, "reason": "아카이브에 유효한 isilon_usage 패키지/버전 없음"}
+    if missing_members(members):
+        return {"ok": False, "reason": "패키지가 불완전함(빠진 파일: %s)" % ", ".join(missing_members(members))}
     cur = parse_version(current_version) or (0, 0, 0)
     if new_v <= cur:
         return {"ok": False, "reason": "더 새 버전 아님(%s <= %s)" % (vstr(new_v), vstr(cur)),
@@ -248,15 +312,15 @@ def upgrade_from_archive(archive_path: str, code_dir: str, current_version: str)
 def upgrade_from_bundle_bytes(data: bytes, code_dir: str, current_version: str,
                               *, allow_same: bool = False) -> dict:
     """포탈이 푸시한 agent-bundle(tar.gz bytes)을 적용한다(엣지 측)."""
-    import io
     try:
-        with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tf:
-            out = _members_from_tar(tf)
-    except (tarfile.TarError, OSError, ValueError) as exc:
+        out = _tar_members_from_bytes(data)
+    except _READ_ERRORS as exc:
         return {"ok": False, "reason": "번들 읽기 실패: %s" % exc}
     new_v = members_version(out)
     if not new_v:
         return {"ok": False, "reason": "번들에 유효한 패키지/버전 없음"}
+    if missing_members(out):
+        return {"ok": False, "reason": "번들이 불완전함(빠진 파일: %s)" % ", ".join(missing_members(out))}
     cur = parse_version(current_version) or (0, 0, 0)
     if new_v < cur or (new_v == cur and not allow_same):
         return {"ok": False, "reason": "더 새 버전 아님(%s)" % vstr(new_v), "version": vstr(new_v)}

@@ -40,6 +40,9 @@ def synced(text: str) -> str:
 
 
 def main(argv) -> int:
+    if "-h" in argv or "--help" in argv:
+        print(__doc__)
+        return 0
     check = "--check" in argv
     bad = []
     for name in PAGES:

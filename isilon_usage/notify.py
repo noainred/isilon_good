@@ -26,12 +26,16 @@ def send(webhook_url: str, payload: dict, *, timeout: float = 5.0) -> bool:
         f"{payload.get('root_path','')} "
         f"({payload.get('scanned_human','')}, dirs={payload.get('total_dirs','?')})",
     )
-    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(
-        webhook_url, data=data,
-        headers={"Content-Type": "application/json"}, method="POST",
-    )
     try:
+        # 비 UTF-8 경로(서로게이트)면 UTF-8 인코딩이 실패한다 — 베스트 에포트 약속대로 예외를 밖으로 내지 않는다
+        try:
+            data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        except UnicodeEncodeError:
+            data = json.dumps(body, ensure_ascii=True).encode("ascii")
+        req = urllib.request.Request(
+            webhook_url, data=data,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
         with netutil.urlopen(req, timeout=timeout):
             return True
     except Exception:

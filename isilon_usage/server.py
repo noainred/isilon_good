@@ -253,6 +253,15 @@ def reset_op_password_file(settings_file: str, data_dir: str, info_dir: Optional
     return {"password": pw, "info_path": path}
 
 
+def _json_bytes(payload) -> bytes:
+    """응답 JSON 바이트. 비 UTF-8 파일 이름(서로게이트 문자)이 섞이면 UTF-8 인코딩이 실패해 500 이 났다
+    (/api/atime·/api/dups·/api/analyze/status) — 그때는 \\uXXXX 이스케이프로 내보낸다(브라우저가 그대로 복원)."""
+    try:
+        return json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+    except UnicodeEncodeError:
+        return json.dumps(payload, ensure_ascii=True, default=str).encode("ascii")
+
+
 def _has_nul(obj) -> bool:
     """쿼리/본문 어디든 NUL 문자가 있으면 참(경로로 쓰이면 os 호출이 ValueError)."""
     if isinstance(obj, str):
@@ -288,6 +297,11 @@ def read_json_body(handler):
         return {}, None
     if length > MAX_JSON_BODY:
         return {}, (413, "본문이 너무 큽니다(최대 %dMB)" % (MAX_JSON_BODY // (1024 * 1024)))
+    # 본문이 있으면 JSON 요청만 받는다 — 다른 사이트의 <form enctype=text/plain> 은 application/json 을 보낼 수
+    # 없으므로, 로그인이 필요 없는 POST(스캔 시작·전체 중단 등)도 사이트 간 위조(CSRF)로 실행되지 않는다.
+    ctype = (handler.headers.get("Content-Type") or "").lower()
+    if ctype and "application/json" not in ctype:
+        return {}, (415, "JSON 요청만 받습니다(Content-Type: application/json)")
     try:
         raw = handler.rfile.read(length)
     except (OSError, ValueError):
@@ -296,7 +310,7 @@ def read_json_body(handler):
         return {}, (400, "본문이 잘렸습니다(%d/%d 바이트)" % (len(raw), length))
     try:
         val = json.loads(raw.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError, RecursionError):   # 아주 깊은 중첩 → RecursionError(연결이 끊겼다)
         return {}, (400, "JSON 형식이 아닙니다")
     if not isinstance(val, dict):
         return {}, (400, "JSON 객체({...})만 받습니다")
@@ -362,7 +376,8 @@ def _idle_resources() -> dict:
     return out
 
 
-def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 20) -> dict:
+def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 20,
+                 prev_total_dirs: Optional[int] = None) -> dict:
     """대시보드가 한 번의 폴링으로 쓸 수 있는 통합 상태 객체를 만든다."""
     if run_id is None:
         run_id = dbmod.latest_run_id(conn)
@@ -395,7 +410,14 @@ def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 
         dir_progress = _safe_pct(processed, total_dirs or discovered)
 
     # 처리 속도 / ETA (집계 단계 기준)
-    eta = mgrmod.estimate_eta_seconds(r["phase"], processed, total_dirs, discovered, elapsed)   # 홈·포탈과 같은 계산
+    # 활성 시간(일시정지 갭 제외) 기준 — 재개한 스캔의 남은 시간이 쉬던 시간만큼 부풀지 않게(홈·포탈과 같은 계산)
+    _act = float(r.get("elapsed_accum") or 0)
+    if _act > 0 and not finished and r.get("status") in ("discovering", "sizing"):
+        _act += max(0.0, now - float(r.get("updated_at") or now))
+    _p, _e = mgrmod.sizing_window(r, _act if _act > 0 else elapsed)
+    eta = mgrmod.estimate_eta_seconds(r["phase"], _p, total_dirs, discovered, _e, prev_total_dirs,
+                                      already=int(r.get("sizing_from_processed") or 0)
+                                      if (r["phase"] == "sizing" and r.get("sizing_from_active") is not None) else 0)
 
     # 최신 자원 샘플 + 시계열(스파크라인용). 구버전 DB(scanner_cpu/du_cpu 없음) 호환.
     _cols = ("ts, mem_percent, mem_used, mem_total, swap_used, cpu_percent, "
@@ -510,6 +532,7 @@ def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 
             "disk_verified_pct_of_used": _safe_pct(scanned_bytes, fs_used),
             "disk_verified_pct_of_total": _safe_pct(scanned_bytes, fs_total),
             "eta_seconds": eta,
+            "eta_basis": (("prev_scan" if r["phase"] == "discovering" else "rate") if eta is not None else None),
         },
         "resources": {
             "latest": latest,
@@ -1314,10 +1337,15 @@ class ScanController:
             except OSError:
                 pass
 
-    def update_settings(self, new: dict) -> dict:
-        """설정을 저장하고 갱신된 설정을 반환한다(잠겨 있으면 거부)."""
+    def update_settings(self, new: dict, *, merge_runtime: bool = True) -> dict:
+        """설정을 저장하고 갱신된 설정을 반환한다(잠겨 있으면 거부).
+
+        merge_runtime=True(화면 저장)면 예약의 런타임 필드(last_run 등)를 서버의 현재 값으로 덮는다 — 화면이
+        들고 있던 옛 값으로 되돌리지 않게. 서버가 스스로 런타임 필드를 바꾸는 저장(예약 시차 배치)은 False."""
         if self.lock_settings:
             return {"ok": False, "reason": "설정이 잠겨 있습니다(--lock-settings)."}
+        if not isinstance(new, dict):
+            return {"ok": False, "reason": "설정은 JSON 객체({...})로 보내야 합니다.", "_status": 400}
         new = dict(new or {})
         # 작업 보호 비밀번호: op_lock(체크) + op_password(새 비번)
         #  - op_lock 거짓 → 보호 해제(비밀번호 제거)
@@ -1353,7 +1381,7 @@ class ScanController:
                         a["password"] = old.get("password", "")
         self._sync_op_from_disk()
         merged = dict(self.settings)
-        if isinstance(new.get("schedules"), list):
+        if merge_runtime and isinstance(new.get("schedules"), list):
             new["schedules"] = self._merge_sched_runtime(new["schedules"])
         merged.update({k: v for k, v in new.items() if k in setmod.EDITABLE_KEYS})
         enc_fix = False
@@ -1935,7 +1963,7 @@ class ScanController:
             mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
             try:
                 r = mc.execute("SELECT id, scanned_bytes FROM scans WHERE root_path=? AND status='done' "
-                               "AND scanned_bytes > 0 ORDER BY id DESC LIMIT 1", (path,)).fetchone()
+                               "AND scanned_bytes > 0 ORDER BY id DESC LIMIT 1", (dbmod.db_text(path),)).fetchone()
             finally:
                 mc.close()
         except Exception:  # noqa: BLE001 — 관리 DB 가 아직 없음
@@ -1961,7 +1989,7 @@ class ScanController:
             try:
                 rows = mc.execute(
                     "SELECT id, updated_at FROM scans WHERE root_path=? "
-                    "AND status IN ('discovering','sizing')", (path,)).fetchall()
+                    "AND status IN ('discovering','sizing')", (dbmod.db_text(path),)).fetchall()
             finally:
                 mc.close()
         except Exception:  # noqa: BLE001 — 매니저 DB 가 없으면(첫 실행) 중복도 없다
@@ -2459,7 +2487,7 @@ class ScanController:
                                                 % (int(age), self._DUP_STALE_SECS // 60))}
         elif st not in ("paused", "error"):
             return {"ok": False, "reason": "멈춘(일시정지/오류) 스캔만 재개할 수 있습니다(현재 %s)." % st}
-        dup = self._active_scan_on(row["root_path"], exclude=scan_id)
+        dup = self._active_scan_on(dbmod.fs_text(row["root_path"]), exclude=scan_id)
         if dup is not None:
             self._log("scan #%s 재개 거부: 같은 경로를 #%s 가 스캔 중(중복 방지)" % (scan_id, dup))
             return {"ok": False, "duplicate": True, "scan_id": dup,
@@ -2484,14 +2512,14 @@ class ScanController:
                 os.remove(row["db_path"])       # 깨끗한 per-run DB 로 다시 기록(혼선 방지)
             except OSError:
                 pass
-            self._launch_pscan(scan_id, row["db_path"], row["root_path"], row["size_mode"],
+            self._launch_pscan(scan_id, row["db_path"], dbmod.fs_text(row["root_path"]), row["size_mode"],
                                one_file_system=bool(dict(row).get("opt_one_fs") or 0))
         else:
             # 시작 때 옵션으로 이어 간다(예전엔 one_file_system 이 항상 False → 재개분이 하위 마운트로 넘어가
             # 과대 계상, fold/max_depth 는 현재 설정값). 옛 스캔(opt_* 없음)은 기존처럼 설정값.
             _r = dict(row)
             _ofs = _r.get("opt_one_fs")
-            self._launch(scan_id, _r["db_path"], _r["root_path"], _r["backend"],
+            self._launch(scan_id, _r["db_path"], dbmod.fs_text(_r["root_path"]), _r["backend"],
                          _r["size_mode"], bool(_ofs) if _ofs is not None else False, resume=True,
                          fold_depth=_r.get("opt_fold_depth"), max_depth=_r.get("opt_max_depth"))
         return {"ok": True, "scan_id": scan_id}
@@ -2844,7 +2872,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 ok = status < 400 and not (isinstance(payload, dict) and payload.get("ok") is False)
                 why = "" if ok else str((payload or {}).get("reason") or (payload or {}).get("error") or status)
                 self._audit(pend, ok, why)
-        body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+        body = _json_bytes(payload)
         try:
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -2938,6 +2966,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         except OSError:
             pass
+
+    def _query_int_or(self, qs: dict, key: str, default: int):
+        """정수 쿼리 값, 없거나 잘못되면 default. 0 도 유효한 값으로 받는다(`or default` 는 0 을 기본값으로 바꿨다 —
+        coldplan days=0 이 365 로, dups min_size=0 이 4096 으로)."""
+        v = self._query_int(qs, key)
+        return default if v is None else v
 
     def _query_int(self, qs: dict, key: str):
         # SQLite 정수 범위(±2^63) 밖이면 바인딩에서 OverflowError(→500) — 없는 값으로 취급(2026-11 리뷰)
@@ -3302,7 +3336,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 try:
                     # top=0: 상위 디렉터리 정렬(거대 DB 에서 느림)은 생략한다.
                     # 대시보드는 /api/topdirs(깊이 필터, 빠름)를 따로 쓰므로 불필요.
-                    payload = build_status(pconn, None, top=0)
+                    payload = build_status(pconn, None, top=0, prev_total_dirs=mgrmod.prev_total_dirs(
+                        mconn, scan_meta.get("root_path"), scan_id))
                 except sqlite3.OperationalError:
                     # per-run DB 파일은 생겼지만 아직 테이블 생성 전(스캔 시작 직후 레이스).
                     # 500 대신 "초기화 중"으로 응답해 다음 폴링에 정상 표시되게 한다.
@@ -3431,7 +3466,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         f["owner"] = _uid_name(f.get("uid"))
                     try:
                         from . import systune as sysmod
-                        atime_info = sysmod.atime_policy(row["root_path"])
+                        atime_info = sysmod.atime_policy(dbmod.fs_text(row["root_path"]))
                     except Exception:   # noqa: BLE001
                         atime_info = {"opt": "unknown", "reliable": None}
                     self._send_json({"ok": True, "scan_id": scan_id, "age": age,
@@ -3491,7 +3526,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         return
                 from . import dups as dupsmod
                 self._send_json(dupsmod.find_duplicates(
-                    p, min_size=self._query_int(qs, "min_size") or 4096,
+                    p, min_size=self._query_int_or(qs, "min_size", 4096),
                     max_files=self._query_int(qs, "max_files") or 2_000_000))
                 return
 
@@ -3518,8 +3553,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 field = (qs.get("field", ["mtime"])[0] or "mtime")
                 from . import coldtier as coldmod
                 res = coldmod.plan_cold_move(
-                    p, days=self._query_int(qs, "days") or 365, field=field,
-                    target=tgt, min_size=self._query_int(qs, "min_size") or 0,
+                    p, days=self._query_int_or(qs, "days", 365), field=field,
+                    target=tgt, min_size=self._query_int_or(qs, "min_size", 0),
                     max_files=self._query_int(qs, "max_files") or 2_000_000)
                 if field == "atime" and res.get("ok"):
                     # atime 은 noatime 마운트에서 무의미 — /api/atime 과 같은 신뢰도 소스를 공유(단일 소스).
@@ -3854,6 +3889,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if self._body_err:
             self._send_json({"ok": False, "reason": self._body_err[1]}, status=self._body_err[0])
             return
+        for _k in ("path", "target", "root"):   # 경로 값은 문자열만(배열·숫자면 .strip() 에서 500 이 났다)
+            if _k in body and body[_k] is not None and not isinstance(body[_k], str):
+                self._send_json({"ok": False, "reason": "%s 는 문자열이어야 합니다." % _k}, status=400)
+                return
         try:
             # 작업 잠금 해제: 비밀번호 → 토큰
             if path == "/api/unlock":
@@ -3897,7 +3936,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._audit_pending = path
 
             if path == "/api/scan/start":
-                target = (body.get("path") or "").strip()
+                target = body.get("path") or ""
+                if not isinstance(target, str):     # 배열·숫자 등 → 400(예전엔 500)
+                    self._send_json({"ok": False, "reason": "path 는 문자열이어야 합니다."}, status=400)
+                    return
+                target = target.strip()
                 if not target:
                     self._send_json({"ok": False, "reason": "경로를 입력하세요."},
                                     status=400)
@@ -3939,11 +3982,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             if path in ("/api/gentest/validate", "/api/gentest/start"):
-                kw = dict(
-                    path=(body.get("path") or "").strip(),
-                    n_dirs=body.get("n_dirs", 0), n_subdirs=body.get("n_subdirs", 0),
-                    n_files=body.get("n_files", 0), file_size=body.get("file_size", 0),
-                )
+                try:   # 숫자가 아니면 400(예전엔 int() 변환 중 500)
+                    kw = dict(
+                        path=(body.get("path") or "").strip(),
+                        n_dirs=int(body.get("n_dirs", 0) or 0), n_subdirs=int(body.get("n_subdirs", 0) or 0),
+                        n_files=int(body.get("n_files", 0) or 0), file_size=int(body.get("file_size", 0) or 0),
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    self._send_json({"ok": False, "reason": "개수·크기는 정수여야 합니다."}, status=400)
+                    return
                 if path == "/api/gentest/validate":
                     res = self.controller.gentest_validate(**kw)
                 else:
@@ -4003,7 +4050,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         "/api/scan/partial-aggregate"):
                 try:
                     scan_id = int(body.get("scan_id"))
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):   # 1e999 같은 값 → OverflowError(예전엔 500)
                     self._send_json({"ok": False, "reason": "scan_id 필요"}, status=400)
                     return
                 if path == "/api/scan/stop":
@@ -4019,21 +4066,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             if path == "/api/prune":
-                res = self.controller.prune(
-                    keep_per_root=body.get("keep_per_root"),
-                    older_than_days=body.get("older_than_days"))
+                kpr, otd = body.get("keep_per_root"), body.get("older_than_days")
+                try:      # 숫자(또는 비움)만 — 예전엔 "x"·{} 가 비교 중 500
+                    kpr = None if kpr in (None, "") else int(kpr)
+                    otd = None if otd in (None, "") else float(otd)
+                    if (kpr is not None and kpr < 0) or (otd is not None and not (otd >= 0)):
+                        raise ValueError
+                except (TypeError, ValueError, OverflowError):
+                    self._send_json({"ok": False, "reason": "keep_per_root·older_than_days 는 0 이상의 숫자여야 합니다."},
+                                    status=400)
+                    return
+                res = self.controller.prune(keep_per_root=kpr, older_than_days=otd)
                 self._send_json(res)
                 return
 
             if path == "/api/settings":
                 result = self.controller.update_settings(body.get("settings") or body)
-                self._send_json(result, status=200 if result.get("ok") else 403)
+                self._send_json(result, status=200 if result.get("ok") else int(result.pop("_status", 403)))
                 return
 
             if path == "/api/schedules/stagger":
                 cur = list(self.controller.settings.get("schedules", []))
                 staggered = setmod.stagger_schedules(cur)
-                res = self.controller.update_settings({"schedules": staggered})
+                # 시차 배치는 서버가 last_run 을 일부러 바꾸는 저장 — 런타임 병합으로 되돌리지 않는다(1.99.41 회귀)
+                res = self.controller.update_settings({"schedules": staggered}, merge_runtime=False)
                 if res.get("ok"):
                     res["staggered"] = sum(1 for s in staggered if s.get("enabled", True))
                 self._send_json(res, status=200 if res.get("ok") else 403)

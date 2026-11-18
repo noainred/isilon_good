@@ -161,7 +161,7 @@ def sanitize(raw: dict) -> dict:
     def _int(v, lo, hi, dflt):
         try:
             return max(lo, min(hi, int(v)))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):   # 1e999·Infinity → 기본값(예전엔 serve 가 기동하지 못했다)
             return dflt
 
     def _float(v, lo, hi, dflt):
@@ -234,7 +234,9 @@ def sanitize(raw: dict) -> dict:
     mb = s.get("mount_bases") or []
     if isinstance(mb, str):
         mb = mb.replace(",", "\n").splitlines()
-    s["mount_bases"] = [os.path.abspath(x.strip()) for x in mb if str(x).strip()]
+    if not isinstance(mb, (list, tuple)):     # 숫자 등 잘못된 값 → 빈 목록(예전엔 serve 가 기동하지 못했다)
+        mb = []
+    s["mount_bases"] = [os.path.abspath(x.strip()) for x in mb if isinstance(x, str) and x.strip()]
 
     s["schedules"] = _sanitize_schedules(s.get("schedules"))
     s["storage_arrays"] = _sanitize_storage_arrays(s.get("storage_arrays"))
@@ -310,7 +312,7 @@ def _sanitize_schedules(raw) -> list:
         def _int(key, lo, hi, dflt, _it=it):
             try:
                 return max(lo, min(hi, int(_it.get(key, dflt))))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 return dflt
 
         unit = it.get("unit")
@@ -323,7 +325,8 @@ def _sanitize_schedules(raw) -> list:
             every = _int("every_minutes", 1, 100000, 60)
         else:
             every = 1
-        weekdays = sorted({d for d in (it.get("weekdays") or [])
+        _wd = it.get("weekdays")
+        weekdays = sorted({d for d in (_wd if isinstance(_wd, (list, tuple)) else [])
                            if isinstance(d, int) and 0 <= d <= 6})
         backend = it.get("backend", "native")
         if backend not in ("native", "du"):
@@ -406,7 +409,9 @@ def schedule_due(sc: dict, now: float) -> bool:
     slot = n.replace(hour=hh, minute=mm, second=0, microsecond=0, fold=0)
     if n < slot:
         return False                       # 오늘 지정 시각 전
-    if last >= slot.timestamp():
+    # 오늘 슬롯을 이미 돌았는지는 '현지 시각'끼리 비교한다. 서머타임 시작일에 없는 시각(예: 02:30)은
+    # slot.timestamp() 가 03:30 으로 계산돼, 03:00 에 돈 뒤에도 03:30 까지 매 틱 다시 '차례'가 됐다(30분간 반복 실행).
+    if last > 0 and _dt.datetime.fromtimestamp(last) >= slot:
         return False                       # 오늘 슬롯은 이미 실행됨
     anchor = _dt.datetime.fromtimestamp(float(sc.get("anchor", 0) or now))
 

@@ -226,21 +226,32 @@ cd "$INSTALL_DIR"
 #   --api-token 으로 주면 그 값을, 없으면 기존 값을 유지, 그것도 없으면 새로 생성한다.
 SETTINGS="$DATA_DIR/settings.json"
 TOKEN="$(API_TOKEN="$API_TOKEN" SETTINGS="$SETTINGS" python3 - <<'PY'
-import json, os, secrets
+import json, os, secrets, shutil
 sp = os.environ["SETTINGS"]
 want = (os.environ.get("API_TOKEN") or "").strip()
-try:
-    with open(sp, encoding="utf-8") as fh:
-        s = json.load(fh)
-    if not isinstance(s, dict):
-        s = {}
-except Exception:
+# 설정 읽기: 본 파일이 깨졌으면 .bak(앱이 남긴 직전 정상본) — 빈 값으로 덮어 비밀번호·토큰을 잃지 않게
+s = None
+for p in (sp, sp + ".bak"):
+    try:
+        with open(p, encoding="utf-8") as fh:
+            v = json.load(fh)
+        if isinstance(v, dict):
+            s = v
+            break
+    except Exception:
+        continue
+if s is None:
+    if os.path.exists(sp):           # 둘 다 못 읽으면 덮기 전에 원본을 보관
+        shutil.copyfile(sp, sp + ".broken")
     s = {}
 tok = want or str(s.get("api_token") or "").strip() or secrets.token_hex(16)
 s["api_token"] = tok
+# 쓰기: 앱(settings.write_json_atomic)과 같은 규칙 — 처음부터 소유자만(0600), 원자적 교체
 tmp = sp + ".tmp"
-with open(tmp, "w", encoding="utf-8") as fh:
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as fh:
     json.dump(s, fh, ensure_ascii=False, indent=2)
+os.chmod(tmp, 0o600)
 os.replace(tmp, sp)
 print(tok)
 PY

@@ -38,7 +38,7 @@ from . import upgrade as upgrademod
 from . import ask as askmod
 from . import netutil
 from .server import ThreadingHTTPServer, browse_dir  # 3.6 폴백 포함 재사용
-from .server import read_json_body, _has_nul         # 요청 본문 검증(엣지와 같은 규칙)
+from .server import read_json_body, _has_nul, _json_bytes   # 요청 본문 검증·응답 인코딩(엣지와 같은 규칙)
 from .server import reset_op_password_file      # 임시 비밀번호(엣지와 같은 규칙·같은 함수)
 
 # SSH 실행 입력 검증(옵션 주입 차단): 사용자는 POSIX 계정 이름, 호스트는 IP/호스트명/[IPv6] 만.
@@ -258,7 +258,7 @@ def _sanitize_overall(ov) -> dict:
         for k in _ROOT_NUM_KEYS:
             if k in r:
                 r[k] = _num(r[k])
-        for k in ("root_path", "status", "phase", "fs_source"):
+        for k in ("root_path", "status", "phase", "fs_source", "eta_basis", "nested_in"):
             if k in r and r[k] is not None and not isinstance(r[k], str):
                 r[k] = str(r[k])
         roots.append(r)
@@ -298,7 +298,7 @@ def _public_node(n: dict, cache: dict, rep_err: Optional[dict] = None) -> dict:
     out["version"] = c.get("version")
     out["hostname"] = c.get("hostname")
     out["error"] = n.get("last_error") or c.get("error") or (rep_err or {}).get(n["id"], "")
-    out["active_scans"] = int(ov.get("active_scans") or 0)   # 지금 스캔 중인 개수
+    out["active_scans"] = int(ov.get("active_scans") or 0) if out["online"] else 0   # 지금 스캔 중인 개수(끊긴 노드는 옛 값이라 0)
     out["scanning"] = out["active_scans"] > 0
     out["used_bytes"] = _ov_capacity(ov)
     return out
@@ -985,11 +985,16 @@ class PortalController:
             return {"ok": False, "reason": "저장할 디렉터리를 입력하세요."}
         data, fname = self.make_backup_bytes()
         try:
-            os.makedirs(d, exist_ok=True)
+            if not os.path.isdir(d):
+                os.makedirs(d, mode=0o700, exist_ok=True)   # 새로 만드는 백업 폴더는 소유자만
             path = os.path.join(d, fname)
             tmp = path + ".tmp"
-            with open(tmp, "wb") as fh:
+            # 백업에는 노드 토큰(평문)·비밀번호 해시가 들어 있다 — 원본 설정 파일처럼 소유자만 읽게(0600).
+            # 예전엔 umask 대로 0644 로 만들어 같은 서버의 다른 사용자가 읽을 수 있었다.
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "wb") as fh:
                 fh.write(data)
+            os.chmod(tmp, 0o600)
             os.replace(tmp, path)
         except OSError as exc:
             return {"ok": False, "reason": "저장 실패: %s" % exc}
@@ -1644,6 +1649,10 @@ class PortalController:
                 if not n["token"] and (keep_token_on_url_change or not url_changed):
                     n["token"] = cur.get("token", "")
                 n["last_sync"] = cur.get("last_sync", 0)
+                # 복제 주기의 기준일(anchor)은 수정 때 승계 — 예전엔 지역·별칭만 고쳐도 일/주/월 주기의 기준이
+                # 저장한 날로 옮겨졌다. 화면이 anchor 를 보내지 않으므로 값이 명시돼 오지 않으면 기존 값 유지.
+                if not raw.get("anchor") and cur.get("anchor"):
+                    n["anchor"] = cur.get("anchor")
                 n["last_poll"] = cur.get("last_poll", 0)
                 self.nodes = [n if x["id"] == n["id"] else x for x in self.nodes]
             else:
@@ -2310,7 +2319,8 @@ class PortalController:
                 is_on = bool(c.get("online"))
                 if is_on:
                     online += 1
-                active += int(ov.get("active_scans") or 0)
+                    # 끊긴 노드의 '진행 중'은 끊기기 전 옛 값 — 합계·진행 표·완료 예상에 넣지 않는다(표와 KPI 일치)
+                    active += int(ov.get("active_scans") or 0)
                 total_used += used
                 storages += st
                 reg = n.get("region") or "(미지정)"
@@ -2330,6 +2340,7 @@ class PortalController:
                                 "scanned_bytes": rt.get("scanned_bytes") or 0,
                                 "started_at": rt.get("started_at"), "updated_at": rt.get("updated_at"),
                                 "eta_at": rt.get("eta_at"), "eta_by_portal": bool(rt.get("eta_by_portal")),
+                                "eta_basis": rt.get("eta_basis"),
                             })
                 last_scan = max([0] + [max(rt.get("finished_at") or 0, rt.get("updated_at") or 0)
                                        for rt in roots_l])     # 그 DC 가 마지막으로 스캔한 시각
@@ -2347,10 +2358,10 @@ class PortalController:
                     # 폴링 오류 우선, 없으면 마지막 복제 오류(다음 복제 성공 전까지 유지)
                     "last_error": n.get("last_error") or c.get("error") or rep_err.get(n["id"], ""),
                     "used_bytes": used, "storages": st,
-                    "active_scans": int(ov.get("active_scans") or 0),
+                    "active_scans": int(ov.get("active_scans") or 0) if is_on else 0,
                     "fs_total_bytes": fs_total, "fs_used_bytes": fs_used,
                     "fs_free_bytes": fs_free, "fs_used_pct": fs_pct,
-                    "running": self._running_scan(roots_l),
+                    "running": self._running_scan(roots_l) if is_on else None,
                     "auto_restart": any(rt.get("auto_restart") for rt in roots_l),  # 반복 스캔 중
                     "roots": roots_l,
                     "isilon": c.get("isilon") or {"configured": False},
@@ -2482,6 +2493,7 @@ class PortalController:
                      "online": False, "latency_ms": None, "error": ""}
             if not n.get("enabled"):
                 entry["error"] = "비활성"
+                entry["disabled"] = True
                 return entry
             t0 = time.monotonic()
             try:
@@ -2639,8 +2651,10 @@ class PortalController:
         return {"ok": True, "now": now, "windows": list(self.THRU_WINDOWS), "nodes": out}
 
     def _record_ping(self, results: list) -> None:
+        # 비활성(점검 등으로 끈) 노드는 재지 않았으므로 기록하지 않는다 — 예전엔 '다운'으로 쌓여
+        # 가용률·장애 이력이 거짓으로 나빠졌다(2026-11 리뷰).
         rows = [(int(time.time()), r["id"], r.get("latency_ms"), 1 if r.get("online") else 0)
-                for r in (results or []) if r.get("id")]
+                for r in (results or []) if r.get("id") and not r.get("disabled")]
         if not rows:
             return
         try:
@@ -3099,17 +3113,23 @@ class PortalController:
         return logical
 
     def _replica_db_for(self, node_id: str, path: str):
-        """노드 복제본에서 path 를 포함하는(root 가 prefix) 최신 완료 스캔 DB 경로."""
+        """노드 복제본에서 path 를 포함하는(root 가 prefix) 최신 완료 스캔 DB 경로(첫 후보)."""
+        dbs = self._replica_dbs_for(node_id, path)
+        return dbs[0] if dbs else None
+
+    def _replica_dbs_for(self, node_id: str, path: str) -> list:
+        """path 를 덮는 복제 스캔 DB 후보들(좋은 순서). 비교는 첫 후보에 그 폴더 행이 없으면(접힘 등) 다음 후보를 본다."""
         if not safe_node_id(node_id):
-            return None
+            return []
         rep = os.path.join(self.replicas_dir, node_id)
         try:
             with open(os.path.join(rep, "meta.json"), "r", encoding="utf-8") as fh:
                 meta = json.load(fh)
         except (OSError, ValueError):
-            return None
+            return []
         # 고르는 순서: ① 완료(done) 스캔 — 일시정지·오류는 일부만 센 값이라 비교에 쓰면 '줄어든' 것처럼
-        # 보인다 ② 경로를 더 구체적으로 덮는 루트 ③ 최신. 파일이 없는 항목은 건너뛴다(2026-11 리뷰).
+        # 보인다 ② 최신(완료 시각) ③ 경로를 더 구체적으로 덮는 루트. 예전엔 ②③ 순서가 반대라 오래된 하위
+        # 루트 스캔이 최신 상위 루트 스캔을 이겨, 같은 화면에서 부모·자식 값이 서로 다른 시점이었다.
         cands = []
         for s in meta.get("scans", []):
             root = (s.get("root_path") or "").rstrip("/")
@@ -3117,11 +3137,30 @@ class PortalController:
                 dbf = s.get("db_filename") or os.path.basename(s.get("db_path") or "")
                 dbp = os.path.join(rep, "scans", dbf)
                 if dbf and os.path.exists(dbp):
-                    cands.append(((s.get("status") == "done", len(root),
-                                   float(s.get("finished_at") or 0)), dbp))
-        if not cands:
-            return None
-        return max(cands, key=lambda t: t[0])[1]
+                    cands.append(((s.get("status") == "done", float(s.get("finished_at") or 0),
+                                   len(root)), dbp))
+        cands.sort(key=lambda t: t[0], reverse=True)
+        return [dbp for _k, dbp in cands]
+
+    @staticmethod
+    def _folded_at(c, rid, local: str):
+        """local 에 행이 없을 때, 접기(fold) 때문인지 판별한다 — 가장 가까운 상위 폴더가 '하위 폴더가 있는데
+        하위 행이 하나도 없으면' 접힌 것(그 상위의 합계에 들어 있음). 접힌 상위 경로를, 아니면 None.
+        예전엔 접힌 폴더를 '없음/미스캔·누락'으로 보여, 노드마다 fold 깊이가 다르면 가짜 누락처럼 보였다."""
+        p = local.rstrip("/")
+        while True:
+            parent = os.path.dirname(p)
+            if not parent or parent == p:
+                return None
+            r = c.execute("SELECT subdir_count FROM directories WHERE run_id=? AND path=?", (rid, parent)).fetchone()
+            if r is not None:
+                if int(r["subdir_count"] or 0) <= 0:
+                    return None
+                base = parent.rstrip("/")
+                kid = c.execute("SELECT 1 FROM directories WHERE run_id=? AND path>=? AND path<? LIMIT 1",
+                                (rid, base + "/", base + "0")).fetchone()
+                return parent if kid is None else None
+            p = parent
 
     def compare_path(self, path: str) -> dict:
         """같은 경로의 노드별 용량/파일 수를 모아 비교한다(복제본 기준)."""
@@ -3131,63 +3170,87 @@ class PortalController:
             entry = {"id": n["id"], "region": n.get("region"), "found": False,
                      "total_bytes": 0, "own_bytes": 0, "total_files": 0, "subdir_count": 0}
             local = self._to_local(n, path)   # 논리 경로 → 이 노드의 로컬 경로(별칭)
-            dbp = self._replica_db_for(n["id"], local)
-            if dbp:
+            for i, dbp in enumerate(self._replica_dbs_for(n["id"], local)):
                 try:
                     c = dbmod.connect(dbp)
                     rid = dbmod.latest_run_id(c)
                     r = c.execute(
                         "SELECT total_bytes, own_bytes, total_files, subdir_count "
                         "FROM directories WHERE run_id=? AND path=?", (rid, local)).fetchone()
+                    if r is None and i == 0:
+                        fa = self._folded_at(c, rid, local)
+                        if fa:
+                            entry["folded_at"] = fa
                     c.close()
                     if r is not None:
                         sz = r["total_bytes"] if r["total_bytes"] else r["own_bytes"]
                         entry.update({"found": True, "total_bytes": sz,
                                       "own_bytes": r["own_bytes"], "total_files": r["total_files"],
                                       "subdir_count": r["subdir_count"]})
+                        entry.pop("folded_at", None)
+                        break
                 except Exception:  # noqa: BLE001
-                    pass
+                    continue
             rows.append(entry)
         return {"ok": True, "path": path, "rows": rows}
+
+    def _matrix_kids(self, node_id: str, local: str):
+        """노드의 복제 후보들에서 local 의 직속 자식 행을 찾는다 — (자식 행, 접힘 여부) 또는 None(경로 없음).
+        첫 후보에 행이 없거나 그 아래가 접혀 있으면 다음 후보(더 깊이 저장한 다른 스캔)를 본다."""
+        folded = False
+        for dbp in self._replica_dbs_for(node_id, local):
+            try:
+                c = dbmod.connect(dbp)
+                try:
+                    rid = dbmod.latest_run_id(c)
+                    prow = c.execute("SELECT depth, subdir_count FROM directories WHERE run_id=? AND path=?",
+                                     (rid, local)).fetchone()
+                    if prow is None:
+                        folded = folded or bool(self._folded_at(c, rid, local))
+                        continue
+                    # 범위 비교(대소문자 구분·인덱스 사용): LIKE 는 ASCII 대소문자를 무시해 /data/FOO 의 자식이
+                    # /data/foo 매트릭스에 섞였다(2026-11 리뷰). prefix ≤ path < prefix 의 '/' 다음 문자('0').
+                    base = local.rstrip("/")
+                    kids = c.execute(
+                        "SELECT name, total_bytes, own_bytes, subdir_count FROM directories "
+                        "WHERE run_id=? AND depth=? AND path >= ? AND path < ?",
+                        (rid, int(prow["depth"]) + 1, base + "/", base + "0")).fetchall()
+                finally:
+                    c.close()
+            except Exception:  # noqa: BLE001
+                continue
+            if kids:
+                return [dict(k) for k in kids], False
+            if int(prow["subdir_count"] or 0) > 0:
+                folded = True           # 이 스캔에선 이 폴더에서 접힘 — 다른 후보가 더 깊이 있으면 그걸 쓴다
+                continue
+            return [], False            # 정말 하위 폴더가 없다
+        return ([], True) if folded else None
 
     def compare_matrix(self, path: str) -> dict:
         """path 직속 자식들의 노드별 용량 매트릭스(누락·드리프트 비교)."""
         path = os.path.abspath(path)
         node_ids = [n["id"] for n in self.nodes]
         children = {}
+        folded = []   # 이 경로 아래가 접혀(fold) 하위 행이 없는 노드
         for n in self.nodes:
             local = self._to_local(n, path)   # 논리 경로 → 이 노드의 로컬 경로(별칭)
-            dbp = self._replica_db_for(n["id"], local)
-            if not dbp:
+            res = self._matrix_kids(n["id"], local)
+            if res is None:
                 continue
-            try:
-                c = dbmod.connect(dbp)
-                rid = dbmod.latest_run_id(c)
-                prow = c.execute("SELECT depth FROM directories WHERE run_id=? AND path=?",
-                                 (rid, local)).fetchone()
-                if prow is None:
-                    c.close()
-                    continue
-                # 범위 비교(대소문자 구분·인덱스 사용): LIKE 는 ASCII 대소문자를 무시해 /data/FOO 의 자식이
-                # /data/foo 매트릭스에 섞였다(2026-11 리뷰). prefix ≤ path < prefix 의 '/' 다음 문자('0').
-                base = local.rstrip("/")
-                kids = c.execute(
-                    "SELECT name, total_bytes, own_bytes, subdir_count FROM directories "
-                    "WHERE run_id=? AND depth=? AND path >= ? AND path < ?",
-                    (rid, int(prow["depth"]) + 1, base + "/", base + "0")).fetchall()
-                c.close()
-                for k in kids:
-                    e = children.setdefault(k["name"], {"name": k["name"], "subdir_count": 0, "vals": {}})
-                    e["vals"][n["id"]] = int(k["total_bytes"] or k["own_bytes"] or 0)
-                    e["subdir_count"] = max(e["subdir_count"], int(k["subdir_count"] or 0))
-            except Exception:  # noqa: BLE001
-                pass
+            kids, is_folded = res
+            for k in kids:
+                e = children.setdefault(k["name"], {"name": k["name"], "subdir_count": 0, "vals": {}})
+                e["vals"][n["id"]] = int(k["total_bytes"] or k["own_bytes"] or 0)
+                e["subdir_count"] = max(e["subdir_count"], int(k["subdir_count"] or 0))
+            if is_folded:
+                folded.append(n["id"])
         out = []
         for e in children.values():
             e["sum"] = sum(e["vals"].values())
             out.append(e)
         out.sort(key=lambda x: -x["sum"])
-        return {"ok": True, "path": path, "nodes": node_ids, "children": out}
+        return {"ok": True, "path": path, "nodes": node_ids, "children": out, "folded_nodes": folded}
 
 
 # ------------------------------------------------------------------ HTTP 핸들러
@@ -3207,7 +3270,7 @@ class PortalHandler(BaseHTTPRequestHandler):
                 ok = status < 400 and not (isinstance(payload, dict) and payload.get("ok") is False)
                 why = "" if ok else str((payload or {}).get("reason") or (payload or {}).get("error") or status)
                 self._audit(pend, ok, why)
-        body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+        body = _json_bytes(payload)   # 비 UTF-8 이름이 섞여도 500 없이(엣지와 같은 규칙)
         try:
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")

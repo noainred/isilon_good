@@ -14,15 +14,34 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from isilon_usage import upgrade  # noqa: E402
 
 
+_PKG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "isilon_usage")
+
+
+def _pkg_files(version: str) -> dict:
+    """실제 패키지 파일(버전만 바꿈) — 업그레이드는 필수 파일이 다 있고 실제로 import 되는 묶음만 설치한다."""
+    out = {}
+    for name in sorted(os.listdir(_PKG)):
+        if name.endswith((".py", ".html", ".js", ".css")):
+            with open(os.path.join(_PKG, name), "rb") as fh:
+                out[name] = fh.read()
+    import re as _re
+    out["__init__.py"] = _re.sub(rb'__version__ = "[^"]*"', ('__version__ = "%s"' % version).encode(),
+                                 out["__init__.py"], count=1)
+    out["UPGRADE_MARK.txt"] = version.encode()
+    return out
+
+
+def _add_pkg(tf, prefix: str, version: str) -> None:
+    for rel, data in _pkg_files(version).items():
+        ti = tarfile.TarInfo(prefix + rel)
+        ti.size = len(data)
+        tf.addfile(ti, io.BytesIO(data))
+
+
 def _make_archive(path: str, version: str) -> None:
     """isilon_usage-<version>/isilon_usage/ 를 담은 tar.gz 생성."""
     with tarfile.open(path, "w:gz") as tf:
-        for rel, body in (("__init__.py", '__version__ = "%s"\n' % version),
-                          ("server.py", "# new\n")):
-            data = body.encode()
-            ti = tarfile.TarInfo("isilon_usage-%s/isilon_usage/%s" % (version, rel))
-            ti.size = len(data)
-            tf.addfile(ti, io.BytesIO(data))
+        _add_pkg(tf, "isilon_usage-%s/isilon_usage/" % version, version)
 
 
 def main() -> int:
@@ -51,7 +70,7 @@ def main() -> int:
         assert res["ok"] and res["version"] == "1.41.0", res
         with open(os.path.join(code, "isilon_usage", "__init__.py")) as fh:
             assert "1.41.0" in fh.read()
-        assert os.path.exists(os.path.join(code, "isilon_usage", "server.py"))   # 새 파일
+        assert os.path.exists(os.path.join(code, "isilon_usage", "UPGRADE_MARK.txt"))   # 새 파일
         assert not os.path.exists(os.path.join(code, "isilon_usage", "OLD.txt"))  # 교체됨
         assert res["backup"] and os.path.isdir(res["backup"])                     # 기존 백업
         assert os.path.exists(os.path.join(res["backup"], "OLD.txt"))             # 백업에 옛 파일
@@ -66,10 +85,7 @@ def main() -> int:
     try:
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tf:
-            data = b'__version__ = "2.0.0"\n'
-            ti = tarfile.TarInfo("isilon_usage/__init__.py")
-            ti.size = len(data)
-            tf.addfile(ti, io.BytesIO(data))
+            _add_pkg(tf, "isilon_usage/", "2.0.0")
         os.makedirs(os.path.join(code2, "isilon_usage"))
         with open(os.path.join(code2, "isilon_usage", "__init__.py"), "w") as fh:
             fh.write('__version__ = "1.0.0"\n')

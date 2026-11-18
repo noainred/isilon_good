@@ -269,6 +269,9 @@ def init_db(db_path: str) -> None:
         ensure_column(conn, "scan_runs", "worker_dirs", "TEXT")
         ensure_column(conn, "scan_runs", "session_started_at", "REAL")
         ensure_column(conn, "scan_runs", "elapsed_accum", "REAL NOT NULL DEFAULT 0")
+        # 집계(sizing) 단계에 들어설 때의 활성 시간·처리 수 — 집계 단계 남은 시간을 그 이후 속도로 계산
+        ensure_column(conn, "scan_runs", "sizing_from_active", "REAL")
+        ensure_column(conn, "scan_runs", "sizing_from_processed", "INTEGER")
         ensure_column(conn, "resource_samples", "scanner_cpu", "REAL NOT NULL DEFAULT 0")
         ensure_column(conn, "resource_samples", "du_cpu", "REAL NOT NULL DEFAULT 0")
         ensure_column(conn, "top_files", "atime", "REAL")
@@ -313,7 +316,8 @@ def create_run(
              started_at, updated_at, scanner_pid, hostname, app_version)
         VALUES (?, 'discovering', 'discovering', ?, ?, ?, ?, ?, ?, ?)
         """,
-        (root_path, backend, size_mode, now, now, scanner_pid, hostname, __version__),
+        # 루트 경로도 하위 이름처럼 DB 경계에서 변환(비 UTF-8 루트면 INSERT 가 실패해 스캔이 시작도 못 했다)
+        (db_text(root_path), backend, size_mode, now, now, scanner_pid, hostname, __version__),
     )
     conn.commit()
     return int(cur.lastrowid)

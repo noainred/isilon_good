@@ -358,6 +358,9 @@ def cmd_prune(args: argparse.Namespace) -> int:
 def cmd_partial(args: argparse.Namespace) -> int:
     """멈춘 자료 집계(부분 집계) — 일시정지/오류 스캔의 현재 행으로 재귀 합계(하한값)를 계산한다."""
     data_dir = os.path.abspath(args.data_dir)
+    if not os.path.exists(mgrmod.manager_db_path(data_dir)):   # 없는 폴더면 traceback 대신 안내(status 와 같게)
+        print(f"관리 DB 가 없습니다: {mgrmod.manager_db_path(data_dir)} — --data-dir 를 확인하세요.", file=sys.stderr)
+        return 2
     mconn = dbmod.connect(mgrmod.manager_db_path(data_dir))
     try:
         row = mgrmod.get_scan(mconn, args.scan)
@@ -412,6 +415,9 @@ def _scan_writer_alive(db_path: str) -> int:
 
 def cmd_resume(args: argparse.Namespace) -> int:
     data_dir = os.path.abspath(args.data_dir)
+    if not os.path.exists(mgrmod.manager_db_path(data_dir)):   # 없는 폴더면 traceback 대신 안내(status 와 같게)
+        print(f"관리 DB 가 없습니다: {mgrmod.manager_db_path(data_dir)} — --data-dir 를 확인하세요.", file=sys.stderr)
+        return 2
     mconn = dbmod.connect(mgrmod.manager_db_path(data_dir))
     try:
         row = mgrmod.get_scan(mconn, args.scan)
@@ -446,7 +452,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         v = rd.get(key)
         return int(v) if v is not None else dflt
     run_scan(
-        row["db_path"], row["root_path"],
+        row["db_path"], dbmod.fs_text(row["root_path"]),
         backend=row["backend"], size_mode=row["size_mode"],
         one_file_system=bool(_opt("opt_one_fs", 0)),
         batch_size=s["batch_size"], workers=s["scan_workers"],
@@ -721,7 +727,7 @@ def cmd_pscan(args: argparse.Namespace) -> int:
     if getattr(args, "json", False):
         import json
         print(json.dumps(res, ensure_ascii=False, indent=2))
-        return 0
+        return 0 if res.get("complete", True) else 1
     print("-" * 56)
     print("  총 용량      : %s" % _human(res["total_bytes"]))
     print("  총 파일/디렉터리: %d / %d   오류: %d" % (
@@ -733,6 +739,12 @@ def cmd_pscan(args: argparse.Namespace) -> int:
         for t in res["per_top"][:10]:
             print("    %10s  %s  (파일 %d)" % (_human(t["bytes"]), t["path"], t["files"]))
     print("-" * 56)
+    # 일부 단위(하위 트리)가 실패하면(OOM·프로세스 풀 깨짐 등) 합계가 모자란다 — 성공처럼 보이지 않게 알리고 종료코드 1
+    failed = res.get("failed_units") or []
+    if failed or res.get("complete") is False:
+        print("  ⚠ 일부 하위 트리 집계 실패 — 위 합계는 불완전(하한값)입니다: %s"
+              % ", ".join(str(f.get("path") if isinstance(f, dict) else f) for f in failed[:10]), file=sys.stderr)
+        return 1
     return 0
 
 
@@ -881,6 +893,9 @@ def cmd_gentest(args: argparse.Namespace) -> int:
 
 def cmd_stats(args: argparse.Namespace) -> int:
     data_dir = os.path.abspath(args.data_dir)
+    if not os.path.exists(mgrmod.manager_db_path(data_dir)):   # 없는 폴더면 traceback 대신 안내(status 와 같게)
+        print(f"관리 DB 가 없습니다: {mgrmod.manager_db_path(data_dir)} — --data-dir 를 확인하세요.", file=sys.stderr)
+        return 2
     mconn = dbmod.connect(mgrmod.manager_db_path(data_dir))
     try:
         if args.scan:
@@ -918,7 +933,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
         _show("🧊 마지막 접근 나이(atime 기준)", "atime_age", 0)
         try:
             from . import systune as sysmod
-            ap = sysmod.atime_policy(row["root_path"])
+            ap = sysmod.atime_policy(dbmod.fs_text(row["root_path"]))
             if ap.get("reliable") is False:
                 print("    ⚠ 대상 마운트가 noatime(%s) — atime 미갱신 → 위 atime 분포는 "
                       "신뢰 불가(mtime 참고)." % (ap.get("mount") or ""))

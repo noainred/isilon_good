@@ -313,3 +313,7 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
 .portal details.card > summary{ min-height:32px; }
 .eta-line{ display:flex; flex-wrap:wrap; gap:4px 20px; font-size:13px; color:var(--muted); }
 .eta-line b{ color:var(--text); font-weight:600; }
+.inp[readonly]{ background:var(--panel2); color:var(--muted); cursor:not-allowed; }
+/* 좁은 화면: 넓은 표는 카드 안에서만 가로 스크롤(페이지 전체가 옆으로 밀리지 않게), 격자 칸은 내용 때문에 늘어나지 않게 */
+.grid > *, .kpis > *{ min-width:0; }
+@media (max-width:900px){ .card{ overflow-x:auto; } }
