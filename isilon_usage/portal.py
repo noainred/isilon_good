@@ -100,6 +100,21 @@ def _non_str_field(raw, keys):
     return next((k for k in keys if raw.get(k) is not None and not isinstance(raw.get(k), str)), None)
 
 
+def _audit_target(body) -> str:
+    """감사 로그용 대상 요약 — 노드 id·이름·경로 같은 '무엇에 대해' 만(토큰·비밀번호 등 비밀값은 제외)."""
+    if not isinstance(body, dict):
+        return ""
+    out = []
+    for k in ("id", "ids", "node", "nodes", "name", "path", "dir", "region", "version"):
+        v = body.get(k)
+        if v in (None, "", []):
+            continue
+        if isinstance(v, (list, tuple)):
+            v = ",".join(str(x) for x in list(v)[:20]) + ("…" if len(v) > 20 else "")
+        out.append("%s=%s" % (k, str(v)[:200]))
+    return " ".join(out)
+
+
 def safe_node_id(nid) -> bool:
     """노드 id 가 복제본 폴더 이름으로 안전한지(경로 구분자·'.'/'..'·NUL 금지).
 
@@ -175,8 +190,9 @@ def sanitize_node(raw: dict) -> Optional[dict]:
         "start_day": _i("start_day", 1, 31, 1),
         "anchor": anchor,
         "mode": mode,
-        "enabled": bool(raw.get("enabled", True)),
+        "enabled": _truthy(raw.get("enabled", True)),   # CSV 의 "false"/"0" 도 꺼짐(bool("false") 는 참)
         "last_poll": _f(raw.get("last_poll")),
+        "last_ok": _f(raw.get("last_ok")),     # 마지막 '성공한' 응답 시각(last_poll 은 실패한 시도도 포함)
         "last_sync": _f(raw.get("last_sync")),
         "last_status": str(raw.get("last_status") or "unknown"),
         "last_error": str(raw.get("last_error") or ""),
@@ -1665,6 +1681,7 @@ class PortalController:
                 if not raw.get("anchor") and cur.get("anchor"):
                     n["anchor"] = cur.get("anchor")
                 n["last_poll"] = cur.get("last_poll", 0)
+                n["last_ok"] = cur.get("last_ok", 0)
                 # 마지막 상태·오류도 승계 — 예전엔 지역만 고쳐도 저장 파일의 상태가 unknown·빈 오류로 초기화됐다
                 for _k in ("last_status", "last_error"):
                     if _k in cur and not raw.get(_k):
@@ -1748,8 +1765,9 @@ class PortalController:
         """
         import csv as _csv
         import io as _io
-        if not csv_text or not csv_text.strip():
+        if not isinstance(csv_text, str) or not csv_text.strip():
             return {"ok": False, "reason": "CSV 내용이 비어 있습니다."}
+        csv_text = csv_text.lstrip("\ufeff")   # 엑셀·내보내기 파일의 BOM — 남으면 첫 헤더 'id' 를 못 알아본다
         alias = {
             "id": "id", "name": "id", "node": "id", "이름": "id", "노드": "id",
             "url": "url", "address": "url", "host": "url", "주소": "url",
@@ -1757,7 +1775,9 @@ class PortalController:
             "token": "token", "토큰": "token", "api_token": "token",
             "alias_local": "alias_local", "local": "alias_local", "로컬": "alias_local",
             "alias_logical": "alias_logical", "logical": "alias_logical", "논리": "alias_logical",
-            "mode": "mode",
+            "mode": "mode", "enabled": "enabled", "사용": "enabled",
+            "unit": "unit", "every": "every", "at": "at", "weekdays": "weekdays",
+            "start_month": "start_month", "start_day": "start_day",
         }
         try:
             rows = [r for r in _csv.reader(_io.StringIO(csv_text))
@@ -1781,7 +1801,16 @@ class PortalController:
             raw = {}
             for j, val in enumerate(row):
                 if j < len(cols) and cols[j]:
-                    raw[cols[j]] = (val or "").strip()
+                    v = (val or "").strip()
+                    if len(v) > 1 and v[0] == "'" and v[1] in "=+-@":
+                        v = v[1:]          # 내보내기가 수식 주입 방지로 붙인 ' 를 되돌린다(왕복 보존)
+                    raw[cols[j]] = v
+            # 내보내기 왕복: 사용 여부·주기·요일도 되살린다(예전엔 id/url/지역/별칭만 오가, 꺼 둔 노드가
+            # 가져오기 후 기본값=켜짐·30분 주기로 되살아났다 — 2026-11 리뷰)
+            if raw.get("weekdays") not in (None, ""):
+                raw["weekdays"] = [int(x) for x in re.split(r"[;|\s/]+", raw["weekdays"]) if x.strip().isdigit()]
+            else:
+                raw.pop("weekdays", None)
             if not raw.get("id") or not raw.get("url"):
                 errors.append({"line": line, "error": "id/url 누락"})
                 continue
@@ -2039,7 +2068,7 @@ class PortalController:
             }
             cur = self._get(nid)
             if cur is not None:
-                cur["last_poll"] = time.time()
+                cur["last_poll"] = cur["last_ok"] = time.time()
                 cur["last_status"] = "online"
                 cur["last_error"] = ""
         self._record_throughput(nid, _sanitize_overall(meta.get("overall")))   # 처리량 시계열(영구)
@@ -2249,6 +2278,24 @@ class PortalController:
         return ftot, fused, max(0, ftot - fused), pct
 
     @staticmethod
+    def _edge_to_portal_clock(rt: dict, recv_ts=None, edge_now=None) -> dict:
+        """엣지 시계로 찍힌 절대 시각(시작·갱신·완료)을 포탈 시계로 옮긴다 — 엣지 시계가 3시간 늦으면 방금 끝난
+        스캔이 '3시간 전'으로 보였다(2026-11 리뷰). 차이 = 포탈이 받은 시각 − 엣지가 응답을 만든 시각(전송 지연 포함,
+        보통 1초 미만). edge_now 가 없는 구버전 엣지는 그대로. 원본(캐시)은 바꾸지 않는다."""
+        try:
+            skew = float(recv_ts) - float(edge_now) if (recv_ts and edge_now) else 0.0
+        except (TypeError, ValueError, OverflowError):
+            skew = 0.0
+        if abs(skew) < 5 or not isinstance(rt, dict):      # 몇 초 차이는 전송 지연 — 손대지 않는다
+            return rt
+        out = dict(rt)
+        for k in ("started_at", "updated_at", "finished_at", "partial_agg_at"):
+            v = out.get(k)
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+                out[k] = v + skew
+        return out
+
+    @staticmethod
     def _with_eta(rt: dict, recv_ts=None, edge_now=None) -> dict:
         """진행 중 루트의 남은 시간·끝날 예상 시각을 **포탈(메인) 시계 기준**으로 만든다. 원본(캐시)은 바꾸지 않는다.
 
@@ -2346,7 +2393,9 @@ class PortalController:
                                              "fs_used_bytes": 0, "fs_total_bytes": 0})
                 r["used_bytes"] += used
                 r["storages"] += st
-                roots_l = [self._with_eta(rt, c.get("ts"), c.get("edge_now")) for rt in (ov.get("roots") or [])]
+                roots_l = [self._edge_to_portal_clock(self._with_eta(rt, c.get("ts"), c.get("edge_now")),
+                                                      c.get("ts"), c.get("edge_now"))
+                           for rt in (ov.get("roots") or [])]
                 if is_on:
                     for rt in roots_l:
                         if rt.get("status") in ("discovering", "sizing"):
@@ -2371,7 +2420,7 @@ class PortalController:
                     "id": n["id"], "region": n.get("region"), "url": n["url"],
                     "enabled": n.get("enabled"), "online": is_on,
                     "version": c.get("version"), "hostname": c.get("hostname"),
-                    "last_poll": n.get("last_poll"), "last_sync": n.get("last_sync"),
+                    "last_poll": n.get("last_poll"), "last_ok": n.get("last_ok"), "last_sync": n.get("last_sync"),
                     "last_scan_at": last_scan or None,
                     # 폴링 오류 우선, 없으면 마지막 복제 오류(다음 복제 성공 전까지 유지)
                     "last_error": n.get("last_error") or c.get("error") or rep_err.get(n["id"], ""),
@@ -2741,7 +2790,8 @@ class PortalController:
             out.append({"id": nid, "region": reg.get(nid) or "", "median": med,
                         "series": series})
         out.sort(key=lambda x: (x["region"] or "~", x["id"]))
-        return {"ok": True, "range": range_sec, "bucket": bucket, "nodes": out}
+        return {"ok": True, "range": range_sec, "bucket": bucket, "nodes": out,
+                "server_time": time.time()}   # 화면이 차트 시간축을 포탈 시계로 맞춘다(이 PC 시계가 틀려도)
 
     def _ping_history_loop(self) -> None:
         last_prune = 0.0
@@ -3296,7 +3346,16 @@ class PortalHandler(BaseHTTPRequestHandler):
                     and payload.get("reason") == "unknown_endpoint"):
                 ok = status < 400 and not (isinstance(payload, dict) and payload.get("ok") is False)
                 why = "" if ok else str((payload or {}).get("reason") or (payload or {}).get("error") or status)
-                self._audit(pend, ok, why)
+                # 대상·결과 요약도 남긴다 — 예전엔 성공 행의 상세가 비어 '무엇을' 지웠는지 알 수 없었다(2026-11 리뷰)
+                tgt = getattr(self, "_audit_target", "") or ""
+                if isinstance(payload, dict):
+                    cnt = ["%s=%s" % (k, payload[k]) for k in ("added", "updated", "removed", "deleted", "total")
+                           if isinstance(payload.get(k), int)]
+                    if isinstance(payload.get("errors"), list) and payload["errors"]:
+                        cnt.append("errors=%d" % len(payload["errors"]))
+                    if cnt:
+                        tgt = (tgt + " " if tgt else "") + " ".join(cnt)
+                self._audit(pend, ok, " · ".join(x for x in (tgt, why) if x))
         body = _json_bytes(payload)   # 비 UTF-8 이름이 섞여도 500 없이(엣지와 같은 규칙)
         try:
             self.send_response(status)
@@ -3496,6 +3555,7 @@ class PortalHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         self._audit_pending = None
+        self._audit_target = ""            # keep-alive 로 같은 핸들러가 다음 요청을 받아도 이전 대상이 섞이지 않게
         try:
             self._do_POST()
         finally:
@@ -3559,6 +3619,7 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "events": auditmod.tail(self.data_dir, 300)})
                 return
             self._audit_pending = path           # 변경 작업 기록 — 처리 결과로(_send_json 이 마무리, 엣지와 같은 규칙)
+            self._audit_target = _audit_target(body)   # 무엇에 대해(노드 id·경로 등) — 비밀값은 넣지 않는다
             if path == "/api/portal/backup/save":      # 포탈+노드 백업을 서버 디렉터리에 저장
                 self._send_json(c.save_backup(body.get("dir") or body.get("path") or ""))
                 return

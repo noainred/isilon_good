@@ -759,6 +759,46 @@ def check_y1_y6_integrations_round5() -> None:
     print("[Y1~Y6] OK  gentest 크기 거부·메일 예외 없음·로컬 경로 NFS 진단 없음·0% 사용률·PowerStore 표본·오류 문구")
 
 
+def check_z1_z8_portal_ui_round5() -> None:
+    """Z1 CSV 내보내기→가져오기에서 사용 여부·주기 유실 Z2 비활성 노드가 DOWN Z3 요청 중 기간 버튼 무시
+    Z4 '분 전'·차트가 PC 시계 Z5 펼친 행이 5초마다 닫힘 Z6 '마지막 응답'이 실패 시도 시각 Z7 감사 로그 대상 없음
+    Z8 CSV BOM·수식 주입."""
+    from isilon_usage import portal as P
+    d = tempfile.mkdtemp(prefix="iu_z1_")
+    try:
+        pc = P.PortalController(os.path.join(d, "hq"))
+        pc.upsert_node({"id": "n1", "url": "http://10.0.0.1:8765", "token": "t", "mode": "poll", "enabled": False,
+                        "unit": "week", "every": 2, "at": "04:10", "weekdays": [1, 3], "region": "서울"})
+        # 화면 내보내기와 같은 열(헤더·BOM·' 접두)로 만든 CSV — 지우고 가져오면 같은 노드가 돌아와야 한다
+        csv_text = ("\ufeffid,url,region,token,alias_local,alias_logical,mode,enabled,unit,every,at,weekdays,"
+                    "start_month,start_day\r\nn1,http://10.0.0.1:8765,서울,,'=cmd,,poll,false,week,2,04:10,1;3,1,1")
+        pc.delete_node("n1")
+        r = pc.import_nodes_csv(csv_text)
+        assert r["ok"] and r["added"] == 1, r
+        n = pc._get("n1")
+        assert (n["mode"], n["enabled"], n["unit"], n["every"], n["at"], n["weekdays"], n["alias_local"]) == \
+            ("poll", False, "week", 2, "04:10", [1, 3], "=cmd"), n                                # Z1·Z8
+        assert P.sanitize_node({"id": "a", "url": "http://x", "enabled": "false"})["enabled"] is False
+        assert P._audit_target({"id": "n1", "token": "secret", "password": "pw"}) == "id=n1"     # Z7(비밀값 제외)
+        assert "last_ok" in P.sanitize_node({"id": "a", "url": "http://x"})                       # Z6
+        ph = pc.ping_history(86400)
+        assert "server_time" in ph                                                                # Z4
+        rt = {"status": "done", "finished_at": 1000.0, "updated_at": 990.0, "started_at": 900.0}
+        moved = P.PortalController._edge_to_portal_clock(rt, recv_ts=20000.0, edge_now=9200.0)   # 엣지 3시간 늦음
+        assert moved["finished_at"] == 11800.0 and rt["finished_at"] == 1000.0, moved            # 원본은 그대로
+        assert P.PortalController._edge_to_portal_clock(rt, 1000.5, 1000.0) is rt                 # 전송 지연 수준은 무시
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    h = _read("portal.html")
+    assert "Date.now()/1000-ts" not in h and "Date.now()/1000 - n.last_poll" not in h               # Z4
+    assert "down=nodes.filter(n=>!n.online && !n.disabled).length" in h                              # Z2
+    assert "if(phInflight){ _phAgain=true; return; }" in h                                         # Z3
+    assert "_openNodeRows.has(n.id)" in h and "const _openNodeRows = new Set();" in h               # Z5
+    assert 'n.last_ok?("마지막 응답 "+ago(n.last_ok))' in h                                       # Z6
+    assert 'new Blob(["\\uFEFF"+lines.join' in h and '"enabled","unit","every"' in h               # Z8·Z1
+    print("[Z1~Z8] OK  CSV 왕복 보존·비활성≠DOWN·기간 버튼 대기열·포탈 시계·펼침 유지·마지막 성공 응답·감사 대상·BOM")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -766,7 +806,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_c6_c7_cli_inputs, check_q1_q2_replica_compare, check_q3_nested_roots, check_q4_disabled_ping,
             check_t1_t5_portal_round3, check_u1_u3_ui_round3,
             check_v1_v6_edge_round3, check_w1_w2_round4, check_x1_x8_settings_round4,
-            check_y1_y6_integrations_round5]
+            check_y1_y6_integrations_round5, check_z1_z8_portal_ui_round5]
 
 
 def main() -> int:

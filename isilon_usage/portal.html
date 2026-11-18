@@ -1420,13 +1420,15 @@ window.fetch=async function(url,opts){
 function fmtBytes(n){ n=Number(n||0); const u=["B","KB","MB","GB","TB","PB"]; let i=0;
   while(n>=1024 && i<u.length-1){ n/=1024; i++; } return (i===0? n.toFixed(0): n.toFixed(1))+" "+u[i]; }
 function fmtNum(n){ return Number(n||0).toLocaleString(); }
-function ago(ts){ if(!ts) return "—"; const s=Math.max(0,(Date.now()/1000-ts));
+// "N분 전"·신선도·차트 시간축은 포탈 시계 기준(이 PC 시계가 틀려도 같은 값 — ETA 와 같은 규칙, 2026-11 리뷰)
+function _nowSec(){ try{ return _portalNow(); }catch(e){ return Date.now()/1000; } }
+function ago(ts){ if(!ts) return "—"; const s=Math.max(0,(_nowSec()-ts));
   if(s<60) return Math.floor(s)+"초 전"; if(s<3600) return Math.floor(s/60)+"분 전"; return Math.floor(s/3600)+"시간 전"; }
 function fmtDur(sec){ sec=Math.max(0,Math.floor(sec||0)); const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;
   return h?(h+"시간 "+m+"분"):(m?(m+"분 "+s+"초"):(s+"초")); }
 function fmtClock(ts){ if(!ts) return "—"; const d=new Date(ts*1000);
   return d.toLocaleString("ko-KR",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}); }
-function freshClass(ts){ if(!ts) return ""; const s=Date.now()/1000-ts;
+function freshClass(ts){ if(!ts) return ""; const s=_nowSec()-ts;
   return s<120?"fresh-ok":(s<900?"fresh-warn":"fresh-old"); }
 function capColor(p){ return p>=85?"#B42318":(p>=70?"#B45309":"#1D4ED8"); }  // 보통 파랑 · 70%+ 주황(주의) · 85%+ 빨강 — 엣지 홈과 같은 기준
 // 원형 게이지(SVG, 외부 라이브러리 0) — 전체 사용률 표시용
@@ -1540,7 +1542,8 @@ async function loadNetmon(){
   try{
     const j=await (await fetch("/api/portal/ping",{cache:"no-store"})).json();
     if(j.ok){
-      (j.results||[]).forEach(n=>{ const h=netmonHist[n.id]||(netmonHist[n.id]=[]);
+      (j.results||[]).forEach(n=>{ if(n.disabled) return;   // 비활성 노드는 재지 않았다 — 손실률에 넣지 않음
+        const h=netmonHist[n.id]||(netmonHist[n.id]=[]);
         h.push({ms:n.latency_ms, up:n.online}); if(h.length>NETMON_KEEP) h.shift(); });
       renderNetmon(j.results||[]);
     }
@@ -1548,24 +1551,26 @@ async function loadNetmon(){
   finally{ _nmInflight=false; }
 }
 function renderNetmon(nodes){
-  const up=nodes.filter(n=>n.online).length, down=nodes.length-up;
+  // 비활성(운영자가 끈) 노드는 DOWN 이 아니다 — 예전엔 DOWN 으로 세고 손실 100% 로 보였다(2026-11 리뷰)
+  const up=nodes.filter(n=>n.online).length, down=nodes.filter(n=>!n.online && !n.disabled).length;
   const lats=nodes.filter(n=>n.latency_ms!=null).map(n=>n.latency_ms);
   const avg=lats.length?Math.round(lats.reduce((a,b)=>a+b,0)/lats.length):null;
   if($("nmUp")) $("nmUp").textContent=up;
   if($("nmDown")) $("nmDown").textContent=down;
   if($("nmAvg")) $("nmAvg").textContent=avg!=null?(avg+" ms"):"—";
-  if($("nmAt")) $("nmAt").textContent="최근 "+new Date().toLocaleTimeString("ko-KR");
-  const rows=nodes.slice().sort((a,b)=>(a.online-b.online)||((b.latency_ms||0)-(a.latency_ms||0)));
+  if($("nmAt")) $("nmAt").textContent="최근 "+new Date(_nowSec()*1000).toLocaleTimeString("ko-KR");
+  const rows=nodes.slice().sort((a,b)=>(!!a.disabled-!!b.disabled)||(a.online-b.online)||((b.latency_ms||0)-(a.latency_ms||0)));
   $("nmBody").innerHTML = rows.length ? rows.map(n=>{
     const h=netmonHist[n.id]||[]; const ms=h.map(x=>x.ms).filter(v=>v!=null);
     const mn=ms.length?Math.round(Math.min.apply(null,ms)):"—", mx=ms.length?Math.round(Math.max.apply(null,ms)):"—";
     const loss=h.length?Math.round(h.filter(x=>!x.up).length/h.length*100):0;
-    const stat=n.online?'<span class="badge b-online">🟢 UP</span>':'<span class="badge b-offline">🔴 DOWN</span>';
+    const stat=n.disabled?'<span class="badge">⏸ 비활성</span>'
+      :(n.online?'<span class="badge b-online">🟢 UP</span>':'<span class="badge b-offline">🔴 DOWN</span>');
     const col=n.latency_ms==null?'#567696':(n.latency_ms<150?'#166534':(n.latency_ms<600?'#8A3B00':'#8A0F0F'));
     const lat=n.latency_ms!=null?('<b style="color:'+col+'">'+n.latency_ms+' ms</b>'):'<span class="sub">—</span>';
     return '<tr><td>'+stat+'</td><td><b>'+_he(n.id)+'</b></td><td>'+_he(n.region||'—')+'</td><td class="mono sub">'+_he(_nmHost(n.url))+'</td>'
-      +'<td class="num">'+lat+'</td><td class="num sub">'+mn+'/'+mx+'</td><td class="num sub">'+loss+'%</td>'
-      +'<td>'+_nmSpark(h)+'</td><td class="sub" style="color:#8A0F0F">'+_he(n.error||'')+'</td></tr>';
+      +'<td class="num">'+lat+'</td><td class="num sub">'+mn+'/'+mx+'</td><td class="num sub">'+(n.disabled?'—':loss+'%')+'</td>'
+      +'<td>'+_nmSpark(h)+'</td><td class="sub" style="color:#8A0F0F">'+(n.disabled?'':_he(n.error||''))+'</td></tr>';
   }).join("") : '<tr><td colspan="9" class="sub">등록된 노드가 없습니다.</td></tr>';
 }
 function netmonStart(){ if(netmonTimer) return; loadNetmon(); netmonTimer=setInterval(loadNetmon, 5000);
@@ -1577,20 +1582,25 @@ function netmonStop(){ if(netmonTimer){ clearInterval(netmonTimer); netmonTimer=
 let phRange=86400, phTimer=null, phInflight=false, _phLast=null, _phRz=null;
 const _he=s=>String(s==null?"":s).replace(/[<>&"']/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;","'":"&#39;"}[c]));
 const esc=_he;   // 여러 함수(히스토리·파일브라우저·업그레이드표)가 전역 esc 를 쓴다(예전엔 일부 함수에만 지역 정의돼 ReferenceError 발생)
+let _phAgain=false;
 async function loadPingHistory(){
-  if(phInflight) return; phInflight=true;
+  // 요청 중에 기간 버튼을 누르면 버리지 않고 끝난 뒤 다시 부른다 — 예전엔 '7일'을 눌러도 1일 차트가 다음 새로고침(60초)까지 남았다
+  if(phInflight){ _phAgain=true; return; } phInflight=true;
+  const want=phRange;
   try{
-    const j=await (await fetch("/api/portal/ping-history?range="+phRange,{cache:"no-store"})).json();
-    if(j&&j.ok) renderPingHistory(j);
+    const j=await (await fetch("/api/portal/ping-history?range="+want,{cache:"no-store"})).json();
+    if(j && j.server_time) _setPortalClock({server_time:j.server_time});
+    if(want!==phRange) _phAgain=true;          // 그 사이 기간이 바뀜 — 옛 기간 결과는 그리지 않는다
+    else if(j&&j.ok) renderPingHistory(j);
     else if($("phGroups")) $("phGroups").innerHTML='<div class="sub" style="padding:14px 2px;">이력을 불러오지 못했습니다'+(j&&j.reason?': '+_he(j.reason):'')+'.</div>';
   }catch(e){ if($("phGroups")) $("phGroups").innerHTML='<div class="sub" style="padding:14px 2px;">이력 요청에 실패했습니다.</div>'; }
-  finally{ phInflight=false; }
+  finally{ phInflight=false; if(_phAgain){ _phAgain=false; loadPingHistory(); } }
 }
 function renderPingHistory(j){
   _phLast=j; const nodes=j.nodes||[];
   if(!nodes.length){ $("phGroups").innerHTML='<div class="sub" style="padding:14px 2px;">아직 누적된 핑 표본이 없습니다 — 백그라운드 측정이 1분마다 쌓입니다.</div>'; return; }
   const groups={}, order=[];
-  nodes.forEach((n,i)=>{ n._i=i; const r=n.region||'기타'; if(!groups[r]){ groups[r]=[]; order.push(r); } groups[r].push(n); });
+  nodes.forEach((n,i)=>{ n._i=i; const r=n.region||'(미지정)'; if(!groups[r]){ groups[r]=[]; order.push(r); } groups[r].push(n); });
   let html='';
   order.forEach(r=>{
     html+='<div class="reglabel">'+_he(r)+' <span class="sub" style="font-weight:400">· '+groups[r].length+'대</span></div><div class="phgrid">';
@@ -1611,7 +1621,7 @@ function _phTime(t,range){ const d=new Date(t*1000), p=x=>String(x).padStart(2,"
   return (d.getFullYear()%100)+"/"+p(d.getMonth()+1)+"/"+p(d.getDate()); }
 function drawPhChart(n, range){
   const cv=$("ph"+n._i); if(!cv) return;
-  const now=Math.floor(Date.now()/1000);
+  const now=Math.floor(_nowSec());
   _drawSpark(cv, n.series, n.median, now-range, range);
   cv._node=n; cv._range=range;
   if(!cv._phBound){ cv._phBound=1; _bindPhCanvas(cv); }
@@ -1705,7 +1715,7 @@ function openPhModal(node){
     _phMV={ series, med:nn.median, id:node.id };
     if(series.length){ const span=Math.max(3600, series[series.length-1].t-series[0].t);
       _phMV.range=span; _phMV.t0=series[0].t; }
-    else { _phMV.range=86400; _phMV.t0=Math.floor(Date.now()/1000)-86400; }
+    else { _phMV.range=86400; _phMV.t0=Math.floor(_nowSec())-86400; }
     drawPhModal();
   }).catch(()=>{ const inf=$("phmInfo"); if(inf) inf.textContent="불러오기 실패"; });
 }
@@ -1838,6 +1848,7 @@ function _verCmp(a,b){   // "1.99.10" 형식 버전 비교: 음수=a<b
   }
   return 0;
 }
+const _openNodeRows = new Set();   // 현황 표에서 펼친 노드(id) — 다시 그려도 유지
 function renderPortalDash(){
   const j=pOverview; if(!j) return;
   // 고른 지역이 사라졌으면(그 지역 마지막 노드 삭제·지역명 변경) 필터를 푼다 — 다시 누를 카드가 없어 빈 표에 갇혔다
@@ -1925,7 +1936,7 @@ function renderPortalDash(){
           : ` <span class="badge" style="background:#F4EFE0;color:#8A3B00" title="${tl} 주의">${lab} ⚠</span>`)
         : ` <span class="badge b-offline" title="${tl} 연결 실패">${lab} ✕</span>`;
     }).join("");
-    const arrRows = cfgArr.map(a => `<tr class="rr-${idx}" style="display:none; background:#E7EDF5;"><td></td><td colspan="8" class="sub">${
+    const arrRows = cfgArr.map(a => `<tr class="rr-${idx}" style="display:${_openNodeRows.has(n.id)?"table-row":"none"}; background:#E7EDF5;"><td></td><td colspan="8" class="sub">${
       a.type === "isilon" ? "🟦" : "🟧"} ${_he(a.label||a.type)} ${
       a.ok ? `<b>${_he(a.name||"?")}</b> · ${_he(a.version||"")} · 노드 ${(a.nodes&&a.nodes.online)!=null?_he(a.nodes.online):"?"}/${(a.nodes&&a.nodes.total)!=null?_he(a.nodes.total):"?"} · 용량 ${(a.capacity&&a.capacity.used_pct!=null)?_he(a.capacity.used_pct)+"%":"—"} · 이벤트/알림 ${a.events_unresolved!=null?_he(a.events_unresolved):"—"} · ${a.health==="ok"?"정상":"주의"}`
            : `연결 실패: ${_he(a.error||"")}`}</td></tr>`).join("");
@@ -1934,7 +1945,7 @@ function renderPortalDash(){
       const startTxt=(act&&r.started_at)?(" · 시작 "+fmtClock(r.started_at)+" · 진행 "+elapsedSpan(r.started_at, r.updated_at)
         +(r.eta_at?(" · 남은 약 "+fmtDur(etaLeft(r.eta_at))+" · 완료 예상 "+fmtEtaAt(r.eta_at)):"")):"";
       const fsTxt=r.fs_total_bytes?(" of "+fmtBytes(r.fs_total_bytes)+" ("+Math.round((r.fs_used_bytes||0)/r.fs_total_bytes*100)+"%)"):"";
-      return `<tr class="rr-${idx}" style="display:none; background:#FFFFFF;"><td></td>
+      return `<tr class="rr-${idx}" style="display:${_openNodeRows.has(n.id)?"table-row":"none"}; background:#FFFFFF;"><td></td>
         <td colspan="8" class="sub mono">📁 ${escAttr(r.root_path)} — 조사 ${fmtBytes(r.capacity_bytes!=null?r.capacity_bytes:r.scanned_bytes)}${(r.capacity_scan_id!=null&&r.capacity_scan_id!==r.scan_id)?(" (마지막 완료 기준 · 최신 스캔 "+fmtBytes(r.scanned_bytes)+")"):(r.capacity_partial?" (부분 값)":"")}${r.nested_in?(" · ⊂ "+escAttr(r.nested_in)+" 에 포함(합계 제외)"):""} · fs ${fmtBytes(r.fs_used_bytes)}${fsTxt} · ${scanProgress(r)}${startTxt}${r.finished_at?(" · 완료 "+ago(r.finished_at)):(r.updated_at?(" · 갱신 "+ago(r.updated_at)):"")}</td></tr>`;
     }).join("");
     const outdated = j.version && n.version && _verCmp(n.version, j.version) < 0;   // 숫자 비교(1.99.9 < 1.99.10), 더 새 엣지는 구버전 아님
@@ -1946,7 +1957,7 @@ function renderPortalDash(){
         ? ` <span class="pill" title="HQ→노드 왕복${pr.error?(' · '+escAttr(pr.error)):''}" style="color:${pr.latency_ms<150?'#166534':(pr.latency_ms<600?'#8A3B00':'#8A0F0F')};border-color:${pr.latency_ms<150?'#D7EEE3':(pr.latency_ms<600?'#F1EBD7':'#7A3030')}">${pr.latency_ms} ms</span>`
         : ` <span class="pill" title="${escAttr(pr.error||'실패')}" style="color:#8A0F0F;border-color:#7A3030">✕</span>`) : "";
     // 상태 신선도: 포탈이 이 노드 상태를 마지막으로 받은 지 2분 넘으면 표시(값이 실제와 다를 수 있음을 정직하게)
-    const staleB = (n.enabled && n.online && n.last_poll && (Date.now()/1000 - n.last_poll) >= 120)
+    const staleB = (n.enabled && n.online && n.last_poll && (_nowSec() - n.last_poll) >= 120)
       ? ` <span class="sub ${freshClass(n.last_poll)}" style="white-space:nowrap;" title="포탈이 이 노드 상태를 마지막으로 받은 시각 — 오래되면 표시 값이 실제와 다를 수 있습니다">⏳ 상태 ${ago(n.last_poll)}</span>` : "";
     const rn=n.running;
     const runLine = rn ?`<div class="sub" style="white-space:nowrap; margin-top:3px;">⏱ ${elapsedSpan(rn.started_at, rn.updated_at)} · 시작 ${fmtClock(rn.started_at)}${rn.eta_at?(" · 남은 약 "+fmtDur(etaLeft(rn.eta_at))+" · 완료 예상 <b>"+fmtEtaAt(rn.eta_at)+"</b>"):""}</div>` : "";
@@ -1954,7 +1965,7 @@ function renderPortalDash(){
     // 스캔 진행 바(집계 단계 % 가 있을 때만 — 정직하게)
     const _spct = (n.online && n.active_scans>0) ? nodeScanPct(n) : null;
     const scanBar = (_spct!=null) ? `<div class="capbar" style="height:5px; min-width:0; max-width:170px; margin-top:5px; border-radius:3px;"><i style="width:${_spct}%; background:var(--accent); box-shadow:none;"></i></div><div class="sub" style="margin-top:2px;">집계 진행률 ${_spct}%</div>` : "";
-    return `<tr class="noderow" data-idx="${idx}" style="cursor:pointer;" title="클릭하면 스토리지/어레이 펼침">
+    return `<tr class="noderow" data-idx="${idx}" data-nid="${escAttr(n.id)}" style="cursor:pointer;" title="클릭하면 스토리지/어레이 펼침">
       <td><b translate="no">${escAttr(n.id)}</b>${verBadge}${arrBadges}<div class="sub mono" translate="no">${escAttr(n.hostname||"")}</div></td><td translate="no">${escAttr(n.region||"—")}</td>
       <td class="num">▸ ${fmtNum(n.storages)}</td><td class="num">${fmtBytes(n.used_bytes)}</td>
       <td class="num">${fmtBytes(n.fs_used_bytes)}${n.fs_total_bytes?` <span class="sub">${n.fs_used_pct}%</span>`:""}${n.fs_total_bytes?`<div class="capbar" style="height:4px; min-width:0; margin-top:5px; border-radius:3px;"><i style="width:${Math.min(100,n.fs_used_pct||0)}%; background:${capColor(n.fs_used_pct||0)}; box-shadow:none;"></i></div>`:""}</td>
@@ -1965,7 +1976,10 @@ function renderPortalDash(){
   }).join("") : '<tr><td colspan="9" class="sub">표시할 노드가 없습니다.</td></tr>';
   $("nodeRows").querySelectorAll("tr.noderow").forEach(tr=>tr.addEventListener("click",e=>{
     if(e.target.closest("a,button")) return;
-    $("nodeRows").querySelectorAll(".rr-"+tr.dataset.idx).forEach(r=>r.style.display = r.style.display==="none"?"table-row":"none");
+    // 펼침 상태를 노드 id 로 기억 — 5초마다 다시 그려도 읽던 상세가 닫히지 않게(2026-11 리뷰)
+    const open=!_openNodeRows.has(tr.dataset.nid);
+    if(open) _openNodeRows.add(tr.dataset.nid); else _openNodeRows.delete(tr.dataset.nid);
+    $("nodeRows").querySelectorAll(".rr-"+tr.dataset.idx).forEach(r=>r.style.display = open?"table-row":"none");
   }));
   $("nodeRows").querySelectorAll(".ssbtn").forEach(b=>b.addEventListener("click",async e=>{
     e.stopPropagation();
@@ -2030,7 +2044,7 @@ function renderNodeHeader(){
   const st=_nodeState(n);
   $("ndTitle").textContent=n.id;
   const bd=$("ndBadge"); bd.style.display=""; bd.textContent=st.t; bd.style.background=st.bg; bd.style.color=st.fg;
-  $("ndMeta").textContent=[n.region||"지역 없음", n.version?("v"+n.version):"", n.last_poll?("마지막 응답 "+ago(n.last_poll)):"아직 응답 없음",
+  $("ndMeta").textContent=[n.region||"지역 없음", n.version?("v"+n.version):"", n.last_ok?("마지막 응답 "+ago(n.last_ok)):"아직 응답 없음",
     n.last_sync?("결과 복제 "+ago(n.last_sync)):""].filter(Boolean).join(" · ");
   if(n.enabled && (!n.online || n.error)){
     const adv=_nodeAdvice(n.error); $("ndAlert").style.display="flex";
@@ -2359,12 +2373,18 @@ async function exportNodesCsv(){
     const j=await (await fetch("/api/portal/nodes",{cache:"no-store"})).json();
     const rows=j.nodes||[];
     if(!rows.length){ $("csvMsg").textContent="내보낼 노드가 없습니다."; return; }
-    const esc=s=>{ s=String(s==null?"":s); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
-    const head=["id","url","region","token","alias_local","alias_logical"];
+    // 수식 주입 방지(= + - @ 로 시작하면 앞에 ' — 가져오기가 되돌린다), \r 도 따옴표로
+    const esc=s=>{ s=String(s==null?"":s); if(/^[=+\-@]/.test(s)) s="'"+s;
+      return /[",\r\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
+    // 사용 여부·모드·주기·요일까지 — 내보낸 파일을 그대로 가져오면 같은 노드가 돌아오게(예전엔 꺼 둔 노드가 켜져 돌아왔다)
+    const head=["id","url","region","token","alias_local","alias_logical","mode","enabled","unit","every","at","weekdays","start_month","start_day"];
     const lines=[head.join(",")];
     rows.forEach(n=>lines.push([esc(n.id),esc(n.url),esc(n.region),"",
-      esc(n.alias_local),esc(n.alias_logical)].join(",")));
-    const blob=new Blob([lines.join("\r\n")],{type:"text/csv;charset=utf-8"});
+      esc(n.alias_local),esc(n.alias_logical),esc(n.mode||"both"),(n.enabled===false?"false":"true"),
+      esc(n.unit||"minute"),esc(n.every||""),esc(n.at||""),esc((n.weekdays||[]).join(";")),
+      esc(n.start_month||""),esc(n.start_day||"")].join(",")));
+    // 엑셀이 한글을 깨뜨리지 않게 BOM(샘플 내려받기와 같은 규칙)
+    const blob=new Blob(["\uFEFF"+lines.join("\r\n")],{type:"text/csv;charset=utf-8"});
     const a=document.createElement("a");
     a.href=URL.createObjectURL(blob); a.download="portal_nodes.csv"; a.click();
     setTimeout(()=>URL.revokeObjectURL(a.href),1000);
@@ -2412,7 +2432,7 @@ $("csvImportBtn").addEventListener("click", async ()=>{
       $("csvMsg").innerHTML = `<span style="color:var(--ok)">${m}</span>`;
       loadNodes(); loadOverview();
     } else {
-      $("csvMsg").innerHTML = '<span class="err">실패: '+(j.reason||"")+'</span>';
+      $("csvMsg").innerHTML = '<span class="err">실패: '+_he(j.reason||"")+'</span>';
     }
   } catch(err){ $("csvMsg").innerHTML = '<span class="err">요청 오류: '+err+'</span>'; }
   $("csvImportBtn").disabled = false;
@@ -2745,7 +2765,7 @@ async function runUpgradeModal(){
   let target=null, sawRestart=false; const t0=Date.now();
   try{
     const j=await (await fetch("/api/portal/upgrade/install",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({propagate:true})})).json();
-    if(j&&j.ok===false && !/이미 설치/.test(j.error||"")){ $("upgModalStat").innerHTML=`<span style="color:var(--danger)">시작 실패: ${j.error||""}</span>`; return; }
+    if(j&&j.ok===false && !/이미 설치/.test(j.error||"")){ $("upgModalStat").innerHTML=`<span style="color:var(--danger)">시작 실패: ${_he(j.error||"")}</span>`; return; }
     // '이미 설치 중'이면 진행 중인 설치를 그대로 폴링해 보여준다(중복 시작 안 함)
     target=(j&&(j.target||j.latest))||null;
   }catch(e){ /* 시작 응답이 끊겨도 폴링이 이어서 보여줌 */ }
@@ -2958,7 +2978,7 @@ if($("ugPushAll")) $("ugPushAll").addEventListener("click", async()=>{
       headers:{"Content-Type":"application/json"},body:"{}"})).json();
     if(j.ok){ $("ugWatchMsg").textContent=" 전파 시작 — 보내는 코드 v"+(j.bundle_version||"?")+" · "+(j.total||0)+"대"; }
     else { $("ugWatchMsg").textContent=" ✗ "+(j.error||j.reason||"실패");
-      if($("pushModalStat")) $("pushModalStat").innerHTML=`<span style="color:var(--danger)">시작 실패: ${(j.error||j.reason||"")}</span>`; } }
+      if($("pushModalStat")) $("pushModalStat").innerHTML=`<span style="color:var(--danger)">시작 실패: ${_he(j.error||j.reason||"")}</span>`; } }
   catch(e){ $("ugWatchMsg").textContent=" ✗ "+e; }
   $("ugPushAll").disabled=false;
 });
