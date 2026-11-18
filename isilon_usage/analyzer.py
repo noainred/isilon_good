@@ -162,7 +162,7 @@ def analyze_depth(path: str, *, max_depth: int = 0, dir_limit: int = 0,
                     active[0] -= 1
                     cv.notify_all()
 
-    n = max(1, int(workers or 1))
+    n = max(1, min(64, int(workers or 1)))   # 상한 — 호출자가 거대한 값을 넘겨도 스레드 폭주하지 않게(2026-11 리뷰)
     threads = [threading.Thread(target=worker, name="depth-%d" % i, daemon=True)
                for i in range(n)]
     for t in threads:

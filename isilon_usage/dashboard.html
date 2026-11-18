@@ -310,7 +310,7 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
 .portal .nitem.on{ background:var(--accent-weak); }
 .portal .nitem .ndot{ flex:none; width:10px; height:10px; border-radius:5px; }
 .portal .nitem .nid{ flex:1; min-width:0; font-family:var(--mono-ui); font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.portal .nitem .nreg{ font-size:13px; color:var(--muted); }
+.portal .nitem .nreg{ flex:0 1 auto; max-width:40%; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; color:var(--muted); }
 .portal .nitem .nst{ flex:none; min-width:52px; text-align:right; font-size:13px; font-weight:600; }
 .portal .nd-sec{ padding-top:18px; margin-top:18px; border-top:1px solid var(--line); }
 .portal .nd-sec h3{ margin:0 0 10px; font-size:15px; font-weight:600; }
@@ -326,7 +326,9 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
 .inp[readonly]{ background:var(--panel2); color:var(--muted); cursor:not-allowed; }
 /* 좁은 화면: 넓은 표는 카드 안에서만 가로 스크롤(페이지 전체가 옆으로 밀리지 않게), 격자 칸은 내용 때문에 늘어나지 않게 */
 .grid > *, .kpis > *{ min-width:0; }
-@media (max-width:900px){ .card{ overflow-x:auto; } }
+/* 데스크톱 폭에서도 긴 경로(띄어쓰기 없는 문자열) 표가 페이지 전체를 옆으로 밀지 않게 — 예전엔 900px 이하에만
+   적용돼 1280px 에서 긴 루트 경로가 있으면 홈·탐색이 가로로 밀렸다(2026-11 리뷰). 카드 안에 떠 있는 팝업은 없다. */
+.card{ overflow-x:auto; }
 </style>
 <!-- THEME:END -->
 <script src="/i18n.js"></script>
@@ -1225,7 +1227,7 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
       </label>
       <label>파일 크기
         <span style="display:flex; gap:6px;">
-          <input id="gtSize" type="number" min="0" step="1" value="4" class="setinput" style="flex:1;" />
+          <input id="gtSize" type="number" min="0" step="1" value="4" class="setinput" style="flex:1; min-width:0;" />
           <select id="gtUnit" class="optsel">
             <option value="1">B</option>
             <option value="1024" selected>KB</option>
@@ -2333,7 +2335,7 @@ function tsRender(j) {
   $("tsResBottleneck").innerHTML = '<b style="color:' + (TS_COLOR[rb.level] || "var(--ok)") + '">' + (rb.summary || "") + '</b>';
   $("tsResRows").innerHTML = (j.resources || []).map(r =>
     '<tr style="border-bottom:1px solid var(--line);">'
-    + '<td style="padding:5px 6px; vertical-align:top;"><b>' + escHtml(r.name) + '</b></td>'
+    + '<td style="padding:5px 6px; vertical-align:top;"><b translate="no">' + escHtml(r.name) + '</b></td>'
     + '<td style="padding:5px 6px; vertical-align:top; white-space:nowrap; color:' + (TS_COLOR[r.level] || "") + '">' + (TS_DOT[r.level] || "") + ' ' + escHtml(String(r.level || "").toUpperCase()) + '</td>'
     + '<td style="padding:5px 6px;"><span class="mono">' + escHtml(r.value) + '</span><br><span class="sub">' + escHtml(r.note) + '</span></td></tr>').join("");
   // 워커 구간 분포
@@ -2802,7 +2804,7 @@ async function doBrowse(path, _confirmed) {
     const items = [];
     (j.dirs || []).forEach(d => {
       items.push(`<div class="diritem" data-go="${encodeURIComponent(d.path)}">
-        <span>📁 ${escHtml(d.name)}</span><span class="sub">선택 ▶</span></div>`);
+        <span translate="no">📁 ${escHtml(d.name)}</span><span class="sub">선택 ▶</span></div>`);
     });
     list.innerHTML = items.length ? items.join("")
       : '<span class="sub">하위 디렉터리가 없습니다.</span>';
@@ -3118,7 +3120,7 @@ function renderPieCrumb(sizeBytes) {
     ? ` · <b style="color:#1F2937" title="현재 위치의 재귀 사용 용량">${fmtBytes(sizeBytes)}</b>` : "";
   if (!piePath.length) { el.innerHTML = "(루트)" + szTxt; return; }
   el.innerHTML = "🏠 / " + piePath.map((c, i) =>
-    `<a href="#" class="piecrumb" data-i="${i}">${escHtml(c.name)}</a>`).join(" / ") + szTxt;
+    `<a href="#" class="piecrumb" data-i="${i}" translate="no">${escHtml(c.name)}</a>`).join(" / ") + szTxt;
   el.querySelectorAll("a.piecrumb").forEach(a => a.addEventListener("click", (e) => {
     e.preventDefault();
     piePath = piePath.slice(0, parseInt(a.dataset.i) + 1);
@@ -3182,8 +3184,8 @@ function renderPie(j) {
     legend.innerHTML = slices.map((s, i) => {
       const pct = (s.bytes / denom * 100).toFixed(1);
       const name = s.drill
-        ? `<a href="#" class="piecell" data-i="${i}" style="flex:1;" title="클릭하면 더 깊이: ${escHtml(s.label)}">${escHtml(s.label)}</a>`
-        : `<span style="flex:1; color:var(--muted);" title="${escHtml(s.label)}">${escHtml(s.label)}</span>`;
+        ? `<a href="#" class="piecell" data-i="${i}" style="flex:1;" translate="no" title="클릭하면 더 깊이: ${escHtml(s.label)}">${escHtml(s.label)}</a>`
+        : `<span style="flex:1; color:var(--muted);" translate="no" title="${escHtml(s.label)}">${escHtml(s.label)}</span>`;
       return `<div style="display:flex; align-items:center; gap:8px; padding:2px 0;">
         <span class="dot" style="background:${s.color}"></span>
         ${name}
@@ -3309,7 +3311,7 @@ function renderTopCrumb(sizeBytes) {
     ? ` · <b style="color:#1F2937" title="현재 위치의 재귀 사용 용량">${fmtBytes(sizeBytes)}</b>` : "";
   if (!topPath.length) { el.innerHTML = "(루트)" + szTxt; return; }
   el.innerHTML = "🏠 / " + topPath.map((c, i) =>
-    `<a href="#" class="topcrumb" data-i="${i}">${escHtml(c.name)}</a>`).join(" / ") + szTxt;
+    `<a href="#" class="topcrumb" data-i="${i}" translate="no">${escHtml(c.name)}</a>`).join(" / ") + szTxt;
   el.querySelectorAll("a.topcrumb").forEach(a => a.addEventListener("click", (e) => {
     e.preventDefault();
     topPath = topPath.slice(0, parseInt(a.dataset.i) + 1);
@@ -3394,8 +3396,8 @@ function renderTree(rows) {
     const pct = (sz / parentTotal * 100);
     const canDesc = r.subdir_count > 0;
     const name = canDesc
-      ? `<a href="#" class="tdesc" data-id="${r.id}" data-name="${escHtml(r.name)}">📁 ${escHtml(r.name)}</a>`
-      : `📄 ${escHtml(r.name)}`;
+      ? `<a href="#" class="tdesc" data-id="${r.id}" data-name="${escHtml(r.name)}" translate="no">📁 ${escHtml(r.name)}</a>`
+      : `<span translate="no">📄 ${escHtml(r.name)}</span>`;
     return `<tr><td class="mono" style="max-width:520px; overflow:hidden; text-overflow:ellipsis;">${name}</td>
       <td class="num">${fmtBytes(sz)}</td>
       <td class="num">${pct.toFixed(1)}%</td>
@@ -4646,7 +4648,7 @@ function renderAtime(j) {
   if (!rows.length) { out.innerHTML = head + '<span class="sub">표시할 항목이 없습니다.</span>'; return; }
   const body = rows.map(e =>
     "<tr><td class=\"mono\" style=\"max-width:520px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;\" title=\""
-      + escHtml(e.path) + '">' + (e.is_dir ? "📁 " : "📄 ") + escHtml(e.name) + "</td>"
+      + escHtml(e.path) + '">' + '<span translate="no">' + (e.is_dir ? "📁 " : "📄 ") + escHtml(e.name) + "</span></td>"
     + '<td>' + (e.is_dir ? "폴더" : "파일") + "</td>"
     + '<td class="num">' + (e.is_dir ? "—" : fmtBytes(e.size)) + "</td>"
     + '<td class="num" style="white-space:nowrap;">' + _atDate(e.atime) + ' <span class="sub">' + _atAgeDays(e.atime) + "</span></td>"

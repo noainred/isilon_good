@@ -584,12 +584,78 @@ def check_t1_t5_portal_round3() -> None:
     print("[T1~T4] OK  프로비저닝 이름 선검증·Infinity 상한·끊긴 노드 처리량 제외·문자열 필드 검증")
 
 
+def check_u1_u3_ui_round3() -> None:
+    """U1 영어 모드가 폴더·노드 이름(데이터)까지 번역 U2 긴 지역명이 노드 id 를 가림 U3 데스크톱 폭 가로 넘침."""
+    js = _read("i18n_en.js")
+    assert js.count("closest('[translate=\"no\"]')") >= 2                     # U1: 데이터 요소는 건너뜀
+    dh, ph = _read("dashboard.html"), _read("portal.html")
+    for frag in ('class="piecrumb" data-i="${i}" translate="no"', 'class="topcrumb" data-i="${i}" translate="no"',
+                 'class="piecell" data-i="${i}" style="flex:1;" translate="no"'):
+        assert frag in dh, frag
+    assert '<span class="nid" translate="no"' in ph and 'class="link cmpdrill" data-name="${escAttr(k.name)}" translate="no"' in ph
+    assert ".portal .nitem .nreg{ flex:0 1 auto; max-width:40%;" in ph                # U2
+    css = _read("theme.css")
+    assert re.search(r"^\.card\{ overflow-x:auto; \}$", css, re.M), "U3: 카드 가로 스크롤이 전 폭에 적용돼야 함"
+    print("[U1~U3] OK  데이터 이름은 번역 제외·긴 지역명 말줄임·데스크톱 폭 카드 안 가로 스크롤")
+
+
+def check_v1_v6_edge_round3() -> None:
+    """V1 분석 워커 상한 V2/V3 Infinity 500 V4 비밀값 타입 500 V5 1자 비밀번호 V6 "false" 문자열이 참."""
+    from isilon_usage import server as SV
+    assert SV._truthy("false") is False and SV._truthy("no") is False and SV._truthy("1") is True
+    assert SV._truthy(True) is True and SV._truthy(0) is False
+    d = tempfile.mkdtemp(prefix="iu_v1_")
+    tree = os.path.join(d, "t")
+    os.makedirs(os.path.join(tree, "a"))
+    httpd = SV.serve(os.path.join(d, "data"), host="127.0.0.1", port=0,
+                     initial_settings={"mount_bases": [d]}, enable_scan=True)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = "http://127.0.0.1:%d" % httpd.server_address[1]
+    c = httpd.RequestHandlerClass.controller
+
+    def post(path, raw, tok=""):
+        rq = urllib.request.Request(base + path, data=raw.encode(), method="POST",
+                                    headers={"Content-Type": "application/json", "X-Op-Token": tok})
+        try:
+            r = urllib.request.urlopen(rq)
+            return r.status, json.loads(r.read().decode())
+        except urllib.error.HTTPError as e:
+            return e.code, None
+    try:
+        before = threading.active_count()
+        st, j = post("/api/analyze/start", json.dumps({"path": tree, "workers": 20000}))
+        assert st == 200, st
+        peak = 0
+        for _ in range(40):
+            peak = max(peak, threading.active_count() - before)
+            if not (c._analyze or {}).get("running"):
+                break
+            time.sleep(0.05)
+        assert peak <= 70, peak                                                       # V1: 20000 스레드 아님
+        st, _j = post("/api/analyze/start", '{"path": "%s", "max_depth": 1e999}' % tree)
+        assert st != 500, st                                                          # V2
+        c.setup_op_password("test1234")
+        tok = c.unlock("test1234")["token"]
+        st, _j = post("/api/scan/start", '{"path": "%s", "fold_depth": 1e999}' % tree, tok)
+        assert st != 500, st                                                          # V3
+        st, _j = post("/api/settings", json.dumps({"settings": {"api_token": 123}}), tok)
+        assert st == 400, st                                                          # V4
+        st, _j = post("/api/settings", json.dumps({"settings": {"op_lock": True, "op_password": "x"}}), tok)
+        assert st == 400, st                                                          # V5
+        assert c.unlock("test1234").get("token")                                      # 비밀번호 그대로
+    finally:
+        httpd.shutdown()
+        shutil.rmtree(d, ignore_errors=True)
+    print("[V1~V6] OK  분석 워커 상한·Infinity 400/기본값·비밀값 타입·비밀번호 4자·문자열 불리언")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
             check_s1_sizing_window, check_c2_prune_keeps_active, check_c3_c4_upgrade_bundle, check_c5_dst_schedule,
             check_c6_c7_cli_inputs, check_q1_q2_replica_compare, check_q3_nested_roots, check_q4_disabled_ping,
-            check_t1_t5_portal_round3]
+            check_t1_t5_portal_round3, check_u1_u3_ui_round3,
+            check_v1_v6_edge_round3]
 
 
 def main() -> int:

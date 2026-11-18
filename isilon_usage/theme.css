@@ -300,7 +300,7 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
 .portal .nitem.on{ background:var(--accent-weak); }
 .portal .nitem .ndot{ flex:none; width:10px; height:10px; border-radius:5px; }
 .portal .nitem .nid{ flex:1; min-width:0; font-family:var(--mono-ui); font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.portal .nitem .nreg{ font-size:13px; color:var(--muted); }
+.portal .nitem .nreg{ flex:0 1 auto; max-width:40%; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; color:var(--muted); }
 .portal .nitem .nst{ flex:none; min-width:52px; text-align:right; font-size:13px; font-weight:600; }
 .portal .nd-sec{ padding-top:18px; margin-top:18px; border-top:1px solid var(--line); }
 .portal .nd-sec h3{ margin:0 0 10px; font-size:15px; font-weight:600; }
@@ -316,4 +316,6 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
 .inp[readonly]{ background:var(--panel2); color:var(--muted); cursor:not-allowed; }
 /* 좁은 화면: 넓은 표는 카드 안에서만 가로 스크롤(페이지 전체가 옆으로 밀리지 않게), 격자 칸은 내용 때문에 늘어나지 않게 */
 .grid > *, .kpis > *{ min-width:0; }
-@media (max-width:900px){ .card{ overflow-x:auto; } }
+/* 데스크톱 폭에서도 긴 경로(띄어쓰기 없는 문자열) 표가 페이지 전체를 옆으로 밀지 않게 — 예전엔 900px 이하에만
+   적용돼 1280px 에서 긴 루트 경로가 있으면 홈·탐색이 가로로 밀렸다(2026-11 리뷰). 카드 안에 떠 있는 팝업은 없다. */
+.card{ overflow-x:auto; }

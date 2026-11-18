@@ -212,6 +212,9 @@
     if (!p) return;
     var pn = p.nodeName;
     if (pn === "SCRIPT" || pn === "STYLE" || pn === "NOSCRIPT") return;
+    // 데이터(폴더·노드 이름 등)는 번역하지 않는다 — 폴더 이름이 '분'·'스캔'·'파일' 이면 'min'·'Scans'·'Files' 로
+    // 바뀌어 보였다(2026-11 리뷰). 화면이 데이터 요소에 표준 translate="no" 를 붙인다.
+    if (p.closest && p.closest('[translate="no"]')) return;
     var raw = node.nodeValue, s = raw.trim();
     if (!s) return;
     var e = DICT[s];
@@ -231,7 +234,7 @@
         for (var i = 0; i < els.length; i++) {
           var el = els[i];
           ["title", "placeholder"].forEach(function (a) {
-            var v = el.getAttribute(a); if (!v) return;
+            var v = el.getAttribute(a); if (!v || el.closest('[translate="no"]')) return;
             var t = DICT[v.trim()]; if (t != null) el.setAttribute(a, t);
           });
         }

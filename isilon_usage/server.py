@@ -123,7 +123,7 @@ def _uid_name(uid) -> Optional[str]:
     """uid → 사용자 이름(있으면). NFS uid 가 로컬에 없으면 None."""
     try:
         u = int(uid)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if u in _UID_NAME_CACHE:
         return _UID_NAME_CACHE[u]
@@ -277,6 +277,13 @@ MAX_JSON_BODY = 16 * 1024 * 1024        # JSON 본문 상한(메모리 폭주 �
 MAX_BUNDLE_BODY = 512 * 1024 * 1024     # 업그레이드 번들 상한
 
 
+def _truthy(v) -> bool:
+    """JSON 불리언 옵션 해석 — 문자열 "false"/"no"/"0"/"off"/"" 는 거짓(예전엔 bool("false")=참이라
+    API 로 auto_restart:"false" 를 보내면 반복 스캔이 켜졌다 — 2026-11 리뷰)."""
+    if isinstance(v, str):
+        return v.strip().lower() not in ("", "0", "false", "no", "off", "n", "f")
+    return bool(v)
+
 def read_json_body(handler):
     """요청 본문을 JSON 객체로 읽는다(엣지·포탈 공용). 반환: (dict, None) 또는 ({}, (HTTP 상태, 사유)).
 
@@ -289,7 +296,7 @@ def read_json_body(handler):
         return {}, None
     try:
         length = int(raw_len)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return {}, (400, "Content-Length 가 올바르지 않습니다")
     if length < 0:
         return {}, (400, "Content-Length 가 올바르지 않습니다")
@@ -613,7 +620,7 @@ def list_top_dirs(conn, run_id, *, under_id=None, rel_depth=None,
             parent = dict(rrow)
     try:
         rel = int(rel_depth or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         rel = 0
     if rel == 1 and parent is not None:
         # 직속 자식: parent_id 인덱스(idx_dir_run_parent)로 바로 찾는다. 예전엔 path LIKE + depth 로
@@ -1068,7 +1075,7 @@ class ScanController:
                 for k, cfg in data.items():
                     try:
                         sid = int(k)
-                    except (TypeError, ValueError):
+                    except (TypeError, ValueError, OverflowError):
                         continue
                     row = mgrmod.get_scan(mconn, sid)
                     if row is None or row["status"] in ("done", "error"):
@@ -1080,7 +1087,7 @@ class ScanController:
             for k, cfg in data.items():
                 try:
                     restored[int(k)] = cfg
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     pass
         if restored:
             with self._lock:
@@ -1353,15 +1360,21 @@ class ScanController:
         #  - op_lock 참 + 빈칸 → 기존 유지
         op_changed = None
         if "op_lock" in new or "op_password" in new:
-            want_lock = bool(new.get("op_lock", True))
+            want_lock = _truthy(new.get("op_lock", True))
             newpw = str(new.get("op_password") or "")
             if not want_lock:
                 if self.settings.get("op_password"):
                     op_changed = ""   # 해제
             elif newpw.strip():
+                if len(newpw.strip()) < 4:   # 최초 설정(op-setup)과 같은 규칙 — 예전엔 여기선 1자도 허용됐다
+                    return {"ok": False, "_status": 400, "reason": "비밀번호는 4자 이상이어야 합니다."}
                 op_changed = newpw    # 설정/변경
             new.pop("op_lock", None)
             new.pop("op_password", None)
+        # 비밀번호/토큰은 문자열이어야 한다(숫자면 .strip() 에서 500 이 났다 — 2026-11 리뷰)
+        for _k in ("smtp_password", "api_token", "isilon_password", "powerstore_password"):
+            if new.get(_k) is not None and not isinstance(new.get(_k), str):
+                return {"ok": False, "_status": 400, "reason": "%s 는 문자열이어야 합니다" % _k}
         # 비밀번호/토큰은 화면에 노출하지 않으므로(마스킹), 빈 값으로 오면 기존 값 유지
         if not (new.get("smtp_password") or "").strip():
             new.pop("smtp_password", None)
@@ -1553,7 +1566,7 @@ class ScanController:
             candidates = [c for c in candidates.split(",") if c.strip()]
         try:
             budget = float(budget)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             budget = 5.0
         return tunmod.benchmark_workers(path, candidates=candidates, budget_sec=budget)
 
@@ -1579,7 +1592,7 @@ class ScanController:
             candidates = [c for c in candidates.split(",") if c.strip()]
         try:
             budget = float(budget)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             budget = 5.0
 
         def _on_result(r):
@@ -1631,7 +1644,7 @@ class ScanController:
         path = os.path.abspath(path)
         try:
             secs = float(secs) if secs else float(self.settings.get("autotune_secs", 8) or 8)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             secs = 8.0
         secs = min(60.0, max(2.0, secs))
         with self._autotune_lock:
@@ -1732,8 +1745,8 @@ class ScanController:
             max_depth = max(0, int(max_depth or 0))
             dir_limit = max(0, int(dir_limit or 0))
             time_budget = max(0.0, float(time_budget or 0.0))
-            workers = max(1, int(workers or 8))
-        except (TypeError, ValueError):
+            workers = max(1, min(64, int(workers or 8)))   # 상한(tuning.HARD_CAP) — 10억이면 스레드 폭주
+        except (TypeError, ValueError, OverflowError):
             max_depth, dir_limit, time_budget, workers = 0, 0, 0.0, 8
         with self._analyze_lock:
             if self._analyze and self._analyze.get("running"):
@@ -2035,7 +2048,7 @@ class ScanController:
         if fold_depth is not None:
             try:
                 fold_depth = max(0, min(100000, int(fold_depth)))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 fold_depth = None
         # 지정하지 않은 옵션은 설정의 기본값을 사용
         if backend is None:
@@ -3223,7 +3236,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 try:
                     secs = int(qs.get("seconds", ["86400"])[0])
                     mx = int(qs.get("max", ["600"])[0])
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     secs, mx = 86400, 600
                 self._send_json(self.controller.rate_samples(
                     seconds=max(5, min(86400, secs)), max_points=max(10, min(2000, mx))))
@@ -3236,7 +3249,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 try:
                     bk = int(qs.get("bucket", ["60"])[0])
                     mx = int(qs.get("max", ["60"])[0])
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     bk, mx = 60, 60
                 self._send_json(self.controller.throughput(
                     bucket_sec=max(60, min(3600, bk)), max_buckets=max(2, min(200, mx))))
@@ -3248,7 +3261,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     return
                 try:
                     secs = float(qs.get("sample", ["1.2"])[0])
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     secs = 1.2
                 self._send_json(self.controller.troubleshoot(
                     sample_sec=max(0.2, min(5.0, secs))))
@@ -3677,7 +3690,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     return
                 try:
                     since = float(qs.get("since", ["0"])[0] or 0)
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     since = 0.0
                 self._export_dbs(mconn, since=since)
                 return
@@ -3824,7 +3837,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length", 0))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             length = 0
         if length > MAX_BUNDLE_BODY:
             self._send_json({"ok": False, "reason": "번들이 너무 큽니다"}, status=413)
@@ -3950,12 +3963,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     target,
                     backend=body.get("backend"),       # None 이면 설정 기본값 사용
                     size_mode=body.get("size_mode"),
-                    one_file_system=None if ofs is None else bool(ofs),
+                    one_file_system=None if ofs is None else _truthy(ofs),
                     engine=body.get("engine"),
-                    confirm_outside=bool(body.get("confirm_outside")),
-                    auto_restart=bool(body.get("auto_restart")),
+                    confirm_outside=_truthy(body.get("confirm_outside")),
+                    auto_restart=_truthy(body.get("auto_restart")),
                     fold_depth=body.get("fold_depth"),   # None 이면 노드 설정값 사용
-                    allow_empty=bool(body.get("allow_empty")),   # 이전 데이터가 있던 경로가 정말 비었을 때
+                    allow_empty=_truthy(body.get("allow_empty")),   # 이전 데이터가 있던 경로가 정말 비었을 때
                 )
                 self._send_json(result, status=200 if result.get("ok") else 400)
                 return
@@ -4007,9 +4020,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 res = self.controller.autotune_start(
                     path=(body.get("path") or "").strip() or None,
                     secs=body.get("secs"),
-                    then_scan=body.get("then_scan", True),
-                    confirm_outside=bool(body.get("confirm_outside")),
-                    one_file_system=body.get("one_file_system"),
+                    then_scan=_truthy(body.get("then_scan", True)),
+                    confirm_outside=_truthy(body.get("confirm_outside")),
+                    one_file_system=(None if body.get("one_file_system") is None
+                                     else _truthy(body.get("one_file_system"))),
                 )
                 self._send_json(res, status=200 if res.get("ok") else 400)
                 return
