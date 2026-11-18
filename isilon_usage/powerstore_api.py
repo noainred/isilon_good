@@ -90,8 +90,10 @@ class PowerStoreClient:
         # 1) 클러스터(이름/상태) — 여기까지 되면 ok + 토큰 확보
         try:
             cl = self._get("/cluster?select=id,name,state,system_time")
-            if not cl:
-                out["error"] = "cluster 없음"
+            if not isinstance(cl, list) or not cl or not isinstance(cl[0], dict):
+                # 목록이 아닌 응답({"error":..} 등) — 예전엔 cl[0] KeyError 로 오류 문구가 "0" 이었다
+                out["error"] = ("cluster 없음" if not cl else
+                                "예상 밖 응답: %s" % str(cl)[:200])
                 return out
             c = cl[0]
             out["name"] = c.get("name")
@@ -124,14 +126,15 @@ class PowerStoreClient:
             m = self._post("/metrics/generate",
                            {"entity": "space_metrics_by_cluster", "entity_id": cid})
             if isinstance(m, list) and m:
-                last = m[-1]
+                # 가장 최근의 '값이 있는' 표본 — 마지막 표본이 비어 있으면(수집 중) 용량을 통째로 버리던 문제
+                last = next((x for x in reversed(m) if isinstance(x, dict) and x.get("physical_total")), {})
                 total = last.get("physical_total")
                 used = last.get("physical_used")
                 if total:
                     avail = (total - used) if (total is not None and used is not None) else None
                     out["capacity"] = {
                         "total": total, "used": used, "avail": avail,
-                        "used_pct": round(used / total * 100.0, 1) if (used and total) else None,
+                        "used_pct": round(used / total * 100.0, 1) if (used is not None and total) else None   # 빈 장비(used=0)는 0% — 예전엔 표시 없음,
                     }
         except Exception:  # noqa: BLE001
             pass

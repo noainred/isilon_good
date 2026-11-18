@@ -720,13 +720,53 @@ def check_x1_x8_settings_round4() -> None:
     print("[X1~X8] OK  주소 바뀌면 비밀번호 재입력·확인 주기 유지·소스 주소 단일화·시간 단위 표시·숫자 검사·시차 배치·토큰 지우기·노드 상태 유지")
 
 
+# ------------------------------------------------------------------ 5회차(연동·CLI·알림)
+def check_y1_y6_integrations_round5() -> None:
+    """Y1 gentest --size inf traceback Y2 메일 메시지 만들기 예외(줄바꿈 제목·비 UTF-8) Y3 로컬 경로에 엉뚱한 NFS 진단
+    Y4 빈 장비 사용률 없음 Y5 PowerStore 마지막 표본이 비면 용량 버림 Y6 PowerStore 오류 문구 "0"."""
+    from isilon_usage import cli, notify, systune, storage_status
+    from isilon_usage.powerstore_api import PowerStoreClient
+    for bad in ("inf", "1e999", "1e400T", "abc", "nan"):
+        assert cli._parse_size(bad) is None, bad
+    assert cli._parse_size("4K") == 4096 and cli._parse_size("0") == 0
+    d = tempfile.mkdtemp(prefix="iu_y1_")
+    try:
+        r = subprocess.run([sys.executable, "-m", "isilon_usage", "gentest", os.path.join(d, "g"), "--size", "inf",
+                            "--yes"], capture_output=True, text=True, cwd=os.path.dirname(HERE), timeout=60)
+        assert r.returncode == 2 and "Traceback" not in r.stderr, (r.returncode, r.stderr[-300:])
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    st = {"notify_email": "a@b.c", "smtp_host": "127.0.0.1", "smtp_port": 1}
+    assert notify.send_email(st, "scan /data/x\ny", "b", timeout=0.5) is False                 # Y2
+    assert notify.send_email(st, "s", "b \udcff", timeout=0.5) is False
+    orig = systune.parse_nfs_mounts                                                                # Y3
+    systune.parse_nfs_mounts = lambda: [{"mount": "/mnt/nas", "fstype": "nfs", "src": "x:/y",
+                                         "options": {"soft": True, "nconnect": "1"}}]
+    try:
+        assert systune._pick_target(systune.parse_nfs_mounts(), "/data/local") is None
+        assert systune._pick_target(systune.parse_nfs_mounts(), "/mnt/nas/a")["mount"] == "/mnt/nas"
+    finally:
+        systune.parse_nfs_mounts = orig
+    assert storage_status._cap(1000, 0)["used_pct"] == 0.0                                         # Y4
+    c = PowerStoreClient("http://127.0.0.1:1", "u", "p")
+    c._get = lambda path: ({"error": "x"} if path.startswith("/cluster") else [])
+    out = c.status()
+    assert out["error"] != "0" and "예상 밖" in out["error"], out                                  # Y6
+    c._get = lambda path: ([{"id": "c1", "name": "ps", "state": "ok"}] if path.startswith("/cluster") else [])
+    c._post = lambda path, body: [{"physical_total": 1000, "physical_used": 10}, {"physical_total": None}]
+    out = c.status()
+    assert out.get("capacity", {}).get("total") == 1000 and out["capacity"]["used_pct"] == 1.0, out   # Y5
+    print("[Y1~Y6] OK  gentest 크기 거부·메일 예외 없음·로컬 경로 NFS 진단 없음·0% 사용률·PowerStore 표본·오류 문구")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
             check_s1_sizing_window, check_c2_prune_keeps_active, check_c3_c4_upgrade_bundle, check_c5_dst_schedule,
             check_c6_c7_cli_inputs, check_q1_q2_replica_compare, check_q3_nested_roots, check_q4_disabled_ping,
             check_t1_t5_portal_round3, check_u1_u3_ui_round3,
-            check_v1_v6_edge_round3, check_w1_w2_round4, check_x1_x8_settings_round4]
+            check_v1_v6_edge_round3, check_w1_w2_round4, check_x1_x8_settings_round4,
+            check_y1_y6_integrations_round5]
 
 
 def main() -> int:

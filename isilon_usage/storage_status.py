@@ -61,7 +61,7 @@ def _cap(total, used, avail=None):
     if avail is None and used is not None:
         avail = total - used
     return {"total": total, "used": used, "avail": avail,
-            "used_pct": round(used / total * 100.0, 1) if (used and total) else None}
+            "used_pct": round(used / total * 100.0, 1) if (used is not None and total) else None}   # 빈 장비(used=0)는 0% — 예전엔 표시 없음
 
 
 def _httperr(e):

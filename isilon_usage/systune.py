@@ -118,7 +118,9 @@ def _pick_target(mounts, scan_root):
                 best, best_len = m, len(mp)
         except Exception:
             continue
-    return best or (mounts[0] if mounts else None)
+    # 대상 경로를 품은 마운트가 없으면 '없음' — 예전엔 첫 NFS 마운트를 대신 골라, 로컬 경로를 진단해도
+    # 엉뚱한 NFS 마운트의 soft·nconnect 경고가 나왔다(2026-11 리뷰).
+    return best
 
 
 def _nfs_section(target):

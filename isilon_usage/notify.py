@@ -56,11 +56,18 @@ def send_email(settings: dict, subject: str, body: str, *, timeout: float = 20.0
         return False
     sender = (settings.get("smtp_from") or settings.get("smtp_user")
               or "isilon-usage@localhost")
-    msg = EmailMessage()
-    msg["From"] = sender
-    msg["To"] = ", ".join(recipients)
-    msg["Subject"] = subject
-    msg.set_content(body)
+    # 메시지 만들기도 실패할 수 있다(제목에 줄바꿈이 든 경로, 비 UTF-8 이름의 대리 문자) — 예전엔 여기서 난 예외가
+    # 호출부의 뒤 작업(멈춤 감시 등록·보관 정리)까지 건너뛰게 했다. 제목의 줄바꿈은 공백으로, 대리 문자는 치환.
+    def _clean(t):
+        return str(t or "").encode("utf-8", "replace").decode("utf-8")
+    try:
+        msg = EmailMessage()
+        msg["From"] = sender
+        msg["To"] = ", ".join(recipients)
+        msg["Subject"] = re.sub(r"[\r\n]+", " ", _clean(subject))
+        msg.set_content(_clean(body))
+    except Exception:  # noqa: BLE001 — 알림은 best-effort
+        return False
     try:
         port = int(settings.get("smtp_port") or 587)
     except (TypeError, ValueError):

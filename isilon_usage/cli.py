@@ -857,13 +857,16 @@ def _parse_size(s) -> int:
             break
     try:
         return int(float(s) * mult)
-    except ValueError:
-        return 0
+    except (ValueError, OverflowError):   # 'abc'·nan → ValueError, inf·1e999 → OverflowError(예전엔 traceback)
+        return None
 
 
 def cmd_gentest(args: argparse.Namespace) -> int:
     from . import gentest as genmod
     size = _parse_size(args.size)
+    if size is None:   # 예전엔 잘못된 크기를 조용히 0 바이트로 바꿔 만들었다(또는 inf 면 traceback)
+        print(f"  거부: 파일 크기를 이해할 수 없습니다: {args.size!r} (예: 0, 4K, 1M, 2G)", file=sys.stderr)
+        return 2
     ok, why, plan = genmod.validate(args.path, args.dirs, args.subdirs, args.files, size)
     print("테스트 데이터 생성")
     print(f"  대상: {plan['base']}")
