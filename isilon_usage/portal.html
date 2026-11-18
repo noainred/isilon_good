@@ -6,7 +6,323 @@
 <title>[The Davinci] NAS Management</title>
 <!-- 탭 파비콘: 헤더 V 마크와 같은 스타일(라운드 사각형·파란 그라데이션)의 N(=NAS). 외부 파일 없이 인라인 SVG. -->
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjNGFhM2ZmIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjN2FkMGZmIi8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3QgeD0iMyIgeT0iMyIgd2lkdGg9IjU4IiBoZWlnaHQ9IjU4IiByeD0iMTQiIGZpbGw9InVybCgjZykiLz48dGV4dCB4PSIzMiIgeT0iMzQiIGZvbnQtZmFtaWx5PSJTZWdvZSBVSSxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZiIgZm9udC1zaXplPSI0MiIgZm9udC13ZWlnaHQ9IjgwMCIgZmlsbD0iIzA4MjAzYSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZG9taW5hbnQtYmFzZWxpbmU9ImNlbnRyYWwiPk48L3RleHQ+PC9zdmc+" />
-<link rel="stylesheet" href="/theme.css" />
+<!-- THEME:BEGIN (tools/sync_theme.py 가 isilon_usage/theme.css 에서 생성 — 직접 고치지 말 것) -->
+<style>
+/* ============================================================================
+   The Davinci NAS Management — 라이트 테마 (2026-11 재디자인 · 엣지/포탈 공통 토큰)
+   - 폐쇄망 운영이라 웹폰트를 쓰지 않는다(시스템 한글 글꼴 스택).
+   - 마크업 id·클래스 이름은 그대로(기존 JS 호환), 모양만 새로 정의한다.
+   ============================================================================ */
+:root{
+  --bg:#F4F5F7; --panel:#FFFFFF; --panel2:#F7F8FA; --line:#E3E6EB; --line-strong:#C9CED6;
+  --field:#8A93A0;
+  --text:#111827; --muted:#4B5563; --faint:#6B7280;
+  --accent:#1D4ED8; --accent-hover:#1E40AF; --accent-weak:#EEF3FF; --accent-ink:#1E3A8A;
+  --accent2:#2563EB; --cyan:#0E7490; --mint:#15803D; --purple:#6D28D9;
+  --ok:#166534; --ok-weak:#E8F5EC;
+  --warn:#B45309; --warn-ink:#8A3B00; --warn-weak:#FFF3E0; --warn-chip:#FFE8C7;
+  --danger:#B42318; --danger-weak:#FDECEA;
+  --side:#0F172A; --side-text:#CBD5E1; --side-hover:#1E293B;
+  --sans:"Pretendard","Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --mono-ui:ui-monospace,"D2Coding","SFMono-Regular",Menlo,Consolas,monospace;
+  --radius:12px; --side-w:236px;
+  --elev:0 1px 2px rgba(15,23,42,.06);
+}
+*{ box-sizing:border-box; }
+html{ background:var(--bg); }
+body{ margin:0; background:var(--bg); color:var(--text); font-family:var(--sans); font-size:14px; line-height:1.5;
+  -webkit-font-smoothing:antialiased; padding-left:var(--side-w); }
+::selection{ background:rgba(29,78,216,.18); }
+a{ color:var(--accent); } a:hover{ color:var(--accent-hover); }
+:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+
+/* ── 사이드바 ── */
+#sidebar{ position:fixed; left:0; top:0; bottom:0; width:var(--side-w); background:var(--side); color:var(--side-text);
+  display:flex; flex-direction:column; gap:18px; padding:18px 12px; overflow-y:auto; z-index:30; }
+#sidebar .brand{ display:flex; align-items:center; gap:10px; padding:2px 8px; }
+#sidebar .brand-mark{ width:34px; height:34px; border-radius:9px; background:var(--accent); color:#fff; flex:none;
+  display:flex; align-items:center; justify-content:center; font-weight:800; font-size:16px; }
+#sidebar .brand-name{ color:#fff; font-weight:700; font-size:15px; line-height:1.25; }
+#sidebar .brand-sub{ font-size:12px; color:var(--side-text); word-break:break-all; }
+#sidebar .side-nav{ display:flex; flex-direction:column; gap:3px; }
+#sidebar .sidebtn{ display:flex; align-items:center; gap:10px; width:100%; min-height:44px; padding:0 12px; border-radius:8px;
+  border:0; background:transparent; color:var(--side-text); font:inherit; font-weight:500; font-size:14.5px; cursor:pointer; text-align:left; }
+#sidebar .sidebtn svg{ flex:none; }
+#sidebar .sidebtn:hover{ background:var(--side-hover); color:#fff; }
+#sidebar .sidebtn.active{ background:var(--accent); color:#fff; font-weight:600; }
+#sidebar .sidebtn .cnt{ margin-left:auto; min-width:20px; padding:0 6px; border-radius:10px; background:var(--side-hover); color:#fff;
+  font-size:12px; text-align:center; }
+#sidebar .sidebtn.active .cnt{ background:var(--accent-ink); }
+#sidebar .sidebtn .cnt:empty{ display:none; }
+#sidebar .side-foot{ margin-top:auto; display:flex; flex-direction:column; gap:3px; }
+#sidebar .side-ver{ padding:4px 12px 0; font-size:12px; color:var(--side-text); display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+#sidebar .side-ver #dashVer{ color:#fff; font-weight:600; }
+
+/* ── 상단 바(헤더) ── */
+header#topbar{ position:sticky; top:0; z-index:20; display:flex; flex-wrap:wrap; align-items:center; gap:10px;
+  padding:10px 28px; background:var(--panel); border-bottom:1px solid var(--line); }
+#askBox{ position:relative; flex:1 1 360px; min-width:0; display:flex; gap:8px; align-items:center; }
+#askBox .askfield{ flex:1; min-width:0; display:flex; align-items:center; gap:8px; min-height:42px; padding:0 12px;
+  border:1px solid var(--field); border-radius:8px; background:var(--panel); color:var(--muted); }
+#askBox .askfield:focus-within{ border-color:var(--accent); box-shadow:0 0 0 3px rgba(29,78,216,.15); }
+#askInput{ flex:1; min-width:0; border:0; outline:0; background:transparent; font:inherit; color:var(--text); padding:0; }
+#askOut{ position:absolute; left:0; right:0; top:calc(100% + 8px); z-index:40; max-height:60vh; overflow:auto;
+  background:var(--panel); border:1px solid var(--line-strong); border-radius:10px; padding:14px 16px;
+  box-shadow:0 12px 32px rgba(15,23,42,.16); color:var(--text); line-height:1.6; }
+#askOut:empty{ display:none; }
+#askClose{ float:right; margin:-6px -8px 0 8px; min-height:32px; }
+.tb-status{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.tb-status .pill, .tb-status .badge{ min-height:30px; display:inline-flex; align-items:center; }
+.controls{ display:flex; gap:10px; align-items:center; font-size:13px; color:var(--muted); }
+.controls label{ display:inline-flex; align-items:center; gap:6px; min-height:36px; }
+#iuLangBtn{ min-height:36px; }
+
+/* ── 하위 탭 ── */
+#subnav{ display:flex; flex-wrap:wrap; gap:4px; padding:12px 28px 0; max-width:1380px; }
+#subnav:empty, #subnav.hidden{ display:none; }
+.navbtn{ min-height:40px; padding:0 14px; border-radius:8px; border:1px solid transparent; background:transparent;
+  color:var(--muted); font:inherit; font-weight:600; cursor:pointer; }
+.navbtn:hover{ background:#E9ECF1; color:var(--text); }
+.navbtn.active{ background:var(--panel); color:var(--accent-ink); border-color:var(--line-strong); box-shadow:var(--elev); }
+.navbtn[hidden]{ display:none; }
+
+/* ── 레이아웃 기본 ── */
+.wrap{ max-width:1380px; margin:0; padding:20px 28px 64px; }
+.view > h2:first-child{ font-size:24px !important; font-weight:700; letter-spacing:-.01em; margin:0 0 6px !important; color:var(--text); }
+.page-title{ font-size:24px; font-weight:700; letter-spacing:-.01em; margin:0; }
+.page-desc{ margin:4px 0 16px; color:var(--muted); }
+.spacer{ flex:1; }
+.grid{ display:grid; gap:16px; }
+.cols-3{ grid-template-columns:repeat(3, minmax(0,1fr)); }
+.cols-2{ grid-template-columns:1.3fr 1fr; }
+@media (max-width:980px){ .cols-3,.cols-2{ grid-template-columns:1fr; } }
+
+/* ── 카드 ── */
+.card{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:18px 20px; box-shadow:var(--elev); }
+.card h2{ font-size:16px; font-weight:600; color:var(--text); margin:0 0 12px; letter-spacing:0; text-transform:none; }
+.card h2 .sub{ font-weight:400; }
+details.card > summary{ cursor:pointer; font-weight:600; min-height:32px; }
+.kv{ display:flex; justify-content:space-between; align-items:baseline; gap:12px; padding:7px 0; border-bottom:1px solid #EEF0F3; }
+.kv:last-child{ border-bottom:0; }
+.kv .k{ color:var(--muted); }
+.kv .v{ font-variant-numeric:tabular-nums; font-weight:600; text-align:right; }
+.big{ font-size:28px; font-weight:700; letter-spacing:-.01em; font-variant-numeric:tabular-nums; color:var(--text); line-height:1.25; }
+.sub{ color:var(--muted); font-size:13px; margin-top:2px; }
+.mono{ font-family:var(--mono-ui); }
+.note{ color:var(--warn-ink); font-size:13px; }
+.err{ color:var(--danger); }
+.current{ font-family:var(--mono-ui); font-size:13px; background:var(--panel2); border:1px solid var(--line); border-radius:8px;
+  padding:10px 12px; word-break:break-all; color:var(--text); min-height:20px; }
+pre.changelog{ white-space:pre-wrap; word-break:break-word; font-family:var(--mono-ui); font-size:13px; line-height:1.6;
+  color:var(--text); background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:14px; max-height:70vh; overflow:auto; }
+
+/* ── 진행 막대 ── */
+.bar{ height:8px; background:#E3E6EB; border-radius:4px; overflow:hidden; border:0; }
+.bar > span{ display:block; height:100%; width:0%; background:var(--accent); border-radius:4px; transition:width .4s ease; }
+.bar.mem > span{ background:var(--accent); }
+.bar.mem.high > span{ background:var(--warn); }
+.barlabel{ display:flex; justify-content:space-between; margin:0 0 6px; font-size:13px; }
+.barlabel b{ font-variant-numeric:tabular-nums; }
+
+/* ── 표 ── */
+table{ width:100%; border-collapse:collapse; font-size:13.5px; }
+th,td{ text-align:left; padding:10px 10px; border-bottom:1px solid #EEF0F3; }
+th{ color:var(--muted); font-weight:600; font-size:13px; border-bottom-color:var(--line); white-space:nowrap; }
+th.sortable{ cursor:pointer; user-select:none; }
+th.sortable:hover{ color:var(--text); }
+tbody tr:hover{ background:#F8F9FB; }
+td.num,th.num{ text-align:right; font-variant-numeric:tabular-nums; }
+td.path{ font-family:var(--mono-ui); color:var(--text); max-width:520px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+a.topdrill,a.topcrumb,a.piecell,a.piecrumb{ color:var(--accent); text-decoration:none; font-weight:500; }
+a.topdrill:hover,a.topcrumb:hover,a.piecell:hover,a.piecrumb:hover{ text-decoration:underline; }
+
+/* ── 버튼·입력 ── */
+button{ min-height:36px; background:var(--panel); color:var(--text); border:1px solid var(--field); border-radius:8px;
+  padding:0 14px; cursor:pointer; font:inherit; font-size:13.5px; font-weight:500; }
+button:hover{ background:#F3F4F6; border-color:#6B7280; }
+button:disabled{ opacity:.5; cursor:not-allowed; }
+button.primary{ background:var(--accent); color:#fff; border-color:var(--accent); font-weight:600; }
+button.primary:hover{ background:var(--accent-hover); border-color:var(--accent-hover); }
+.stopbtn{ color:var(--danger); border-color:var(--field); }
+#startBtn.scanning{ background:var(--danger-weak); border-color:var(--danger); color:var(--danger); cursor:default; }
+input[type=text],input[type=number],input[type=password],input[type=search],input:not([type]),select,textarea{
+  font:inherit; color:var(--text); }
+.optsel,.setinput,.inp{ background:var(--panel); color:var(--text); border:1px solid var(--field); border-radius:8px;
+  padding:0 10px; min-height:38px; font-size:13.5px; }
+textarea.setinput{ padding:8px 10px; }
+.optsel:focus,.setinput:focus,.inp:focus{ outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(29,78,216,.15); }
+input[type=checkbox],input[type=radio]{ accent-color:var(--accent); width:16px; height:16px; }
+.setgrid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(200px,1fr)); gap:14px; }
+#settingsCard label{ display:flex; flex-direction:column; gap:6px; font-size:13px; color:var(--muted); }
+#settingsCard .setgrid .setlbl{ display:block; min-height:2.6em; line-height:1.3; }
+#settingsCard input:disabled,#settingsCard select:disabled,#settingsCard textarea:disabled{ opacity:.55; }
+
+/* ── 탭·칩·필·배지 ── */
+.subtabs{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; }
+.stab,.rbtn{ min-height:38px; background:var(--panel); color:var(--muted); border:1px solid var(--line-strong); border-radius:8px;
+  padding:0 14px; font-size:13.5px; font-weight:600; cursor:pointer; }
+.stab:hover,.rbtn:hover{ color:var(--text); }
+.stab.active,.rbtn.active{ background:var(--accent-weak); color:var(--accent-ink); border-color:var(--accent); }
+.chip{ display:inline-flex; align-items:center; min-height:32px; background:var(--panel); border:1px solid var(--line-strong);
+  border-radius:16px; padding:0 12px; cursor:pointer; font-size:13px; user-select:none; color:var(--text); }
+.chip.on{ background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+.pill{ font-size:12.5px; color:var(--muted); background:var(--panel2); border:1px solid var(--line); border-radius:999px; padding:2px 10px; }
+.badge{ display:inline-flex; align-items:center; gap:6px; padding:3px 11px; border-radius:999px; font-size:12.5px; font-weight:600;
+  border:1px solid transparent; white-space:nowrap; background:var(--panel2); color:var(--muted); }
+.badge.discovering,.badge.sizing,.b-scan{ background:var(--accent-weak); color:var(--accent-ink); }
+.badge.done,.b-online{ background:var(--ok-weak); color:var(--ok); }
+.badge.paused{ background:var(--warn-chip); color:var(--warn-ink); }
+.badge.error,.b-offline{ background:var(--danger-weak); color:var(--danger); }
+.legend{ display:flex; gap:14px; flex-wrap:wrap; font-size:13px; color:var(--muted); margin-top:6px; }
+.dot{ display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:middle; }
+canvas{ width:100%; height:90px; display:block; }
+
+/* ── 폴더 목록(찾아보기) ── */
+.diritem{ display:flex; justify-content:space-between; gap:10px; padding:8px 10px; border-radius:6px; cursor:pointer;
+  font-family:var(--mono-ui); font-size:13px; color:var(--text); }
+.diritem:hover{ background:var(--accent-weak); }
+
+/* ── 홈 KPI·목록(새 화면 요소) ── */
+.kpis{ display:grid; grid-template-columns:repeat(auto-fit, minmax(210px,1fr)); gap:16px; margin-bottom:16px; }
+.kpi{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:16px 18px; box-shadow:var(--elev); }
+.kpi .kl{ font-size:13px; color:var(--muted); }
+.kpi .kv2{ margin-top:2px; font-size:28px; font-weight:700; font-variant-numeric:tabular-nums; letter-spacing:-.01em; }
+.kpi .ks{ font-size:13px; color:var(--muted); }
+.kpi .bar{ margin-top:8px; }
+.attn-item{ display:flex; gap:12px; padding:12px 0; border-bottom:1px solid #EEF0F3; }
+.attn-item:last-child{ border-bottom:0; }
+.attn-ico{ flex:none; width:32px; height:32px; border-radius:8px; display:flex; align-items:center; justify-content:center; }
+.attn-ico.warn{ background:var(--warn-chip); color:var(--warn-ink); }
+.attn-ico.bad{ background:var(--danger-weak); color:var(--danger); }
+.attn-ico.info{ background:var(--accent-weak); color:var(--accent-ink); }
+.attn-ico.ok{ background:var(--ok-weak); color:var(--ok); }
+.attn-t{ font-weight:600; }
+.attn-d{ font-size:13px; color:var(--muted); }
+.linkbtn{ background:transparent; border:0; color:var(--accent); font-weight:600; padding:0; min-height:36px; }
+.linkbtn:hover{ background:transparent; color:var(--accent-hover); text-decoration:underline; }
+.runcard{ padding:14px 16px; border:1px solid var(--line); border-radius:10px; display:flex; flex-direction:column; gap:10px; }
+.runcard + .runcard{ margin-top:10px; }
+.runcard.paused{ background:#FFF8EE; }
+.steps{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; font-size:13px; color:var(--muted); }
+.steps .on{ padding:2px 10px; border-radius:12px; background:var(--accent-weak); color:var(--accent-ink); font-weight:600; }
+.steps .done{ color:var(--ok); font-weight:500; }
+.steps .sep{ flex:0 1 28px; height:2px; background:var(--line-strong); }
+
+/* ── About ── */
+.about-hero{ border-radius:14px; padding:24px 26px; margin-bottom:16px; background:var(--panel); border:1px solid var(--line); }
+.about-hero-row{ display:flex; align-items:center; gap:18px; }
+.about-icon{ width:62px; height:62px; flex:0 0 62px; border-radius:14px; font-size:30px; display:flex; align-items:center;
+  justify-content:center; background:var(--accent); color:#fff; }
+.about-title{ font-size:28px; font-weight:800; letter-spacing:-.01em; line-height:1.15; color:var(--text); }
+.about-tagline{ color:var(--muted); font-size:14px; margin-top:4px; }
+.about-slogan{ margin:18px 0 15px; font-size:15px; color:var(--text); }
+.about-slogan i{ color:var(--accent); font-style:italic; }
+.about-badges{ display:flex; gap:10px; flex-wrap:wrap; }
+.about-badge{ padding:5px 14px; border-radius:10px; font-size:13px; font-weight:700; border:1px solid var(--line); background:var(--panel2); color:var(--text); }
+.about-badge.ver{ color:var(--accent-ink); background:var(--accent-weak); border-color:#C7D5FB; }
+.about-2col{ display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; }
+.about-label{ color:var(--muted); font-size:13px; font-weight:700; margin-bottom:12px; }
+.about-author-row{ display:flex; align-items:center; gap:14px; }
+.about-avatar{ width:48px; height:48px; flex:0 0 48px; border-radius:50%; color:#fff; font-weight:700; font-size:19px;
+  display:flex; align-items:center; justify-content:center; background:var(--accent); }
+.about-author-name{ font-size:17px; font-weight:700; }
+.about-mail{ color:var(--accent); text-decoration:none; font-size:14px; }
+.about-copy{ font-size:26px; font-weight:800; margin-bottom:3px; }
+.about-grid{ display:grid; grid-template-columns:1fr 1fr; gap:18px 30px; }
+.about-feat{ display:flex; gap:12px; align-items:flex-start; }
+.about-feat .fi{ font-size:20px; line-height:1.25; flex:0 0 24px; }
+.about-feat b{ display:block; font-size:14.5px; margin-bottom:3px; color:var(--text); }
+.about-feat .sub{ display:block; line-height:1.5; margin-top:0; }
+.about-notice{ margin-top:4px; border:1px solid var(--line); border-radius:12px; padding:16px 18px; background:var(--panel2); color:var(--text); line-height:1.65; }
+.about-foot{ text-align:center; color:var(--muted); font-size:12px; margin:18px 0 4px; }
+
+/* ── 좁은 화면: 사이드바를 위로 ── */
+@media (max-width:900px){
+  body{ padding-left:0; }
+  #sidebar{ position:static; width:auto; padding:12px; gap:10px; }
+  #sidebar .side-nav{ flex-direction:row; flex-wrap:wrap; }
+  #sidebar .side-nav .sidebtn{ width:auto; flex:1 1 120px; }
+  #sidebar .side-foot{ flex-direction:row; flex-wrap:wrap; }
+  header#topbar{ position:static; padding:10px 16px; }
+  #subnav{ padding:10px 16px 0; }
+  .wrap{ padding:16px 16px 48px; }
+  .about-2col,.about-grid{ grid-template-columns:1fr; }
+}
+::-webkit-scrollbar{ width:10px; height:10px; }
+::-webkit-scrollbar-thumb{ background:#C9CED6; border-radius:6px; border:2px solid var(--bg); }
+.sec-title{ font-size:16px; font-weight:600; margin:22px 0 10px; color:var(--text); }
+.sec-title .sub{ font-weight:400; }
+@media (max-width:900px){ #backendPill,#psutilPill{ display:none !important; } }
+
+/* ── 포탈 전용(body.portal) — 엣지와 이름이 같은 클래스의 다른 쓰임은 여기서만 ── */
+.portal .grid{ gap:16px; } .portal .cols-4{ grid-template-columns:repeat(4, minmax(0,1fr)); }
+@media (max-width:980px){ .portal .cols-4{ grid-template-columns:1fr 1fr; } }
+.portal .view{ display:none; } .portal .view.active{ display:block; }
+.portal .note{ background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:10px 12px; color:var(--text); font-size:13px; }
+.portal .dot{ border-radius:50%; }
+.portal label.fld{ display:flex; flex-direction:column; gap:6px; font-size:13px; color:var(--muted); }
+.portal a.link{ color:var(--accent); text-decoration:none; font-weight:500; } .portal a.link:hover{ text-decoration:underline; }
+.portal td.miss{ color:var(--danger); font-weight:600; } .portal td.warn{ color:var(--warn-ink); font-weight:600; }
+.portal .ssbtn{ min-height:30px; padding:0 10px; font-size:12.5px; border-radius:999px; border-color:var(--line-strong); color:var(--ok); background:var(--ok-weak); vertical-align:middle; white-space:nowrap; }
+.portal .ssbtn:disabled{ opacity:.6; cursor:default; }
+.portal .regcard{ cursor:pointer; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+.portal .regcard:hover{ border-color:var(--line-strong); }
+.portal .regcard.active{ border-color:var(--accent); background:var(--accent-weak); }
+.portal .regcard .big{ font-size:22px !important; }
+.portal .capbar{ position:relative; height:16px; background:#E3E6EB; border:0; border-radius:8px; overflow:hidden; min-width:84px; }
+.portal .capbar > i{ position:absolute; top:0; bottom:0; left:0; border-radius:8px; transition:width .4s ease; }
+.portal .capbar > b{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#111827; text-shadow:0 0 3px #fff, 0 0 3px #fff; }
+.portal .pill{ display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; font-weight:600; border:1px solid var(--line); white-space:nowrap; }
+.portal .fresh-ok{ color:var(--ok); } .portal .fresh-warn{ color:var(--warn-ink); } .portal .fresh-old{ color:var(--danger); }
+.portal #clock{ color:var(--muted); }
+.portal .rbtns{ display:inline-flex; border:1px solid var(--line-strong); border-radius:8px; overflow:hidden; }
+.portal .rbtn{ border:0; border-left:1px solid var(--line-strong); border-radius:0; min-height:36px; }
+.portal .rbtn:first-child{ border-left:0; }
+.portal .reglabel{ font-size:14px; font-weight:700; color:var(--text); margin:18px 0 10px; }
+.portal .phgrid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(320px,1fr)); gap:12px; }
+.portal .phcard{ background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+.portal .phcard .phhead{ display:flex; align-items:baseline; gap:8px; margin-bottom:4px; }
+.portal .phcard canvas{ width:100%; height:120px; display:block; }
+.portal .subpane{ display:none; } .portal .subpane.active{ display:block; }
+/* ── 새 스캔 단계(1 어디를 · 2 방식 · 3 세부 옵션) ── */
+.scan-step{ display:flex; flex-direction:column; gap:8px; }
+.step-title{ font-weight:600; font-size:15px; color:var(--text); display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px; display:list-item; }
+.stepno{ display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:11px; background:var(--text); color:#fff; font-size:12px; flex:none; }
+.methods{ display:grid; grid-template-columns:repeat(auto-fit, minmax(240px,1fr)); gap:10px; }
+.method{ display:flex; align-items:flex-start; gap:12px; text-align:left; min-height:72px; padding:12px 14px; border-radius:10px;
+  border:1px solid var(--line-strong); background:var(--panel); color:var(--text); font-weight:400; }
+.method:hover{ background:var(--panel2); border-color:var(--field); }
+.method.on{ border:2px solid var(--accent); background:var(--accent-weak); padding:11px 13px; }
+.method .mdot{ flex:none; width:18px; height:18px; margin-top:2px; border-radius:9px; border:2px solid var(--field); background:#fff; box-sizing:border-box; }
+.method.on .mdot{ border:6px solid var(--accent); }
+.method b{ font-weight:600; }
+.method .mtag{ color:var(--accent-ink); font-weight:600; margin-left:4px; }
+.method .mdesc{ display:block; margin-top:2px; font-size:13px; color:var(--muted); }
+/* ── 포탈 노드 화면: 왼쪽 목록 + 오른쪽 상세 ── */
+.portal .nodes-md{ display:flex; flex-wrap:wrap; align-items:flex-start; gap:16px; }
+.portal .nodes-list{ flex:2 1 300px; min-width:0; padding:14px; }
+.portal .nodes-detail{ flex:3 1 480px; min-width:0; display:flex; flex-direction:column; gap:16px; }
+.portal .nlist{ display:flex; flex-direction:column; gap:2px; max-height:70vh; overflow:auto; }
+.portal .nitem{ display:flex; align-items:center; gap:10px; width:100%; min-height:48px; padding:0 10px; border:0; border-radius:8px;
+  background:transparent; text-align:left; color:var(--text); font-weight:400; }
+.portal .nitem:hover{ background:var(--panel2); }
+.portal .nitem.on{ background:var(--accent-weak); }
+.portal .nitem .ndot{ flex:none; width:10px; height:10px; border-radius:5px; }
+.portal .nitem .nid{ flex:1; min-width:0; font-family:var(--mono-ui); font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.portal .nitem .nreg{ font-size:13px; color:var(--muted); }
+.portal .nitem .nst{ flex:none; min-width:52px; text-align:right; font-size:13px; font-weight:600; }
+.portal .nd-sec{ padding-top:18px; margin-top:18px; border-top:1px solid var(--line); }
+.portal .nd-sec h3{ margin:0 0 10px; font-size:15px; font-weight:600; }
+.portal .nd-alert{ display:flex; gap:12px; margin-top:16px; padding:12px 14px; border-radius:10px; background:var(--danger-weak); color:#7A1A12; }
+.portal .add-main{ display:flex; flex-direction:column; gap:8px; padding:16px; border:2px solid var(--accent); border-radius:10px; background:var(--accent-weak); }
+.portal .cmdline{ flex:1 1 320px; min-width:0; box-sizing:border-box; padding:12px 14px; border-radius:8px; background:var(--side); color:#E2E8F0;
+  font-family:var(--mono-ui); font-size:13px; overflow-wrap:anywhere; }
+.portal .add-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(200px,1fr)); gap:12px; margin-top:12px; }
+.portal .add-opt{ display:flex; flex-direction:column; align-items:flex-start; gap:6px; padding:14px; border:1px solid var(--line-strong); border-radius:10px; }
+.portal details.card > summary{ min-height:32px; }
+</style>
+<!-- THEME:END -->
 <script src="/i18n.js"></script>
 </head>
 <body class="portal">
@@ -443,67 +759,142 @@
 
   <!-- ③ 노드 관리 (추가/수정 + 등록 목록) -->
   <div class="subpane active" id="np-nodes">
-  <div class="card" style="margin-bottom:14px;">
-    <h2>글로벌 노드 추가 / 수정</h2>
-    <div class="setgrid">
-      <label class="fld">노드 이름(고유)<input id="nId" class="inp mono" placeholder="dc-tokyo" /></label>
-      <label class="fld">지역(표시용)<input id="nRegion" class="inp" placeholder="아시아/도쿄" /></label>
-      <label class="fld">주소(URL)<input id="nUrl" class="inp mono" placeholder="http://10.20.1.5:8765" /></label>
-      <label class="fld">API 토큰(엣지 api_token 과 동일)<input id="nToken" class="inp mono" type="password" placeholder="(변경 시에만)" /></label>
-      <label class="fld">경로 별칭: 로컬 접두어(선택)<input id="nAliasLocal" class="inp mono" placeholder="/mnt/isilon/data" /></label>
-      <label class="fld">경로 별칭: 논리 접두어(선택)<input id="nAliasLogical" class="inp mono" placeholder="/data" /></label>
-      <label class="fld">복제 단위<select id="nUnit" class="inp">
-        <option value="minute">분 마다</option><option value="hour">시간 마다</option>
-        <option value="day">일 마다</option><option value="week">주 마다</option>
-        <option value="month">개월 마다</option></select></label>
-      <label class="fld">수집 방식<select id="nMode" class="inp"><option value="both">복제 + 폴링(권장)</option><option value="replicate">복제만</option><option value="poll">폴링만</option></select></label>
-    </div>
-    <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center;">
-      <span class="sub">반복주기</span>
-      <input id="nEvery" class="inp" type="number" min="1" value="30" style="width:74px;" />
-      <span id="nUnitLabel" class="sub">분마다</span>
-      <span id="nWeekdays" style="display:none; gap:5px; align-items:center;"></span>
-      <select id="nMonth" class="inp" style="display:none;"></select>
-      <select id="nDay" class="inp" style="display:none;"></select>
-      <input id="nAt" type="time" class="inp" style="width:110px; display:none;" value="03:00" />
-      <span class="sub" id="nSummary" style="margin-left:8px;"></span>
-    </div>
-    <div style="display:flex; gap:10px; align-items:center; margin-top:14px; flex-wrap:wrap;">
-      <label class="sub" style="display:flex; gap:6px; align-items:center;"><input id="nEnabled" type="checkbox" checked /> 사용함</label>
-      <span class="sub" id="nodeMsg"></span>
-      <div class="spacer"></div>
-      <button id="testBtn">연결 테스트</button>
-      <button id="addBtn" class="primary">저장(추가/수정)</button>
-    </div>
-    <div class="note" style="margin-top:12px;">연결 테스트는 <span class="mono">/api/dbexport</span>(meta.json)로 응답·토큰·요약을 확인합니다. 같은 이름으로 저장하면 수정됩니다.</div>
-  </div>
+  <div class="nodes-md">
+    <!-- 왼쪽: 등록된 노드 목록(누르면 오른쪽에 상세) -->
+    <section class="card nodes-list" aria-labelledby="nlTitle">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px;">
+        <h2 id="nlTitle" style="margin:0;">등록된 노드 <span class="sub" id="nlCount"></span></h2>
+        <button type="button" id="ndNewBtn">＋ 새 노드</button>
+      </div>
+      <div id="nodeList" class="nlist"><div class="sub" style="padding:8px 4px;">불러오는 중…</div></div>
+    </section>
 
-  <div class="card" id="csvImportCard" style="margin-bottom:14px;">
-    <h2>📋 CSV로 여러 서버 한 번에 가져오기</h2>
-    <div class="sub" style="margin-bottom:8px;">
-      여러 노드를 줄 단위로 붙여넣거나 <b>.csv 파일</b>을 선택해 한 번에 등록합니다. 첫 줄은 헤더이며
-      <b>id,url</b> 은 필수, 나머지(region·token·alias_local·alias_logical)는 선택입니다.
-      같은 id 는 <b>덮어쓰기(수정)</b>, 토큰을 비우면 기존 토큰이 유지됩니다.
-    </div>
-    <textarea id="csvText" class="inp mono" rows="6" spellcheck="false"
-      style="width:100%; resize:vertical; box-sizing:border-box;"
-      placeholder="id,url,region,token&#10;dc-seoul,http://10.1.1.5:8765,아시아/서울,TOKEN&#10;dc-tokyo,10.2.2.6:8765,아시아/도쿄,"></textarea>
-    <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; align-items:center;">
-      <input type="file" id="csvFile" accept=".csv,text/csv,text/plain" class="sub" />
-      <button id="csvImportBtn" class="primary">⬆ 가져오기</button>
-      <button id="csvSampleDownload">⬇ 샘플 CSV 받기</button>
-      <button id="csvSampleBtn">예시 채우기</button>
-      <button id="csvExportBtn" title="현재 등록된 노드를 CSV로 내려받기(토큰은 빈칸 — 채워서 가져오기)">⬇ 현재 구성 내보내기</button>
-      <span id="csvMsg" class="sub" style="margin-left:4px;"></span>
-    </div>
-  </div>
+    <div class="nodes-detail">
+      <!-- 오른쪽: 선택한 노드 상세 = 추가/수정 폼(같은 입력칸 하나 — 단일 소스) -->
+      <section class="card" id="nodeDetail" aria-live="polite">
+        <div style="display:flex; flex-wrap:wrap; align-items:flex-start; justify-content:space-between; gap:12px;">
+          <div style="min-width:0;">
+            <div style="display:flex; flex-wrap:wrap; align-items:center; gap:10px;">
+              <h2 id="ndTitle" class="mono" style="margin:0; font-size:20px; overflow-wrap:anywhere;">새 노드</h2>
+              <span id="ndBadge" class="badge" style="display:none;"></span>
+            </div>
+            <div class="sub" id="ndMeta">엣지의 주소와 토큰을 넣고 저장하면 등록됩니다.</div>
+          </div>
+          <div style="display:flex; flex-wrap:wrap; gap:8px;">
+            <button id="testBtn">연결 테스트</button>
+            <button id="ndSyncBtn" style="display:none;">지금 가져오기</button>
+          </div>
+        </div>
 
-  <div class="card">
-    <h2>등록된 글로벌 노드</h2>
-    <table>
-      <thead><tr><th>이름</th><th>지역</th><th>주소</th><th>복제 주기</th><th>마지막 동기화</th><th>상태</th><th>동작</th></tr></thead>
-      <tbody id="regRows"><tr><td colspan="7" class="sub">불러오는 중…</td></tr></tbody>
-    </table>
+        <div id="ndAlert" class="nd-alert" style="display:none;">
+          <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none; margin-top:2px;"><path d="M12 4 2.5 20h19zM12 10v4M12 17h.01"/></svg>
+          <div><div id="ndAlertT" style="font-weight:600;"></div><div id="ndAlertD" style="font-size:13px;"></div></div>
+        </div>
+
+        <div class="nd-sec">
+          <h3>연결</h3>
+          <div class="setgrid">
+            <label class="fld">노드 이름(고유)<input id="nId" class="inp mono" placeholder="dc-tokyo" /></label>
+            <label class="fld">지역(표시용)<input id="nRegion" class="inp" placeholder="아시아/도쿄" /></label>
+            <label class="fld">주소(URL)<input id="nUrl" class="inp mono" placeholder="http://10.20.1.5:8765" /></label>
+            <label class="fld">토큰(엣지 api_token 과 같게)<input id="nToken" class="inp mono" type="password" placeholder="저장돼 있음 — 바꿀 때만 입력" /></label>
+          </div>
+        </div>
+
+        <div class="nd-sec">
+          <h3>가져오기</h3>
+          <div class="setgrid">
+            <label class="fld">무엇을<select id="nMode" class="inp"><option value="both">상태와 스캔 결과 모두(권장)</option><option value="poll">상태만</option><option value="replicate">스캔 결과만</option></select></label>
+            <label class="fld">얼마나 자주(단위)<select id="nUnit" class="inp">
+              <option value="minute">분 마다</option><option value="hour">시간 마다</option>
+              <option value="day">일 마다</option><option value="week">주 마다</option>
+              <option value="month">개월 마다</option></select></label>
+          </div>
+          <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center;">
+            <span class="sub">반복주기</span>
+            <input id="nEvery" class="inp" type="number" min="1" value="30" style="width:80px;" aria-label="반복주기" />
+            <span id="nUnitLabel" class="sub">분마다</span>
+            <span id="nWeekdays" style="display:none; gap:5px; align-items:center;"></span>
+            <select id="nMonth" class="inp" style="display:none;" aria-label="시작 월"></select>
+            <select id="nDay" class="inp" style="display:none;" aria-label="시작 일"></select>
+            <input id="nAt" type="time" class="inp" style="width:120px; display:none;" value="03:00" aria-label="시각" />
+            <span class="sub" id="nSummary" style="margin-left:8px;"></span>
+          </div>
+          <label class="sub" style="display:flex; gap:8px; align-items:center; margin-top:10px; min-height:36px;"><input id="nEnabled" type="checkbox" checked /> 이 노드 사용(끄면 가져오지 않음)</label>
+          <div class="sub">스캔 결과까지 가져와야 ‘비교’에서 이 노드의 폴더를 다른 노드와 나란히 볼 수 있습니다.</div>
+        </div>
+
+        <div class="nd-sec">
+          <h3>경로 이름 맞추기 <span class="sub" style="font-weight:400;">— 노드마다 마운트 위치가 달라도 같은 이름으로 비교합니다(선택)</span></h3>
+          <div style="display:flex; flex-wrap:wrap; align-items:flex-end; gap:12px;">
+            <label class="fld" style="flex:1 1 200px;">이 노드에서의 경로<input id="nAliasLocal" class="inp mono" placeholder="/mnt/isilon/data" /></label>
+            <span aria-hidden="true" style="display:flex; align-items:center; min-height:38px; color:var(--muted);"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>
+            <label class="fld" style="flex:1 1 200px;">포탈에서 부를 이름<input id="nAliasLogical" class="inp mono" placeholder="/data" /></label>
+          </div>
+        </div>
+
+        <div class="nd-sec" style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px;">
+          <div style="display:flex; flex-wrap:wrap; align-items:center; gap:10px;">
+            <button id="addBtn" class="primary" style="min-height:42px; padding:0 22px;">저장</button>
+            <span class="sub" id="nodeMsg"></span>
+          </div>
+          <button id="ndDelBtn" class="linkbtn" style="color:var(--danger); display:none;">이 노드 삭제</button>
+        </div>
+      </section>
+
+      <!-- 노드 추가 방법 -->
+      <section class="card" id="nodeAddCard">
+        <h2>노드 추가</h2>
+        <div class="add-main">
+          <div style="font-weight:600;">엣지에서 한 줄로 등록 <span style="color:var(--accent-ink); font-weight:600;">권장</span></div>
+          <div class="sub" style="color:var(--text);">엣지 서버에서 설치 명령 끝에 이 포탈 주소를 붙이면 엣지가 스스로 등록됩니다. 토큰을 옮겨 적을 필요가 없습니다.
+            (설치 스크립트 <span class="mono">install_edge.sh</span> 는 사내 미러에서 받습니다.)</div>
+          <div style="display:flex; flex-wrap:wrap; align-items:center; gap:8px;">
+            <code id="enrollCmd" class="cmdline">sudo bash install_edge.sh --hq … --enroll [등록 토큰]</code>
+            <button type="button" id="enrollCopy">명령 복사</button>
+          </div>
+          <div class="sub" id="enrollHint"></div>
+        </div>
+        <div class="add-grid">
+          <div class="add-opt">
+            <div style="font-weight:600;">직접 입력</div>
+            <div class="sub">엣지의 주소와 토큰을 이미 알고 있을 때.</div>
+            <button type="button" id="addManualBtn">입력하기</button>
+          </div>
+          <div class="add-opt">
+            <div style="font-weight:600;">CSV로 여러 대 한꺼번에</div>
+            <div class="sub">이름, 주소, 지역, 토큰 순서. 이미 있는 노드는 적은 값만 바뀝니다.</div>
+            <button type="button" id="addCsvBtn">CSV 열기</button>
+          </div>
+          <div class="add-opt">
+            <div style="font-weight:600;">IP만으로 원격 설치</div>
+            <div class="sub">설치 명령을 만들어 주거나, SSH로 설치·등록까지 한 번에 합니다.</div>
+            <button type="button" id="addRemoteBtn">원격 설치 열기</button>
+          </div>
+        </div>
+      </section>
+
+      <details class="card" id="csvImportCard">
+        <summary><b>CSV로 여러 서버 한 번에 가져오기</b></summary>
+        <div class="sub" style="margin:10px 0 8px;">
+          여러 노드를 줄 단위로 붙여넣거나 <b>.csv 파일</b>을 선택해 한 번에 등록합니다. 첫 줄은 헤더이며
+          <b>id,url</b> 은 필수, 나머지(region·token·alias_local·alias_logical)는 선택입니다.
+          같은 id 는 적은 값만 바뀌고(빈칸은 그대로), 토큰을 비우면 기존 토큰이 유지됩니다.
+        </div>
+        <textarea id="csvText" class="inp mono" rows="6" spellcheck="false" aria-label="CSV 내용"
+          style="width:100%; resize:vertical; box-sizing:border-box;"
+          placeholder="id,url,region,token&#10;dc-seoul,http://10.1.1.5:8765,아시아/서울,TOKEN&#10;dc-tokyo,10.2.2.6:8765,아시아/도쿄,"></textarea>
+        <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; align-items:center;">
+          <input type="file" id="csvFile" accept=".csv,text/csv,text/plain" class="sub" aria-label="CSV 파일" />
+          <button id="csvImportBtn" class="primary">가져오기</button>
+          <button id="csvSampleDownload">샘플 CSV 받기</button>
+          <button id="csvSampleBtn">예시 채우기</button>
+          <button id="csvExportBtn" title="현재 등록된 노드를 CSV로 내려받기(토큰은 빈칸 — 채워서 가져오기)">현재 구성 내보내기</button>
+          <span id="csvMsg" class="sub" style="margin-left:4px;"></span>
+        </div>
+      </details>
+      <div id="npProvisionSlot"></div>
+    </div>
   </div>
   </div>
 
@@ -741,7 +1132,7 @@ function updateLoginUI(){
       btn.textContent="🔓 로그아웃 ("+(m>0?m+"분":_opLeft()+"초")+")"; }
     else btn.textContent="🔑 로그인";
   }
-  ["addBtn","testBtn","pvGenBtn","pvSshBtn","setPwBtn","setPwClearBtn","ugGenBtn","ugSshBtn","pAuditBtn","ugWatchSave","ugPushAll","ugPushAllSsh","bkDownload","bkSave","bkSchedSave"].forEach(id=>{ const e=$(id); if(e) e.disabled=ro; });
+  ["addBtn","testBtn","ndDelBtn","pvGenBtn","pvSshBtn","setPwBtn","setPwClearBtn","ugGenBtn","ugSshBtn","pAuditBtn","ugWatchSave","ugPushAll","ugPushAllSsh","bkDownload","bkSave","bkSchedSave"].forEach(id=>{ const e=$(id); if(e) e.disabled=ro; });
 }
 // 상단/탭 제목(브랜딩) 적용 — 옵션에서 지정한 값이 있으면 그것으로, 없으면 기본값.
 function applyPortalTitle(title, sub){
@@ -1068,7 +1459,8 @@ document.querySelectorAll("#view-nodes .stab").forEach(b=>b.addEventListener("cl
 
 // 설정 카드를 종류별 탭으로 재배치(노드 관리 / 계정·보안 / 모니터링·백업 / 일반).
 (function(){
-  const moves={ "np-nodes":["cardProvision"], "np-account":["cardLoginSec","cardNodePw","cardNodeToken","cardEnroll"], "np-monitor":["cardDbDir","cardBackup","cardAskLlm"] };
+  // npProvisionSlot = 노드 화면 오른쪽 열(노드 추가 아래)
+  const moves={ "npProvisionSlot":["cardProvision"], "np-account":["cardLoginSec","cardNodePw","cardNodeToken","cardEnroll"], "np-monitor":["cardDbDir","cardBackup","cardAskLlm"] };
   Object.keys(moves).forEach(pane=>{ const p=document.getElementById(pane); if(!p) return;
     moves[pane].forEach(id=>{ const el=document.getElementById(id); if(el) p.appendChild(el); }); });
   const g=document.getElementById("np-general"), t=document.getElementById("cardTitle");
@@ -1525,29 +1917,89 @@ function renderPortalDash(){
     : "노드 행 클릭=스토리지 펼침 · 지역 카드=필터 · 머리글=정렬. 깊은 경로 비교는 ‘경로 비교’ 탭에서.";
 }
 
+// ── 노드 화면: 왼쪽 목록 + 오른쪽 상세(= 추가/수정 폼 하나 — 같은 입력칸을 쓴다) ──
+let _nodeRows = [];        // 마지막으로 받은 노드 목록(/api/portal/nodes)
+let _selNode = undefined;  // 선택한 노드 id(null = 새 노드 입력 중, undefined = 아직 고르지 않음)
+function _nodeState(n){
+  if(!n.enabled) return {t:"사용 안 함", fg:"var(--muted)", dot:"#8A93A0", bg:"var(--panel2)"};
+  if(!n.online) return {t:"끊김", fg:"var(--danger)", dot:"#B42318", bg:"var(--danger-weak)"};
+  if(n.active_scans>0) return {t:"스캔 중", fg:"var(--accent-ink)", dot:"#1D4ED8", bg:"var(--accent-weak)"};
+  return {t:"연결됨", fg:"var(--ok)", dot:"#166534", bg:"var(--ok-weak)"};
+}
+function _nodeAdvice(err){   // 오류 문구 → 사람이 할 일
+  const e=String(err||"");
+  if(/401|토큰/.test(e)) return ["엣지가 요청을 거부했습니다 — 토큰이 서로 다릅니다",
+    "엣지 서버 설정 화면의 API 토큰을 아래 ‘토큰’ 칸에 넣고 연결 테스트를 누르세요. 엣지를 다시 설치했다면 토큰이 새로 만들어졌을 수 있습니다."];
+  if(/timed out|timeout|시간 초과|refused|연결 거부|No route|unreachable|Name or service/i.test(e)) return ["엣지에 연결할 수 없습니다",
+    "주소(IP·포트)가 맞는지, 엣지 서비스가 켜져 있는지, 방화벽이 막지 않는지 확인하세요."];
+  return ["마지막 응답에 문제가 있습니다", ""];
+}
+function renderNodeList(){
+  const rows=_nodeRows||[];
+  $("nlCount").textContent = rows.length ? String(rows.length) : "";
+  if(_selNode && !rows.some(n=>n.id===_selNode)) _selNode=undefined;   // 다른 곳에서 지워진 노드
+  if(_selNode===undefined) {     // 처음: 끊긴 노드가 있으면 그것부터, 없으면 첫 노드
+    const first = rows.find(n=>n.enabled && !n.online) || rows[0];
+    if(first){ selectNode(first.id); return; } else { newNodeForm(); }
+  }
+  $("nodeList").innerHTML = rows.length ? rows.map(n=>{ const st=_nodeState(n), on=(n.id===_selNode);
+    return `<button type="button" class="nitem${on?" on":""}" aria-pressed="${on}" data-nid="${escAttr(n.id)}">
+      <span class="ndot" style="background:${st.dot}"></span><span class="nid">${_he(n.id)}</span>
+      <span class="nreg">${_he(n.region||"")}</span><span class="nst" style="color:${st.fg}">${st.t}</span></button>`; }).join("")
+    : '<div class="sub" style="padding:8px 4px;">등록된 노드가 없습니다. 오른쪽 ‘노드 추가’에서 시작하세요.</div>';
+  $("nodeList").querySelectorAll("button[data-nid]").forEach(b=>b.addEventListener("click",()=>selectNode(b.dataset.nid)));
+  renderNodeHeader();
+}
+function renderNodeHeader(){
+  const n=(_nodeRows||[]).find(x=>x.id===_selNode);
+  $("ndDelBtn").style.display = n ? "" : "none";
+  $("ndSyncBtn").style.display = n ? "" : "none";
+  if(!n){ $("ndTitle").textContent="새 노드"; $("ndBadge").style.display="none";
+    $("ndMeta").textContent="엣지의 주소와 토큰을 넣고 저장하면 등록됩니다."; $("ndAlert").style.display="none"; return; }
+  const st=_nodeState(n);
+  $("ndTitle").textContent=n.id;
+  const bd=$("ndBadge"); bd.style.display=""; bd.textContent=st.t; bd.style.background=st.bg; bd.style.color=st.fg;
+  $("ndMeta").textContent=[n.region||"지역 없음", n.version?("v"+n.version):"", n.last_poll?("마지막 응답 "+ago(n.last_poll)):"아직 응답 없음",
+    n.last_sync?("결과 복제 "+ago(n.last_sync)):""].filter(Boolean).join(" · ");
+  if(n.enabled && (!n.online || n.error)){
+    const adv=_nodeAdvice(n.error); $("ndAlert").style.display="flex";
+    $("ndAlertT").textContent=adv[0]; $("ndAlertD").textContent=(adv[1]?adv[1]+" ":"")+(n.error?("(받은 오류: "+n.error+")"):"");
+  } else $("ndAlert").style.display="none";
+}
+function fillNodeForm(n){
+  $("nId").value=n.id; $("nRegion").value=n.region||""; $("nUrl").value=n.url; $("nToken").value="";
+  $("nAliasLocal").value=n.alias_local||""; $("nAliasLogical").value=n.alias_logical||"";
+  $("nUnit").value=n.unit||"minute"; $("nEvery").value=n.every||n.interval_minutes||30;
+  $("nAt").value=n.at||"03:00"; $("nMonth").value=n.start_month||1; $("nDay").value=n.start_day||1;
+  nWsel=new Set(n.weekdays&&n.weekdays.length?n.weekdays:[1]); buildNW();
+  $("nMode").value=n.mode||"both"; $("nEnabled").checked=!!n.enabled; updateNUnit();
+}
+function selectNode(id){
+  const n=(_nodeRows||[]).find(x=>x.id===id); if(!n) return;
+  _selNode=id; fillNodeForm(n); $("nodeMsg").textContent=""; renderNodeList();
+}
+function newNodeForm(){
+  _selNode=null;
+  ["nId","nRegion","nUrl","nToken","nAliasLocal","nAliasLogical"].forEach(k=>{ $(k).value=""; });
+  $("nUnit").value="minute"; $("nEvery").value=30; $("nMode").value="both"; $("nEnabled").checked=true;
+  nWsel=new Set([1]); buildNW(); updateNUnit(); $("nodeMsg").textContent="";
+  renderNodeHeader();
+  document.querySelectorAll("#nodeList .nitem").forEach(b=>{ b.classList.remove("on"); b.setAttribute("aria-pressed","false"); });
+}
+function renderEnrollCmd(tokenSet){
+  const cmd="sudo bash install_edge.sh --hq "+location.origin+" --enroll [등록 토큰]";
+  $("enrollCmd").textContent=cmd;
+  $("enrollHint").innerHTML = tokenSet
+    ? "[등록 토큰] 자리에는 ‘계정 · 보안’에서 정한 등록 토큰을 넣으세요."
+    : '<span style="color:var(--warn-ink); font-weight:600;">등록 토큰이 아직 없습니다.</span> 로그인 비밀번호가 있는 포탈은 토큰이 있어야 엣지가 스스로 등록됩니다 — <button type="button" class="linkbtn" id="enrollGoSet">계정 · 보안에서 정하기</button>';
+  const g=$("enrollGoSet"); if(g) g.addEventListener("click",()=>showSub("np-account"));
+}
 async function loadNodes(){
   try {
     const j = await (await fetch("/api/portal/nodes",{cache:"no-store"})).json();
     const rows=(j.nodes||[]);
-    $("regRows").innerHTML = rows.length ? rows.map(n=>
-      `<tr><td class="mono">${_he(n.id)}</td><td>${_he(n.region||"—")}</td><td class="mono">${_he(n.url)}</td>
-        <td>${nodeSummary(n)}</td><td class="sub">${ago(n.last_poll)}</td>
-        <td>${!n.online?'<span class="badge b-offline">오프라인</span>':(n.active_scans>0?'<span class="badge b-scan">🔄 스캔 중 '+n.active_scans+'</span>':'<span class="badge b-online">온라인</span>')}</td>
-        <td><button data-edit="${escAttr(n.id)}">수정</button> <button data-sync="${escAttr(n.id)}">동기화</button> <button data-del="${escAttr(n.id)}">삭제</button></td></tr>`
-    ).join("") : '<tr><td colspan="7" class="sub">등록된 노드 없음</td></tr>';
-    $("regRows").querySelectorAll("button[data-del]").forEach(b=>b.addEventListener("click",async()=>{
-      if(confirm("노드 "+b.dataset.del+" 삭제?")){ await fetch("/api/portal/nodes/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:b.dataset.del})}); loadNodes(); loadOverview(); }}));
-    $("regRows").querySelectorAll("button[data-sync]").forEach(b=>b.addEventListener("click",async()=>{
-      await fetch("/api/portal/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:b.dataset.sync})}); b.textContent="동기화…"; setTimeout(()=>{loadNodes();loadOverview();},1500); }));
-    $("regRows").querySelectorAll("button[data-edit]").forEach(b=>b.addEventListener("click",()=>{
-      const n=rows.find(x=>x.id===b.dataset.edit); if(!n) return;
-      $("nId").value=n.id; $("nRegion").value=n.region||""; $("nUrl").value=n.url; $("nToken").value="";
-      $("nAliasLocal").value=n.alias_local||""; $("nAliasLogical").value=n.alias_logical||"";
-      $("nUnit").value=n.unit||"minute"; $("nEvery").value=n.every||n.interval_minutes||30;
-      $("nAt").value=n.at||"03:00"; $("nMonth").value=n.start_month||1; $("nDay").value=n.start_day||1;
-      nWsel=new Set(n.weekdays&&n.weekdays.length?n.weekdays:[1]); buildNW();
-      $("nMode").value=n.mode||"both"; $("nEnabled").checked=!!n.enabled; updateNUnit();
-      show("nodes"); $("nodeMsg").textContent="수정 모드: "+n.id; }));
+    _nodeRows = rows;
+    renderNodeList();
     // 노드 비밀번호 관리 드롭다운(전체 + 개별, 토큰 없는 노드 표시)
     const np=$("npNode");
     if(np){ const cur=np.value;
@@ -1796,9 +2248,30 @@ function nodePayload(){
     interval_minutes: (u==="minute") ? (parseInt($("nEvery").value)||30) : 30 };
 }
 $("addBtn").addEventListener("click", async ()=>{
-  const j = await (await fetch("/api/portal/nodes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(nodePayload())})).json();
+  const pl=nodePayload();
+  const j = await (await fetch("/api/portal/nodes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(pl)})).json();
   $("nodeMsg").textContent = j.ok ? "✓ 저장됨" : ("실패: "+(j.reason||""));
-  if(j.ok){ loadNodes(); loadOverview(); }
+  if(j.ok){ _selNode=pl.id; loadNodes(); loadOverview(); }
+});
+$("ndNewBtn").addEventListener("click", ()=>{ newNodeForm(); $("nId").focus(); });
+$("addManualBtn").addEventListener("click", ()=>{ newNodeForm(); $("nodeDetail").scrollIntoView({behavior:"smooth"}); setTimeout(()=>$("nId").focus(), 300); });
+$("addCsvBtn").addEventListener("click", ()=>{ const d=$("csvImportCard"); d.open=true; d.scrollIntoView({behavior:"smooth"}); });
+$("addRemoteBtn").addEventListener("click", ()=>{ const c=$("cardProvision"); if(c) c.scrollIntoView({behavior:"smooth"}); });
+$("enrollCopy").addEventListener("click", async ()=>{
+  try{ await navigator.clipboard.writeText($("enrollCmd").textContent); $("enrollCopy").textContent="복사됨"; }
+  catch(e){ const r=document.createRange(); r.selectNodeContents($("enrollCmd")); const sl=getSelection(); sl.removeAllRanges(); sl.addRange(r); $("enrollCopy").textContent="선택됨 — Ctrl+C"; }
+  setTimeout(()=>{ $("enrollCopy").textContent="명령 복사"; }, 2000);
+});
+$("ndDelBtn").addEventListener("click", async ()=>{
+  const id=_selNode; if(!id || !confirm("노드 "+id+" 를 삭제할까요?\n포탈에 받아 둔 이 노드의 복제 결과도 목록에서 빠집니다(엣지 원본은 그대로).")) return;
+  const j=await (await fetch("/api/portal/nodes/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})})).json();
+  $("nodeMsg").textContent = (j && j.ok===false) ? ("실패: "+(j.reason||"")) : "";
+  _selNode=undefined; loadNodes(); loadOverview();
+});
+$("ndSyncBtn").addEventListener("click", async ()=>{
+  const id=_selNode; if(!id) return; $("ndSyncBtn").textContent="가져오는 중…";
+  await fetch("/api/portal/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
+  setTimeout(()=>{ $("ndSyncBtn").textContent="지금 가져오기"; loadNodes(); loadOverview(); },1500);
 });
 $("testBtn").addEventListener("click", async ()=>{
   $("nodeMsg").textContent="테스트 중…";
@@ -2062,6 +2535,7 @@ async function pLoadUpgradeCfg(){
   try{ const j=await (await fetch("/api/portal/settings",{cache:"no-store"})).json();
     if(j.ok && $("ugWatchDir")) $("ugWatchDir").value=j.upgrade_watch_dir||"";
     if(j.ok && $("setEnroll")) $("setEnroll").placeholder=j.enroll_token_set?"설정됨 — 바꾸려면 새 토큰 입력(비우고 저장=해제)":"enroll 공유 토큰";
+    if(j.ok && $("enrollCmd")) renderEnrollCmd(!!j.enroll_token_set);
     if(j.ok){ // 중앙 DB 저장 경로(복제본) 카드
       if($("dbDir") && document.activeElement!==$("dbDir")) $("dbDir").value=j.replica_dir||"";
       if($("dbDirEff")) $("dbDirEff").textContent=j.replica_dir_effective||"—";
