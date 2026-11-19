@@ -4479,6 +4479,14 @@ function render(d) {
   $("phaseTxt").textContent = phaseKo[r.phase] || r.phase;
 
   // 분석 화면 안내 배너(하나를 공유): 진행 중 → 임시값 안내 / 부분 집계 중 → 진행 / 부분 집계 값 → 하한값 안내
+  // 보고 있던 스캔이 '진행 중 → 끝남/멈춤'으로 바뀌면 폴더 트리 등을 다시 불러온다 — 예전엔 트리가 진행 중(또는
+  // 스냅샷 하한값) 숫자로 남아 새로고침해야 바뀌었다(16회차 점검). 상위 폴더 표는 매 주기 갱신돼 원래 괜찮았다.
+  {
+    const _sidNow = _sel ? _sel.id : d.scan_id, _stNow = _sel ? _sel.status : r.status;
+    const _runNow = (_stNow === "discovering" || _stNow === "sizing");
+    if (window._selRunPrev && window._selRunPrev.id === _sidNow && window._selRunPrev.running && !_runNow) lastDetailScan = null;
+    window._selRunPrev = {id: _sidNow, running: _runNow};
+  }
   const _an = $("analysisNotice");
   if (_an) {
     if (!window._anRunningHtml) window._anRunningHtml = _an.innerHTML;   // 원래(진행 중) 문구 보관

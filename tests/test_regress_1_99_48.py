@@ -1642,6 +1642,32 @@ def check_as_regress_round16() -> None:
     print("[T1·T2] OK  예약·장비 추가/삭제 저장·PID 1 에서도 pscan 정상")
 
 
+def check_at_livesnap_round16() -> None:
+    """U1 스캔이 끝난 뒤에도 폴더 트리가 진행 중(또는 스냅샷 하한값) 숫자로 남음 U2 만드는 사이 스캔이 멈추면 옛 스냅샷이
+    놓여 재개 뒤 '지금 결과'처럼 보임."""
+    from isilon_usage import livesnap, db as dbmod
+    d = tempfile.mkdtemp(prefix="iu_at_")
+    try:
+        src = os.path.join(d, "src.db")
+        _mk_replica_db(src, "/x", [("/x", 0, 1, 0), ("/x/a", 1, 0, 0)])
+        c = dbmod.connect(src)
+        c.execute("UPDATE scan_runs SET status='discovering'")
+        c.commit()
+        c.close()
+        dst = os.path.join(d, "snap.db")
+        r = livesnap.build(src, dst, still_running=lambda: False)                         # U2
+        assert r["ok"] is False and not os.path.exists(dst), r
+        r = livesnap.build(src, dst, still_running=lambda: True)
+        assert r["ok"] and os.path.exists(dst), r
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    sv = _read("server.py")
+    assert "still_running=lambda: int(scan_id) in self.running_ids()" in sv
+    assert "livesnap.remove(self.live_snapshot_path(scan_id))\n            with self._lock:\n                self._live_snaps.pop(int(scan_id), None)" in sv
+    assert "window._selRunPrev.running && !_runNow) lastDetailScan = null;" in _read("dashboard.html")   # U1(브라우저 확인)
+    print("[U1·U2] OK  완료 후 트리 갱신·멈춘 스캔엔 스냅샷을 놓지 않음·재개 때 옛 스냅샷 삭제")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1657,7 +1683,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_ak_round11_misc, check_al_tools_round12, check_am_remote_round13,
             check_an_fuzz_round13, check_ao_regress_round14,
             check_ap_explore_round14, check_aq_live_snapshot,
-            check_ar_crash_round15, check_as_regress_round16]
+            check_ar_crash_round15, check_as_regress_round16,
+            check_at_livesnap_round16]
 
 
 def main() -> int:

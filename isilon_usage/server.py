@@ -2555,6 +2555,13 @@ class ScanController:
         # 시작과 같은 임계 구역 — 재개도 같은 루트 중복 실행을 만들 수 있다(업그레이드 후 자동 재개가
         # 같은 루트의 두 스캔을 둘 다 살려 쌍이 영구화되던 문제). 먼저 재개된 쪽만 계속된다.
         self._wait_stopping(scan_id)   # 멈추는 중이면 끝날 때까지 — 잠금 밖에서(곧바로 '재개'를 눌러도 거절되지 않게)
+        try:   # 멈추기 전에 만든 스냅샷은 재개 뒤 '지금 결과'가 아니다 — 지운다(필요하면 다시 만든다)
+            from . import livesnap
+            livesnap.remove(self.live_snapshot_path(scan_id))
+            with self._lock:
+                self._live_snaps.pop(int(scan_id), None)
+        except Exception:  # noqa: BLE001
+            pass
         with self._start_lock:
             return self._resume_scan_locked(scan_id)
 
@@ -2749,7 +2756,8 @@ class ScanController:
         def _run():
             from . import livesnap
             try:
-                res = livesnap.build(src, dst, on_progress=_prog)
+                res = livesnap.build(src, dst, on_progress=_prog,
+                                     still_running=lambda: int(scan_id) in self.running_ids())
                 if res.get("ok"):
                     job.update(at=res["at"], rows=res["rows"], error=None)
                     self._log("스냅샷 scan #%s: 폴더 %d개 · %.1f초" % (scan_id, res["rows"], res["elapsed"]))
@@ -4300,6 +4308,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             if path == "/api/scan/live-snapshot":      # 진행 중 스캔의 '지금까지 결과' 만들기(스캔은 계속)
                 try:
+                    if isinstance(body.get("scan_id"), (bool, float)):   # true·1.9 를 1번 스캔으로 받지 않게
+                        raise ValueError
                     sid = int(body.get("scan_id"))
                 except (TypeError, ValueError, OverflowError):
                     self._send_json({"ok": False, "reason": "scan_id 필요"}, status=400)

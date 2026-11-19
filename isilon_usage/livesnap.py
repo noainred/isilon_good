@@ -72,7 +72,7 @@ def copy_consistent(src_db: str, dst_db: str) -> int:
         conn.close()
 
 
-def build(src_db: str, dst_db: str, *, stop_event=None, on_progress=None) -> dict:
+def build(src_db: str, dst_db: str, *, stop_event=None, on_progress=None, still_running=None) -> dict:
     """스냅샷을 만든다: 임시 파일에 일관 복사 → 부분 집계 → 제자리로 교체. 반환 {ok, rows, at, elapsed} 또는 {ok:False, reason}."""
     from .scanner import partial_aggregate
     t0 = time.time()
@@ -96,7 +96,13 @@ def build(src_db: str, dst_db: str, *, stop_event=None, on_progress=None) -> dic
             c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         finally:
             c.close()
+        # 만드는 사이 스캔이 끝나거나 멈췄으면 놓지 않는다 — 놓으면 재개 뒤에 옛 스냅샷이 '지금 결과'로 보였다(16회차 점검)
+        if still_running is not None and not still_running():
+            return {"ok": False, "reason": "만드는 사이 스캔이 끝나거나 멈춰 버렸습니다(완료값·멈춘 자료 집계를 보세요)."}
         os.replace(tmp, dst_db)
+        if still_running is not None and not still_running():   # 교체 직후에 끝난 경우도 정리
+            remove(dst_db)
+            return {"ok": False, "reason": "만드는 사이 스캔이 끝났습니다."}
         for sfx in ("-wal", "-shm"):                   # 옛 스냅샷의 WAL/SHM 이 새 본문과 섞이지 않게
             try:
                 os.remove(dst_db + sfx)
