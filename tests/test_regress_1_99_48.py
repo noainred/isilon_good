@@ -1612,6 +1612,36 @@ h.serve_forever()
     print("[S1·S2] OK  강제 종료 시 pscan 워커도 함께 종료·오래된 임시 파일 정리")
 
 
+# ------------------------------------------------------------------ 16회차(13~15회차 수정분 회귀)
+def check_as_regress_round16() -> None:
+    """T1 '바뀐 칸만 저장'의 기준값이 예약·장비 배열을 참조로 들고 있어 추가·삭제가 저장되지 않음
+    T2 서버가 PID 1(컨테이너)일 때 pscan 워커가 전부 스스로 종료해 스캔이 빔."""
+    dh = _read("dashboard.html")
+    assert "_setBase = JSON.parse(JSON.stringify(_collectSettingsPayload()));" in dh             # T1(브라우저로도 확인)
+    script = ("let schedules=[{a:1}]; const base=JSON.parse(JSON.stringify({schedules}));"
+              "schedules.push({b:2}); console.log(JSON.stringify(schedules)!==JSON.stringify(base.schedules));")
+    out = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=30).stdout.strip()
+    assert out == "true", out
+    assert "or ppid == 1" not in _read("pscan.py")                                               # T2
+    if shutil.which("unshare"):
+        d = tempfile.mkdtemp(prefix="iu_as_")
+        try:
+            for a in range(5):
+                os.makedirs(os.path.join(d, "t", "a%d" % a, "s"))
+                with open(os.path.join(d, "t", "a%d" % a, "s", "f"), "wb") as fh:
+                    fh.write(b"x")
+            code = ("import sys; sys.path.insert(0, %r); from isilon_usage import pscan;"
+                    "r = pscan.parallel_scan(%r, processes=2); print(r.get('complete'), r['total_files'])"
+                    % (os.path.dirname(HERE), os.path.join(d, "t")))
+            r = subprocess.run(["unshare", "--pid", "--fork", "--mount-proc", sys.executable, "-c", code],
+                               capture_output=True, text=True, timeout=60)
+            if r.returncode == 0:                                 # 권한이 없으면(일반 사용자) 건너뜀
+                assert r.stdout.strip().splitlines()[-1] == "True 5", r.stdout
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+    print("[T1·T2] OK  예약·장비 추가/삭제 저장·PID 1 에서도 pscan 정상")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1627,7 +1657,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_ak_round11_misc, check_al_tools_round12, check_am_remote_round13,
             check_an_fuzz_round13, check_ao_regress_round14,
             check_ap_explore_round14, check_aq_live_snapshot,
-            check_ar_crash_round15]
+            check_ar_crash_round15, check_as_regress_round16]
 
 
 def main() -> int:

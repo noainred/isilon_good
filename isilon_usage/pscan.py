@@ -118,7 +118,9 @@ def _bind_to_parent() -> None:
         ppid = os.getppid()
         libc = ctypes.CDLL(None, use_errno=True)
         libc.prctl(1, int(signal.SIGKILL), 0, 0, 0)   # 1 = PR_SET_PDEATHSIG
-        if os.getppid() != ppid or ppid == 1:          # 걸기 직전에 부모가 이미 죽었으면 바로 끝낸다
+        # 걸기 직전에 부모가 이미 죽었으면 바로 끝낸다. 'ppid == 1' 은 보지 않는다 — 서버가 컨테이너의 PID 1 이면
+        # 정상 워커의 부모가 1 이라 모든 워커가 죽어 스캔이 비었다(16회차 점검, 15회차 수정의 회귀).
+        if os.getppid() != ppid:
             os._exit(1)
     except Exception:  # noqa: BLE001
         pass

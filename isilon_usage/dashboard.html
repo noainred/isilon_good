@@ -2063,7 +2063,9 @@ async function loadSettings() {
       ` · 설정 ${j.locked ? "잠김" : "편집가능"}` +
       ` <span class="sub">(host·port·data-dir 는 실행 시 고정이라 읽기 전용)</span>`;
     settingsLoaded = true;
-    try { _setBase = _collectSettingsPayload(); } catch (e) { _setBase = null; }
+    // 깊은 복사 — 예약·장비 목록은 화면이 같은 배열을 그 자리에서 고쳐(push/splice), 참조로 두면 추가·삭제가
+    // '바뀐 것 없음'으로 보여 저장되지 않았다(16회차 점검, 15회차 수정의 회귀)
+    try { _setBase = JSON.parse(JSON.stringify(_collectSettingsPayload())); } catch (e) { _setBase = null; }
   } catch (e) { /* 무시 */ }
 }
 
