@@ -340,13 +340,19 @@ def cross_site_post(handler) -> bool:
     origin = (handler.headers.get("Origin") or "").strip()
     if not origin:
         return False
+    # 화면(대시보드·포탈)이 모든 POST 에 붙이는 표시 헤더 — 다른 사이트는 사전 확인 없이 붙일 수 없고 이 서버는
+    # 사전 확인(OPTIONS)을 승인하지 않으므로, 있으면 같은 화면이다. Host 를 바꾸는 프록시 뒤에서도 동작(22회차 점검).
+    if (handler.headers.get("X-Requested-With") or "").strip():
+        return False
     if origin.lower() == "null":
         return True
     try:
         o_host = (urlparse(origin).netloc or "").lower()
     except ValueError:
         return True
-    hosts = {(handler.headers.get(h) or "").strip().lower() for h in ("Host", "X-Forwarded-Host")}
+    hosts = {(handler.headers.get("Host") or "").strip().lower()}
+    for xf in (handler.headers.get("X-Forwarded-Host") or "").split(","):   # 프록시 체인: 'a, b'
+        hosts.add(xf.strip().lower())
     hosts.discard("")
     return o_host not in hosts
 
@@ -4091,9 +4097,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     return
                 limit = max(2, min(self._query_int(qs, "limit") or 30, 100))
                 scans = mconn.execute(
-                    "SELECT id, db_path, started_at FROM scans "
+                    "SELECT * FROM scans "
                     "WHERE root_path=? AND status='done' ORDER BY id DESC LIMIT ?",
                     (root, limit)).fetchall()
+                try:   # 루트 기준 깊이(루트=0) — 그 스캔이 이 깊이를 행으로 남겼는지 판단용
+                    _rel = os.path.relpath(dpath, root)
+                    _fdepth = 0 if _rel == "." else (_rel.count(os.sep) + 1)
+                except ValueError:
+                    _fdepth = 0
                 points = []
                 for s in scans:
                     dbp = s["db_path"]
@@ -4115,7 +4126,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             "scan_id": int(s["id"]), "started_at": s["started_at"],
                             "total_bytes": int(r["total_bytes"]),
                             "total_files": int(r["total_files"])})
-                    else:   # 그 스캔엔 폴더가 없음(지워짐) — 0 으로 남긴다(아래에서 처음 나타나기 전 것은 버림)
+                    else:
+                        # 그 스캔엔 행이 없음 — 그 깊이까지 행을 남긴 스캔(fold/최대 깊이 안)일 때만 '지워짐(0)'.
+                        # 묶은(fold)·깊이 제한 스캔은 폴더가 있어도 행이 없다 — 건너뛴다(22회차 점검: 있는 폴더가 0 B 로).
+                        _sd = dict(s)
+                        _fold = int(_sd.get("opt_fold_depth") or 0)
+                        _maxd = int(_sd.get("opt_max_depth") or 0)
+                        if (_fold and _fdepth > _fold) or (_maxd and _fdepth > _maxd):
+                            continue
                         points.append({"scan_id": int(s["id"]), "started_at": s["started_at"],
                                        "total_bytes": 0, "total_files": 0, "absent": True})
                 points.reverse()  # 오래된→최신 순으로

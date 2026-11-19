@@ -368,6 +368,9 @@ def _h_forecast(q, data):
         return {"answer": _detail_unavailable(data), "facts": {}}
     fc = d["forecast"]
     if not fc.get("ok") or not fc.get("enough"):
+        if fc.get("reason"):   # 서버가 준 이유(하루 이상 걸친 이력 필요 등) — 화면과 같은 문구(22회차 점검)
+            return {"answer": "용량 증가 추세를 아직 계산할 수 없습니다 — %s (현재 완료 스캔 %s회)."
+                              % (str(fc["reason"]).rstrip("."), fc.get("points", 0)), "facts": {}}
         return {"answer": "용량 증가 추세를 계산할 만큼 완료 스캔이 충분하지 않습니다 "
                           f"(같은 루트 2회 이상 필요, 현재 {fc.get('points', 0)}회).", "facts": {}}
     g = int(fc.get("growth_per_day") or 0)
@@ -473,17 +476,38 @@ def llm_phrase(question: str, facts: dict, cfg: dict):
     return box.get("txt")
 
 
-_NUM_RE = re.compile(r"\d+(?:[.,]\d+)*")
+_NUM_RE = re.compile(r"(\d+(?:[.,]\d+)*)\s*(만|억|%)?")
+_DATE_RE = re.compile(r"\d{4}[-./]\d{1,2}[-./]\d{1,2}|\d{1,2}:\d{2}(?::\d{2})?")
 
 
-def _nums(text: str) -> set:
-    return {n.replace(",", "") for n in _NUM_RE.findall(text or "")}
+def _num_tokens(text: str) -> list:
+    """(값, 중요한가) 목록. 날짜·시각은 뺀다. 중요한 수 = 소수·100 이상·퍼센트 — 목록 번호·'상위 5개' 같은 작은
+    정수는 검사하지 않는다(22회차 점검: 거의 모든 다듬은 문장을 버리던 문제)."""
+    out = []
+    for m in _NUM_RE.finditer(_DATE_RE.sub(" ", text or "")):
+        raw, suf = m.group(1).replace(",", ""), m.group(2)
+        try:
+            v = float(raw)
+        except ValueError:
+            continue
+        if suf == "만":
+            v *= 1e4
+        elif suf == "억":
+            v *= 1e8
+        out.append((v, ("." in raw) or v >= 100 or suf == "%"))
+    return out
 
 
 def _numbers_grounded(phrased: str, facts: dict, rule_answer: str) -> bool:
-    """LLM 문장의 숫자가 모두 사실(facts)·규칙 답변에 있는지 — 없는 숫자를 지어냈으면 False."""
-    allowed = _nums(json.dumps(facts, ensure_ascii=False)) | _nums(rule_answer)
-    return _nums(phrased) <= allowed
+    """LLM 문장의 '중요한' 숫자가 모두 사실(facts)·규칙 답변의 어떤 수와 반올림 오차 안에서 맞는지 — 지어낸 수(9999 TB)는
+    걸러 내고, '약 210 KB'(210.00)·'45%'(45.2)·'123만 개'(1,234,567) 같은 반올림은 허용한다."""
+    allowed = [v for v, _ in _num_tokens(json.dumps(facts, ensure_ascii=False) + " " + (rule_answer or ""))]
+    for v, important in _num_tokens(phrased):
+        if not important:
+            continue
+        if not any(abs(a - v) <= max(0.6, 0.006 * abs(a)) for a in allowed):
+            return False
+    return True
 
 
 def respond(question: str, data: dict, llm_cfg: Optional[dict] = None) -> dict:

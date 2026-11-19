@@ -95,6 +95,9 @@ for _v in "$INSTALL_DIR" "$DATA_DIR" "$MOUNT_BASE"; do
   case "$_v" in *[[:space:]]*|*\"*|*\\*) echo "✗ 경로에 공백/따옴표/역슬래시는 쓸 수 없습니다: $_v" >&2; exit 1;; esac
 done
 case "$PORT" in ''|*[!0-9]*) echo "✗ --port 는 숫자여야 합니다: $PORT" >&2; exit 1;; esac
+# 상대 경로는 절대 경로로 — 아래에서 cd / 뒤 폴더를 바꾸므로 상대 경로면 교체가 실패했다(22회차 점검)
+case "$INSTALL_DIR" in /*) ;; *) INSTALL_DIR="$(pwd)/$INSTALL_DIR";; esac
+case "$DATA_DIR" in /*) ;; *) DATA_DIR="$(pwd)/$DATA_DIR";; esac
 # 설치 경로가 심볼릭 링크면 실제 경로로 — 폴더 바꾸기(mv)가 링크 자체를 실제 폴더로 바꿔 링크 대상엔 옛 코드가 남았다(21회차 점검)
 if [ -L "$INSTALL_DIR" ]; then INSTALL_DIR="$(readlink -f "$INSTALL_DIR")"; fi
 SD_INSTALL_DIR="${INSTALL_DIR//%/%%}"; SD_DATA_DIR="${DATA_DIR//%/%%}"

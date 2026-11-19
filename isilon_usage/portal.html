@@ -1141,7 +1141,16 @@ const escAttr = (s) => String(s==null?"":s).replace(/[&"'<>]/g,c=>({"&":"&amp;",
 // 동기화·원격 스캔 시작/중지 등 일반 작업과 보기는 자유. 401 이면 로그인(비밀번호가 없으면 처음 만들기) 후 1회 재시도.
 let _opRequired=false, _opExpiry=0, _opTimer=null;
 let _opTemp=false, _opInfoPath="";   // 서버가 만든 임시 비밀번호 사용 중(경로만 — 비밀번호는 화면에 오지 않음)
-const _origFetch = window.fetch.bind(window);
+const _nativeFetch = window.fetch.bind(window);
+// 모든 POST 에 표시 헤더를 붙인다 — 다른 사이트의 페이지는 사전 확인(CORS) 없이 이런 헤더를 붙일 수 없어, 서버가 이 헤더가
+// 있으면 같은 화면에서 온 요청으로 본다. Host 를 바꾸는 역방향 프록시(nginx 기본) 뒤에서 Origin≠Host 라 로그인까지
+// 거부되던 문제(22회차 점검)를 이것으로 푼다.
+const _origFetch = function (url, opts) {
+  opts = opts || {};
+  if ((opts.method || "GET").toUpperCase() === "POST")
+    opts.headers = Object.assign({}, opts.headers || {}, {"X-Requested-With": "isilon-usage"});
+  return _nativeFetch(url, opts);
+};
 function _opToken(){ try{ return sessionStorage.getItem("pOpToken")||""; }catch(e){ return ""; } }
 function _opLeft(){ return Math.max(0, Math.ceil((_opExpiry-Date.now())/1000)); }
 function _opLoggedIn(){ return !!_opToken() && _opLeft()>0; }

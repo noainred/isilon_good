@@ -2462,6 +2462,38 @@ def check_bf_round21_modules() -> None:
     print("[HH1~HH7] OK  스토리지 조회 한 번·설정 반영·상태 판정·콜드 심볼릭·리다이렉트 헤더·응답 상한·질의응답·감사 회전·마운트·비교·추세·이력")
 
 
+def check_bg_round22_regress() -> None:
+    """II1 Host 를 바꾸는 프록시 뒤에서 모든 브라우저 POST(로그인 포함) 403 II2 묶은(fold) 스캔에 있는 폴더를 이력에서 0 B 로
+    II3 추세 부족 이유가 화면·질의응답에서 '3회뿐, 2회 이상 필요'로 모순 II4 숫자 검증이 다듬은 문장 거의 전부를 버림
+    II5 설치 스크립트 상대 경로."""
+    from isilon_usage import server as SV, ask as AK
+
+    class H:
+        def __init__(self, hd):
+            self.headers = hd
+    proxied = {"Origin": "http://nas.corp.example", "Host": "127.0.0.1:8765"}
+    assert SV.cross_site_post(H(proxied)) is True
+    assert SV.cross_site_post(H(dict(proxied, **{"X-Requested-With": "isilon-usage"}))) is False      # II1
+    assert SV.cross_site_post(H(dict(proxied, **{"X-Forwarded-Host": "nas.corp.example, internal"}))) is False
+    for f in ("dashboard.html", "portal.html"):
+        assert '"X-Requested-With": "isilon-usage"' in _read(f), f
+    sv = _read("server.py")
+    assert '_fold and _fdepth > _fold' in sv                                                        # II2
+    assert "fc.reason ||" in _read("dashboard.html")                                                  # II3
+    r = AK._h_forecast("언제 가득 차?", {"scope": "edge", "detail": {"forecast": {"ok": True, "enough": False, "points": 3,
+                                                                                 "reason": "하루 이상 걸쳐 있어야"}}})
+    assert r is None or "3회뿐" not in r["answer"], r
+    facts = {"pct": 45.2, "files": 1234567}                                                             # II4
+    rule = "/a 2.00 KB (총 210.00 KB, 사용률 45.2%)"
+    for ok_txt in ("약 210 KB", "45%", "약 123만 개", "1. a 2. b", "상위 5개", "2026-11-19 기준"):
+        assert AK._numbers_grounded(ok_txt, facts, rule), ok_txt
+    assert not AK._numbers_grounded("9999 TB", facts, rule) and not AK._numbers_grounded("300 GB", facts, rule)
+    for f in ("install_edge.sh", "install_portal.sh"):                                                  # II5
+        sh = open(os.path.join(os.path.dirname(HERE), "tools", f), encoding="utf-8").read()
+        assert 'INSTALL_DIR="$(pwd)/$INSTALL_DIR"' in sh and 'DATA_DIR="$(pwd)/$DATA_DIR"' in sh, f
+    print("[II1~II5] OK  프록시 뒤 POST·묶은 스캔 이력·추세 부족 이유·숫자 검증 완화·설치 상대 경로")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -2484,7 +2516,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_az_round19_regress, check_ba_round19_portal_edge,
             check_bb_round20_regress, check_bc_round20_upgrade,
             check_bd_round20_stress, check_be_round21_sec_regress,
-            check_bf_round21_modules]
+            check_bf_round21_modules, check_bg_round22_regress]
 
 
 def main() -> int:
