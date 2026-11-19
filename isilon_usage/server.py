@@ -524,23 +524,30 @@ _URL_SECRET_KEYS = (("notify_webhook", True), ("ask_llm_endpoint", False), ("upg
                     ("isilon_url", False), ("powerstore_url", False))
 
 
-def _unmask_settings(new: dict, cur: dict) -> None:
-    """화면이 받은 '가린 값'을 그대로 돌려보내면 저장된 원래 값으로 되돌린다(제자리 수정)."""
+def _unmask_settings(new: dict, cur: dict):
+    """화면이 받은 '가린 값'을 그대로 돌려보내면 저장된 원래 값으로 되돌린다(제자리 수정).
+
+    가린 주소의 일부만 고쳐 보내면(예: 호스트만 바꿈) '***' 가 그대로 저장돼 주소가 깨졌다(28회차 점검) —
+    그때는 오류 문구를 돌려준다(주소 전체를 다시 입력하라는 안내). 문제없으면 None."""
     for _k, _hp in _URL_SECRET_KEYS:
         if _k in new:
             new[_k] = netutil.keep_masked(new.get(_k), (cur or {}).get(_k), _hp)
+            if netutil.is_masked_leftover(new.get(_k), (cur or {}).get(_k)):
+                return "%s: 가려진(***) 주소의 일부만 바꿀 수 없습니다 — 주소 전체를 다시 입력하세요." % _k
     if isinstance(new.get("storage_arrays"), list):
         olds = [a for a in ((cur or {}).get("storage_arrays") or []) if isinstance(a, dict)]
         for a in new["storage_arrays"]:
             if not isinstance(a, dict) or not isinstance(a.get("url"), str):
                 continue
+            # id·이름으로만 찾는다 — 가린 주소로 찾으면, 그 주소를 손으로 입력한 새 어레이가 옛 어레이의 비밀 주소·
+            # 비밀번호를 물려받았다(28회차 점검)
             old = (next((o for o in olds if a.get("id") and o.get("id") == a.get("id")), None)
                    or next((o for o in olds if a.get("name") and o.get("name") == a.get("name")), None))
-            if old is None:
-                old = next((o for o in olds
-                            if netutil.mask_url_secret(o.get("url")) == a["url"].strip()), None)
             if old is not None:
                 a["url"] = netutil.keep_masked(a["url"], old.get("url"))
+            if netutil.is_masked_leftover(a.get("url"), (old or {}).get("url")):
+                return "스토리지 어레이 주소: 가려진(***) 주소의 일부만 바꿀 수 없습니다 — 주소 전체를 다시 입력하세요."
+    return None
 
 
 def _idle_resources() -> dict:
@@ -1137,6 +1144,10 @@ class ScanController:
         return json.dumps([s.get(k) for k in keys] + [s.get("storage_arrays") or []], sort_keys=True, default=str)
 
     def storage_status(self, force: bool = False) -> list:
+        """저장소 상태(응답용) — base·오류 문구 속 URL 비밀값을 가린다(인증 없는 조회, 28회차 점검)."""
+        return netutil.redact_urls(self._storage_status_raw(force))
+
+    def _storage_status_raw(self, force: bool = False) -> list:
         """설정된 스토리지 어레이 상태 목록을 캐시(60초)와 함께 반환.
 
         - 한 번에 하나만 조회(single-flight): 느린 어레이에 화면 새로고침마다 새 30초 조회가 겹쳐 쌓였다(21회차 점검).
@@ -1494,7 +1505,8 @@ class ScanController:
             source_mode=st["source_mode"], auto=st["auto"],
             available=bool(st.get("available")), busy=busy,
             installing=bool(st.get("installing")), watch_dir=st["watch_dir"])
-        return {"ok": True, **st}
+        # source·download_url·오류·로그에 설정 URL 의 비밀값(쿼리 토큰·사용자 정보)이 그대로 있었다(28회차 점검)
+        return netutil.redact_urls({"ok": True, **st})
 
     def upgrade_check(self) -> dict:
         info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__,
@@ -1640,7 +1652,9 @@ class ScanController:
         new = dict(new or {})
         if isinstance(new.get("storage_arrays"), list):
             new["storage_arrays"] = [dict(a) if isinstance(a, dict) else a for a in new["storage_arrays"]]
-        _unmask_settings(new, self.settings)
+        _merr = _unmask_settings(new, self.settings)
+        if _merr:
+            return {"ok": False, "_status": 400, "reason": _merr}
         # 작업 보호 비밀번호: op_lock(체크) + op_password(새 비번)
         #  - op_lock 거짓 → 보호 해제(비밀번호 제거)
         #  - op_lock 참 + 새 비번 있음 → 설정/변경(+info.MD 기록)

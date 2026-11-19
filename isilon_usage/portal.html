@@ -1230,9 +1230,7 @@ function _fillIdle(el, v){
   if(isCb) el.checked=!!v; else el.value=v;
 }
 async function loadAuth(){
-  try{ const _ac=(typeof AbortController!=="undefined")?new AbortController():null; const _t=_ac?setTimeout(()=>_ac.abort(),8000):null;
-    let _r; try{ _r=await _origFetch("/api/portal/auth",Object.assign({cache:"no-store"},_ac?{signal:_ac.signal}:{})); } finally{ if(_t) clearTimeout(_t); }
-    const j=await _r.json();
+  try{ const j=await _fetchJT("/api/portal/auth", 8000, null, _origFetch);
     _opRequired=!!j.op_required;
     _opTemp=!!j.op_temp; _opInfoPath=j.op_info_path||"";
     if(_opTemp) showTempPasswordNotice();
@@ -1794,17 +1792,18 @@ function _bindPhModalCanvas(){
 
 let pOverview=null, regionFilter="", nodeSort="used_bytes", nodeOrder="desc";
 let pingResults={};
-// 조회 시간 제한(멈춘 포탈에 요청이 끝없이 걸려 있지 않게)
-async function _fetchT(url, ms, opts){
+// 조회 시간 제한(멈춘 포탈에 요청이 끝없이 걸려 있지 않게) — 본문 읽기(JSON)까지 포함한다. 머리글만 오고 본문이 멈추면
+// 예전엔 시간 제한이 이미 풀려 조회가 영영 끝나지 않았고, 그 뒤 주기 조회가 모두 건너뛰어졌다(28회차 점검).
+async function _fetchJT(url, ms, opts, f){
   const ac=(typeof AbortController!=="undefined")?new AbortController():null;
   const t=ac?setTimeout(()=>ac.abort(), ms||8000):null;
-  try{ return await fetch(url, Object.assign({cache:"no-store"}, opts||{}, ac?{signal:ac.signal}:{})); }
+  try{ const r=await (f||fetch)(url, Object.assign({cache:"no-store"}, opts||{}, ac?{signal:ac.signal}:{})); return await r.json(); }
   finally{ if(t) clearTimeout(t); }
 }
 let _ovOkAt=0, _ovFails=0;   // 마지막 성공 시각·연속 실패 수 — 끊긴 동안 '방금 갱신'으로 옛 값을 보여 주지 않게(26회차 점검)
 async function loadOverview(){
   try {
-    const j = await (await _fetchT("/api/portal/overview", 8000)).json();
+    const j = await _fetchJT("/api/portal/overview", 8000);
     if(!j.ok) return; pOverview=j; _ovFetch=Date.now(); _ovOkAt=Date.now(); _ovFails=0; renderPortalDash();
   } catch(e){ _ovFails++; _updAtText(); }
 }
@@ -2146,7 +2145,7 @@ function renderEnrollCmd(tokenSet){
 }
 async function loadNodes(){
   try {
-    const j = await (await _fetchT("/api/portal/nodes", 8000)).json();
+    const j = await _fetchJT("/api/portal/nodes", 8000);
     const rows=(j.nodes||[]);
     _nodeRows = rows;
     renderNodeList();
@@ -3048,7 +3047,7 @@ function renderPush(p){
       +`<td class="${n.state==="fail"?"":"sub"}" style="padding:5px 18px; ${n.state==="fail"?"color:var(--danger)":""}">${esc(detail)}</td></tr>`;
   }).join("");
 }
-let _pushErr=0;
+let _pushErr=0;   // 연속 실패 수(새 푸시 창을 열 때 0 — 지난 장애로 다 쓴 재시도가 이어지지 않게)
 async function pollPush(){
   let j=null;
   try{ j=await (await fetch("/api/portal/upgrade/status",{cache:"no-store"})).json(); }catch(e){}
@@ -3067,6 +3066,7 @@ function openPushModal(){
   if($("pushBarTxt")) $("pushBarTxt").textContent="—";
   if($("pushModalStat")) $("pushModalStat").innerHTML='<span style="color:var(--warn)">⏳ 시작</span>';
   if(_pushTimer){clearTimeout(_pushTimer);_pushTimer=null;}
+  _pushErr=0;
   // 여기서 바로 조회하지 않는다 — 시작 요청 전이라 '지난 푸시' 결과가 보이고 거기서 갱신이 멈췄다(2026-11 점검).
   // 시작 요청이 성공한 뒤 pollPush 로 이번 푸시를 끝까지 따라간다.
 }
@@ -3164,7 +3164,7 @@ let _thruData=null; const _thruOpen={};
 const _THRU_LABEL={"60":"최근 1분","600":"최근 10분","1800":"최근 30분","3600":"최근 1시간","36000":"최근 10시간","86400":"최근 1일"};
 function _bph(v){ return (v==null)?"—":(fmtBytes(v)+"/h"); }
 async function loadThroughput(){
-  try{ const j=await (await _fetchT("/api/portal/throughput", 15000)).json();
+  try{ const j=await _fetchJT("/api/portal/throughput", 15000);
     if(j&&j.ok){ _thruData=j; renderThroughput(); } }catch(e){}
 }
 function renderThroughput(){

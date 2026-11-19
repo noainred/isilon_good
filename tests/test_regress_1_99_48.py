@@ -3238,6 +3238,48 @@ def check_bw_round26_portal_ui() -> None:
     print("[YY1~YY9] OK  포탈 화면 조회 단일화·끊김 표시·버튼 실패 처리·응답 순서·로그인 사유·중복 방지·푸시 재시도")
 
 
+def check_bx_round28_regress() -> None:
+    """ZZ1 저장소·Isilon 상태의 base 에 URL 비밀값 ZZ2 업그레이드 상태 source·download_url·로그에 비밀값 ZZ3 포탈 조회 시간 제한이
+    본문 읽기 전에 풀림(본문이 멈추면 주기 조회 영구 정지) ZZ4 가린 주소 일부만 고쳐 '***' 저장 ZZ5 가린 주소로 옛 어레이 비밀 물려받음."""
+    import json as _json
+    from isilon_usage import server as SV, portal as P, netutil as NU
+    d = tempfile.mkdtemp(prefix="iu_bx_")
+    try:
+        ctl = SV.ScanController(os.path.join(d, "edge"))                                              # ZZ1
+        ctl._storage_status_raw = lambda force=False: [{"type": "isilon", "base": "https://u:PW1@h:8080/p?tok=Z",
+                                                         "error": "<urlopen error https://h/x?tok=Z>"}]
+        out = _json.dumps(ctl.storage_status()) + _json.dumps(ctl.isilon_status())
+        assert "PW1" not in out and "tok=Z" not in out, out
+        ctl.settings["upgrade_url"] = "http://m.example/base?token=SECRETQ"                         # ZZ2
+        ctl._upg_state.update({"source": "http://m.example/base/versions.json?token=SECRETQ",
+                               "download_url": "http://usr:SECRETPW@m.example/x.tar.gz",
+                               "check_error": "fail http://m.example/b?token=SECRETQ"})
+        out = _json.dumps(ctl.upgrade_status())
+        assert "SECRETQ" not in out and "SECRETPW" not in out, out
+        pc = P.PortalController(os.path.join(d, "hq"))
+        pc._upg_state["source"] = "http://m.example/base/versions.json?token=SECRETQ"
+        assert "SECRETQ" not in _json.dumps(pc.upgrade_status())
+        ctl.update_settings({"notify_webhook": "https://hooks.example.com/services/T/B/SEC"})       # ZZ4
+        r = ctl.update_settings({"notify_webhook": "https://other.example.com/***"})
+        assert r.get("ok") is False and ctl.settings["notify_webhook"].endswith("/SEC"), r
+        pc.set_upgrade_net("github", "https://m.example/dl?token=SECRETQ", False)
+        r = pc.set_upgrade_net("github", "https://other.example/dl?***", True)
+        assert r.get("ok") is False and pc.settings["upgrade_url"].endswith("SECRETQ") and not pc.settings.get("upgrade_auto")
+        assert NU.is_masked_leftover("https://x/***", "") and not NU.is_masked_leftover("https://x/a", "")
+        ctl.update_settings({"storage_arrays": [{"id": "a1", "type": "unity", "url": "https://adm:SEC@u.example.com",
+                                                 "password": "pw"}]})                                 # ZZ5
+        r = ctl.update_settings({"storage_arrays": [
+            {"id": "a1", "type": "unity", "url": "https://***@u.example.com", "password": ""},
+            {"type": "unity", "url": "https://***@u.example.com", "password": ""}]})
+        assert r.get("ok") is False, r                      # 새 어레이가 가린 주소로 옛 비밀을 물려받지 않음
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    ph = _read("portal.html")                                                                       # ZZ3
+    assert "return await r.json(); }\n  finally{ if(t) clearTimeout(t); }" in ph and "_fetchT(" not in ph
+    assert '_fetchJT("/api/portal/auth", 8000, null, _origFetch)' in ph and "_pushErr=0;\n" in ph
+    print("[ZZ1~ZZ5] OK  상태 응답 URL 비밀값 가림·포탈 조회 본문 시간 제한·가린 주소 일부 수정 거부·어레이 비밀 승계 차단")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3269,7 +3311,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser, check_bj_round23_regress, check_bk_round23_portal, check_bl_round23_engine, check_bm_round24_regress,
             check_bn_round24_consistency, check_bo_round24_perf, check_bp_round25_regress, check_bq_round25_schedule, check_br_round25_client,
             check_bs_round26_regress, check_bt_round26_cli, check_bu_round27_regress,
-            check_bv_round27_security, check_bw_round26_portal_ui]
+            check_bv_round27_security, check_bw_round26_portal_ui,
+            check_bx_round28_regress]
 
 
 def main() -> int:

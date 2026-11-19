@@ -1408,6 +1408,10 @@ class PortalController:
 
     def set_ask_llm(self, body) -> dict:
         """자연어 질의응답용 로컬 LLM 설정을 저장한다(보낸 키만 반영)."""
+        if "ask_llm_endpoint" in body:   # 먼저 검사 — 반쯤 바뀐 채 남지 않게
+            _v = str(netutil.keep_masked(str(body.get("ask_llm_endpoint") or ""), self.settings.get("ask_llm_endpoint")) or "")
+            if netutil.is_masked_leftover(_v, self.settings.get("ask_llm_endpoint")):
+                return {"ok": False, "reason": "가려진(***) 주소의 일부만 바꿀 수 없습니다 — 주소 전체를 다시 입력하세요."}
         if "ask_llm_enabled" in body:
             self.settings["ask_llm_enabled"] = _truthy(body.get("ask_llm_enabled"))
         if "ask_llm_endpoint" in body:
@@ -1823,7 +1827,8 @@ class PortalController:
             available=bool(st.get("available")), busy=False,
             installing=bool(st.get("installing")),
             watch_dir=self.settings.get("upgrade_watch_dir", ""))
-        return {"ok": True, **st}
+        # source·download_url·오류·로그에 설정 URL 의 비밀값(쿼리 토큰·사용자 정보)이 그대로 있었다(28회차 점검)
+        return netutil.redact_urls({"ok": True, **st})
 
     def upgrade_check(self) -> dict:
         info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__,
@@ -1898,6 +1903,9 @@ class PortalController:
                 return {"ok": False, "reason": "확인 주기(초)는 숫자여야 합니다."}
         if token is not None and str(token or "").strip() and token_error(str(token).strip()):
             return {"ok": False, "reason": token_error(str(token).strip())}   # 헤더로 보내는 값(24회차 점검)
+        _u = str(netutil.keep_masked(str(url or ""), self.settings.get("upgrade_url")) or "")
+        if netutil.is_masked_leftover(_u, self.settings.get("upgrade_url")):   # 먼저 검사(반쯤 바뀐 채 남지 않게)
+            return {"ok": False, "reason": "가려진(***) 주소의 일부만 바꿀 수 없습니다 — 주소 전체를 다시 입력하세요."}
         src = str(source or "off").strip().lower()
         self.settings["upgrade_source"] = src if src in ("off", "github") else "off"
         self.settings["upgrade_url"] = str(netutil.keep_masked(str(url or ""), self.settings.get("upgrade_url")) or "").strip()

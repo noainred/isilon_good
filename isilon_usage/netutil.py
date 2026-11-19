@@ -66,6 +66,7 @@ def read_json(resp, limit: int = MAX_JSON_RESPONSE):
 # 설정 응답(GET — 인증 없이 읽힘)에 URL 속 비밀값(userinfo·쿼리 토큰, 웹훅 경로)이 그대로 나가던 문제(27회차 보안 점검).
 # 화면엔 가린 값을 보여 주고, 그 가린 값이 그대로 저장 요청에 돌아오면 서버가 저장된 원래 값을 유지한다.
 _MASK = "***"
+MASK = _MASK
 
 
 def mask_url_secret(u, hide_path: bool = False) -> str:
@@ -93,6 +94,14 @@ def mask_url_secret(u, hide_path: bool = False) -> str:
     return out
 
 
+def is_masked_leftover(value, stored) -> bool:
+    """가린 표시('***')가 남은 주소인가(저장된 원래 값과 다를 때만) — 일부만 고친 가린 주소를 걸러낸다."""
+    v = str(value or "")
+    if _MASK not in v or v.strip() == str(stored or "").strip():
+        return False
+    return ("://" + _MASK + "@") in v or ("?" + _MASK) in v or v.rstrip("/").endswith("/" + _MASK) or v.strip() == _MASK
+
+
 def keep_masked(posted, stored, hide_path: bool = False):
     """저장 요청 값이 '저장된 값을 가린 모양' 그대로면 저장된 값을, 아니면 보낸 값을 돌려준다."""
     if not isinstance(posted, str):
@@ -101,3 +110,26 @@ def keep_masked(posted, stored, hide_path: bool = False):
     if st and posted.strip() == mask_url_secret(st, hide_path) and posted.strip() != st.strip():
         return st
     return posted
+
+
+_URL_RE = None
+
+
+def redact_urls(obj):
+    """응답 안의 모든 문자열에서 URL 의 비밀값(사용자 정보·쿼리)을 가린다(재귀, 새 객체 반환).
+
+    저장소 상태의 base·업그레이드 상태의 source/download_url·오류/로그 문구처럼 설정 URL 에서 파생된 값이
+    인증 없는 조회로 그대로 나가던 문제(28회차 점검) — 응답을 내보내기 직전 한 곳에서 처리한다."""
+    global _URL_RE
+    if _URL_RE is None:
+        import re
+        _URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://[^\s\"'<>]+")
+    if isinstance(obj, str):
+        if "://" not in obj:
+            return obj
+        return _URL_RE.sub(lambda m: mask_url_secret(m.group(0)), obj)
+    if isinstance(obj, dict):
+        return {k: redact_urls(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [redact_urls(v) for v in obj]
+    return obj
