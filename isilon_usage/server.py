@@ -2726,13 +2726,18 @@ class ScanController:
                                     running.add(csid)
                         continue
                     nxt = int(sc.get("chain_i", 0) or 0) + 1
-                    if nxt < len(paths):
-                        sc["chain_scan_id"] = self._chain_start(
-                            sc, paths[nxt], running, running_paths)  # 실패 시 None → 체인 종료
-                        sc["chain_i"] = nxt
-                    else:
-                        sc["chain_i"] = 0
-                        sc["chain_scan_id"] = None      # 체인 완료
+                    # 다음 경로를 시작한다. 시작할 수 없는 경로(비었음·마운트 빠짐·실행 중)는 기록을 남기고 건너뛰어
+                    # 그다음 경로로 — 예전엔 거기서 체인이 끝나 뒤 경로들이 이번 주기 내내 스캔되지 않았고 기록도 없었다.
+                    sc["chain_scan_id"] = None
+                    sc["chain_i"] = 0                   # 시작한 경로가 없으면 체인 완료
+                    for idx in range(nxt, len(paths)):
+                        sid2 = self._chain_start(sc, paths[idx], running, running_paths)
+                        if sid2 is not None:
+                            sc["chain_scan_id"] = sid2
+                            sc["chain_i"] = idx
+                            break
+                        self._log("예약: 체인 %d/%d 경로를 시작하지 못해 건너뜀(비었음·마운트·실행 중 등): %s"
+                                  % (idx + 1, len(paths), paths[idx]))
                     sc["chain_resumes"] = 0
                     changed = True
                     continue
@@ -3775,9 +3780,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     if _r.get("scan_id") in _ar:
                         _r["auto_restart"] = True
         terminal = ("done", "paused", "error")
+        # DB 파일이 실제로 있는 것만 — 없는 스캔을 meta 에 실으면 포탈이 '복제됨'으로 보고 워터마크를 넘겨
+        # 다시는 받지 않았다(2026-11 리뷰).
         finished = [s for s in scans
                     if s.get("status") in terminal
-                    and float(s.get("finished_at") or 0) > since]
+                    and float(s.get("finished_at") or 0) > since
+                    and s.get("db_path") and os.path.exists(s.get("db_path"))]
         meta = {
             "hostname": socket.gethostname(),
             "version": __version__,

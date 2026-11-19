@@ -80,6 +80,8 @@ def parse_threshold_days(q: str):
     m = re.search(r"(\d+)\s*(개월|주일|일|주|달|년|연)", q)
     if not m:
         return None
+    if m.group(2) in ("년", "연") and int(m.group(1)) >= 1000:
+        return None        # '2024년 이후' 같은 연도는 기간이 아니다(예전엔 2024년 = 73만 일로 읽었다)
     return int(m.group(1)) * _UNIT_DAYS.get(m.group(2), 1)
 
 
@@ -271,7 +273,9 @@ def _h_old_data(q, data):
     d = _need_detail(data)
     if not d or not d.get("age"):
         return {"answer": _detail_unavailable(data), "facts": {}}
-    thr = parse_threshold_days(q) or 365     # 기본: 1년 이상 = 아카이브 후보
+    thr = parse_threshold_days(q)
+    if thr is None:
+        thr = 365     # 기본: 1년 이상 = 아카이브 후보(명시한 '0일'은 그대로 — 예전엔 0 이 365 로 바뀜)
     b, f, labels, strad = _sum_age_over(d["age"], thr)
     human_thr = (f"{thr // 365}년" if thr % 365 == 0 and thr >= 365
                  else (f"{thr // 30}개월" if thr % 30 == 0 and thr >= 30 else f"{thr}일"))
@@ -288,7 +292,9 @@ def _h_cold_data(q, data):
     d = _need_detail(data)
     if not d or not d.get("atime_age"):
         return {"answer": _detail_unavailable(data), "facts": {}}
-    thr = parse_threshold_days(q) or 365
+    thr = parse_threshold_days(q)
+    if thr is None:
+        thr = 365
     b, f, labels, strad = _sum_age_over(d["atime_age"], thr)
     human_thr = (f"{thr // 365}년" if thr % 365 == 0 and thr >= 365 else f"{thr}일")
     facts = {"기준": f"{human_thr} 이상 미접근", "용량": fmt_bytes(b), "파일수": f, "버킷": labels}
@@ -315,7 +321,8 @@ def _h_owners(q, data):
 
 def _h_extensions(q, data):
     if not _has(q, "확장자", "무슨 파일", "어떤 파일", "무슨 종류", "어떤 종류", "파일 종류",
-                "포맷", "형식", "ext"):
+                "포맷", "형식") and not re.search(r"\bext(ension)?s?\b", q):
+        # 'ext' 는 단어로만 — next·text·context 안의 글자에 걸려 확장자 질문으로 오인하던 문제(2026-11 리뷰)
         return None
     d = _need_detail(data)
     if not d or not d.get("extensions"):

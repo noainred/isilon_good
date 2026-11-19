@@ -799,6 +799,81 @@ def check_z1_z8_portal_ui_round5() -> None:
     print("[Z1~Z8] OK  CSV 왕복 보존·비활성≠DOWN·기간 버튼 대기열·포탈 시계·펼침 유지·마지막 성공 응답·감사 대상·BOM")
 
 
+# ------------------------------------------------------------------ 6회차(예약·복제·분석)
+def check_aa_round6() -> None:
+    """A1 순차 예약의 중간 경로 실패가 뒤 경로를 이번 주기 내내 건너뜀 A2 DB 가 안 온 스캔을 복제 완료로 보고 워터마크 전진
+    A3 질문 기능: 0일→365일·연도를 기간으로·'next' 를 확장자 질문으로."""
+    from isilon_usage import server as SV, ask
+    from isilon_usage import manager as M
+    d = tempfile.mkdtemp(prefix="iu_aa_")
+    cwd = os.getcwd()
+    os.chdir(d)
+    try:
+        roots = []
+        for nm in ("A", "B", "C"):
+            p = os.path.join(d, "m", nm)
+            os.makedirs(p)
+            with open(os.path.join(p, "f"), "wb") as fh:
+                fh.write(b"x" * 100)
+            roots.append(p)
+        httpd = SV.serve(os.path.join(d, "data"), host="127.0.0.1", port=0,
+                         initial_settings={"mount_bases": [os.path.join(d, "m")]}, enable_scan=True)
+        c = httpd.RequestHandlerClass.controller
+        _orig = c._chain_start
+        c._chain_start = lambda sc, path, running, rp: (None if path == roots[1] else _orig(sc, path, running, rp))
+        now = time.time()
+        c.update_settings({"schedules": [{"paths": roots, "unit": "day", "every": 1, "at": "00:00", "enabled": True,
+                                          "anchor": now - 2 * 86400}]}, merge_runtime=False)
+        started = set()
+        for _ in range(60):
+            c._check_schedules()
+            conn = __import__("isilon_usage.db", fromlist=["x"]).connect(M.manager_db_path(os.path.join(d, "data")))
+            started = {r[0] for r in conn.execute("SELECT root_path FROM scans")}
+            conn.close()
+            if roots[2] in started:
+                break
+            time.sleep(0.2)
+        assert roots[0] in started and roots[2] in started, started                  # A1: B 를 건너뛰고 C 진행
+        httpd.server_close()
+    finally:
+        os.chdir(cwd)
+        shutil.rmtree(d, ignore_errors=True)
+    src = _read("server.py")
+    assert "and s.get(\"db_path\") and os.path.exists(s.get(\"db_path\"))]" in src                 # A2(엣지)
+    # A2(포탈): meta 에 2건, DB 는 1건만 온 복제 묶음 → 워터마크는 빠진 스캔 앞에서 멈추고 오류 표시
+    import tarfile
+    from isilon_usage import portal as P
+    d2 = tempfile.mkdtemp(prefix="iu_aa2_")
+    try:
+        meta = {"scans": [{"id": 1, "root_path": "/a", "status": "done", "finished_at": 100.0, "db_filename": "s1.db"},
+                          {"id": 2, "root_path": "/b", "status": "done", "finished_at": 200.0, "db_filename": "s2.db"},
+                          {"id": 3, "root_path": "/c", "status": "done", "finished_at": 300.0, "db_filename": "s3.db"}]}
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            for name, data in (("meta.json", json.dumps(meta).encode()), ("scans/s1.db", b"x"), ("scans/s3.db", b"z")):
+                ti = tarfile.TarInfo(name)
+                ti.size = len(data)
+                tf.addfile(ti, io.BytesIO(data))
+        pc = P.PortalController(os.path.join(d2, "hq"))
+        pc.upsert_node({"id": "n1", "url": "http://10.0.0.1:8765", "token": "t", "mode": "replicate"})
+        orig = P._http_get
+        P._http_get = lambda url, token, timeout=0: io.BytesIO(buf.getvalue())
+        try:
+            pc._replicate_one("n1")
+        finally:
+            P._http_get = orig
+        ls = pc._get("n1")["last_sync"]
+        assert 100.0 <= ls < 200.0, ls                       # 예전엔 300(빠진 #2 를 넘어 다시 받지 않음)
+        assert "받지 못함" in pc._rep_err.get("n1", ""), pc._rep_err
+    finally:
+        shutil.rmtree(d2, ignore_errors=True)
+    assert ask.parse_threshold_days("2024년 이후 안 바뀐") is None and ask.parse_threshold_days("0일") == 0   # A3
+    data = {"overall": {"roots": []}}
+    out = ask.answer("다음 스캔은 언제? next", data)
+    assert out.get("intent") != "extensions", out.get("intent")
+    print("[A1~A3] OK  순차 예약 실패 경로 건너뛰고 계속·DB 없는 스캔 미복제·질문 기능 기간/키워드")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -806,7 +881,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_c6_c7_cli_inputs, check_q1_q2_replica_compare, check_q3_nested_roots, check_q4_disabled_ping,
             check_t1_t5_portal_round3, check_u1_u3_ui_round3,
             check_v1_v6_edge_round3, check_w1_w2_round4, check_x1_x8_settings_round4,
-            check_y1_y6_integrations_round5, check_z1_z8_portal_ui_round5]
+            check_y1_y6_integrations_round5, check_z1_z8_portal_ui_round5,
+            check_aa_round6]
 
 
 def main() -> int:

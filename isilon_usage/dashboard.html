@@ -4678,7 +4678,7 @@ function renderAtime(j) {
   $("atCsv").style.display = rows.length ? "" : "none";
   const head = '<div class="sub" style="margin-bottom:8px;">📂 <span class="mono">' + escHtml(j.path)
     + '</span> — 폴더 자체 접근 ' + _atDate(j.dir_atime) + ' · 항목 <b>' + fmtNum(j.count) + '</b>개'
-    + (j.recursive ? " (하위 포함)" : "") + (j.truncated ? ' · <span class="err">최대치 도달로 잘림</span>' : "") + "</div>";
+    + (j.recursive ? " (하위 포함)" : "") + (j.truncated ? ' · <span class="err">최대치 도달로 잘림 — 먼저 읽은 항목만 정렬한 결과라, 폴더 전체에서 가장 오래된 것이 아닐 수 있습니다(최대 개수를 늘리거나 하위 폴더로 좁히세요)</span>' : "") + "</div>";
   if (!rows.length) { out.innerHTML = head + '<span class="sub">표시할 항목이 없습니다.</span>'; return; }
   const body = rows.map(e =>
     "<tr><td class=\"mono\" style=\"max-width:520px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;\" title=\""

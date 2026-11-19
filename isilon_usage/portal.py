@@ -586,6 +586,7 @@ class PortalController:
         self._rep_at = {}           # id -> 마지막 복제 '시도' 시각(포탈 시계) — 복제 주기 판정 기준
         self._rep_fail = {}         # id -> 연속 복제 실패 횟수(재시도 백오프)
         self._rep_err = {}          # id -> 마지막 복제 오류(다음 복제 성공 전까지 표시)
+        self._rep_missing = {}      # id -> 마지막 복제에서 meta 에는 있었으나 DB 가 오지 않은 스캔 수
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._thread = None
@@ -2090,7 +2091,10 @@ class PortalController:
             cur = self._get(nid) or n
             cur["last_sync"] = max(float(cur.get("last_sync", 0) or 0), newest)
             self._rep_err.pop(nid, None)
-            if self._has_unreplicated(nid, cur["last_sync"]):
+            if self._rep_missing.get(nid):
+                self._rep_err[nid] = ("replicate: 스캔 DB %d건을 받지 못함 — 다음 복제에서 다시 시도"
+                                      % self._rep_missing[nid])
+            if self._rep_missing.get(nid) or self._has_unreplicated(nid, cur["last_sync"]):
                 # 받았는데도 워터마크가 그 완료 스캔을 못 넘음 = 엣지가 그 스캔을 보내지 않음(드묾 —
                 # 예: 엣지 스캔 목록 최근 200개 밖). 실패처럼 백오프해 60초마다 헛복제하지 않게 한다.
                 self._rep_fail[nid] = int(self._rep_fail.get(nid, 0)) + 1
@@ -2206,7 +2210,19 @@ class PortalController:
             # 증분 복제: 엣지가 보내는 meta.json 의 scans 는 'since 이후 완료분'만 담겨온다.
             # 통째로 덮어쓰면 과거 스캔이 목록에서 사라져 비교 화면이 조용히 깨진다(디스크엔 .db 남음).
             # → 기존 meta 의 scans 와 db_filename 기준으로 '병합'해 과거 목록을 보존한다.
+            missing_at = []        # meta 에는 있는데 DB 파일이 안 온 스캔의 완료 시각(워터마크가 넘지 않게)
             if new_meta is not None:
+                got = []
+                for sc in (new_meta.get("scans") or []):
+                    dbf = os.path.basename(str((sc or {}).get("db_filename") or ""))
+                    if dbf and os.path.exists(os.path.join(dest, "scans", dbf)):
+                        got.append(sc)
+                    else:
+                        try:
+                            missing_at.append(float((sc or {}).get("finished_at") or 0))
+                        except (TypeError, ValueError, OverflowError):
+                            pass
+                new_meta["scans"] = got
                 old_scans = []
                 try:
                     with open(os.path.join(dest, "meta.json"), encoding="utf-8") as fh:
@@ -2225,7 +2241,8 @@ class PortalController:
                 os.remove(tmp)
             except OSError:
                 pass
-        # meta 의 완료 시각으로 last_sync 전진
+        # meta 의 완료 시각으로 last_sync 전진 — 단 DB 가 안 온 스캔은 넘지 않는다(다음 복제에서 다시 받게)
+        base = float(n.get("last_sync", 0) or 0)
         try:
             with open(os.path.join(dest, "meta.json"), "r", encoding="utf-8") as fh:
                 meta = json.load(fh)
@@ -2233,6 +2250,12 @@ class PortalController:
                 newest = max(newest, float(s.get("finished_at") or 0))
         except (OSError, ValueError):
             pass
+        miss = [t for t in missing_at if t > base]
+        if miss:
+            newest = max(base, min(newest, min(miss) - 1e-6))
+            self._rep_missing[n["id"]] = len(miss)     # _replicate_one 이 오류로 표시하고 백오프 후 다시 받는다
+        else:
+            self._rep_missing.pop(n["id"], None)
         return newest
 
     # --- 글로벌 롤업 ---
