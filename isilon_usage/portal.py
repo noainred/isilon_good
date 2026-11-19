@@ -869,7 +869,7 @@ class PortalController:
 
     def set_nav_hidden(self, items) -> dict:
         """상단에 숨길 메뉴 목록을 저장한다('nodes'=설정은 잠금 방지로 숨길 수 없음)."""
-        if not isinstance(items, list) or any(v not in ("dash", "netmon", "compare", "nodes") for v in items):
+        if not isinstance(items, list):   # 목록이 아니면 거부(예전엔 ok:true 인데 저장 안 됨). 모르는 항목은 걸러 냄(호환)
             return {"ok": False, "reason": "숨길 메뉴는 dash·netmon·compare 목록이어야 합니다."}
         hidden = [v for v in items if v in ("dash", "netmon", "compare")]
         self.settings["nav_hidden"] = hidden

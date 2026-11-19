@@ -313,11 +313,12 @@ def _test_node_stop_all() -> None:
                 return {"ok": False, "reason": "pscan 은 중지 불가"}
             return {"ok": True}
         pc._edge_post = fake_post   # type: ignore[assignment]
+        pc._poll_one = lambda nid: True   # 유휴 노드(b)의 재확인 폴링은 성공(가짜 주소라 실제로는 닿지 않음)
 
         r = pc.node_stop_all()
         assert r["ok"] and r["stopped"] == 1 and r["total"] == 3, r
-        assert calls == [("a", "/api/scan/stop", {"scan_id": 1}),
-                         ("c", "/api/scan/stop", {"scan_id": 3})], calls   # b(유휴)는 미호출
+        assert sorted(calls) == [("a", "/api/scan/stop", {"scan_id": 1}),
+                                 ("c", "/api/scan/stop", {"scan_id": 3})], calls   # b(유휴)는 미호출(노드 병렬이라 순서 무관)
         by = {x["id"]: x for x in r["results"]}
         assert by["a"]["ok"] and by["a"]["stopped"] == 1, by
         assert by["b"]["ok"] and by["b"]["stopped"] == 0, by
