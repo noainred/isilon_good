@@ -266,15 +266,55 @@ def _json_bytes(payload) -> bytes:
         return json.dumps(payload, ensure_ascii=True, default=str).encode("ascii")
 
 
+def _any_str(obj, pred) -> bool:
+    """중첩 dict/list 안의 모든 문자열(키 포함)에 pred 가 참인 것이 있으면 참 — 반복(스택)으로 돈다.
+    재귀로 돌면 수백 단계 중첩 본문에서 RecursionError 로 응답 없이 연결이 끊겼다(22회차 점검)."""
+    stack = [obj]
+    while stack:
+        o = stack.pop()
+        if isinstance(o, str):
+            if pred(o):
+                return True
+        elif isinstance(o, dict):
+            for k, v in o.items():
+                stack.append(k)
+                stack.append(v)
+        elif isinstance(o, (list, tuple)):
+            stack.extend(o)
+    return False
+
+
+def parse_scan_id(v):
+    """요청 본문의 scan_id — 정수(참거짓 제외) 또는 숫자만 든 문자열만. 아니면 None."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str) and re.fullmatch(r"[0-9]{1,19}", v):
+        return int(v)
+    return None
+
+
+MAX_JSON_DEPTH = 64
+
+
+def _json_depth(obj) -> int:
+    """중첩 깊이(반복 계산)."""
+    best, stack = 0, [(obj, 1)]
+    while stack:
+        o, d = stack.pop()
+        if isinstance(o, dict):
+            best = max(best, d)
+            stack.extend((v, d + 1) for v in o.values())
+        elif isinstance(o, (list, tuple)):
+            best = max(best, d)
+            stack.extend((v, d + 1) for v in o)
+    return best
+
+
 def _has_nul(obj) -> bool:
     """쿼리/본문 어디든 NUL 문자가 있으면 참(경로로 쓰이면 os 호출이 ValueError)."""
-    if isinstance(obj, str):
-        return "\x00" in obj
-    if isinstance(obj, dict):
-        return any(_has_nul(k) or _has_nul(v) for k, v in obj.items())
-    if isinstance(obj, (list, tuple)):
-        return any(_has_nul(v) for v in obj)
-    return False
+    return _any_str(obj, lambda t: "\x00" in t)
 
 
 _BAD_SURROGATE = re.compile("[\ud800-\udc7f\udd00-\udfff]")
@@ -284,13 +324,7 @@ def _has_bad_surrogate(obj) -> bool:
     """짝 없는 UTF-16 서로게이트(JSON 의 "\\ud800" 등)가 있으면 참. 파일·감사 로그(UTF-8)에 쓸 때 예외가 나
     500·연결 끊김·노드 목록 저장 불능이 됐다(2026-11 퍼징). 단 U+DC80~U+DCFF 는 UTF-8 이 아닌 실제 파일 이름을
     나타내는 값(surrogateescape)이라 허용한다 — 화면이 그 경로로 스캔·탐색을 요청할 수 있어야 한다."""
-    if isinstance(obj, str):
-        return bool(_BAD_SURROGATE.search(obj))
-    if isinstance(obj, dict):
-        return any(_has_bad_surrogate(k) or _has_bad_surrogate(v) for k, v in obj.items())
-    if isinstance(obj, (list, tuple)):
-        return any(_has_bad_surrogate(v) for v in obj)
-    return False
+    return _any_str(obj, lambda t: bool(_BAD_SURROGATE.search(t)))
 
 
 MAX_JSON_BODY = 16 * 1024 * 1024        # JSON 본문 상한(메모리 폭주 방지)
@@ -400,6 +434,8 @@ def read_json_body(handler):
         return {}, (400, "JSON 형식이 아닙니다")
     if not isinstance(val, dict):
         return {}, (400, "JSON 객체({...})만 받습니다")
+    if _json_depth(val) > MAX_JSON_DEPTH:   # 수백 단계 중첩은 뒤(저장·감사)에서 재귀 한도에 걸린다 — 받지 않는다
+        return {}, (400, "JSON 중첩이 너무 깊습니다(최대 %d 단계)" % MAX_JSON_DEPTH)
     if _has_nul(val):
         return {}, (400, "요청에 NUL 문자가 있습니다")
     if _has_bad_surrogate(val):
@@ -1346,7 +1382,10 @@ class ScanController:
                                 res.get("reason"), int(_w // 60)))
             except Exception:  # noqa: BLE001
                 pass
-            self._rate_stop.wait(max(10, secs))
+            try:
+                self._rate_stop.wait(max(10, min(float(secs), 7 * 86400.0)))
+            except (TypeError, ValueError, OverflowError):   # 이상한 주기 값이 이 스레드를 죽이지 않게
+                self._rate_stop.wait(60)
 
     # ----- 자동 업그레이드 상태/조작(인터넷 소스, 상세 표시용) -----
     def _upg_log(self, msg: str) -> None:
@@ -1567,6 +1606,10 @@ class ScanController:
         # 어레이 목록: 빈 비밀번호는 기존 값(같은 id·같은 주소) 유지
         if isinstance(new.get("storage_arrays"), list):
             olds = [a for a in (self.settings.get("storage_arrays") or []) if isinstance(a, dict)]
+            for a in new["storage_arrays"]:   # 문자열이 아닌 비밀번호·주소는 거부(예전엔 .strip() 에서 500, 22회차 점검)
+                if isinstance(a, dict) and any(k in a and a[k] is not None and not isinstance(a[k], str)
+                                               for k in ("password", "url", "user", "name", "id", "type")):
+                    return {"ok": False, "reason": "스토리지 어레이의 password·url·user·name 은 문자열이어야 합니다."}
             for a in new["storage_arrays"]:
                 if isinstance(a, dict) and not (a.get("password") or "").strip():
                     old = (next((o for o in olds if a.get("id") and o.get("id") == a.get("id")), None)
@@ -4582,11 +4625,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             if path == "/api/scan/live-snapshot":      # 진행 중 스캔의 '지금까지 결과' 만들기(스캔은 계속)
-                try:
-                    if isinstance(body.get("scan_id"), (bool, float)):   # true·1.9 를 1번 스캔으로 받지 않게
-                        raise ValueError
-                    sid = int(body.get("scan_id"))
-                except (TypeError, ValueError, OverflowError):
+                sid = parse_scan_id(body.get("scan_id"))
+                if sid is None:
                     self._send_json({"ok": False, "reason": "scan_id 필요"}, status=400)
                     return
                 if not (0 < sid < 2 ** 63):
@@ -4598,10 +4638,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             if path in ("/api/scan/stop", "/api/scan/resume", "/api/scan/delete",
                         "/api/scan/partial-aggregate"):
-                try:
-                    scan_id = int(body.get("scan_id"))
-                except (TypeError, ValueError, OverflowError):   # 1e999 같은 값 → OverflowError(예전엔 500)
-                    self._send_json({"ok": False, "reason": "scan_id 필요"}, status=400)
+                # 정수(또는 숫자만 든 문자열)만 — true·2.9·'3 ' 을 1·2·3번 스캔으로 받아 엉뚱한 스캔을 지웠다(22회차 점검)
+                scan_id = parse_scan_id(body.get("scan_id"))
+                if scan_id is None:
+                    self._send_json({"ok": False, "reason": "scan_id 필요(정수)"}, status=400)
                     return
                 if not (0 < scan_id < 2 ** 63):   # SQLite 정수 범위 밖이면 DB 조회에서 500 이 났다(2026-11 퍼징)
                     self._send_json({"ok": False, "reason": "scan_id 범위가 올바르지 않습니다"}, status=400)

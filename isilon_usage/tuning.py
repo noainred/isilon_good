@@ -41,10 +41,15 @@ def _self_rss() -> int:
 
 def _normalize_candidates(candidates) -> List[int]:
     out = set()
+    # 목록이 아니면(true·1·1.5) 기본 후보 — 예전엔 'int object is not iterable' 로 500(22회차 점검)
+    if not isinstance(candidates, (list, tuple, set)):
+        candidates = None
     for c in (candidates or DEFAULT_CANDIDATES):
+        if isinstance(c, bool):
+            continue
         try:
             v = int(c)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):   # 1e999 → 건너뜀
             continue
         if v >= 1:
             out.add(min(HARD_CAP, v))

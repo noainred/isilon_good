@@ -2494,6 +2494,41 @@ def check_bg_round22_regress() -> None:
     print("[II1~II5] OK  프록시 뒤 POST·묶은 스캔 이력·추세 부족 이유·숫자 검증 완화·설치 상대 경로")
 
 
+def check_bh_round22_fuzz() -> None:
+    """JJ1 아주 큰 upgrade_check_secs 가 업그레이드 감시 스레드를 죽임 JJ2 설정의 1e999·401자리 수 500 JJ3 900단계 중첩 본문에
+    응답 없이 끊김 JJ4 벤치마크 후보 형식 500 JJ5 어레이 비밀번호 비문자열 500 JJ6·JJ7 포탈 비문자열 칸 500·스레드 예외
+    JJ8 scan_id true·2.9 가 1·2번 스캔을 지움."""
+    import io
+    import json as _json
+    from isilon_usage import server as SV, settings as SE, tuning as TU, portal as P
+    out = SE.sanitize(dict(SE.DEFAULTS, upgrade_check_secs=10 ** 13, sample_interval=10 ** 400, batch_size=True))
+    assert out["upgrade_check_secs"] <= 7 * 86400 and out["batch_size"] == 500                      # JJ1·JJ2
+    out = SE.sanitize(dict(SE.DEFAULTS, upgrade_check_secs=float("inf")))
+    assert out["upgrade_check_secs"] == 60
+
+    class H:
+        def __init__(self, body):
+            self.rfile = io.BytesIO(body)
+            self.headers = {"Content-Length": str(len(body)), "Content-Type": "application/json"}
+    deep = ('{"a":' + "[" * 900 + "]" * 900 + "}").encode()
+    _b, err = SV.read_json_body(H(deep))                                                             # JJ3
+    assert err and err[0] == 400, err
+    assert TU._normalize_candidates(True) and TU._normalize_candidates([1e999, 2]) == [2]              # JJ4
+    d = tempfile.mkdtemp(prefix="iu_bh_")
+    try:
+        ctl = SV.ScanController(os.path.join(d, "data"))                                             # JJ5
+        r = ctl.update_settings({"storage_arrays": [{"type": "isilon", "url": "http://x", "password": {"a": 1}}]})
+        assert r["ok"] is False, r
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert P._non_str_field({"id": [1]}, ("id",)) == "id"                                              # JJ6·JJ7
+    assert "_non_str_field(body, (\"id\", \"dir\"" in _read("portal.py")
+    for v, want in ((True, None), (2.9, None), ("3 ", None), (3, 3), ("3", 3), (None, None), ([1], None)):   # JJ8
+        assert SV.parse_scan_id(v) == want, (v, SV.parse_scan_id(v))
+    assert "parse_scan_id(body.get(\"scan_id\"))" in _read("server.py")
+    print("[JJ1~JJ8] OK  업그레이드 주기 상한·설정 큰 수·깊은 중첩·벤치 후보·어레이 비번·포탈 비문자열·scan_id 엄격")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -2516,7 +2551,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_az_round19_regress, check_ba_round19_portal_edge,
             check_bb_round20_regress, check_bc_round20_upgrade,
             check_bd_round20_stress, check_be_round21_sec_regress,
-            check_bf_round21_modules, check_bg_round22_regress]
+            check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz]
 
 
 def main() -> int:

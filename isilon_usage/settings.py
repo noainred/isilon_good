@@ -186,6 +186,8 @@ def sanitize(raw: dict) -> dict:
     s["check_readonly"] = bool(s.get("check_readonly", True))
 
     def _int(v, lo, hi, dflt):
+        if isinstance(v, bool):        # true 를 1 로 저장하지 않게(22회차 점검) — 기본값
+            return dflt
         try:
             return max(lo, min(hi, int(v)))
         except (TypeError, ValueError, OverflowError):   # 1e999·Infinity → 기본값(예전엔 serve 가 기동하지 못했다)
@@ -193,8 +195,11 @@ def sanitize(raw: dict) -> dict:
 
     def _float(v, lo, hi, dflt):
         try:
-            return max(lo, min(hi, float(v)))
-        except (TypeError, ValueError):
+            f = float(v)
+            if f != f:                 # NaN
+                return dflt
+            return max(lo, min(hi, f))
+        except (TypeError, ValueError, OverflowError):   # 401자리 정수 → 500 이던 문제(22회차 점검)
             return dflt
 
     s["batch_size"] = _int(s["batch_size"], 1, 1_000_000, 500)
@@ -240,10 +245,8 @@ def sanitize(raw: dict) -> dict:
     _ls = s.get("last_scan")            # 마지막 스캔 파라미터 스냅샷(dict 만 허용; 내부는 앱이 채움)
     s["last_scan"] = _ls if isinstance(_ls, dict) else {}
     s["upgrade_watch_dir"] = str(s.get("upgrade_watch_dir") or "").strip()
-    try:
-        s["upgrade_check_secs"] = max(10, int(s.get("upgrade_check_secs", 60) or 60))
-    except (TypeError, ValueError):
-        s["upgrade_check_secs"] = 60
+    # 위 한도(7일)도 — 아주 큰 값은 업그레이드 감시 스레드의 대기(wait)를 OverflowError 로 죽였다(22회차 점검)
+    s["upgrade_check_secs"] = _int(s.get("upgrade_check_secs", 60) or 60, 10, 7 * 86400, 60)
     _usrc = str(s.get("upgrade_source") or "off").strip().lower()
     s["upgrade_source"] = _usrc if _usrc in ("off", "github") else "off"
     s["upgrade_url"] = str(s.get("upgrade_url") or "").strip()

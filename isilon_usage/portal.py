@@ -148,9 +148,9 @@ def node_url_error(url: str) -> Optional[str]:
     try:
         sp = urlsplit(u)
         port = sp.port
+        host = sp.hostname or ""
     except ValueError:
-        return "포트가 올바르지 않습니다(1~65535)."
-    host = sp.hostname or ""
+        return "주소(호스트·포트)가 올바르지 않습니다(포트는 1~65535)."
     if not host or not _HOST_RE.match(host) or any(c.isspace() for c in u):
         return "호스트(IP/이름)가 올바르지 않습니다."
     if port is not None and not (1 <= port <= 65535):
@@ -737,7 +737,7 @@ class PortalController:
                 out["op_info_path"] = str(s.get("op_info_path") or "")
                 out["upgrade_watch_dir"] = str(s.get("upgrade_watch_dir") or "").strip()
                 try:
-                    out["upgrade_check_secs"] = max(10, int(s.get("upgrade_check_secs", 60) or 60))
+                    out["upgrade_check_secs"] = max(10, min(7 * 86400, int(s.get("upgrade_check_secs", 60) or 60)))
                 except (TypeError, ValueError, OverflowError):
                     pass
                 _src = str(s.get("upgrade_source") or "off").strip().lower()
@@ -1256,7 +1256,7 @@ class PortalController:
         if watch_dir is not None:          # None = 바꾸지 않음
             self.settings["upgrade_watch_dir"] = str(watch_dir or "").strip()
         if check_secs is not None:
-            self.settings["upgrade_check_secs"] = max(10, int(check_secs))
+            self.settings["upgrade_check_secs"] = max(10, min(7 * 86400, int(check_secs)))   # 위 한도 7일
         self._save_settings()
         return {"ok": True, "upgrade_watch_dir": self.settings.get("upgrade_watch_dir", ""),
                 "upgrade_check_secs": self.settings["upgrade_check_secs"]}
@@ -1784,7 +1784,7 @@ class PortalController:
             self.settings["upgrade_token"] = str(token or "").strip()
         self.settings["upgrade_auto"] = bool(auto)
         if check_secs is not None and not isinstance(check_secs, bool):
-            self.settings["upgrade_check_secs"] = max(10, int(check_secs))
+            self.settings["upgrade_check_secs"] = max(10, min(7 * 86400, int(check_secs)))   # 위 한도 7일
         self._save_settings()
         return self.upgrade_status()
 
@@ -2025,8 +2025,15 @@ class PortalController:
         n = self._get(nid) if nid else None
         url = str(raw.get("url") or "").strip()
         token = raw.get("token") or None
-        if url and not re.match(r"^https?://", url):
+        if url:   # 저장할 때와 같은 주소 검사 — 'http://[1]' 같은 값이 urlparse 에서 500 을 냈다(22회차 점검)
+            _ue = node_url_error(url)
+            if _ue:
+                return {"ok": False, "reason": _ue}
+        m_sch = re.match(r"^(https?)://", url, re.I)
+        if url and not m_sch:
             url = "http://" + url
+        elif m_sch:
+            url = m_sch.group(1).lower() + url[m_sch.end(1):]
         url = url.rstrip("/")
         if n is not None:
             # 편집 중인 URL 을 테스트한다(예전엔 id 가 있으면 저장된 URL 만 봐서, 고친 주소가 맞는지 확인할 수
@@ -3980,6 +3987,13 @@ class PortalHandler(BaseHTTPRequestHandler):
         body = self._read_json_body()
         if self._body_err:
             self._send_json({"ok": False, "reason": self._body_err[1]}, status=self._body_err[0])
+            return
+        # 문자열이어야 하는 공통 칸 — 목록·숫자·참거짓이면 .strip() 500·백그라운드 스레드 예외(sync id 가 목록이면
+        # 'unhashable')가 났다(22회차 점검). 모든 포탈 POST 에 같은 규칙.
+        _bad = _non_str_field(body, ("id", "dir", "path", "host", "user", "url", "region", "name", "key_path",
+                                     "password", "token"))
+        if _bad:
+            self._send_json({"ok": False, "reason": "%s 는 문자열이어야 합니다." % _bad}, status=400)
             return
         c = self.controller
         try:
