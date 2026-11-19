@@ -291,7 +291,10 @@ def _sanitize_storage_arrays(raw) -> list:
         if t not in _STORAGE_TYPES or not url:
             continue
         out.append({
-            "id": str(it.get("id") or it.get("name") or url).strip(),
+            # 이름도 id 도 없으면 주소에서 만든 불투명 id — 예전엔 주소 자체를 id 로 써, 가린 설정 응답에 주소(토큰 포함)가
+            # id 로 그대로 나갔다(29회차 점검)
+            "id": str(it.get("id") or it.get("name")
+                      or ("arr-" + __import__("hashlib").sha1(url.encode("utf-8", "surrogatepass")).hexdigest()[:12])).strip(),
             "type": t,
             "name": str(it.get("name") or "").strip(),
             "url": url,

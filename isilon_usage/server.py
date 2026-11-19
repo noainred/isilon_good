@@ -509,6 +509,7 @@ def _public_settings(s: dict) -> dict:
         b["password"] = ""
         b["password_set"] = bool(a.get("password"))
         b["url"] = netutil.mask_url_secret(a.get("url"))
+        b["id"] = netutil.mask_url_secret(a.get("id"))     # 옛 설정은 주소를 id 로 썼다 — id 로 토큰이 새지 않게(29회차)
         sa.append(b)
     out["storage_arrays"] = sa
     # URL 속 비밀값(웹훅 경로·사용자 정보·쿼리 토큰)도 가린다 — 이 응답은 인증 없이 읽힌다(27회차 보안 점검).
@@ -542,7 +543,11 @@ def _unmask_settings(new: dict, cur: dict):
             # id·이름으로만 찾는다 — 가린 주소로 찾으면, 그 주소를 손으로 입력한 새 어레이가 옛 어레이의 비밀 주소·
             # 비밀번호를 물려받았다(28회차 점검)
             old = (next((o for o in olds if a.get("id") and o.get("id") == a.get("id")), None)
+                   or next((o for o in olds if a.get("id") and netutil.MASK in str(a.get("id"))
+                            and netutil.mask_url_secret(o.get("id")) == a.get("id")), None)
                    or next((o for o in olds if a.get("name") and o.get("name") == a.get("name")), None))
+            if old is not None and a.get("id") and netutil.MASK in str(a.get("id")):
+                a["id"] = old.get("id")                  # 가린 id 는 원래 id 로
             if old is not None:
                 a["url"] = netutil.keep_masked(a["url"], old.get("url"))
             if netutil.is_masked_leftover(a.get("url"), (old or {}).get("url")):

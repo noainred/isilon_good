@@ -3338,6 +3338,41 @@ def check_bz_round28_dashboard() -> None:
     print("[BBB1~BBB12] OK  엣지 화면 중복 요청 방지·진행 조회 단일화·응답 순서·트리 복구·로그인 사유·공통 끊김 배너·스냅샷 재시도")
 
 
+def check_ca_round29_regress() -> None:
+    """CCC1 행 동작 실패 뒤 버튼이 영영 꺼짐(그리기 캐시) CCC2 어레이 id(=주소)로 토큰 노출 CCC3 실패한 트리 재조회가 검색 결과를 덮음
+    CCC4 URL 가리기가 끝 문장부호를 삼킴·긴 문자열에서 느림 CCC5 설치·데이터 폴더 '/' 통과 CCC6 systemd 없음에도 '서비스 등록·재시작' 완료."""
+    import json as _json
+    from isilon_usage import server as SV, settings as SE, netutil as NU
+    dh = _read("dashboard.html")
+    assert "finally { _rowBusy.delete(k); const ob = $(\"ovBody\"); if (ob) ob._ovHtml = null; }" in dh       # CCC1
+    assert "id: (name || url)" not in dh                                                                  # CCC2
+    a = SE._sanitize_storage_arrays([{"type": "unity", "url": "https://a2/api?k=SECRET2"}])[0]
+    assert "SECRET2" not in a["id"], a
+    legacy = {"storage_arrays": [{"id": "https://a2/api?k=SECRET2", "type": "unity", "url": "https://a2/api?k=SECRET2",
+                                  "password": "p"}]}
+    pub = SV._public_settings(legacy)
+    assert "SECRET2" not in _json.dumps(pub), pub
+    d = tempfile.mkdtemp(prefix="iu_ca_")
+    try:
+        ctl = SV.ScanController(os.path.join(d, "edge"))
+        ctl.update_settings(dict(legacy))
+        r = ctl.update_settings(_json.loads(_json.dumps(SV._public_settings(ctl.settings))))
+        assert r.get("ok"), r
+        sa = ctl.settings["storage_arrays"][0]
+        assert sa["id"] == sa["url"] == "https://a2/api?k=SECRET2" and sa["password"] == "p", sa
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert "window._treeErr = null;      // 검색으로" in dh and "window._treeErr = null;      // 다른 스캔" in dh  # CCC3
+    assert NU.redact_urls("(https://h/p?q=1), end") == "(https://h/p?***), end"                        # CCC4
+    t0 = time.time()
+    NU.redact_urls("a" * 100000 + " http://x/?a=1")
+    assert time.time() - t0 < 0.5
+    for fn in ("install_edge.sh", "install_portal.sh"):                                                # CCC5·CCC6
+        sh = open(os.path.join(os.path.dirname(HERE), "tools", fn), encoding="utf-8").read()
+        assert 'if [ "$INSTALL_DIR" = "/" ] || [ "$DATA_DIR" = "/" ]; then' in sh and "systemd 없음 — 서비스 등록·재시작은 건너뜀" in sh, fn
+    print("[CCC1~CCC6] OK  행 버튼 복구·어레이 id 가림·트리 재조회 정리·URL 가리기 정규식·설치 루트 거부·systemd 없음 안내")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3371,7 +3406,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bs_round26_regress, check_bt_round26_cli, check_bu_round27_regress,
             check_bv_round27_security, check_bw_round26_portal_ui,
             check_bx_round28_regress, check_by_round28_install,
-            check_bz_round28_dashboard]
+            check_bz_round28_dashboard, check_ca_round29_regress]
 
 
 def main() -> int:

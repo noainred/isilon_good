@@ -79,6 +79,9 @@ case "$DATA_DIR" in /*) ;; *) DATA_DIR="$(pwd)/$DATA_DIR";; esac
 # 안을 가리키면 아래 검사를 지나쳐 업그레이드가 데이터를 지웠고, 'a/../a' 설치 경로는 폴더 바꾸기·되돌리기가 실패했다(28회차 점검)
 _canon() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1" 2>/dev/null || readlink -m "$1" 2>/dev/null || printf '%s\n' "$1"; }
 INSTALL_DIR="$(_canon "$INSTALL_DIR")"; DATA_DIR="$(_canon "$DATA_DIR")"
+# 루트(/)는 설치·데이터 폴더로 받지 않는다 — 아래 포함 검사가 '/'에선 맞지 않아 통과했고, 설치 폴더가 '/'면 교체가 / 를
+# 덮어쓸 수 있었다(29회차 점검)
+if [ "$INSTALL_DIR" = "/" ] || [ "$DATA_DIR" = "/" ]; then echo "✗ 설치·데이터 폴더로 / 는 쓸 수 없습니다." >&2; exit 1; fi
 # 설치 경로가 심볼릭 링크면 실제 경로로 — 폴더 바꾸기(mv)가 링크 자체를 실제 폴더로 바꿔 링크 대상엔 옛 코드가 남았다(21회차 점검)
 # systemd 유닛에 그대로 쓰므로 공백·따옴표·역슬래시가 든 경로는 받지 않는다(유닛 파싱이 깨짐).
 for _v in "$INSTALL_DIR" "$DATA_DIR"; do
@@ -272,7 +275,8 @@ sleep 1
 systemctl --no-pager -l status "$SERVICE" 2>/dev/null | head -6 || true
 
 echo
-echo "✅ 완료 — isilon_portal(HQ) $VER 설치·서비스 등록·재시작"
+if [ -d /run/systemd/system ]; then echo "✅ 완료 — isilon_portal(HQ) $VER 설치·서비스 등록·재시작"
+else echo "✅ 완료 — isilon_portal(HQ) $VER 설치(systemd 없음 — 서비스 등록·재시작은 건너뜀, 위 안내대로 직접 실행)"; fi
 echo "   접속 : http://<HQ주소>:$PORT/   (노드 등록은 웹의 '노드 설정')"
 echo "   로그 : journalctl -u $SERVICE -f"
 echo "   업그레이드 : 이 스크립트를 다시 실행하면 최신으로 교체 후 재시작합니다."

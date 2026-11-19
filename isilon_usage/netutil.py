@@ -123,7 +123,8 @@ def redact_urls(obj):
     global _URL_RE
     if _URL_RE is None:
         import re
-        _URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://[^\s\"'<>]+")
+        # 스킴은 단어 경계에서 시작·32자 이내(긴 영숫자열에서 느려지지 않게), 끝의 문장부호 ),;] 는 URL 에 넣지 않는다(29회차 점검)
+        _URL_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9+.\-]{0,31}://[^\s\"'<>]*[^\s\"'<>),;\]]")
     if isinstance(obj, str):
         if "://" not in obj:
             return obj

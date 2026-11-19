@@ -3205,7 +3205,8 @@ async function _rowGuard(id, fn) {
   _rowBusy.add(k);
   document.querySelectorAll('#ovBody button[data-stop="' + k + '"],#ovBody button[data-resume="' + k + '"],#ovBody button[data-del="' + k + '"],#ovBody button[data-partial="' + k + '"]')
     .forEach(b => { b.disabled = true; });
-  try { await fn(); } finally { _rowBusy.delete(k); }
+  // 끝나면 표를 다시 그리게 한다 — 그리기 캐시(_ovHtml)가 같으면 꺼 둔 버튼이 실패 뒤에도 영영 꺼져 있었다(29회차 점검)
+  try { await fn(); } finally { _rowBusy.delete(k); const ob = $("ovBody"); if (ob) ob._ovHtml = null; }
 }
 async function stopScan(id) {
   if (_rowBusy.has(String(id))) return;
@@ -3616,6 +3617,7 @@ function renderTree(rows, meta) {
 }
 async function treeSearch(q) {
   if (selectedScan == null) return;
+  window._treeErr = null;      // 검색으로 넘어가면 실패한 트리 재조회가 검색 결과를 덮지 않게(29회차 점검)
   if (!q) { treeStack = []; loadTree(null, []); return; }   // 검색어를 지우고 Enter → 트리로 돌아감(예전엔 검색 결과가 남았다)
   const my = ++_treeSeq;
   try {
@@ -4340,6 +4342,7 @@ function scanDurTitle(r, running) {
     ? `실제 스캔한 시간 ${fmtDur(act)} · 시작~끝 ${fmtDur(wall)}(일시정지 포함)` : "스캔 소요 시간";
 }
 function selectScan(id) {
+  window._treeErr = null;      // 다른 스캔을 고르면 옛 스캔의 트리 재조회는 버린다
   selectedScan = id; userPicked = true;
   $("scanSelect").value = String(id);
   poll();
@@ -5369,7 +5372,7 @@ $("arrAdd").addEventListener("click", () => {
   const name = $("arrName").value.trim();
   storageArrays.push({type: $("arrType").value, name: name, url: url,
     user: $("arrUser").value.trim(), password: $("arrPass").value,
-    verify_ssl: $("arrVerify").checked, id: (name || url)});
+    verify_ssl: $("arrVerify").checked, id: (name || ("arr-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)))});   // 주소를 id 로 쓰지 않는다(29회차 점검: 주소 속 토큰이 id 로 노출)
   $("arrUrl").value = ""; $("arrName").value = ""; $("arrUser").value = ""; $("arrPass").value = "";
   $("arrVerify").checked = false; renderStorageArrays();
 });
