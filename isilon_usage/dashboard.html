@@ -4312,7 +4312,11 @@ async function poll() {
     _statusFailStreak = 0;
     // (b) 화면 표시 — 렌더 코드 오류는 '지연'과 구분해 콘솔 로그 + 별도 안내
     try {
-      if (data.scan_meta) $("scanDbInfo").textContent = "DB 파일: " + (data.scan_meta.db_filename || "");
+      {   // 이 라벨은 '분석할 스캔' 선택기 옆 — 진행 패널이 따르는 스캔(statusScan)이 아니라 고른 스캔의 파일(18회차 점검)
+        const _selRow = (allScans || []).find(x => x.id === selectedScan);
+        const _dbf = _selRow ? _selRow.db_filename : (data.scan_meta && data.scan_meta.id === selectedScan ? data.scan_meta.db_filename : null);
+        if (_dbf != null) $("scanDbInfo").textContent = "DB 파일: " + (_dbf || "");
+      }
       if (!data.ok) {
         $("statusBadge").className = "badge " + (data.reason === "initializing" ? "discovering" : "paused");
         $("statusBadge").textContent = data.reason === "initializing" ? "초기화 중" : "대기 중";
@@ -4521,6 +4525,14 @@ function render(d) {
     const _st = _sel ? _sel.status : r.status;
     const _paAt = _sel ? _sel.partial_agg_at : r.partial_agg_at;
     const _running = (_st === "discovering" || _st === "sizing");
+    {
+      // 멈춘 자료 집계가 끝나 값(시각)이 생기거나 바뀌면 폴더 트리도 다시 불러온다 — 예전엔 배너만 '부분 집계 값'으로
+      // 바뀌고 트리는 집계 전 값(4KB)으로 남아 새로고침해야 했다(18회차 점검).
+      const _paKey = (_sel ? _sel.id : d.scan_id) + ":" + (_paAt || "") + ":" + (_pa && _pa.running ? "r" : "");
+      if (window._paSeen != null && window._paSeen !== _paKey && window._paSeen.split(":")[0] === _paKey.split(":")[0]
+          && !(_pa && _pa.running)) refreshTreeInPlace();
+      window._paSeen = _paKey;
+    }
     if (_running) {
       _an.style.display = "block";
       const _sid = _sel ? _sel.id : d.scan_id;

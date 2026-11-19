@@ -2561,13 +2561,6 @@ class ScanController:
         # 시작과 같은 임계 구역 — 재개도 같은 루트 중복 실행을 만들 수 있다(업그레이드 후 자동 재개가
         # 같은 루트의 두 스캔을 둘 다 살려 쌍이 영구화되던 문제). 먼저 재개된 쪽만 계속된다.
         self._wait_stopping(scan_id)   # 멈추는 중이면 끝날 때까지 — 잠금 밖에서(곧바로 '재개'를 눌러도 거절되지 않게)
-        try:   # 멈추기 전에 만든 스냅샷은 재개 뒤 '지금 결과'가 아니다 — 지운다(필요하면 다시 만든다)
-            from . import livesnap
-            livesnap.remove(self.live_snapshot_path(scan_id))
-            with self._lock:
-                self._live_snaps.pop(int(scan_id), None)
-        except Exception:  # noqa: BLE001
-            pass
         with self._start_lock:
             return self._resume_scan_locked(scan_id)
 
@@ -2607,6 +2600,15 @@ class ScanController:
         # 업그레이드가 sizing 초기(per-run DB 생성 전)에 끼어든 경우에도 재개되도록 한다.
         if not is_pscan and not os.path.exists(row["db_path"]):
             return {"ok": False, "reason": "per-run DB 가 없어 재개할 수 없습니다."}
+        # 멈추기 전에 만든 스냅샷은 재개 뒤 '지금 결과'가 아니다 — 지운다(필요하면 다시 만든다). 재개가 받아들여진
+        # 뒤에만: 예전엔 검사 전에 지워 '이미 실행 중' 등으로 거절된 재개도 진행 중 스캔의 스냅샷을 날렸다(18회차 점검).
+        try:
+            from . import livesnap
+            with self._lock:
+                self._live_snaps.pop(int(scan_id), None)
+            livesnap.remove(self.live_snapshot_path(scan_id))
+        except Exception:  # noqa: BLE001
+            pass
         # 재개 즉시 매니저 상태를 '진행 중'으로 되돌린다 — 안 그러면 'paused' 로 남아
         # 화면엔 '일시정지'로 보이고 active_scans(포탈 집계)에서도 빠진다(스캐너가 곧 정확히 갱신).
         try:

@@ -15,11 +15,15 @@
 
 from __future__ import annotations
 
+import glob
+import itertools
 import os
 import time
 from typing import Optional
 
 from . import db as dbmod
+
+_SEQ = itertools.count(1)
 
 
 def _tables(conn, schema: str) -> list:
@@ -77,7 +81,9 @@ def build(src_db: str, dst_db: str, *, stop_event=None, on_progress=None, still_
     from .scanner import partial_aggregate
     t0 = time.time()
     os.makedirs(os.path.dirname(os.path.abspath(dst_db)), exist_ok=True)
-    tmp = dst_db + ".building"
+    # 작업마다 다른 임시 이름 — 재개로 버려진 옛 작업이 끝나며 지우는 임시 파일이 새 작업 것과 겹쳐
+    # 새 스냅샷이 'no such table' 로 실패했다(18회차 점검).
+    tmp = "%s.building.%d.%d" % (dst_db, os.getpid(), next(_SEQ))
     try:
         rows = copy_consistent(src_db, tmp)
         if rows <= 0:
@@ -120,8 +126,13 @@ def build(src_db: str, dst_db: str, *, stop_event=None, on_progress=None, still_
 def remove(dst_db: Optional[str]) -> None:
     if not dst_db:
         return
-    for sfx in ("", "-wal", "-shm", ".building", ".building-wal", ".building-shm"):
+    for sfx in ("", "-wal", "-shm"):
         try:
             os.remove(dst_db + sfx)
+        except OSError:
+            pass
+    for p in glob.glob(glob.escape(dst_db) + ".building*"):   # 만드는 중이던 임시 파일(작업마다 이름이 다름)
+        try:
+            os.remove(p)
         except OSError:
             pass

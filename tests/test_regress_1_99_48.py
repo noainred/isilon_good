@@ -1755,6 +1755,47 @@ def check_av_round17_flow() -> None:
     print("[W1~W5] OK  1단계 남은 시간 파일 기준·멈춘 스캔 안내·진행 패널 최근 스캔·1단계 전체 수·배너 클릭 유지")
 
 
+def check_aw_round18_regress() -> None:
+    """X1 재개로 버려진 스냅샷 작업과 새 작업이 같은 임시 파일을 써 새 작업이 실패 X2 거절된 재개가 진행 중 스냅샷을 지움
+    X3 멈춘 자료 집계가 끝나도 트리가 집계 전 값 X4 'DB 파일' 라벨이 고른 스캔이 아니라 진행 패널 스캔."""
+    from isilon_usage import server as SV, manager as M, db as dbmod, livesnap as LS
+    d = tempfile.mkdtemp(prefix="iu_aw_")
+    try:
+        seen = []
+        orig = LS.copy_consistent
+        LS.copy_consistent = lambda src, dst: (seen.append(dst), open(dst, "w").close(), 0)[2]
+        try:
+            dst = os.path.join(d, "snap.db")
+            LS.build("/nonexist", dst)
+            LS.build("/nonexist", dst)
+        finally:
+            LS.copy_consistent = orig
+        assert len(seen) == 2 and seen[0] != seen[1], seen                                         # X1
+        assert not [n for n in os.listdir(d) if ".building" in n], os.listdir(d)
+        open(dst + ".building.9.9", "w").close()
+        LS.remove(dst)
+        assert not os.path.exists(dst + ".building.9.9")
+        data = os.path.join(d, "data")                                                             # X2
+        M.init_manager(data)
+        ctl = SV.ScanController(data)
+        sid = M.register_scan(data, root_path="/x", db_path=os.path.join(d, "x.db"), backend="native", size_mode="disk")
+        c = dbmod.connect(M.manager_db_path(data))
+        c.execute("UPDATE scans SET status='sizing', phase='sizing', updated_at=? WHERE id=?", (time.time(), sid))
+        c.commit()
+        c.close()
+        snap = ctl.live_snapshot_path(sid)
+        os.makedirs(os.path.dirname(snap), exist_ok=True)
+        open(snap, "w").close()
+        r = ctl.resume_scan(sid)
+        assert r["ok"] is False and os.path.exists(snap), (r, os.path.exists(snap))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    dh = _read("dashboard.html")
+    assert "window._paSeen = _paKey;" in dh                                                        # X3
+    assert '$("scanDbInfo").textContent = "DB 파일: " + (data.scan_meta.db_filename' not in dh     # X4
+    print("[X1~X4] OK  스냅샷 임시 파일 작업별·거절된 재개는 스냅샷 보존·부분 집계 뒤 트리 갱신·DB 파일 라벨")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1772,7 +1813,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_ap_explore_round14, check_aq_live_snapshot,
             check_ar_crash_round15, check_as_regress_round16,
             check_at_livesnap_round16, check_au_regress_round17,
-            check_av_round17_flow]
+            check_av_round17_flow, check_aw_round18_regress]
 
 
 def main() -> int:
