@@ -793,11 +793,20 @@ def list_top_dirs(conn, run_id, *, under_id=None, rel_depth=None,
 
 
 def search_dirs(pconn, run_id: int, q: str, *, limit: int = 200) -> dict:
+    # 완료된 스캔은 total_bytes 가 다 채워져 있어 그 인덱스 순서로 훑다가 limit 개에서 멈출 수 있다 — 화면 크기 식(CASE)
+    # 정렬은 인덱스를 못 써 일치하는 모든 행을 정렬해 흔한 검색어가 1ms → 100ms 로 느려졌다(24회차 성능 점검).
+    # 집계 전(진행·멈춤)만 화면 크기 식으로 정렬한다.
+    try:
+        _st = pconn.execute("SELECT status FROM scan_runs WHERE id=?", (run_id,)).fetchone()
+        _done = bool(_st) and _st[0] == "done"
+    except Exception:  # noqa: BLE001
+        _done = False
+    _order = "total_bytes" if _done else "(CASE WHEN total_bytes>0 THEN total_bytes ELSE own_bytes END)"
     rows = pconn.execute(
         """SELECT id, path, name, depth, file_count, subdir_count,
                   own_bytes, total_bytes, total_files, status
            FROM directories WHERE run_id=? AND path LIKE ? ESCAPE '\\'
-           ORDER BY (CASE WHEN total_bytes>0 THEN total_bytes ELSE own_bytes END) DESC LIMIT ?""",
+           ORDER BY """ + _order + """ DESC LIMIT ?""",
         (run_id, "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%", limit + 1),
     ).fetchall()
     return {"ok": True, "results": [dict(r) for r in rows[:limit]], "truncated": len(rows) > limit, "limit": limit}

@@ -2809,6 +2809,37 @@ def check_bn_round24_consistency() -> None:
     print("[PP1~PP9] OK  화면 간 일관성: 서버 시계 경과·질의응답 조사 용량·파일 수 중첩 제외·FS 단일 규칙·사용량 API·스냅샷·부분 값·복제 시각·깊이 제한")
 
 
+def check_bo_round24_perf() -> None:
+    """QQ1 검색 정렬을 화면 크기 식으로 바꾼 뒤 완료 스캔의 흔한 검색어가 인덱스를 못 써 1ms → 100ms(24회차 성능 점검)."""
+    import random
+    from isilon_usage import db as dbmod, server as SV
+    d = tempfile.mkdtemp(prefix="iu_bo_")
+    try:
+        random.seed(1)
+        db = os.path.join(d, "x.db")
+        dbmod.init_db(db)
+        c = dbmod.connect(db)
+        rid = dbmod.create_run(c, "/r", backend="native", size_mode="disk", scanner_pid=0)
+        c.executemany("INSERT INTO directories (run_id, path, name, depth, status, own_bytes, total_bytes) "
+                      "VALUES (?,?,?,?,?,?,?)",
+                      ((rid, "/r/s%06d" % i, "s%06d" % i, 1, "done", 1, random.randint(1, 10 ** 9)) for i in range(100000)))
+        c.execute("UPDATE scan_runs SET status='done' WHERE id=?", (rid,))
+        c.commit()
+        plan = " ".join(str(tuple(r)) for r in c.execute(
+            "EXPLAIN QUERY PLAN SELECT id FROM directories WHERE run_id=? AND path LIKE ? ESCAPE '\\' "
+            "ORDER BY total_bytes DESC LIMIT 201", (rid, "%s0%")))
+        r = SV.search_dirs(c, rid, "s0")
+        assert len(r["results"]) == 200 and r["truncated"]
+        sizes = [x["total_bytes"] for x in r["results"]]
+        assert sizes == sorted(sizes, reverse=True)
+        c.close()
+        assert "TEMP B-TREE" not in plan.upper(), plan            # 정렬용 임시 B-트리 없이 인덱스 순서
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert '_order = "total_bytes" if _done else' in _read("server.py")
+    print("[QQ1] OK  완료 스캔 검색은 total_bytes 인덱스 순서(흔한 검색어 1ms 대)")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -2832,7 +2863,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bb_round20_regress, check_bc_round20_upgrade,
             check_bd_round20_stress, check_be_round21_sec_regress,
             check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser, check_bj_round23_regress, check_bk_round23_portal, check_bl_round23_engine, check_bm_round24_regress,
-            check_bn_round24_consistency]
+            check_bn_round24_consistency, check_bo_round24_perf]
 
 
 def main() -> int:
