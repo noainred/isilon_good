@@ -449,6 +449,7 @@ class Scanner:
         # 파일 청크의 stat/집계를 대신한다. 큐는 메모리 제한(워커 수×2 청크).
         self._chunk_q: Optional["queue.Queue"] = None
         self._q_cv = threading.Condition()
+        self._stat_tls = threading.local()   # 청크별 stat 읽기 오류 수(스레드마다 따로)
         self._idle_workers = 0
         self._helping = 0
         self._stat_us_ema = 0.0        # 최근 파일당 stat 소요(µs, EMA) — 나눔 on/off 판단
@@ -1150,7 +1151,11 @@ class Scanner:
     def _safe_stat(self, entry):
         try:
             return entry.stat(follow_symlinks=False)
-        except OSError:
+        except OSError as exc:
+            # 사라진 파일(ENOENT, 스캔 중 삭제)이 아닌 실패는 읽기 오류로 센다 — 예: x 권한 없는 폴더(r--) 안의 파일.
+            # 예전엔 조용히 빠지고 오류도 0 이었다(2026-11 악조건 점검). 청크 처리가 스레드별 카운터를 읽는다.
+            if getattr(exc, "errno", None) != errno.ENOENT:
+                self._stat_tls.err = getattr(self._stat_tls, "err", 0) + 1
             return None
 
     def _safe_stat_path(self, path: str):
@@ -1625,15 +1630,9 @@ class Scanner:
         (락 축소는 GIL 을 없애지 않는다 — 효과는 워커가 I/O 대기에 있을 때 나타난다.)
         """
         t0 = time.monotonic()
-        stats = []
-        n_stat_err = 0                                  # 사라진 파일(ENOENT)이 아닌 stat 실패 = 읽기 오류
-        for e in entries:                               # I/O — 락 밖
-            try:
-                stats.append(e.stat(follow_symlinks=False))
-            except OSError as exc:
-                stats.append(None)
-                if getattr(exc, "errno", None) != errno.ENOENT:
-                    n_stat_err += 1   # 예: x 권한 없는 폴더(r--) 안의 파일 — 예전엔 조용히 빠지고 오류도 0(2026-11 점검)
+        self._stat_tls.err = 0
+        stats = [self._safe_stat(e) for e in entries]   # I/O — 락 밖(_safe_stat 이 읽기 오류를 스레드별로 센다)
+        n_stat_err = getattr(self._stat_tls, "err", 0)
         if None in stats:                               # 파일이 사라짐: 보통 churn, 대상 전체 소실이면 일시정지
             self._pause_if_root_lost()
         if entries:   # 파일당 stat 소요(EMA) — 청크 나눔을 I/O 대기형에서만 켜기 위한 측정

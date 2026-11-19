@@ -1270,7 +1270,7 @@ def check_aj_adverse_fs_round11() -> None:
     finally:
         shutil.rmtree(d, ignore_errors=True)
     src = _read("scanner.py")                                                          # J3
-    assert "n_stat_err += 1" in src and "acc.errors += n_stat_err" in src
+    assert "self._stat_tls.err = getattr(self._stat_tls, \"err\", 0) + 1" in src and "acc.errors += n_stat_err" in src
     print("[J1~J4] OK  du 비 UTF-8 이름·pscan 오류 목록/이중 계산·stat 실패 오류 집계·링크 루트 크기")
 
 
