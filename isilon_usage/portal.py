@@ -32,13 +32,13 @@ from . import __version__
 from . import db as dbmod
 from . import manager as mgrmod
 from . import auth as authmod
+from . import netutil
 from . import audit as auditmod
 from . import settings as setmod
 from . import upgrade as upgrademod
 from . import ask as askmod
-from . import netutil
 from .server import ThreadingHTTPServer, browse_dir  # 3.6 폴백 포함 재사용
-from .server import read_json_body, is_json_ctype, cross_site_post, _ChunkedWriter, safe_cwd, _has_nul, _json_bytes, _truthy   # 요청 본문 검증·응답 인코딩(엣지와 같은 규칙)
+from .server import read_json_body, is_json_ctype, cross_site_post, _ChunkedWriter, _security_headers, safe_cwd, _has_nul, _json_bytes, _truthy   # 요청 본문 검증·응답 인코딩(엣지와 같은 규칙)
 from .server import reset_op_password_file      # 임시 비밀번호(엣지와 같은 규칙·같은 함수)
 
 # SSH 실행 입력 검증(옵션 주입 차단): 사용자는 POSIX 계정 이름, 호스트는 IP/호스트명/[IPv6] 만.
@@ -146,6 +146,28 @@ def _alias_norm(v) -> str:
     """별칭 경로 정리 — 끝 '/' 는 떼되 '/' 자체는 남긴다(예전엔 '/' 가 빈 값이 돼 경로 매핑이 꺼졌다, 23회차 점검)."""
     t = str(v or "").strip()
     return (t.rstrip("/") or "/") if t else ""
+
+
+META_MAX_BYTES = 16 * 1024 * 1024   # 복제 묶음의 meta.json 상한
+
+
+def _replica_scan_db(rep: str, sc: dict):
+    """복제본 meta 의 스캔 한 건 → 복제본 scans 폴더 안의 DB 경로(없으면 None).
+
+    db_filename 은 엣지가 보낸 값이라 '../../x.db'·'/절대/경로' 가 올 수 있다 — 이름만 쓰고, 실제 경로가
+    scans 폴더 안인지(심볼릭 링크 포함) 확인한다(27회차 보안 점검)."""
+    dbf = os.path.basename(str(sc.get("db_filename") or "") or str(sc.get("db_path") or ""))
+    if not dbf or dbf in (".", ".."):
+        return None
+    base = os.path.join(rep, "scans")
+    dbp = os.path.join(base, dbf)
+    try:
+        rb = os.path.realpath(base)
+        if os.path.commonpath([rb, os.path.realpath(dbp)]) != rb or not os.path.isfile(dbp):
+            return None
+    except (OSError, ValueError):
+        return None
+    return dbp
 
 
 def _keep_alias(existing, rec: dict) -> None:
@@ -754,6 +776,7 @@ class PortalController:
         self._auth = authmod.AuthGuard(
             self._op_password_now,          # 서버 명령(reset-password --portal)이 바꾼 비밀번호도 바로 반영
             ttl=lambda: float(self.settings.get("op_ttl_minutes", 30) or 30) * 60)
+        self._enroll_limit = authmod.FailLimiter(max_fails=5, lockout=60.0)   # enroll_token 추측 방지(IP별)
         self._last_upgrade_check = 0.0
         self._init_ping_db()
         self._init_throughput_db()
@@ -1377,7 +1400,7 @@ class PortalController:
                      "portal_subtitle": self.settings.get("portal_subtitle") or "",
                      "export_token_set": bool(self.settings.get("export_token")),
                      "ask_llm_enabled": bool(self.settings.get("ask_llm_enabled")),
-                     "ask_llm_endpoint": self.settings.get("ask_llm_endpoint") or "",
+                     "ask_llm_endpoint": netutil.mask_url_secret(self.settings.get("ask_llm_endpoint") or ""),
                      "ask_llm_model": self.settings.get("ask_llm_model") or "",
                      "ask_llm_timeout": int(self.settings.get("ask_llm_timeout", 20) or 20),
                      "ask_llm_key_set": bool(self.settings.get("ask_llm_key"))},
@@ -1388,7 +1411,8 @@ class PortalController:
         if "ask_llm_enabled" in body:
             self.settings["ask_llm_enabled"] = _truthy(body.get("ask_llm_enabled"))
         if "ask_llm_endpoint" in body:
-            self.settings["ask_llm_endpoint"] = str(body.get("ask_llm_endpoint") or "").strip()
+            self.settings["ask_llm_endpoint"] = str(netutil.keep_masked(
+                str(body.get("ask_llm_endpoint") or ""), self.settings.get("ask_llm_endpoint")) or "").strip()
         if "ask_llm_model" in body:
             self.settings["ask_llm_model"] = str(body.get("ask_llm_model") or "").strip()
         if body.get("ask_llm_key") is not None:   # null 은 '보내지 않음'(예전엔 저장된 키가 지워졌다)
@@ -1775,8 +1799,8 @@ class PortalController:
         st["bundle_stale"] = bool(st["bundle_version"] and st["bundle_version"] != __version__)
         st["source_mode"] = self.settings.get("upgrade_source", "off")
         st["auto"] = bool(self.settings.get("upgrade_auto"))
-        st["url"] = self.settings.get("upgrade_url") or upgrademod.DEFAULT_UPGRADE_BASE
-        st["url_custom"] = self.settings.get("upgrade_url") or ""
+        st["url"] = netutil.mask_url_secret(self.settings.get("upgrade_url") or upgrademod.DEFAULT_UPGRADE_BASE)
+        st["url_custom"] = netutil.mask_url_secret(self.settings.get("upgrade_url") or "")   # 비밀값 가림(27회차)
         st["token_set"] = bool(self.settings.get("upgrade_token"))   # 값은 노출 안 함(설정 여부만)
         st["check_secs"] = self.settings.get("upgrade_check_secs", 60)
         st["node_count"] = len(nodes)
@@ -1876,7 +1900,7 @@ class PortalController:
             return {"ok": False, "reason": token_error(str(token).strip())}   # 헤더로 보내는 값(24회차 점검)
         src = str(source or "off").strip().lower()
         self.settings["upgrade_source"] = src if src in ("off", "github") else "off"
-        self.settings["upgrade_url"] = str(url or "").strip()
+        self.settings["upgrade_url"] = str(netutil.keep_masked(str(url or ""), self.settings.get("upgrade_url")) or "").strip()
         if token is not None:               # None=미전송(기존 유지), ""=명시적 비움
             self.settings["upgrade_token"] = str(token or "").strip()
         self.settings["upgrade_auto"] = bool(auto)
@@ -1981,7 +2005,7 @@ class PortalController:
         return {"ok": True, "count": len(applied), "applied": applied,
                 "results": [{"id": i, "ok": True} for i in applied]}
 
-    def enroll_node(self, raw: dict) -> dict:
+    def enroll_node(self, raw: dict, client=None) -> dict:
         """엣지가 스스로 포탈에 등록한다(자기 enroll). 공유 enroll_token 으로 인증.
 
         포탈에 enroll_token 이 설정돼 있으면 그 값이 일치해야 한다(여러 엣지가 공유하는
@@ -1993,8 +2017,14 @@ class PortalController:
         want = str(self.settings.get("enroll_token") or "").strip()
         given = str(raw.get("enroll_token") or "").strip()
         if want:
+            wait = self._enroll_limit.blocked(client)
+            if wait:
+                return {"ok": False, "_status": 429, "locked_out": True,
+                        "reason": "등록 실패가 많아 잠시 잠겼습니다(%d초 후 재시도)" % wait}
             if not authmod.secret_equal(given, want):   # 한글 토큰도 예외 없이(바이트 비교)
+                self._enroll_limit.failed(client)        # 접속 IP별 연속 실패 잠금(27회차 보안 점검)
                 return {"ok": False, "reason": "enroll_token 불일치", "_status": 401}
+            self._enroll_limit.succeeded(client)
         elif self._auth.required():
             return {"ok": False, "_status": 401,
                     "reason": "포탈 설정(설치·구성)에서 enroll_token 을 정하고, 엣지 설치 때 --enroll <토큰> 으로 넘기세요."}
@@ -2563,8 +2593,13 @@ class PortalController:
                         src = tf.extractfile(m)
                         if src is not None:
                             try:
-                                new_meta = json.loads(src.read().decode("utf-8"))
-                            except (ValueError, OSError):
+                                # 크기 상한(16MB) — 악성·고장 엣지가 거대한 meta.json(예: 수백만 개 목록)으로 포탈 메모리를
+                                # 1GB 넘게 쓰게 했다(27회차 점검). 넘으면 이번 meta 는 버린다(DB 파일은 그대로 받음).
+                                raw = src.read(META_MAX_BYTES + 1)
+                                new_meta = (json.loads(raw.decode("utf-8")) if len(raw) <= META_MAX_BYTES else None)
+                                if not isinstance(new_meta, dict):
+                                    new_meta = None
+                            except (ValueError, OSError, UnicodeDecodeError, RecursionError):
                                 new_meta = None
                         continue
                     elif (name.startswith("scans/") and name.endswith(".db")
@@ -2601,9 +2636,15 @@ class PortalController:
             missing_at = []        # meta 에는 있는데 DB 파일이 안 온 스캔의 완료 시각(워터마크가 넘지 않게)
             if new_meta is not None:
                 got = []
-                for sc in (new_meta.get("scans") or []):
-                    dbf = os.path.basename(str((sc or {}).get("db_filename") or ""))
+                _sc = new_meta.get("scans")
+                for sc in (_sc if isinstance(_sc, list) else [])[:20000]:
+                    if not isinstance(sc, dict):
+                        continue
+                    dbf = os.path.basename(str(sc.get("db_filename") or ""))
                     if dbf and os.path.exists(os.path.join(dest, "scans", dbf)):
+                        # 저장할 때도 이름만(경로 성분 제거) — 예전엔 원래 값('/절대/경로/x.db')을 남겨, 나중에 비교·매트릭스가
+                        # 복제본 폴더 밖의 DB 를 열었다(27회차 점검)
+                        sc = dict(sc, db_filename=dbf)
                         got.append(sc)
                     else:
                         try:
@@ -2620,7 +2661,8 @@ class PortalController:
                 merged = self._merge_scan_lists(old_scans, new_meta.get("scans"))
                 # 엣지에서 사용자가 지운 스캔은 복제본에서도 지운다 — 예전엔 남아 비교 화면이 지운 스캔을 '최신'으로
                 # 보여 엣지·홈 값과 어긋났다(18회차 점검). 구버전 엣지는 이 목록을 안 보내 예전과 같다.
-                dels = {os.path.basename(x) for x in (new_meta.get("deleted_db_filenames") or [])
+                _dl = new_meta.get("deleted_db_filenames")
+                dels = {os.path.basename(x) for x in ((_dl if isinstance(_dl, list) else [])[:5000])
                         if isinstance(x, str) and x}
                 if dels:
                     keep_m = []
@@ -3728,12 +3770,13 @@ class PortalController:
         # 보인다 ② 최신(완료 시각) ③ 경로를 더 구체적으로 덮는 루트. 예전엔 ②③ 순서가 반대라 오래된 하위
         # 루트 스캔이 최신 상위 루트 스캔을 이겨, 같은 화면에서 부모·자식 값이 서로 다른 시점이었다.
         cands = []
-        for s in meta.get("scans", []):
-            root = (s.get("root_path") or "").rstrip("/")
+        for s in (meta.get("scans") if isinstance(meta, dict) and isinstance(meta.get("scans"), list) else []):
+            if not isinstance(s, dict):
+                continue
+            root = str(s.get("root_path") or "").rstrip("/")
             if path == root or path.startswith(root + "/") or (not root and path.startswith("/")):
-                dbf = s.get("db_filename") or os.path.basename(s.get("db_path") or "")
-                dbp = os.path.join(rep, "scans", dbf)
-                if dbf and os.path.exists(dbp):
+                dbp = _replica_scan_db(rep, s)
+                if dbp:
                     cands.append(((s.get("status") == "done",) + self._scan_recency(s) + (len(root),), dbp))
         cands.sort(key=lambda t: t[0], reverse=True)
         return [dbp for _k, dbp in cands]
@@ -3752,12 +3795,13 @@ class PortalController:
         except (OSError, ValueError):
             return []
         cands = []
-        for s in meta.get("scans", []):
-            root = (s.get("root_path") or "").rstrip("/")
+        for s in (meta.get("scans") if isinstance(meta, dict) and isinstance(meta.get("scans"), list) else []):
+            if not isinstance(s, dict):
+                continue
+            root = str(s.get("root_path") or "").rstrip("/")
             if path == root or path.startswith(root + "/") or (not root and path.startswith("/")):
-                dbf = s.get("db_filename") or os.path.basename(s.get("db_path") or "")
-                dbp = os.path.join(rep, "scans", dbf)
-                if dbf and os.path.exists(dbp):
+                dbp = _replica_scan_db(rep, s)
+                if dbp:
                     cands.append(((s.get("status") == "done",) + self._scan_recency(s) + (len(root),), dbp, root))
         cands.sort(key=lambda t: t[0], reverse=True)
         out, seen = [], set()
@@ -3898,6 +3942,10 @@ class PortalHandler(BaseHTTPRequestHandler):
     def setup(self):
         super().setup()
         self.wfile = _ChunkedWriter(self.wfile)   # 큰 응답도 조각마다 시간 제한(엣지와 같은 규칙)
+
+    def end_headers(self):
+        _security_headers(self)                   # 엣지와 같은 보안 헤더(27회차)
+        super().end_headers()
     data_dir = ""
     controller = None  # PortalController
 
@@ -4183,7 +4231,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             # 엣지 자기등록(enroll) — op 로그인 토큰이 아니라 공유 enroll_token 으로 인증하므로
             # 일반 인증 게이트 '앞'에 둔다(엣지는 포탈 로그인 토큰을 갖지 않는다).
             if path == "/api/portal/enroll":
-                res = c.enroll_node(body)
+                res = c.enroll_node(body, self.client_address[0] if self.client_address else None)
                 st = res.pop("_status", None) or (200 if res.get("ok") else 400)
                 self._audit("enroll", res.get("ok"),
                             "" if res.get("ok") else (res.get("reason") or ""))

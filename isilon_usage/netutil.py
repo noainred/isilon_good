@@ -60,3 +60,44 @@ def read_json(resp, limit: int = MAX_JSON_RESPONSE):
     except (ValueError, UnicodeDecodeError):
         head = raw[:60].decode("utf-8", "replace").strip().replace("\n", " ")
         raise ValueError("JSON 이 아닌 응답입니다(주소·포트·API 경로 확인): %s" % head)
+
+
+# --------------------------------------------------------------- URL 비밀값 가리기
+# 설정 응답(GET — 인증 없이 읽힘)에 URL 속 비밀값(userinfo·쿼리 토큰, 웹훅 경로)이 그대로 나가던 문제(27회차 보안 점검).
+# 화면엔 가린 값을 보여 주고, 그 가린 값이 그대로 저장 요청에 돌아오면 서버가 저장된 원래 값을 유지한다.
+_MASK = "***"
+
+
+def mask_url_secret(u, hide_path: bool = False) -> str:
+    """URL 의 사용자 정보·쿼리(·hide_path 면 경로)를 '***' 로 가린다. 가릴 게 없으면 그대로."""
+    s = str(u or "").strip()
+    if not s:
+        return s
+    try:
+        from urllib.parse import urlsplit
+        p = urlsplit(s)
+    except ValueError:
+        return _MASK
+    if not p.scheme or not p.netloc:
+        # 주소 모양이 아니면(오타 등) 통째로 가린다 — 무엇이 비밀인지 모른다
+        return _MASK if (hide_path or "@" in s or "?" in s) else s
+    host = p.netloc.rsplit("@", 1)[-1]
+    out = p.scheme + "://" + (_MASK + "@" if "@" in p.netloc else "") + host
+    path = p.path or ""
+    if hide_path and path.strip("/"):
+        out += "/" + _MASK
+    else:
+        out += path
+    if p.query or p.fragment:
+        out += "?" + _MASK
+    return out
+
+
+def keep_masked(posted, stored, hide_path: bool = False):
+    """저장 요청 값이 '저장된 값을 가린 모양' 그대로면 저장된 값을, 아니면 보낸 값을 돌려준다."""
+    if not isinstance(posted, str):
+        return posted
+    st = str(stored or "")
+    if st and posted.strip() == mask_url_secret(st, hide_path) and posted.strip() != st.strip():
+        return st
+    return posted

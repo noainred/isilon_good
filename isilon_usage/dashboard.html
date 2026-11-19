@@ -4907,7 +4907,10 @@ async function doAsk() {
   out.innerHTML = '<span class="sub">분석 중…</span>';
   const scan = (typeof selectedScan !== "undefined" && selectedScan != null) ? ("&scan=" + selectedScan) : "";
   try {
-    const j = await (await fetch("/api/ask?q=" + encodeURIComponent(q) + scan, {cache: "no-store"})).json();
+    // 로그인했으면 토큰을 붙인다 — 서버는 로그인한 사람에게만 외부 LLM 을 쓴다(27회차 보안 점검)
+    const _tk = _opToken();
+    const j = await (await fetch("/api/ask?q=" + encodeURIComponent(q) + scan,
+      {cache: "no-store", headers: _tk ? {"X-Op-Token": _tk} : {}})).json();
     if (!j || !j.ok) { out.textContent = "답을 만들지 못했습니다."; return; }
     const llm = (j.source === "rules+llm") ? ' <span class="sub">· 🧠 LLM 다듬음</span>' : "";
     out.innerHTML = mdLite(j.answer) + llm;

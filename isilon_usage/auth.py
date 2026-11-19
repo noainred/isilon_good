@@ -202,3 +202,48 @@ class AuthGuard:
         token = str(token or "")
         with self._lock:
             self._tokens.pop(token, None)
+
+
+class FailLimiter:
+    """클라이언트(보통 IP)별 연속 실패 잠금 — 비밀번호가 아닌 공유 비밀(enroll_token 등)의 무차별 대입 방지.
+
+    로그인(OpAuth.login)과 같은 규칙: max_fails 회 연속 실패하면 lockout 초간 그 클라이언트만 잠근다(27회차 보안 점검:
+    enroll_token 은 횟수 제한 없이 추측할 수 있었다)."""
+
+    _MAX_CLIENTS = 4096
+
+    def __init__(self, max_fails: int = 5, lockout: float = 60.0) -> None:
+        self._max = int(max_fails)
+        self._lockout = float(lockout)
+        self._fails: dict = {}
+        self._locked: dict = {}
+        self._lock = threading.Lock()
+
+    def blocked(self, client) -> int:
+        """잠겨 있으면 남은 초(>0), 아니면 0."""
+        key = str(client or "")
+        now = time.time()
+        with self._lock:
+            until = self._locked.get(key, 0.0)
+            if now < until:
+                return int(until - now) + 1
+            self._locked.pop(key, None)
+            return 0
+
+    def failed(self, client) -> None:
+        key = str(client or "")
+        now = time.time()
+        with self._lock:
+            n = self._fails.get(key, 0) + 1
+            if n >= self._max:
+                self._locked[key] = now + self._lockout
+                self._fails.pop(key, None)
+            else:
+                self._fails[key] = n
+            if len(self._fails) + len(self._locked) > self._MAX_CLIENTS:
+                self._locked = {k: v for k, v in self._locked.items() if v > now}
+                self._fails = {}
+
+    def succeeded(self, client) -> None:
+        with self._lock:
+            self._fails.pop(str(client or ""), None)

@@ -41,6 +41,7 @@ except ImportError:  # pragma: no cover
 from . import __version__, SCHEMA_VERSION
 from . import db as dbmod
 from . import monitor as monmod
+from . import netutil
 from . import manager as mgrmod
 from . import settings as setmod
 from . import isilon_api as isilonmod
@@ -327,7 +328,7 @@ def _has_bad_surrogate(obj) -> bool:
     return _any_str(obj, lambda t: bool(_BAD_SURROGATE.search(t)))
 
 
-MAX_JSON_BODY = 16 * 1024 * 1024        # JSON 본문 상한(메모리 폭주 방지)
+MAX_JSON_BODY = 4 * 1024 * 1024         # JSON 본문 상한(메모리·CPU 폭주 방지 — 16MB 본문 하나가 인증 전에 7초를 잡았다, 27회차)
 MAX_BUNDLE_BODY = 512 * 1024 * 1024     # 업그레이드 번들 상한
 
 
@@ -434,13 +435,44 @@ def read_json_body(handler):
         return {}, (400, "JSON 형식이 아닙니다")
     if not isinstance(val, dict):
         return {}, (400, "JSON 객체({...})만 받습니다")
-    if _json_depth(val) > MAX_JSON_DEPTH:   # 수백 단계 중첩은 뒤(저장·감사)에서 재귀 한도에 걸린다 — 받지 않는다
+    # 깊이·NUL·짝 없는 서로게이트를 한 번에 훑는다 — 예전엔 세 번 따로 돌아 큰 본문에서 CPU 를 세 배 썼다(27회차 점검)
+    depth, nul, bad = _scan_body(val)
+    if depth > MAX_JSON_DEPTH:   # 수백 단계 중첩은 뒤(저장·감사)에서 재귀 한도에 걸린다 — 받지 않는다
         return {}, (400, "JSON 중첩이 너무 깊습니다(최대 %d 단계)" % MAX_JSON_DEPTH)
-    if _has_nul(val):
+    if nul:
         return {}, (400, "요청에 NUL 문자가 있습니다")
-    if _has_bad_surrogate(val):
+    if bad:
         return {}, (400, "요청에 잘못된 문자(짝 없는 서로게이트)가 있습니다")
     return val, None
+
+
+def _scan_body(obj):
+    """(최대 깊이, NUL 있음, 짝 없는 서로게이트 있음) — 반복 한 번으로. 깊이가 한도를 넘으면 거기서 멈춘다."""
+    best, nul, bad = 0, False, False
+    stack = [(obj, 1)]
+    srch = _BAD_SURROGATE.search
+    while stack:
+        o, d = stack.pop()
+        if isinstance(o, str):
+            if not nul and "\x00" in o:
+                nul = True
+            if not bad and srch(o):
+                bad = True
+        elif isinstance(o, dict):
+            if d > best:
+                best = d
+                if best > MAX_JSON_DEPTH:
+                    break
+            for k, v in o.items():
+                stack.append((k, d + 1))
+                stack.append((v, d + 1))
+        elif isinstance(o, (list, tuple)):
+            if d > best:
+                best = d
+                if best > MAX_JSON_DEPTH:
+                    break
+            stack.extend((v, d + 1) for v in o)
+    return best, nul, bad
 
 
 def reset_op_password(data_dir: str, info_dir: Optional[str] = None) -> Optional[dict]:
@@ -471,12 +503,44 @@ def _public_settings(s: dict) -> dict:
     out["upgrade_token_set"] = bool((s or {}).get("upgrade_token"))
     sa = []
     for a in ((s or {}).get("storage_arrays") or []):
+        if not isinstance(a, dict):
+            continue
         b = dict(a)
         b["password"] = ""
         b["password_set"] = bool(a.get("password"))
+        b["url"] = netutil.mask_url_secret(a.get("url"))
         sa.append(b)
     out["storage_arrays"] = sa
+    # URL 속 비밀값(웹훅 경로·사용자 정보·쿼리 토큰)도 가린다 — 이 응답은 인증 없이 읽힌다(27회차 보안 점검).
+    # 가린 값이 그대로 저장 요청에 돌아오면 update_settings 가 원래 값을 유지한다(_unmask_settings).
+    for _k, _hp in _URL_SECRET_KEYS:
+        if _k in out:
+            out[_k] = netutil.mask_url_secret(out.get(_k), _hp)
     return out
+
+
+# (설정 키, 경로까지 가릴지) — 웹훅은 경로 자체가 비밀(예: Slack services/T…/B…/토큰)
+_URL_SECRET_KEYS = (("notify_webhook", True), ("ask_llm_endpoint", False), ("upgrade_url", False),
+                    ("isilon_url", False), ("powerstore_url", False))
+
+
+def _unmask_settings(new: dict, cur: dict) -> None:
+    """화면이 받은 '가린 값'을 그대로 돌려보내면 저장된 원래 값으로 되돌린다(제자리 수정)."""
+    for _k, _hp in _URL_SECRET_KEYS:
+        if _k in new:
+            new[_k] = netutil.keep_masked(new.get(_k), (cur or {}).get(_k), _hp)
+    if isinstance(new.get("storage_arrays"), list):
+        olds = [a for a in ((cur or {}).get("storage_arrays") or []) if isinstance(a, dict)]
+        for a in new["storage_arrays"]:
+            if not isinstance(a, dict) or not isinstance(a.get("url"), str):
+                continue
+            old = (next((o for o in olds if a.get("id") and o.get("id") == a.get("id")), None)
+                   or next((o for o in olds if a.get("name") and o.get("name") == a.get("name")), None))
+            if old is None:
+                old = next((o for o in olds
+                            if netutil.mask_url_secret(o.get("url")) == a["url"].strip()), None)
+            if old is not None:
+                a["url"] = netutil.keep_masked(a["url"], old.get("url"))
 
 
 def _idle_resources() -> dict:
@@ -1419,8 +1483,8 @@ class ScanController:
         st["current"] = __version__
         st["source_mode"] = self.settings.get("upgrade_source", "off")
         st["auto"] = bool(self.settings.get("upgrade_auto"))
-        st["url"] = (self.settings.get("upgrade_url") or upgrademod.DEFAULT_UPGRADE_BASE)
-        st["url_custom"] = self.settings.get("upgrade_url") or ""
+        st["url"] = netutil.mask_url_secret(self.settings.get("upgrade_url") or upgrademod.DEFAULT_UPGRADE_BASE)
+        st["url_custom"] = netutil.mask_url_secret(self.settings.get("upgrade_url") or "")   # 비밀값 가림(27회차)
         st["check_secs"] = int(self.settings.get("upgrade_check_secs", 60) or 60)
         st["token_set"] = bool(self.settings.get("upgrade_token"))   # 값 비노출, 설정 여부만
         st["watch_dir"] = self.settings.get("upgrade_watch_dir", "")
@@ -1574,6 +1638,9 @@ class ScanController:
         if not isinstance(new, dict):
             return {"ok": False, "reason": "설정은 JSON 객체({...})로 보내야 합니다.", "_status": 400}
         new = dict(new or {})
+        if isinstance(new.get("storage_arrays"), list):
+            new["storage_arrays"] = [dict(a) if isinstance(a, dict) else a for a in new["storage_arrays"]]
+        _unmask_settings(new, self.settings)
         # 작업 보호 비밀번호: op_lock(체크) + op_password(새 비번)
         #  - op_lock 거짓 → 보호 해제(비밀번호 제거)
         #  - op_lock 참 + 새 비번 있음 → 설정/변경(+info.MD 기록)
@@ -3311,6 +3378,15 @@ class ScanController:
             rec["stop"].set()
 
 
+def _security_headers(h) -> None:
+    """모든 응답에 붙이는 보안 헤더(엣지·포탈 공통) — 다른 사이트가 화면을 iframe 에 넣어 버튼을 누르게 하는
+    클릭재킹과, 브라우저가 응답 형식을 추측(MIME 스니핑)하는 것을 막는다(27회차 보안 점검)."""
+    h.send_header("X-Content-Type-Options", "nosniff")
+    h.send_header("X-Frame-Options", "DENY")
+    h.send_header("Content-Security-Policy", "frame-ancestors 'none'")
+    h.send_header("Referrer-Policy", "same-origin")
+
+
 class DashboardHandler(BaseHTTPRequestHandler):
     # 연결 소켓 시간 제한(초) — 없으면 아무것도 안 보내는 연결 하나가 스레드·fd 를 끝없이 잡았다(20회차 점검: 400개 연결
     # → 스레드 404개가 65초 넘게 유지). 계산 시간에는 걸리지 않고, 받기/보내기가 이만큼 멈출 때만 연결을 끊는다.
@@ -3319,6 +3395,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def setup(self):
         super().setup()
         self.wfile = _ChunkedWriter(self.wfile)   # 큰 응답도 조각마다 시간 제한(전체가 아니라)
+
+    def end_headers(self):
+        _security_headers(self)
+        super().end_headers()
     data_dir = ""  # 서버 생성 시 클래스 속성으로 주입(manager.db + scans/ 의 상위 폴더)
     controller = None  # ScanController (웹에서 스캔 시작/중지)
 
@@ -3998,7 +4078,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 # 자연어 질의응답(규칙 기반 + 선택적 로컬 LLM). 읽기 전용.
                 q = (qs.get("q", [""])[0] or "").strip()
                 data = self._gather_ask_data(mconn, self._query_int(qs, "scan"))
-                self._send_json(askmod.respond(q, data, self._ask_llm_cfg()))
+                cfg = self._ask_llm_cfg()
+                # 외부 LLM(저장된 키 사용)은 로그인한 사람만 — 포탈과 같은 규칙. 예전엔 인증 없는 GET 으로 누구나
+                # 저장된 키의 호출량을 쓰고, 스캔 데이터를 외부로 보내게 할 수 있었다(27회차 보안 점검). 규칙 기반 답은 누구나.
+                ctrl = self.controller
+                if ctrl is not None and ctrl.op_required() and not ctrl.op_token_valid(self.headers.get("X-Op-Token")):
+                    cfg["enabled"] = False
+                self._send_json(askmod.respond(q, data, cfg))
                 return
 
             if path == "/api/atime":

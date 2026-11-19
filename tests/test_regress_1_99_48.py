@@ -3113,6 +3113,112 @@ def check_bu_round27_regress() -> None:
     print("[WW1~WW5] OK  영속 표식 LRU·동시 기록 잠금·재개 안내 따옴표·autotune 범위·마지막 백업 표시")
 
 
+def check_bv_round27_security() -> None:
+    """XX1 큰 JSON 본문 깊이 검사 한 번에 XX2 복제 meta.json 크기·목록 상한 XX3 db_filename 경로로 복제본 밖 DB 열기
+    XX4 설정 응답의 URL 비밀값(웹훅·사용자 정보·쿼리 토큰)과 가린 값 되돌림 XX5 로그인 없이 외부 LLM 호출
+    XX6 클릭재킹·MIME 스니핑 헤더 XX7 enroll_token 무제한 추측."""
+    import json as _json
+    import urllib.request
+    from isilon_usage import server as SV, portal as P, manager as M, netutil as NU, ask as AK
+    assert SV.MAX_JSON_BODY <= 4 * 1024 * 1024                                                       # XX1
+    deep = cur = []
+    for _ in range(SV.MAX_JSON_DEPTH + 5):
+        nxt = []
+        cur.append(nxt)
+        cur = nxt
+    assert SV._scan_body(deep)[0] > SV.MAX_JSON_DEPTH
+    assert SV._scan_body({"a": ["x\x00"]})[1] is True
+    src = _read("portal.py")                                                                         # XX2
+    assert "src.read(META_MAX_BYTES + 1)" in src and "[:20000]" in src and "[:5000]" in src
+    assert "sc = dict(sc, db_filename=dbf)" in src
+    d = tempfile.mkdtemp(prefix="iu_bv_")
+    httpd = None
+    try:
+        pc = P.PortalController(os.path.join(d, "hq"))                                               # XX3
+        rep = os.path.join(pc.replicas_dir, "n1")
+        os.makedirs(os.path.join(rep, "scans"))
+        outside = os.path.join(d, "outside.db")
+        open(outside, "w").close()
+        os.symlink(outside, os.path.join(rep, "scans", "link.db"))
+        open(os.path.join(rep, "scans", "ok.db"), "w").close()
+        meta = {"scans": [{"root_path": "/r", "db_filename": outside, "status": "done", "finished_at": 3},
+                          {"root_path": "/r", "db_filename": "../../outside.db", "status": "done", "finished_at": 2},
+                          {"root_path": "/r", "db_filename": "link.db", "status": "done", "finished_at": 4},
+                          {"root_path": "/r", "db_filename": "ok.db", "status": "done", "finished_at": 1}]}
+        with open(os.path.join(rep, "meta.json"), "w", encoding="utf-8") as fh:
+            _json.dump(meta, fh)
+        got = pc._replica_dbs_for("n1", "/r/a")
+        assert got == [os.path.join(rep, "scans", "ok.db")], got
+        assert [x for x, _r in pc._replica_cands("n1", "/r/a")] == got
+        s0 = {"notify_webhook": "https://hooks.example.com/services/T1/B2/SECRET",                   # XX4
+              "ask_llm_endpoint": "https://user:pw@llm.example.com/v1?key=SECRET",
+              "upgrade_url": "https://mirror.example.com/dl?token=SECRET",
+              "storage_arrays": [{"id": "a1", "type": "unity", "url": "https://adm:SECRET@u.example.com",
+                                  "password": "p"}]}
+        pub = SV._public_settings(s0)
+        assert "SECRET" not in _json.dumps(pub), pub
+        ctl = SV.ScanController(os.path.join(d, "edge"))
+        ctl.update_settings(dict(s0))
+        res = ctl.update_settings(_json.loads(_json.dumps(SV._public_settings(ctl.settings))))
+        assert res.get("ok"), res
+        for k in ("notify_webhook", "ask_llm_endpoint", "upgrade_url"):
+            assert ctl.settings[k] == s0[k], (k, ctl.settings[k])
+        assert ctl.settings["storage_arrays"][0]["url"] == s0["storage_arrays"][0]["url"]
+        assert "SECRET" not in _json.dumps(ctl.upgrade_status())
+        ctl.update_settings({"notify_webhook": "https://hooks.example.com/new"})          # 새 값은 그대로 저장
+        assert ctl.settings["notify_webhook"] == "https://hooks.example.com/new"
+        ctl.update_settings({"notify_webhook": ""})                                       # 비우면 지워진다
+        assert ctl.settings["notify_webhook"] == ""
+        assert NU.keep_masked("https://hooks.example.com/***", "") == "https://hooks.example.com/***"
+        pc.set_upgrade_net("github", "https://mirror.example.com/dl?token=SECRET", False)
+        st = pc.upgrade_status()
+        assert "SECRET" not in _json.dumps(st)
+        pc.set_upgrade_net("github", st["url_custom"], False)
+        assert pc.settings["upgrade_url"] == "https://mirror.example.com/dl?token=SECRET"
+        pc.set_ask_llm({"ask_llm_endpoint": "https://u:SECRET@l.example.com/v1"})
+        assert "SECRET" not in _json.dumps(pc.upgrade_config(), default=str)
+        pc.set_ask_llm({"ask_llm_endpoint": pc.upgrade_config()["ask_llm_endpoint"]})
+        assert pc.settings["ask_llm_endpoint"] == "https://u:SECRET@l.example.com/v1"
+        # XX5·XX6: 비밀번호 있는 엣지 — 로그인 없는 /api/ask 는 LLM 을 끈 채로
+        data = os.path.join(d, "data")
+        M.init_manager(data)
+        httpd = SV.serve(data, host="127.0.0.1", port=0,
+                         initial_settings={"ask_llm_enabled": True, "ask_llm_endpoint": "http://127.0.0.1:9/v1"})
+        httpd.controller.update_settings({"op_lock": True, "op_password": "pw1234"})
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        base = "http://127.0.0.1:%d" % httpd.server_address[1]
+        seen = []
+        orig = AK.respond
+        SV.askmod.respond = lambda q, data_, cfg: (seen.append(bool(cfg.get("enabled"))) or {"ok": True})
+        try:
+            urllib.request.urlopen(base + "/api/ask?q=total").read()
+            tok = httpd.controller.unlock("pw1234", "t")["token"]
+            urllib.request.urlopen(urllib.request.Request(base + "/api/ask?q=total",
+                                                          headers={"X-Op-Token": tok})).read()
+        finally:
+            SV.askmod.respond = orig
+        assert seen == [False, True], seen
+        r = urllib.request.urlopen(base + "/")
+        assert r.headers.get("X-Frame-Options") == "DENY" and r.headers.get("X-Content-Type-Options") == "nosniff"
+        assert "frame-ancestors 'none'" in (r.headers.get("Content-Security-Policy") or "")
+        r = urllib.request.urlopen(base + "/api/scans")
+        assert r.headers.get("X-Frame-Options") == "DENY"
+        assert "_security_headers(self)" in src
+        pc.settings["enroll_token"] = "right-token"                                                  # XX7
+        for _ in range(5):
+            assert pc.enroll_node({"enroll_token": "bad", "url": "http://e:8765"}, "10.0.0.9")["_status"] == 401
+        r7 = pc.enroll_node({"enroll_token": "right-token", "url": "http://e:8765"}, "10.0.0.9")
+        assert r7.get("_status") == 429, r7                  # 잠김 — 맞는 토큰도 잠시 거부
+        r8 = pc.enroll_node({"enroll_token": "bad", "url": "http://e:8765"}, "10.0.0.10")
+        assert r8.get("_status") == 401                      # 다른 IP 는 영향 없음
+    finally:
+        if httpd is not None:
+            httpd.shutdown()
+        shutil.rmtree(d, ignore_errors=True)
+    assert "_tk ? {\"X-Op-Token\": _tk}" in _read("dashboard.html")
+    print("[XX1~XX7] OK  본문 검사·복제 meta 상한·복제본 밖 DB 차단·URL 비밀값 가림·로그인 없는 LLM 차단·보안 헤더·enroll 잠금")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3143,7 +3249,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bd_round20_stress, check_be_round21_sec_regress,
             check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser, check_bj_round23_regress, check_bk_round23_portal, check_bl_round23_engine, check_bm_round24_regress,
             check_bn_round24_consistency, check_bo_round24_perf, check_bp_round25_regress, check_bq_round25_schedule, check_br_round25_client,
-            check_bs_round26_regress, check_bt_round26_cli, check_bu_round27_regress]
+            check_bs_round26_regress, check_bt_round26_cli, check_bu_round27_regress,
+            check_bv_round27_security]
 
 
 def main() -> int:
