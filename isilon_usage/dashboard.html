@@ -1814,7 +1814,13 @@ function showTempPasswordNotice(force) {
   ov.addEventListener("mousedown", e => { if (e.target === ov) close(); });
   setTimeout(() => okBtn.focus(), 0);
 }
-async function promptUnlock() {
+// 로그인 창은 한 번에 하나 — 동시에 401 을 받은 요청들이 각자 창을 띄워 여러 겹 쌓였다(25회차 점검)
+function promptUnlock() {
+  if (window._unlockPending) return window._unlockPending;
+  window._unlockPending = _promptUnlockOnce().finally(() => { window._unlockPending = null; });
+  return window._unlockPending;
+}
+async function _promptUnlockOnce() {
   window._unlockAlerted = false;     // 비밀번호 틀림 안내를 이미 띄웠는지(띄웠으면 호출한 화면은 다시 알리지 않음)
   const pw = await passwordPrompt(_opTemp ? ("로그인 — " + _tempPwText() + " 비밀번호를 입력하세요:")
                                           : "로그인 — 비밀번호를 입력하세요:");
@@ -2178,8 +2184,12 @@ async function tuneBenchmark() {
     tries++;
     try {
       const j = await (await fetch("/api/benchmark-workers/status", {cache: "no-store"})).json();
-      _benchRender(j);
-      if (j.done || tries > 180) { clearInterval(_benchTimer); _benchTimer = null; }
+      const lost = (!j.done && j.running === false);   // 서버 재시작으로 측정이 사라짐(25회차 점검)
+      if (!lost) _benchRender(j);
+      if (j.done || tries > 180 || lost) {
+        clearInterval(_benchTimer); _benchTimer = null;
+        if (lost || (!j.done && tries > 180)) out.innerHTML = '<span style="color:var(--warn)">측정이 끝나지 않았습니다(서버 재시작·시간 초과) — 다시 실측하세요.</span>';
+      }
     } catch (e) { /* 일시 오류 무시, 계속 폴링 */ }
   }, 1000);
 }
@@ -2228,6 +2238,14 @@ async function gtPoll() {
     const pct = tf > 0 ? Math.min(100, cf / tf * 100) : (j.done ? 100 : 0);
     $("gtBar").style.width = pct + "%";
     $("gtProg").innerHTML = `디렉터리 ${fmtNum(cd)}/${fmtNum(td)} · 파일 ${fmtNum(cf)}/${fmtNum(tf)} · ${fmtBytes(wb)} (${pct.toFixed(1)}%)`;
+    // 서버가 재시작돼 작업이 사라졌으면(running:false·done:false 가 두 번) 멈춘 것으로 — 예전엔 버튼이 막힌 채 끝없이 폴링했다(25회차 점검)
+    if (!j.done && j.running === false) { window._gtLost = (window._gtLost || 0) + 1; } else { window._gtLost = 0; }
+    if (window._gtLost >= 2) {
+      clearInterval(_gtTimer); _gtTimer = null; window._gtLost = 0;
+      $("gtStart").disabled = false; $("gtStop").style.display = "none";
+      $("gtMsg").innerHTML = '<span style="color:var(--warn)">서버가 재시작되어 생성이 중단됐습니다 — 다시 시작하세요.</span>';
+      return;
+    }
     if (j.done) {
       clearInterval(_gtTimer); _gtTimer = null;
       $("gtStart").disabled = false; $("gtStop").style.display = "none";
@@ -2294,6 +2312,13 @@ async function depPoll() {
       + '개 · 최대깊이 <b>' + (j.max_depth || 0) + '</b> · ' + el.toFixed(1) + 's';
     const bud = depBudgetSec();
     $("depBar").style.width = (bud ? Math.min(100, el / bud * 100) : (j.done ? 100 : 60)) + "%";
+    if (!j.done && j.running === false) { window._depLost = (window._depLost || 0) + 1; } else { window._depLost = 0; }
+    if (window._depLost >= 2) {   // 서버 재시작으로 분석이 사라짐(25회차 점검)
+      clearInterval(_depTimer); _depTimer = null; window._depLost = 0;
+      $("depStartBtn").disabled = false; $("depStopBtn").style.display = "none";
+      $("depMsg").innerHTML = '<span style="color:var(--warn)">서버가 재시작되어 분석이 중단됐습니다 — 다시 시작하세요.</span>';
+      return;
+    }
     if (j.done) {
       clearInterval(_depTimer); _depTimer = null;
       $("depStartBtn").disabled = false; $("depStopBtn").style.display = "none";
@@ -3078,10 +3103,13 @@ async function startScan() {
 let _autotuneTracked = null;
 let _autotuneSawRunning = false;   // 이 화면이 측정 진행을 직접 봤는지(옛 결과로 선택을 빼앗지 않게)
 async function pollAutotune() {
+  if (window._atInFlight) return;      // 앞 요청이 아직이면 건너뜀(서버 멈춤 때 쌓임 방지, 25회차 점검)
+  window._atInFlight = true;
   try {
-    const j = await (await fetch("/api/autotune/status", {cache: "no-store"})).json();
+    const j = await fetchJsonTimeout("/api/autotune/status", 8000);
     renderAutotune(j);
   } catch (e) { /* 무시 */ }
+  finally { window._atInFlight = false; }
 }
 function renderAutotune(j) {
   const card = $("autotuneCard");
@@ -3473,15 +3501,20 @@ function refreshTreeInPlace() {
   }
   if (typeof loadErrors === "function") loadErrors();
 }
+// 트리·검색 응답 순서 표시 — 늦게 온 옛 응답이 새 화면을 덮지 않게(파이의 _pieSeq 와 같은 방식).
+// 예전엔 느린 폴더 응답이 그 사이 누른 '루트'를 덮어 경로는 '(루트)'인데 행은 하위 폴더였다(25회차 점검)
+let _treeSeq = 0;
 async function loadTree(parentId, crumb) {
   if (selectedScan == null) return;
+  const my = ++_treeSeq;
   treeStack = crumb || [];
   try {
     const url = "/api/children?scan=" + selectedScan +
       (parentId != null ? "&parent=" + parentId : "");
     const j = await (await fetch(url, {cache: "no-store"})).json();
+    if (my !== _treeSeq) return;
     renderTree(j.children || [], j);
-  } catch (e) { $("treeBody").innerHTML = '<tr><td colspan="6" class="err">' + escHtml(String(e)) + '</td></tr>'; }
+  } catch (e) { if (my === _treeSeq) $("treeBody").innerHTML = '<tr><td colspan="6" class="err">' + escHtml(String(e)) + '</td></tr>'; }
 }
 function renderTree(rows, meta) {
   $("treeCrumb").textContent = treeStack.length
@@ -3515,8 +3548,10 @@ function renderTree(rows, meta) {
 async function treeSearch(q) {
   if (selectedScan == null) return;
   if (!q) { treeStack = []; loadTree(null, []); return; }   // 검색어를 지우고 Enter → 트리로 돌아감(예전엔 검색 결과가 남았다)
+  const my = ++_treeSeq;
   try {
     const j = await (await fetch("/api/search?scan=" + selectedScan + "&q=" + encodeURIComponent(q), {cache: "no-store"})).json();
+    if (my !== _treeSeq) return;
     const rows = j.results || [];
     $("treeCrumb").textContent = `🔎 "${q}" 검색 ${rows.length}건` + (j.truncated ? ` 이상 — 큰 순 상위 ${rows.length}개만 표시(검색어를 더 구체적으로)` : "");
     const tb = $("treeBody");
@@ -4268,8 +4303,10 @@ function renderArrayHtml(a) {
     </div>${capHtml}${alarmHtml}</div>`;
 }
 async function loadStorage() {
+  if (window._stInFlight) return;      // 앞 요청이 아직이면 건너뜀(서버 멈춤 때 쌓임 방지, 25회차 점검)
+  window._stInFlight = true;
   try {
-    const j = await (await fetch("/api/storage", {cache: "no-store"})).json();
+    const j = await fetchJsonTimeout("/api/storage", 20000);
     const arrays = (j.arrays || []).filter(a => a && a.configured !== false);
     const card = $("storageCard");
     const el = $("storageBody");
@@ -4277,6 +4314,7 @@ async function loadStorage() {
     if (card) card.style.display = arrays.length ? "" : "none";
     if (el && arrays.length) el.innerHTML = arrays.map(renderArrayHtml).join("");
   } catch (e) { /* 무시 */ }
+  finally { window._stInFlight = false; }
 }
 
 let _statusInFlight = false;
@@ -4318,10 +4356,15 @@ async function poll() {
   loadStorage();   // 스토리지 어레이 상태(서버 60초 캐시라 가벼움)
   if ($("view-report") && $("view-report").style.display !== "none") loadReport();   // 리포트 열려 있으면 갱신
   // 1) 관리 개요(가벼움) — 항상 먼저 갱신. 상세가 느려도 개요는 막히지 않는다.
-  try {
-    const sj = await fetchJsonTimeout("/api/scans", 8000);
-    if (sj.ok) renderOverview(sj);
-  } catch (e) { /* 개요 일시 오류 무시 */ }
+  // 앞의 개요 요청이 아직이면 또 보내지 않는다 — 서버가 멈추면 주기마다 쌓여 164개까지 밀렸다(25회차 점검)
+  if (!window._scansInFlight) {
+    window._scansInFlight = true;
+    try {
+      const sj = await fetchJsonTimeout("/api/scans", 8000);
+      if (sj.ok) { renderOverview(sj); window._ovFail = false; window._lastOvOk = Date.now(); }
+    } catch (e) { window._ovFail = true; }
+    finally { window._scansInFlight = false; }
+  }
   pollAutotune();   // 오토튜닝 진행 카드 갱신(진행 중이 아니면 카드 숨김 — 가벼움)
   // 2) 상세(/api/status) — 한 번에 하나만. 거대 DB(수십억 파일)에서 느린 요청이
   //    쌓여 브라우저 연결을 막고 개요까지 멈추는 것을 방지한다(+타임아웃).
@@ -4345,8 +4388,13 @@ async function poll() {
       const why = (e && e.name === "AbortError") ? "응답 시간 초과(25초)" : ("" + e);
       // 한 번의 일시 지연은 무시(깜빡임 방지), 2회 연속부터 안내
       if (_statusFailStreak >= 2) {
-        $("errLine").innerHTML = '<span style="color:var(--warn)">⏳ 상세 갱신 지연 중(개요는 정상) — '
-          + why + '. 거대 DB 에서는 정상적인 현상일 수 있습니다(잠시 후 자동 복구).</span>';
+        // 개요(/api/scans)도 실패면 서버 연결 끊김 — '개요는 정상'이라고 하지 않는다(25회차 점검)
+        $("errLine").innerHTML = window._ovFail
+          ? ('<span style="color:var(--danger)">⚠ 서버에 연결할 수 없습니다'
+             + (window._lastOvOk ? ' (마지막 갱신 ' + new Date(window._lastOvOk).toLocaleTimeString(_LOC) + ')' : '')
+             + ' — 화면의 값은 그 시점 것입니다. 자동으로 다시 시도합니다.</span>')
+          : ('<span style="color:var(--warn)">⏳ 상세 갱신 지연 중(개요는 정상) — '
+             + why + '. 거대 DB 에서는 정상적인 현상일 수 있습니다(잠시 후 자동 복구).</span>');
       }
       return;   // finally 에서 _statusInFlight 리셋
     }
@@ -5084,12 +5132,14 @@ async function openThroughputPopup() {
     + '<div id="thruPopBody" class="sub">불러오는 중…</div>';
   const close = document.createElement("button");
   close.textContent = "닫기"; close.style.cssText = "margin-top:12px;";
-  close.addEventListener("click", () => ov.remove());
+  // 닫는 길(버튼·바깥·Esc) 모두에서 Esc 처리기를 떼어 낸다 — 예전엔 Esc 로 닫을 때만 떼어, 버튼으로 닫으면 처리기와
+  // 팝업 DOM 이 계속 남아 열 때마다 쌓였다(25회차 점검: 60번에 처리기 2→62)
+  const esc = (e) => { if (e.key === "Escape") shut(); };
+  const shut = () => { ov.remove(); document.removeEventListener("keydown", esc); };
+  close.addEventListener("click", shut);
   box.appendChild(close); ov.appendChild(box); document.body.appendChild(ov);
-  ov.addEventListener("click", (e) => { if (e.target === ov) ov.remove(); });
-  document.addEventListener("keydown", function esc(e) {
-    if (e.key === "Escape") { ov.remove(); document.removeEventListener("keydown", esc); }
-  });
+  ov.addEventListener("click", (e) => { if (e.target === ov) shut(); });
+  document.addEventListener("keydown", esc);
   try {
     const j = await (await fetch("/api/troubleshoot/throughput?bucket=3600&max=72", {cache: "no-store"})).json();
     renderThruPopup(j.buckets || []);

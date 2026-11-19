@@ -2932,6 +2932,22 @@ def check_bq_round25_schedule() -> None:
     print("[SS1~SS6] OK  시계 역행·복제 상태 저장·별도 스레드·월 첫 발생·주 묶음(일요일)·빈 요일·삭제 경합")
 
 
+def check_br_round25_client() -> None:
+    """대시보드 장시간 세션 TT1 서버 재시작으로 사라진 생성·분석·실측 작업에 버튼이 막힌 채 끝없이 폴링 TT2 서버가 멈추면
+    스토리지·오토튜닝·개요 요청이 주기마다 쌓임 TT3 처리용량 팝업을 버튼으로 닫으면 Esc 처리기·DOM 누수 TT4 늦은 트리·검색
+    응답이 새 화면을 덮음 TT5 개요도 실패인데 '개요는 정상' TT6 로그인 창 여러 겹."""
+    dh = _read("dashboard.html")
+    assert dh.count("j.running === false") >= 3 and "생성이 중단됐습니다" in dh and "분석이 중단됐습니다" in dh   # TT1
+    for g in ("window._scansInFlight", "window._atInFlight", "window._stInFlight"):                   # TT2
+        assert dh.count(g) >= 3, g
+    assert 'fetchJsonTimeout("/api/storage", 20000)' in dh and 'fetchJsonTimeout("/api/autotune/status", 8000)' in dh
+    assert "const shut = () => { ov.remove(); document.removeEventListener(\"keydown\", esc); };" in dh   # TT3
+    assert dh.count("if (my !== _treeSeq) return;") == 2                                              # TT4
+    assert "서버에 연결할 수 없습니다" in dh                                                            # TT5
+    assert "if (window._unlockPending) return window._unlockPending;" in dh                            # TT6
+    print("[TT1~TT6] OK  사라진 작업 감지·요청 쌓임 방지·팝업 처리기 정리·트리 응답 순서·연결 끊김 안내·로그인 창 하나")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -2955,7 +2971,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bb_round20_regress, check_bc_round20_upgrade,
             check_bd_round20_stress, check_be_round21_sec_regress,
             check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser, check_bj_round23_regress, check_bk_round23_portal, check_bl_round23_engine, check_bm_round24_regress,
-            check_bn_round24_consistency, check_bo_round24_perf, check_bp_round25_regress, check_bq_round25_schedule]
+            check_bn_round24_consistency, check_bo_round24_perf, check_bp_round25_regress, check_bq_round25_schedule, check_br_round25_client]
 
 
 def main() -> int:
