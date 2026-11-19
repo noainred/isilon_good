@@ -2647,6 +2647,69 @@ def check_bk_round23_portal() -> None:
     print("[MM1~MM6] OK  백업 SQLite 일관 사본·재등록 논리 경로 유지·별칭 '/'·설치 폴더 권한·지운 노드 처리량·토큰 ASCII")
 
 
+def check_bl_round23_engine() -> None:
+    """NN1 pscan 이 루트 하위 폴더 수에 대해 O(N²) NN2 du 가 최대 깊이를 무시해 합계 부풀림 NN3 du 가 하드링크 중복 제거 끔을 무시
+    NN4 fold<최대 깊이면 최대 깊이가 무시됨 NN5 재개해 끝나도 옛 정지 사유 NN6 pscan 링크 루트 크기 NN7 디스크 가득 시 상태."""
+    import random
+    from isilon_usage import scanner as S, db as dbmod, pscan as PS
+    d = tempfile.mkdtemp(prefix="iu_bl_")
+    try:
+        random.seed(3)
+        T = os.path.join(d, "tree")
+
+        def mk(p, dep):
+            os.makedirs(p, exist_ok=True)
+            for i in range(3):
+                with open(os.path.join(p, "f%d" % i), "wb") as fh:
+                    fh.write(b"x" * random.randint(1, 9000))
+            if dep < 5:
+                for i in range(2):
+                    mk(os.path.join(p, "d%d" % i), dep + 1)
+        mk(T, 0)
+        os.link(os.path.join(T, "f0"), os.path.join(T, "d0", "d1", "hl"))
+
+        def root_tot(db):
+            c = dbmod.connect(db)
+            r = c.execute("SELECT total_bytes, total_files FROM directories WHERE depth=0").fetchone()
+            c.close()
+            return tuple(r)
+        n = 0
+
+        def scan(**kw):
+            nonlocal n
+            n += 1
+            db = os.path.join(d, "s%d.db" % n)
+            S.run_scan(db, T, with_monitor=False, **kw)
+            return root_tot(db)
+        base3 = scan(max_depth=3)
+        if shutil.which("du"):
+            assert scan(max_depth=3, backend="du") == base3                                           # NN2
+            assert scan(hardlink_dedup=False, backend="du") == scan(hardlink_dedup=False)            # NN3
+        assert scan(fold_depth=2, max_depth=3) == base3 and scan(fold_depth=1, max_depth=4) == scan(max_depth=4)   # NN4
+        db = os.path.join(d, "g.db")                                                                  # NN5
+        S.run_scan(db, T, db_max_bytes=1, with_monitor=False)
+        c = dbmod.connect(db)
+        st, err = c.execute("SELECT status, error FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()
+        c.close()
+        assert st == "paused" and err, (st, err)
+        S.run_scan(db, T, resume=True, with_monitor=False)
+        c = dbmod.connect(db)
+        st, err = c.execute("SELECT status, error FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()
+        c.close()
+        assert st == "done" and not err, (st, err)
+        lnk = os.path.join(d, "lnk")                                                                  # NN6
+        os.symlink(T, lnk)
+        r = PS.parallel_scan(lnk, processes=2, size_mode="apparent")
+        r2 = PS.parallel_scan(T, processes=2, size_mode="apparent")
+        assert r["total_bytes"] == r2["total_bytes"], (r["total_bytes"], r2["total_bytes"])
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    ps = _read("pscan.py")                                                                           # NN1
+    assert "doneq" in ps and "wait(pending" not in ps and "window = max(64, procs * 8)" in ps
+    assert "실패해도 아래 관리 DB 기록은 시도한다" in _read("scanner.py")                                # NN7
+    print("[NN1~NN7] OK  pscan 선형·du 최대 깊이/중복 제거·fold 와 최대 깊이·옛 정지 사유·링크 루트·디스크 가득")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -2669,7 +2732,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_az_round19_regress, check_ba_round19_portal_edge,
             check_bb_round20_regress, check_bc_round20_upgrade,
             check_bd_round20_stress, check_be_round21_sec_regress,
-            check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser, check_bj_round23_regress, check_bk_round23_portal]
+            check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser, check_bj_round23_regress, check_bk_round23_portal, check_bl_round23_engine]
 
 
 def main() -> int:

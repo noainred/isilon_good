@@ -417,7 +417,7 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
     root_dev = None
     root_hl = _HardLinks()
     try:
-        rst = os.stat(root, follow_symlinks=False)
+        rst = os.stat(root)   # 루트가 심볼릭 링크면 대상 폴더 — 단위 스캔·threads 엔진과 같게(23회차 점검: 링크 자체 95B)
         total_bytes += _entry_bytes(rst, size_mode)
         if one_file_system:
             root_dev = rst.st_dev
@@ -455,7 +455,7 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
 
     if child_dirs:
         import multiprocessing
-        from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
+        from concurrent.futures import ProcessPoolExecutor
         # 적응형 깊이 분할: 1단계 자식이 프로세스보다 적으면 더 깊이 펼쳐 병렬 단위를
         # 늘린다(자식 적은 영역의 작업 불균형 완화). 펼친 부모는 직속 파일만, 자식은
         # 재귀로 스캔 → 누락/중복 없음. per_top 은 원래 1단계 자식(top)으로 합산.
@@ -481,15 +481,28 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
             q = None
             ex = ProcessPoolExecutor(max_workers=procs)
         try:
+            # 한꺼번에 다 넣고 wait(남은 전부)를 반복하면 완료마다 남은 수만큼 돌아 O(N²)였다 — 루트 아래 폴더 4만 개에 74초,
+            # 30만 개는 5분 넘게 안 끝났다(23회차 점검). 진행 중 작업 수를 창(window)으로 묶고, 끝난 작업은 콜백이 큐에
+            # 넣어 하나씩 꺼낸다(선형).
+            import queue as _queue
             futs = {}
-            for j, (upath, top, rec) in enumerate(units):
-                sp = (_remap(upath, root, node_mounts[j % len(node_mounts)])
-                      if node_mounts else upath)
-                futs[ex.submit(scan_subtree, sp, size_mode, 0,
-                               tpp if rec else 1, rec, deadline, opts)] = (top, sp)
+            doneq = _queue.Queue()
+            window = max(64, procs * 8)
+            next_j = 0
+
+            def _submit_more():
+                nonlocal next_j
+                while next_j < n_units and len(futs) < window:
+                    upath, top, rec = units[next_j]
+                    sp = (_remap(upath, root, node_mounts[next_j % len(node_mounts)])
+                          if node_mounts else upath)
+                    f = ex.submit(scan_subtree, sp, size_mode, 0, tpp if rec else 1, rec, deadline, opts)
+                    futs[f] = (top, sp)
+                    f.add_done_callback(doneq.put)
+                    next_j += 1
+            _submit_more()
             done_n = 0
             last_prog = 0.0
-            pending = set(futs)
 
             def _drain():
                 if q is None:
@@ -501,11 +514,17 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
                         return
                     workers_live[unit] = {"pid": pid, "files": f, "bytes": b, "dir": cur, "ts": ts}
 
-            while pending:
-                done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+            while futs:
+                done = []
+                try:
+                    done.append(doneq.get(timeout=0.5))
+                    while True:
+                        done.append(doneq.get_nowait())
+                except _queue.Empty:
+                    pass
                 _drain()
                 for fut in done:
-                    top, sp = futs[fut]
+                    top, sp = futs.pop(fut)
                     workers_live.pop(sp, None)
                     try:
                         res_t = fut.result()
@@ -534,6 +553,7 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
                     a[2] += d
                     a[4] += e                  # 이 1단계 폴더 아래 읽기 오류 수(오류 목록에 이름이 보이게)
                     done_n += 1
+                _submit_more()
                 now = time.time()
                 if on_progress and (done or (now - last_prog) >= 1.0):
                     last_prog = now

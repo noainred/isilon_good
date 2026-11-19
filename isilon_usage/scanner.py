@@ -841,9 +841,18 @@ class Scanner:
             return self.run_id
         except Exception as exc:  # 치명적 오류는 기록하고 종료
             if self.run_id is not None:
-                dbmod.update_run(conn, self.run_id, status="error", error=dbmod.db_text(str(exc)),
-                                 finished_at=time.time())
-                conn.commit()
+                # 디스크가 가득 찬 경우 이 기록 자체도 실패한다 — 예전엔 여기서 다시 예외가 나 관리 DB 갱신까지 건너뛰어
+                # 'discovering' 으로 남았다(23회차 점검). 실패해도 아래 관리 DB 기록은 시도한다.
+                try:
+                    try:
+                        conn.rollback()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    dbmod.update_run(conn, self.run_id, status="error", error=dbmod.db_text(str(exc)),
+                                     finished_at=time.time())
+                    conn.commit()
+                except Exception:  # noqa: BLE001
+                    pass
             self._status = "error"
             self._phase = "error"
             try:
@@ -1195,6 +1204,8 @@ class Scanner:
         )
         if self._stop_reason:   # 디스크 부족 등으로 자동 정지된 경우 사유 기록
             fields["error"] = self._stop_reason
+        elif status == "done":   # 재개해 끝났으면 지난 정지 사유(DB 크기 초과 등)를 지운다(23회차 점검: 완료인데 옛 사유가 남음)
+            fields["error"] = None
         dbmod.update_run(conn, self.run_id, **fields)
         conn.commit()
         self._write_stats(conn)   # 집계 리포트 최종 저장
@@ -1382,6 +1393,9 @@ class Scanner:
                         # (fold 넘김 행은 fold walk 의 연속이라 제외 — 위 over_fold 참고)
                         if self.max_depth and (depth + 1) > self.max_depth and not over_fold:
                             continue
+                        # fold 넘김 행(over_fold)의 depth 는 실제 깊이가 아니다 — 실제 깊이로 최대 깊이를 지킨다
+                        if self.max_depth and over_fold and self._real_depth(entry.path) > self.max_depth:
+                            continue
                         # 깊이 접기(옵션): 깊이 N 초과 디렉터리는 행을 만들지 않고,
                         # 하위 전체 용량을 이 디렉터리 own_bytes 에 합산한다.
                         # → DB 행 수(=크기)는 묶이고 상위 합계는 정확하다(상세만 N까지).
@@ -1488,6 +1502,14 @@ class Scanner:
             self._flush_progress_locked(self._disc_conn,
                                         current_dir=fpath, current_depth=depth)
 
+    def _real_depth(self, path: str) -> int:
+        """스캔 루트 기준 실제 깊이(루트=0)."""
+        try:
+            rel = os.path.relpath(path, self.root_path)
+        except ValueError:
+            return 0
+        return 0 if rel in (".", "") else rel.count(os.sep) + 1
+
     def _fold_subtree(self, root: str, budget: int = 0, deadline: float = 0.0,
                       acc: Optional[_DirAcc] = None):
         """fold_depth 초과 하위 트리를 '행 없이' walk 하여 (dir_bytes, overflow, used) 를 반환.
@@ -1537,6 +1559,10 @@ class Scanner:
                                         continue
                                 except OSError:
                                     continue
+                            # 최대 깊이는 접기(fold) 안에서도 지킨다 — 예전엔 fold<최대 깊이면 깊이 제한이 통째로 무시돼
+                            # 같은 최대 깊이가 fold 값에 따라 다른 합계를 냈다(23회차 점검: 기본 fold 4 면 최대 깊이 5+ 무효)
+                            if self.max_depth and self._real_depth(entry.path) > self.max_depth:
+                                continue
                             stack.append(entry.path)
                         else:
                             files_chunk.append(entry)
@@ -1770,6 +1796,12 @@ class Scanner:
             # st_size) — 같은 설정이 서버마다 다른 합계를 냈다. 이 모드는 native 합산(디렉터리 st_size 포함)을 쓴다.
             du_path = None
             self._log("du 백엔드: apparent 모드는 du 버전마다 디렉터리 크기 처리가 달라 native 합산을 씁니다", conn)
+        # 최대 깊이를 정했으면 du 는 안 된다 — du -s 는 정한 깊이 아래까지 다 걸어 합계가 몇 배로 부풀었다(23회차 점검:
+        # 3.5MB → 14.6MB). 하드링크 중복 제거를 끈 경우도 — du 는 늘 한 번만 세어 설정과 다른 값이 됐다.
+        if du_path is not None and (self.max_depth or not self.hardlink_dedup):
+            du_path = None
+            self._log("du 백엔드: %s 이라 native 합산을 씁니다"
+                      % ("최대 깊이 지정" if self.max_depth else "하드링크 중복 제거 끔"), conn)
 
         # 집계 튜닝(이 연결에만 적용): 페이지 캐시 상향 + 자동 체크포인트 간격 상향.
         # 기본 자동 체크포인트(1000페이지)는 윈도우 커밋마다 백필을 돌려 되레 느리다.
