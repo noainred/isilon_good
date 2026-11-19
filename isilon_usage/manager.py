@@ -452,6 +452,7 @@ def overall_capacity(conn) -> dict:
             "finished_at": s.get("finished_at"),
             "updated_at": s.get("updated_at"),
             "partial_agg_at": s.get("partial_agg_at"),   # 멈춘 자료 부분 집계 시각(이력 표 배지)
+            "active_elapsed": s.get("active_elapsed"),   # 활성 시간(일시정지 제외) — 화면의 소요 시간
             "capacity_bytes": cap_bytes,
             "capacity_files": int(cap.get("total_files") or 0),
             "capacity_scan_id": cap["id"],

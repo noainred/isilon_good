@@ -601,7 +601,7 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
           <input id="setWorkers" type="number" min="1" max="64" class="setinput" />
           <button type="button" id="tuneBtn" class="btn" style="margin-top:4px;">서버 사양 기반 권장 계산</button>
           <button type="button" id="benchBtn" class="btn" style="margin-top:4px;">실측 보정(시범 스캔)</button>
-          <span id="tuneResult" class="sub" style="display:block; margin-top:4px;"></span>
+          <span id="setTuneResult" class="sub" style="display:block; margin-top:4px;"></span>
           <span id="benchResult" class="sub" style="display:block; margin-top:4px;"></span>
         </label>
         <label title="N까지만 행을 저장하고 그 아래는 용량만 합산합니다(합계는 정확). 0이면 접지 않음.">
@@ -2046,7 +2046,7 @@ async function loadSettings() {
 }
 
 async function tuneWorkers() {
-  const out = $("tuneResult");
+  const out = $("setTuneResult");   // 설정 화면의 권장 계산 결과(도구의 튜닝 점검 #tuneResult 와 다른 칸 — 예전엔 id 가 같아 점검 결과가 안 보였다)
   out.textContent = "서버 사양 확인 중…";
   try {
     const j = await fetchJsonTimeout("/api/recommend-workers", 8000);
@@ -2228,7 +2228,10 @@ async function depStart() {
   try {
     const j = await (await fetch("/api/analyze/start", {
       method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})).json();
-    if (!j.ok) { $("depMsg").innerHTML = '<span style="color:var(--danger)">시작 실패: ' + escHtml(j.error || "") + '</span>'; return; }
+    if (!j.ok) {
+      // 이전 분석 결과가 이번 경로의 결과처럼 남지 않게 숨긴다(2026-11 리뷰)
+      if ($("depResult")) $("depResult").style.display = "none";
+      $("depMsg").innerHTML = '<span style="color:var(--danger)">시작 실패: ' + escHtml(j.error || "") + '</span>'; return; }
   } catch (e) { $("depMsg").innerHTML = '<span style="color:var(--danger)">오류: ' + escHtml(String(e)) + '</span>'; return; }
   $("depStartBtn").disabled = true; $("depStopBtn").style.display = "";
   $("depProgWrap").style.display = "block"; $("depMsg").textContent = "";
@@ -3433,7 +3436,8 @@ function renderTree(rows) {
   }));
 }
 async function treeSearch(q) {
-  if (selectedScan == null || !q) return;
+  if (selectedScan == null) return;
+  if (!q) { treeStack = []; loadTree(null, []); return; }   // 검색어를 지우고 Enter → 트리로 돌아감(예전엔 검색 결과가 남았다)
   try {
     const j = await (await fetch("/api/search?scan=" + selectedScan + "&q=" + encodeURIComponent(q), {cache: "no-store"})).json();
     const rows = j.results || [];
@@ -3457,12 +3461,13 @@ async function treeSearch(q) {
 // ---- 용량 추세 + 스캔 비교 ----
 let allScans = [];
 function drawTrend(rootPath) {
-  const pts = allScans.filter(s => s.root_path === rootPath && s.scanned_bytes != null)
+  // 완료 스캔만 — 일시정지·진행 중 스캔의 부분 값이 추세 점으로 찍혀 소진 예측(/api/forecast, 완료만)과 어긋났다
+  const pts = allScans.filter(s => s.root_path === rootPath && s.scanned_bytes != null && s.status === "done")
     .sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
   drawSeries($("trendChart"), pts, {lines: [{get: s => s.scanned_bytes || 0, color: "#15803D"}]});
   $("trendNote").textContent = pts.length
     ? `${rootPath} — ${pts.length}회 스캔, 최신 ${fmtBytes(pts[pts.length-1].scanned_bytes)}`
-    : "같은 루트의 과거 스캔이 없습니다.";
+    : "같은 루트의 완료된 스캔이 없습니다.";
 }
 // ===== 분석 리포트(파일 나이/소유자/확장자) =====
 function _statBarList(items, labelFn, maxN) {
@@ -3605,10 +3610,17 @@ async function _loadReportNow() {
 let diffRoot = "";          // 폴더 변화 이력 조회에 쓰는 현재 비교 루트
 function populateDiff(rootPath) {
   diffRoot = rootPath || "";
-  const opts = allScans.filter(s => s.root_path === rootPath)
-    .map(s => `<option value="${s.id}">#${s.id} · ${s.started_at ? new Date(s.started_at*1000).toLocaleString("ko-KR") : ""}</option>`).join("");
+  // 비교는 완료(또는 부분 집계한) 스캔끼리만 — 진행 중·일시정지 스캔은 합계가 없어 모든 폴더가 '삭제'로 보였다
+  const usable = allScans.filter(s => s.root_path === rootPath && (s.status === "done" || s.partial_agg_at));
+  const opts = usable
+    .map(s => `<option value="${s.id}">#${s.id} · ${s.started_at ? new Date(s.started_at*1000).toLocaleString("ko-KR") : ""}${s.status === "done" ? "" : " (부분 집계)"}</option>`).join("");
   $("diffBase").innerHTML = opts; $("diffTarget").innerHTML = opts;
-  const ids = allScans.filter(s => s.root_path === rootPath).map(s => s.id);
+  // 다른 스캔으로 바꾸면 이전 비교 결과·폴더 이력은 지운다(예전엔 다른 루트의 결과가 남아 '이력 보기'가 엉뚱한 경로를 물었다)
+  if ($("diffSummary")) $("diffSummary").textContent = "";
+  if ($("diffBody")) $("diffBody").innerHTML = '<tr><td colspan="3" class="sub">같은 루트의 두 스캔을 골라 비교하세요. 행을 클릭하면 그 폴더의 변화 이력을 봅니다.</td></tr>';
+  if ($("fhOut")) $("fhOut").textContent = "—";
+  if ($("fhPath")) $("fhPath").value = "";
+  const ids = usable.map(s => s.id);
   if (ids.length >= 2) { $("diffBase").value = ids[1]; $("diffTarget").value = ids[0]; }
 }
 async function runDiff() {
@@ -3787,13 +3799,12 @@ function renderHistory(scans) {
     body.innerHTML = '<tr><td colspan="8" style="color:var(--muted)">스캔 이력이 없습니다.</td></tr>';
     return;
   }
-  const now = Date.now() / 1000;
   body.innerHTML = list.map(r => {
     const running = runningSet.has(r.id);
-    const endt = running ? now : (r.finished_at || r.updated_at || now);
-    const dur = r.started_at ? Math.max(0, endt - r.started_at) : null;
+    const dur = scanActiveSec(r, running);
     const durTxt = dur == null ? "—"
-      : (fmtDur(dur) + (running ? " <span style='color:var(--warn)'>(진행중)</span>" : ""));
+      : (`<span title="${escHtml(scanDurTitle(r, running))}">${fmtDur(dur)}</span>`
+         + (running ? " <span style='color:var(--warn)'>(진행중)</span>" : ""));
     return `<tr>
       <td><b>#${r.id}</b></td>
       <td class="path" title="${escHtml(r.root_path)}">${escHtml(r.root_path)}</td>
@@ -4023,9 +4034,8 @@ function renderOverview(j) {
         ? `<div class="sub" title="용량은 마지막 완료 스캔(#${r.capacity_scan_id}) 기준">#${r.scan_id} ${statusKo[r.status] || escHtml(r.status)}: ${fmtBytes(r.scanned_bytes)}</div>`
         : (r.capacity_partial ? '<div class="sub" title="완료된 스캔이 아직 없어 부분 값입니다">부분 값</div>' : "");
       const nestNote = r.nested_in ? `<div class="sub" title="다른 스캔 루트 안에 있어 전체 합계에서 뺐습니다(두 번 세지 않음)">⊂ ${escHtml(r.nested_in)} 에 포함 · 합계 제외</div>` : "";
-      const endt = r.finished_at || r.updated_at;
-      const el = (r.started_at && endt) ? (endt - r.started_at) : null;
       const running = runningSet.has(r.scan_id);
+      const el = scanActiveSec(r, running);
       const loop = autoRestartSet.has(r.scan_id);   // 완료 후 자동 재시작(반복) 중
       const loopBadge = loop ? ` <span style="color:#B42318; font-weight:700; white-space:nowrap;" title="완료되면 같은 설정으로 자동 재시작됩니다(반복). 끄려면 '중지'.">🔁 반복 동작 중</span>` : "";
       let act = `<a href="#" class="goScan" data-scan="${r.scan_id}">#${r.scan_id}</a>`;
@@ -4046,7 +4056,7 @@ function renderOverview(j) {
         <td class="num">${fmtBytes(cap)}${capNote}${nestNote}</td>
         <td class="num">${fmtBytes(r.fs_used_bytes)}</td>
         <td class="num">${pct.toFixed(1)}%</td>
-        <td class="num">${el == null ? "—" : fmtDur(el)}</td>
+        <td class="num" title="${escHtml(scanDurTitle(r, running))}">${el == null ? "—" : fmtDur(el)}</td>
         <td>${running && (r.status === "paused" || r.status === "done") ? "실행 중" : (statusKo[r.status] || r.status)}${loopBadge}${(!running && r.partial_agg_at && r.status !== "done") ? ' <span class="badge paused" title="지금까지 발견된 행으로 계산한 하한값(재개 전). 재개해 완료하면 정확한 값으로 바뀝니다.">부분 집계 ' + new Date(r.partial_agg_at * 1000).toLocaleString("ko-KR") + '</span>' : ''}</td>
         <td>${act}</td>
       </tr>`;
@@ -4089,14 +4099,34 @@ function renderOverview(j) {
 
   // 사용자가 직접 고르지 않았으면: 이전에 '완료'된 스캔이 있으면 그 데이터(정확한 값)를 기본으로 보여준다.
   // (스캔 진행 중에는 집계 전 임시값이 나오므로, 직전 완료 스캔이 있으면 그쪽을 우선) — 없으면 진행중, 그것도 없으면 최신.
+  // 보고 있던 스캔이 목록에서 사라졌으면(삭제·보존 정리) 기본 선택으로 돌아가 모든 패널을 다시 그린다 —
+  // 예전엔 지워진 스캔이 선택된 채 분석·리포트가 그 데이터를 계속 보여 줬다(2026-11 리뷰).
+  let _lostSel = false;
+  if (selectedScan != null && scans.length && !scans.some(s => s.id === selectedScan)) { userPicked = false; _lostSel = true; }
   if (!userPicked) {
     const done = scans.find(s => s.status === "done");      // 목록은 최신순 → 가장 최근 완료 스캔
     const active = scans.find(s => s.status === "discovering" || s.status === "sizing");
     selectedScan = done ? done.id : (active ? active.id : (scans.length ? scans[0].id : null));
   }
   if (selectedScan != null) sel.value = String(selectedScan);
+  if (_lostSel) setTimeout(poll, 0);
 }
 
+// 스캔 소요 시간 = 활성 시간(일시정지 동안 제외) — 12분 쉬었다 재개한 1초짜리 스캔이 '12분 2초'로 보이던 문제.
+// 활성 기록(active_elapsed)이 없으면(구버전 스캔) 시작~끝 벽시계 시간.
+function scanActiveSec(r, running) {
+  const now = Date.now() / 1000, act = Number(r.active_elapsed || 0);
+  if (act > 0) return act + (running && r.updated_at ? Math.max(0, now - r.updated_at) : 0);
+  const endt = running ? now : (r.finished_at || r.updated_at || now);
+  return r.started_at ? Math.max(0, endt - r.started_at) : null;
+}
+function scanDurTitle(r, running) {
+  const endt = running ? Date.now() / 1000 : (r.finished_at || r.updated_at);
+  const wall = (r.started_at && endt) ? Math.max(0, endt - r.started_at) : null;
+  const act = scanActiveSec(r, running);
+  return (wall != null && act != null && wall - act > 60)
+    ? `실제 스캔한 시간 ${fmtDur(act)} · 시작~끝 ${fmtDur(wall)}(일시정지 포함)` : "스캔 소요 시간";
+}
 function selectScan(id) {
   selectedScan = id; userPicked = true;
   $("scanSelect").value = String(id);
@@ -4604,6 +4634,7 @@ function render(d) {
     topPath = []; topRel = 1; _topDepthSig = "";   // 스캔이 바뀌면 드릴다운 초기화
     piePath = [];                                  // 파이 드릴다운도 초기화
     treeStack = [];
+    if ($("treeSearch")) $("treeSearch").value = "";   // 이전 스캔의 검색어가 남지 않게
     loadTree(null, []);
     loadErrors();
     populateDiff(currentRoot);

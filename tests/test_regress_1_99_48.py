@@ -874,6 +874,48 @@ def check_aa_round6() -> None:
     print("[A1~A3] OK  순차 예약 실패 경로 건너뛰고 계속·DB 없는 스캔 미복제·질문 기능 기간/키워드")
 
 
+def check_ab_edge_views_round6() -> None:
+    """B1 중복 id 로 튜닝 점검 결과가 안 보임 B2 미완료 스캔과 비교·변화 Top(모든 폴더가 '삭제') B3 지운 스캔이 선택된 채 남음
+    B4 스캔 전환 후 비교 결과 잔존 B5 재개 스캔 소요 시간에 쉬던 시간 포함 B6 빈 검색어로 트리 복귀 안 됨 B7 일시정지 스캔이 추세 점."""
+    from collections import Counter
+    for name in ("dashboard.html", "portal.html"):                                  # B1: 같은 id 는 한 번만
+        ids = re.findall(r'\sid="([^"$`{}]+)"', _read(name))
+        dup = [k for k, v in Counter(ids).items() if v > 1]
+        assert not dup, (name, dup)
+    from isilon_usage import server as SV, db as dbmod
+    from isilon_usage import manager as M
+    d = tempfile.mkdtemp(prefix="iu_ab_")
+    try:
+        M.init_manager(d)
+        ids = []
+        for st in ("done", "paused"):
+            sid = M.register_scan(d, root_path="/r", db_path=os.path.join(d, "s%d.db" % len(ids)),
+                                  backend="native", size_mode="disk")
+            dbmod.init_db(os.path.join(d, "s%d.db" % len(ids)))
+            c = dbmod.connect(M.manager_db_path(d))
+            M.update_scan(c, sid, status=st, active_elapsed=0.9, started_at=time.time() - 800)
+            c.commit()
+            c.close()
+            ids.append(sid)
+        r = SV.diff_scans(d, ids[0], ids[1])                                         # B2
+        assert r["ok"] is False and r.get("not_done"), r
+        c = dbmod.connect(M.manager_db_path(d))
+        roots = M.overall_capacity(c)["roots"]
+        c.close()
+        assert all("active_elapsed" in x for x in roots)                            # B5(홈 표에 활성 시간)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    dh = _read("dashboard.html")
+    assert 'const out = $("setTuneResult");' in dh
+    assert 's.status === "done" || s.partial_agg_at' in dh                          # B2(화면)
+    assert "if (_lostSel) setTimeout(poll, 0);" in dh                                # B3
+    assert '$("fhPath").value = "";' in dh                                           # B4
+    assert "function scanActiveSec(r, running)" in dh and "endt - r.started_at) : null;\n      const running" not in dh   # B5
+    assert "if (!q) { treeStack = []; loadTree(null, []); return; }" in dh           # B6
+    assert 's.scanned_bytes != null && s.status === "done")' in dh                   # B7
+    print("[B1~B7] OK  중복 id 없음·미완료 비교 거부·지운 스캔 선택 해제·비교 초기화·활성 소요 시간·검색 복귀·추세 완료만")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -882,7 +924,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_t1_t5_portal_round3, check_u1_u3_ui_round3,
             check_v1_v6_edge_round3, check_w1_w2_round4, check_x1_x8_settings_round4,
             check_y1_y6_integrations_round5, check_z1_z8_portal_ui_round5,
-            check_aa_round6]
+            check_aa_round6, check_ab_edge_views_round6]
 
 
 def main() -> int:

@@ -723,6 +723,13 @@ def diff_scans(data_dir: str, base_id: int, target_id: int, *,
         mconn.close()
     if not base or not target:
         return {"ok": False, "reason": "scan 을 찾을 수 없습니다."}
+    # 완료된 스캔끼리만 — 진행 중·일시정지·오류 스캔은 재귀 합계가 아직 없어(0) 모든 폴더가 '삭제됨'으로 보였다
+    # (2026-11 리뷰). 멈춘 자료 부분 집계(partial_agg_at)를 한 스캔은 하한값이라 비교 가능하다고 표시만 한다.
+    for _nm, _s in (("기준", dict(base)), ("대상", dict(target))):
+        if _s.get("status") != "done" and not _s.get("partial_agg_at"):
+            return {"ok": False, "not_done": True,
+                    "reason": "%s 스캔 #%s 가 완료되지 않아(%s) 비교할 수 없습니다 — 완료된 스캔을 고르거나 "
+                              "'멈춘 자료 집계'를 먼저 하세요." % (_nm, _s.get("id"), _s.get("status"))}
     if not (os.path.exists(base["db_path"]) and os.path.exists(target["db_path"])):
         return {"ok": False, "reason": "per-run DB 가 없습니다."}
 
@@ -3622,6 +3629,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 d = diff_scans(self.data_dir, int(prev["id"]), scan_id,
                                limit=400, max_depth=self._query_int(qs, "max_depth"))
                 if not d.get("ok"):
+                    if d.get("not_done"):      # 대상이 진행 중·일시정지 — 변화 리포트를 만들지 않는다(오류 아님)
+                        self._send_json({"ok": True, "has_base": False, "reason": d.get("reason")})
+                        return
                     self._send_json(d)
                     return
                 rows = d["rows"]
