@@ -512,8 +512,13 @@ def run_fold_overflow_case() -> None:
                 sc.run()
                 res.append(_root_totals(dbp)[0])
             assert res[0] == res[1], ("max_depth+fold: 예산에 따라 결과가 달라짐", fold, mdepth, res)
-            if mdepth > fold:
-                assert res[0] == exp, ("fold 는 max_depth 와 무관하게 끝까지 세야 함", fold, mdepth, res)
+            # 23회차부터: 최대 깊이는 접기(fold) 안에서도 지킨다 — 같은 최대 깊이면 fold 와 무관하게 같은 합계
+            # (예전엔 fold<최대 깊이면 최대 깊이를 무시해 끝까지 셌다 — 기본 fold 4 에서 최대 깊이 5+ 가 무효였다)
+            dbp = os.path.join(tmp, "md_f0_m%d.db" % mdepth)
+            dbmod.init_db(dbp)
+            sc0 = Scanner(dbp, root, backend="native", batch_size=500, workers=3, fold_depth=0, max_depth=mdepth)
+            sc0.run()
+            assert res[0] == _root_totals(dbp)[0], ("같은 max_depth 인데 fold 에 따라 합계가 다름", fold, mdepth, res)
             n += 1
         print("[fold-overflow] OK  %d조합 합계 정답과 동일(bytes=%d files=%d)·결과 행 ≤ fold 깊이·"
               "max_depth 상호작용 불변" % (n, exp[0], exp[1]))
