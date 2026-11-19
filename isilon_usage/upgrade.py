@@ -15,6 +15,7 @@ import shutil
 import sys
 import subprocess
 import tarfile
+import threading
 import time
 import zipfile
 import zlib
@@ -114,8 +115,15 @@ def prune_package_backups(code_dir: str, keep: int = 3) -> None:
         shutil.rmtree(os.path.join(code_dir, n), ignore_errors=True)
     # 옛 방식이 남긴 반쯤 쓴 .new·되돌린 .bad, 끊긴 단계 폴더는 쓸모가 없다 — 모두 지운다
     for n in names:
-        if _re.match(r"^isilon_usage\.(new|bad)\.\d+$", n) or _re.match(r"^\.isilon_usage\.stage\.\d+$", n):
+        if _re.match(r"^isilon_usage\.(new|bad)\.\d+$", n):
             shutil.rmtree(os.path.join(code_dir, n), ignore_errors=True)
+        elif _re.match(r"^\.isilon_usage\.stage\.\d+(\.\d+)?$", n):
+            # 단계 폴더는 10분 넘은 것만 — 지금 다른 설치가 쓰는 중일 수 있다(21회차 점검: 동시 설치가 서로를 지움)
+            try:
+                if time.time() - os.path.getmtime(os.path.join(code_dir, n)) > 600:
+                    shutil.rmtree(os.path.join(code_dir, n), ignore_errors=True)
+            except OSError:
+                pass
 
 
 # 인터넷 자동 설치 실패 기억 — 같은 묶음(버전+sha)이 계속 실패하면 점검 주기(기본 60초)마다 다시 받아 설치를 시도해
@@ -261,7 +269,31 @@ def members_version(members: Dict[str, bytes]) -> Optional[Tuple[int, int, int]]
     return tuple(int(x) for x in m.groups()) if m else None
 
 
+_INSTALL_LOCK = threading.Lock()
+
+
 def apply_package(members: Dict[str, bytes], code_dir: str) -> str:
+    """설치를 한 번에 하나만 — 엣지의 자동 점검·수동 설치·포탈 푸시가 겹치면 한쪽이 다른 쪽의 단계 폴더를 지우거나
+    같은 백업 이름으로 부딪혀 엉뚱한 실패가 났다(21회차 점검). 프로세스 안은 잠금, 프로세스 사이는 파일 잠금."""
+    with _INSTALL_LOCK:
+        lockf = None
+        try:
+            try:
+                import fcntl
+                lockf = open(os.path.join(os.path.abspath(code_dir), ".isilon_usage.install.lock"), "a")
+                fcntl.flock(lockf, fcntl.LOCK_EX)
+            except (ImportError, OSError):
+                lockf = None
+            return _apply_package_locked(members, code_dir)
+        finally:
+            if lockf is not None:
+                try:
+                    lockf.close()
+                except OSError:
+                    pass
+
+
+def _apply_package_locked(members: Dict[str, bytes], code_dir: str) -> str:
     """members 를 code_dir/isilon_usage/ 로 교체 설치한다(기존은 백업, 원자적 스왑).
 
     반환: 백업 경로(없으면 ""). 실패 시 예외(가능하면 롤백).
@@ -270,6 +302,9 @@ def apply_package(members: Dict[str, bytes], code_dir: str) -> str:
     pkg = os.path.join(code_dir, "isilon_usage")
     ts = int(time.time())
     backup = "%s.bak.%d" % (pkg, ts)
+    while os.path.exists(backup):      # 같은 초에 두 번 — 백업 이름이 겹쳐 ENOTEMPTY 로 실패하지 않게
+        ts += 1
+        backup = "%s.bak.%d" % (pkg, ts)
     # 새 코드는 별도 폴더(<code_dir>/.isilon_usage.stage.<ts>/isilon_usage)에 다 쓴 뒤 '그 자리에서' 불러 보고,
     # 통과해야만 바꿔 넣는다. 예전엔 바꿔 넣은 뒤 확인해, 깨진 묶음이 매 점검 주기마다 몇 초씩 실제 코드 자리에
     # 들어갔다 빠지며 .bad 폴더(1.7MB)를 계속 남겼고, 쓰다 실패(디스크 가득)하면 반쯤 쓴 .new 폴더가 남았다(20회차 점검).
@@ -277,7 +312,7 @@ def apply_package(members: Dict[str, bytes], code_dir: str) -> str:
         prune_package_backups(code_dir, keep=3)   # 옛 버전이 남긴 .new/.bad 부터 정리
     except Exception:  # noqa: BLE001
         pass
-    stage_parent = os.path.join(code_dir, ".isilon_usage.stage.%d" % ts)
+    stage_parent = os.path.join(code_dir, ".isilon_usage.stage.%d.%d" % (ts, os.getpid()))
     staging = os.path.join(stage_parent, "isilon_usage")
     shutil.rmtree(stage_parent, ignore_errors=True)
     try:

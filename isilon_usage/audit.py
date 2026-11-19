@@ -43,7 +43,13 @@ def record(data_dir: str, *, action: str, ok: bool, ip: str = "", detail: str = 
             line.encode("utf-8")
         except UnicodeEncodeError:       # 비 UTF-8 경로 등(서로게이트) — \u 이스케이프로(감사 기록이 요청을 깨지 않게)
             line = json.dumps(rec, ensure_ascii=True)
-        with open(path, "a", encoding="utf-8") as fh:
+        # 소유자만 읽기(0600) — 로그인 시도·IP·작업 대상이 들어 있다(예전엔 0644, 21회차 점검)
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            os.fchmod(fd, 0o600)          # 예전에 0644 로 만든 파일도 바로잡는다
+        except OSError:
+            pass
+        with os.fdopen(fd, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
     except (OSError, ValueError):
         pass

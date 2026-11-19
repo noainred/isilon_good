@@ -38,7 +38,7 @@ from . import upgrade as upgrademod
 from . import ask as askmod
 from . import netutil
 from .server import ThreadingHTTPServer, browse_dir  # 3.6 폴백 포함 재사용
-from .server import read_json_body, _has_nul, _json_bytes, _truthy   # 요청 본문 검증·응답 인코딩(엣지와 같은 규칙)
+from .server import read_json_body, is_json_ctype, cross_site_post, _ChunkedWriter, safe_cwd, _has_nul, _json_bytes, _truthy   # 요청 본문 검증·응답 인코딩(엣지와 같은 규칙)
 from .server import reset_op_password_file      # 임시 비밀번호(엣지와 같은 규칙·같은 함수)
 
 # SSH 실행 입력 검증(옵션 주입 차단): 사용자는 POSIX 계정 이름, 호스트는 IP/호스트명/[IPv6] 만.
@@ -3726,6 +3726,10 @@ class PortalHandler(BaseHTTPRequestHandler):
     # 연결 소켓 시간 제한(초) — 없으면 아무것도 안 보내는 연결 하나가 스레드·fd 를 끝없이 잡았다(20회차 점검: 400개 연결
     # → 스레드 404개가 65초 넘게 유지). 계산 시간에는 걸리지 않고, 받기/보내기가 이만큼 멈출 때만 연결을 끊는다.
     timeout = 120
+
+    def setup(self):
+        super().setup()
+        self.wfile = _ChunkedWriter(self.wfile)   # 큰 응답도 조각마다 시간 제한(엣지와 같은 규칙)
     data_dir = ""
     controller = None  # PortalController
 
@@ -3834,7 +3838,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             if path == "/api/portal/changelog":
                 text = None
                 for cand in (os.path.join(os.path.dirname(HERE), "CHANGELOG.md"),
-                             os.path.join(os.getcwd(), "CHANGELOG.md")):
+                             os.path.join(safe_cwd(), "CHANGELOG.md")):
                     try:
                         with open(cand, "r", encoding="utf-8") as fh:
                             text = fh.read()
@@ -3970,6 +3974,9 @@ class PortalHandler(BaseHTTPRequestHandler):
 
     def _do_POST(self) -> None:
         path = urlparse(self.path).path
+        if cross_site_post(self):   # 다른 사이트의 브라우저 요청 거부(엣지와 같은 규칙, 21회차 점검)
+            self._send_json({"ok": False, "reason": "다른 사이트에서 온 요청은 받지 않습니다."}, status=403)
+            return
         body = self._read_json_body()
         if self._body_err:
             self._send_json({"ok": False, "reason": self._body_err[1]}, status=self._body_err[0])
@@ -3991,7 +3998,7 @@ class PortalHandler(BaseHTTPRequestHandler):
                     self._send_json({"ok": False, "reason": "locked", "op_required": True},
                                     status=401)
                     return
-                if not c.auth_required() and "application/json" not in (self.headers.get("Content-Type") or ""):
+                if not c.auth_required() and not is_json_ctype(self.headers.get("Content-Type")):
                     self._send_json({"ok": False, "reason": "JSON 요청만 허용"}, status=415)
                     return
                 res = c.set_password(body.get("password") or "", body.get("encrypt"))

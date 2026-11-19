@@ -77,6 +77,8 @@ for _v in "$INSTALL_DIR" "$DATA_DIR"; do
   case "$_v" in *[[:space:]]*|*\"*|*\\*) echo "✗ 경로에 공백/따옴표/역슬래시는 쓸 수 없습니다: $_v" >&2; exit 1;; esac
 done
 case "$PORT" in ''|*[!0-9]*) echo "✗ --port 는 숫자여야 합니다: $PORT" >&2; exit 1;; esac
+# 설치 경로가 심볼릭 링크면 실제 경로로 — 폴더 바꾸기(mv)가 링크 자체를 실제 폴더로 바꿔 링크 대상엔 옛 코드가 남았다(21회차 점검)
+if [ -L "$INSTALL_DIR" ]; then INSTALL_DIR="$(readlink -f "$INSTALL_DIR")"; fi
 SD_INSTALL_DIR="${INSTALL_DIR//%/%%}"; SD_DATA_DIR="${DATA_DIR//%/%%}"
 SD_DATA_DIR_X="${SD_DATA_DIR//\$/\$\$}"
 
@@ -190,6 +192,7 @@ for f in info.MD portal_info.MD .iu_data_persist.json; do   # 설치 폴더에 �
 done
 systemctl stop "$SERVICE" >/dev/null 2>&1 || true     # 파일 교체 안정화
 mkdir -p "$DATA_DIR"
+cd /                                                  # 설치 폴더 안에서 실행해도 옛 폴더(지워짐)에 머물지 않게
 if [ -d "$INSTALL_DIR" ] && ! mv "$INSTALL_DIR" "$OLD_DIR" 2>/dev/null; then
   # 옮길 수 없는 폴더(마운트 지점 등)면 예전처럼 제자리 반영 — 단계 폴더에서 복사
   if command -v rsync >/dev/null 2>&1; then
@@ -208,6 +211,11 @@ else
     systemctl start "$SERVICE" >/dev/null 2>&1 || true
     echo "✗ 새 설치로 바꾸지 못했습니다 — 옛 설치로 되돌렸습니다."; rm -rf "$NEW_DIR" "$TMP_DIR"; exit 1
   fi
+  # 옛 폴더를 작업 폴더로 쓰던 다른 프로세스(같은 폴더를 쓰는 엣지·포탈 등)는 지워진 폴더에 남는다 — 알린다(21회차 점검)
+  for _p in /proc/[0-9]*; do
+    _c="$(readlink "$_p/cwd" 2>/dev/null || true)"
+    case "$_c" in "$OLD_DIR"|"$OLD_DIR"/*) echo "   ⚠ 프로세스 ${_p#/proc/} 가 옛 설치 폴더를 쓰고 있습니다 — 그 서비스도 재시작하세요.";; esac
+  done
   rm -rf "$OLD_DIR"
 fi
 rm -rf "$TMP_DIR"

@@ -2123,7 +2123,7 @@ function _benchRender(j) {
       + `<td style="text-align:right;padding:1px 8px">${mem}</td>`
       + `<td style="padding:1px 6px">${best ? "◀ 권장" : ""}</td></tr>`;
   }).join("");
-  let html = `대상: <span class="mono">${j.sample_path || ""}</span>`
+  let html = `대상: <span class="mono">${escHtml(j.sample_path || "")}</span>`
     + (j.running ? ' <span style="color:var(--warn)">· 측정 중… (단계별로 추가됩니다)</span>' : "")
     + `<table style="border-collapse:collapse;margin:4px 0"><tr style="color:var(--muted)">`
     + `<td style="padding:1px 8px">스레드</td><td style="padding:1px 8px">탐색</td>`
@@ -2132,8 +2132,8 @@ function _benchRender(j) {
   if (j.done) {
     html += `<b style="color:var(--ok)">실측 권장 ${rec} 스레드</b> `
       + `<a href="#" id="benchApply" style="color:var(--accent2)">→ 이 값 적용</a><br>`
-      + `<span style="color:var(--muted)">${j.note || ""}</span>`;
-    if (j.error) html += `<br><span style="color:var(--danger)">${j.error}</span>`;
+      + `<span style="color:var(--muted)">${escHtml(j.note || "")}</span>`;
+    if (j.error) html += `<br><span style="color:var(--danger)">${escHtml(j.error)}</span>`;
   }
   out.innerHTML = html;
   if (j.done && rec != null) {
@@ -3104,7 +3104,7 @@ function renderAutotune(j) {
       + `(${fmtNum(Math.round(best.files_per_sec))} files/s). `
       + (j.scan_id ? `이 설정으로 <b>스캔 #${j.scan_id}</b>을 자동 시작했습니다.`
         : '본 스캔을 시작합니다.')
-      + (j.note ? `<br><span class="sub">참고: ${j.note}</span>` : "");
+      + (j.note ? `<br><span class="sub">참고: ${escHtml(j.note)}</span>` : "");
     // 이 화면에서 측정이 '진행되는 걸 본' 오토튜닝만 그 스캔으로 따라간다 — 예전엔 끝난 지 오래된 결과가
     // 새로고침할 때마다 선택을 그 스캔으로 되돌려, 더 새 스캔이 있어도 옛 스캔이 열렸다(2026-11 사용 흐름 점검).
     if (j.scan_id && _autotuneSawRunning && _autotuneTracked !== j.scan_id) {

@@ -2140,7 +2140,7 @@ def check_bc_round20_upgrade() -> None:
         except OSError as exc:
             assert "설치하지 않음" in str(exc), exc
         assert open(live, "rb").read() == before                                                   # EE1
-        left = [n for n in os.listdir(code) if n != "isilon_usage"]
+        left = [n for n in os.listdir(code) if n not in ("isilon_usage", ".isilon_usage.install.lock")]
         assert not left, left
         os.makedirs(os.path.join(code, "isilon_usage.bad.123"))                                    # 옛 버전이 남긴 것
         os.makedirs(os.path.join(code, "isilon_usage.new.124"))
@@ -2150,7 +2150,7 @@ def check_bc_round20_upgrade() -> None:
             raise AssertionError("쓰기 실패가 성공으로")
         except OSError:
             pass
-        left = [n for n in os.listdir(code) if n != "isilon_usage"]
+        left = [n for n in os.listdir(code) if n not in ("isilon_usage", ".isilon_usage.install.lock")]
         assert not left, left
         assert open(live, "rb").read() == before
     finally:
@@ -2223,6 +2223,138 @@ def check_bd_round20_stress() -> None:
     print("[FF1~FF4] OK  느린 NAS 중지 즉시·연결 시간 제한·준비 전 조회 '초기화 중'·로그 스캔 번호")
 
 
+def check_be_round21_sec_regress() -> None:
+    """GG1 CSRF: 'text/plain; x=application/json'·Content-Type 없음 통과, 다른 사이트 Origin GG2 로그인 없이 지정 경로 밖 스캔
+    GG3 벤치마크 표시 미이스케이프·로그 토큰·감사 로그 0644 GG4 동시 설치가 서로의 단계 폴더를 지움 GG5 큰 응답 한 번 쓰기
+    GG6 끝난 스캔의 'no such table' 을 '초기화 중'으로 숨김 GG7 설치 경로 심볼릭 링크·지워진 작업 폴더."""
+    import io
+    import json as _json
+    import urllib.request
+    import urllib.error
+    from isilon_usage import server as SV, manager as M, upgrade as U, audit as A
+    assert SV.is_json_ctype("application/json; charset=utf-8") and not SV.is_json_ctype("text/plain; x=application/json")
+    assert not SV.is_json_ctype("") and not SV.is_json_ctype(None)
+    d = tempfile.mkdtemp(prefix="iu_be_")
+    cwd = os.getcwd()
+    os.chdir(d)
+    httpd = None
+    try:
+        m = os.path.join(d, "m")
+        out = os.path.join(d, "outside")
+        os.makedirs(m)
+        os.makedirs(out)
+        httpd = SV.serve(os.path.join(d, "data"), host="127.0.0.1", port=0,
+                         initial_settings={"mount_bases": [m]}, enable_scan=True)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        base = "http://127.0.0.1:%d" % httpd.server_address[1]
+
+        def post(path, body, headers):
+            rq = urllib.request.Request(base + path, data=body, method="POST", headers=headers)
+            try:
+                r = urllib.request.urlopen(rq)
+                return r.status, _json.loads(r.read().decode() or "{}")
+            except urllib.error.HTTPError as e:
+                return e.code, _json.loads(e.read().decode() or "{}")
+        b = _json.dumps({"scan_id": 999}).encode()
+        assert post("/api/scan/stop", b, {"Content-Type": "text/plain; x=application/json"})[0] == 415      # GG1
+        assert post("/api/scan/stop", b, {})[0] == 415
+        st, _ = post("/api/scan/stop", b, {"Content-Type": "application/json", "Origin": "http://evil.example"})
+        assert st == 403, st
+        st, _ = post("/api/scan/stop", b"", {"Origin": "null"})
+        assert st == 403, st
+        st, _ = post("/api/scan/stop", b, {"Content-Type": "application/json",
+                                            "Origin": base})
+        assert st != 403, st
+        ctl = httpd.RequestHandlerClass.controller                                                          # GG2
+        ctl.setup_op_password("test1234")
+        st, j = post("/api/scan/start", _json.dumps({"path": out, "confirm_outside": True}).encode(),
+                     {"Content-Type": "application/json"})
+        assert st == 401 and j.get("op_required"), (st, j)
+        tok = ctl.unlock("test1234")["token"]
+        st, j = post("/api/scan/start", _json.dumps({"path": out, "confirm_outside": True}).encode(),
+                     {"Content-Type": "application/json", "X-Op-Token": tok})
+        assert st == 200 and j.get("ok"), (st, j)
+        for _ in range(100):
+            if not ctl.running_ids():
+                break
+            time.sleep(0.05)
+        data = os.path.join(d, "data")                                                                      # GG6
+        mc = __import__("isilon_usage.db", fromlist=["x"]).connect(M.manager_db_path(data))
+        mc.execute("UPDATE scans SET status='done' WHERE id=?", (j["scan_id"],))
+        mc.commit()
+        dbp = mc.execute("SELECT db_path FROM scans WHERE id=?", (j["scan_id"],)).fetchone()[0]
+        mc.close()
+        c = __import__("isilon_usage.db", fromlist=["x"]).connect(dbp)
+        c.execute("DROP TABLE scan_stats")
+        c.commit()
+        c.close()
+        os.utime(dbp, (time.time() - 3600, time.time() - 3600))   # 오래된(끝난) DB
+        try:
+            urllib.request.urlopen(base + "/api/stats?scan=%d" % j["scan_id"])
+            raise AssertionError("손상된 끝난 스캔이 정상 응답")
+        except urllib.error.HTTPError as e:
+            assert e.code == 500 and "no such table" in e.read().decode(), e
+    finally:
+        if httpd is not None:
+            httpd.shutdown()
+        os.chdir(cwd)
+    dh = _read("dashboard.html")                                                                            # GG3
+    assert "${escHtml(j.sample_path" in dh and "${escHtml(j.note)}" in dh and "${escHtml(j.error)}" in dh
+    import re as _re
+    sv = _read("server.py")
+    assert "(?:token|api_token|key|password)=" in sv
+    A.record(d, action="x", ok=True)
+    ap = [os.path.join(dp, f) for dp, dn, fn in os.walk(d) for f in fn if f.startswith("audit")][0]
+    assert (os.stat(ap).st_mode & 0o777) == 0o600, oct(os.stat(ap).st_mode)
+    code = os.path.join(d, "code")                                                                          # GG4
+    pkg_src = HERE
+    shutil.copytree(pkg_src, os.path.join(code, "isilon_usage"), ignore=shutil.ignore_patterns("__pycache__"))
+    members = {}
+    for dp, dn, fn in os.walk(pkg_src):
+        dn[:] = [x for x in dn if x != "__pycache__"]
+        for f in fn:
+            with open(os.path.join(dp, f), "rb") as fh:
+                members[os.path.relpath(os.path.join(dp, f), pkg_src)] = fh.read()
+    orig = U._smoke_test
+    U._smoke_test = lambda cd: (time.sleep(1.5), orig(cd))[1]
+    res = []
+    try:
+        ts = [threading.Thread(target=lambda: res.append(_try(U.apply_package, members, code))) for _ in range(2)]
+        ts[0].start()
+        time.sleep(0.5)
+        ts[1].start()
+        for t in ts:
+            t.join(60)
+    finally:
+        U._smoke_test = orig
+    assert len(res) == 2 and all(r == "ok" for r in res), res
+    shutil.rmtree(d, ignore_errors=True)
+    buf = io.BytesIO()                                                                                     # GG5
+    calls = []
+
+    class _W:
+        def write(self, b):
+            calls.append(len(b))
+            buf.write(b)
+            return len(b)
+    w = SV._ChunkedWriter(_W())
+    w.write(b"x" * (3 * (1 << 20) + 5))
+    assert calls == [1 << 20, 1 << 20, 1 << 20, 5] and buf.getbuffer().nbytes == 3 * (1 << 20) + 5
+    for f in ("install_edge.sh", "install_portal.sh"):                                                      # GG7
+        sh = open(os.path.join(os.path.dirname(HERE), "tools", f), encoding="utf-8").read()
+        assert 'readlink -f "$INSTALL_DIR"' in sh and "\ncd /" in sh, f
+    assert "safe_cwd()" in sv and 'os.path.join(os.getcwd(), "CHANGELOG.md")' not in _read("portal.py")
+    print("[GG1~GG7] OK  CSRF 미디어 타입·Origin·밖 스캔 로그인·이스케이프·로그 토큰·감사 0600·동시 설치·큰 응답 조각·끝난 스캔 오류·설치 경로")
+
+
+def _try(fn, *a):
+    try:
+        fn(*a)
+        return "ok"
+    except Exception as exc:  # noqa: BLE001
+        return "err: %s" % exc
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -2244,7 +2376,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_ax_round18_data, check_ay_round18_portal_delete,
             check_az_round19_regress, check_ba_round19_portal_edge,
             check_bb_round20_regress, check_bc_round20_upgrade,
-            check_bd_round20_stress]
+            check_bd_round20_stress, check_be_round21_sec_regress]
 
 
 def main() -> int:

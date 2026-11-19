@@ -304,6 +304,58 @@ def _truthy(v) -> bool:
         return v.strip().lower() not in ("", "0", "false", "no", "off", "n", "f")
     return bool(v)
 
+class _ChunkedWriter:
+    """응답 쓰기를 1MB 조각으로 — 소켓 시간 제한(timeout)은 sendall '한 번' 전체에 걸려, 큰 본문(백업·릴리스·에이전트
+    묶음 다운로드, 큰 JSON)을 한 번에 쓰면 꾸준히 받는 느린 클라이언트도 120초 뒤 잘렸다(21회차 점검)."""
+    CHUNK = 1 << 20
+
+    def __init__(self, w):
+        self._w = w
+
+    def write(self, b):
+        n = len(b)
+        if n <= self.CHUNK:
+            return self._w.write(b)
+        mv = memoryview(b)
+        for i in range(0, n, self.CHUNK):
+            self._w.write(mv[i:i + self.CHUNK])
+        return n
+
+    def __getattr__(self, name):
+        return getattr(self._w, name)
+
+
+def safe_cwd() -> str:
+    """작업 폴더(지워졌으면 '/') — 설치 스크립트가 설치 폴더를 바꾸면 옛 작업 폴더가 사라져 os.getcwd() 가 예외였다."""
+    try:
+        return os.getcwd()
+    except OSError:
+        return "/"
+
+
+def cross_site_post(handler) -> bool:
+    """다른 사이트(출처)에서 온 브라우저 POST 인지. 브라우저는 교차 출처 POST 에 Origin 을 반드시 붙인다 —
+    Origin 의 호스트가 이 서버(Host) 와 다르면(또는 'null' — 샌드박스 iframe 등) 거부한다. Content-Type 검사만으로는
+    본문 없는 POST(전체 중단 등)를 막지 못했다(21회차 점검). 스크립트·포탈(Origin 없음)은 영향 없음."""
+    origin = (handler.headers.get("Origin") or "").strip()
+    if not origin:
+        return False
+    if origin.lower() == "null":
+        return True
+    try:
+        o_host = (urlparse(origin).netloc or "").lower()
+    except ValueError:
+        return True
+    hosts = {(handler.headers.get(h) or "").strip().lower() for h in ("Host", "X-Forwarded-Host")}
+    hosts.discard("")
+    return o_host not in hosts
+
+
+def is_json_ctype(ctype) -> bool:
+    """Content-Type 의 미디어 타입이 application/json 인지(매개변수 charset 등은 허용)."""
+    return str(ctype or "").split(";", 1)[0].strip().lower() == "application/json"
+
+
 def read_json_body(handler):
     """요청 본문을 JSON 객체로 읽는다(엣지·포탈 공용). 반환: (dict, None) 또는 ({}, (HTTP 상태, 사유)).
 
@@ -326,8 +378,9 @@ def read_json_body(handler):
         return {}, (413, "본문이 너무 큽니다(최대 %dMB)" % (MAX_JSON_BODY // (1024 * 1024)))
     # 본문이 있으면 JSON 요청만 받는다 — 다른 사이트의 <form enctype=text/plain> 은 application/json 을 보낼 수
     # 없으므로, 로그인이 필요 없는 POST(스캔 시작·전체 중단 등)도 사이트 간 위조(CSRF)로 실행되지 않는다.
-    ctype = (handler.headers.get("Content-Type") or "").lower()
-    if ctype and "application/json" not in ctype:
+    # 미디어 타입이 정확히 application/json 이어야 한다 — 예전엔 '포함'만 봐서 'text/plain; x=application/json'
+    # (브라우저가 사전 확인 없이 다른 사이트에서 보낼 수 있는 값)과 Content-Type 없음(타입 없는 Blob)이 통과했다(21회차 점검).
+    if not is_json_ctype(handler.headers.get("Content-Type")):
         return {}, (415, "JSON 요청만 받습니다(Content-Type: application/json)")
     try:
         raw = handler.rfile.read(length)
@@ -3159,6 +3212,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
     # 연결 소켓 시간 제한(초) — 없으면 아무것도 안 보내는 연결 하나가 스레드·fd 를 끝없이 잡았다(20회차 점검: 400개 연결
     # → 스레드 404개가 65초 넘게 유지). 계산 시간에는 걸리지 않고, 받기/보내기가 이만큼 멈출 때만 연결을 끊는다.
     timeout = 120
+
+    def setup(self):
+        super().setup()
+        self.wfile = _ChunkedWriter(self.wfile)   # 큰 응답도 조각마다 시간 제한(전체가 아니라)
     data_dir = ""  # 서버 생성 시 클래스 속성으로 주입(manager.db + scans/ 의 상위 폴더)
     controller = None  # ScanController (웹에서 스캔 시작/중지)
 
@@ -3174,8 +3231,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elapsed = time.time() - t0
         if elapsed >= self.SLOW_REQ_SEC:
             try:
+                # 쿼리의 token=… 값은 가린다 — ?token=<api_token> 으로 부른 느린 요청이 로그에 비밀을 남겼다(21회차 점검)
+                _p = re.sub(r"(?i)([?&](?:token|api_token|key|password)=)[^&]*", r"\1***", self.path or "")
                 sys.stderr.write("[http] 느린 요청 %.0fms %s %s\n"
-                                 % (elapsed * 1000, method, self.path))
+                                 % (elapsed * 1000, method, _p))
                 sys.stderr.flush()
             except Exception:
                 pass
@@ -3334,6 +3393,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         row = mgrmod.get_scan(mconn, scan_id)
         if row is None:
             return None, None
+        self._last_scan_row = row        # 'no such table' 판단용(진행 중 스캔만 '초기화 중')
         if analysis and self.controller is not None:
             snap = self.controller.live_snapshot_db(row)
             if snap:
@@ -3410,6 +3470,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                                    str(tok).encode("utf-8", "ignore"))
 
     def _do_GET(self) -> None:
+        self._last_scan_row = None
         parsed = urlparse(self.path)
         path = parsed.path
         qs = parse_qs(parsed.query)
@@ -3627,7 +3688,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if path == "/api/changelog":
                 text = None
                 for cand in (os.path.join(os.path.dirname(HERE), "CHANGELOG.md"),
-                             os.path.join(os.getcwd(), "CHANGELOG.md")):
+                             os.path.join(safe_cwd(), "CHANGELOG.md")):
                     try:
                         with open(cand, "r", encoding="utf-8") as fh:
                             text = fh.read()
@@ -4042,7 +4103,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except sqlite3.OperationalError as exc:
             # 스캔 시작 직후 per-run DB 파일은 생겼는데 테이블이 아직 없을 때 — 진행 표시(/api/status)처럼 '초기화 중'으로.
             # 예전엔 내보내기·하위 폴더·검색·오류·통계가 500 'no such table' 을 냈다(20회차 점검: 부하 중 1/14,000).
-            if "no such table" in str(exc):
+            _lr = getattr(self, "_last_scan_row", None)
+            _st = ""
+            try:
+                _st = (_lr["status"] if _lr is not None else "") or ""
+            except (KeyError, IndexError, TypeError):
+                _st = ""
+            # 진행 중 스캔일 때만 — 끝난 스캔의 테이블이 없으면 손상·옛 스키마다(그때는 진짜 오류를 그대로, 21회차 점검)
+            _young = False
+            try:   # 방금 만든 DB 파일(테이블 생성 전)도 — 2분 안이면
+                _young = _lr is not None and (time.time() - os.path.getmtime(_lr["db_path"])) < 120
+            except (OSError, KeyError, IndexError, TypeError):
+                _young = False
+            if "no such table" in str(exc) and (_st in ("discovering", "sizing") or _young):
                 self._send_json({"ok": False, "reason": "initializing",
                                  "error": "스캔 DB 를 준비하는 중입니다 — 잠시 뒤 다시 시도하세요."})
             else:
@@ -4241,6 +4314,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _do_POST(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
+        if cross_site_post(self):
+            self._send_json({"ok": False, "reason": "다른 사이트에서 온 요청은 받지 않습니다."}, status=403)
+            return
         if self.controller is None:
             self._send_json({"ok": False,
                              "reason": "이 서버는 웹 스캔이 비활성화되어 있습니다."},
@@ -4272,7 +4348,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # 최초 비밀번호 설정(비밀번호가 없을 때만). JSON 본문만 받는다 — 다른 사이트의 폼(CSRF)으로는
             # Content-Type: application/json 을 보낼 수 없다.
             if path == "/api/op-setup":
-                if "application/json" not in (self.headers.get("Content-Type") or ""):
+                if not is_json_ctype(self.headers.get("Content-Type")):
                     self._send_json({"ok": False, "reason": "JSON 요청만 허용"}, status=415)
                     return
                 res = self.controller.setup_op_password(body.get("password") or "")
@@ -4282,6 +4358,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # 인증은 '설정'과 되돌릴 수 없는 작업(삭제·정리·업그레이드 설치 등)에만 — 스캔 시작·중지·재개 등
             # 일반 작업은 자유. 비밀번호가 아직 없으면 need_setup 으로 '처음 비밀번호 만들기'를 유도한다.
             # 토큰은 커스텀 헤더(X-Op-Token)로만 받으므로 다른 사이트(CSRF)가 위조할 수 없다.
+            # 지정 경로(mount_bases) 밖 스캔(confirm_outside)은 지정 경로 밖 탐색(/api/browse?confirm=1)과 같은 등급 —
+            # 로그인을 요구한다. 예전엔 탐색은 막고 스캔 시작은 열려 있어, 로그인 없이 밖을 스캔한 뒤 내보내기·하위
+            # 목록으로 그 트리를 볼 수 있었다(21회차 점검). 지정 경로 안의 스캔은 예전처럼 로그인 없이.
+            if (path in ("/api/scan/start", "/api/autotune/start") and _truthy(body.get("confirm_outside"))
+                    and self.controller.mount_bases and self.controller.op_required()
+                    and not self.controller.op_token_valid(self.headers.get("X-Op-Token"))):
+                _tp = body.get("path")
+                _tp = _tp if isinstance(_tp, str) else ""
+                if not _tp.strip() or not self.controller.browse_allowed(os.path.abspath(_tp.strip())):
+                    self._audit(path, False, "locked")
+                    self._send_json({"ok": False, "reason": "locked", "op_required": True,
+                                     "error": "지정 경로 밖을 스캔하려면 비밀번호로 로그인하세요."}, status=401)
+                    return
             if path in OP_PROTECTED_POSTS:
                 if not self.controller.op_required():
                     self._audit(path, False, "need_setup")
