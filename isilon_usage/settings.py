@@ -614,7 +614,25 @@ def mark_initialized(data_dir: str, code_dir: str, proxies, detail=None) -> None
     if not _data_present(data_dir, proxies):
         return
     # 데이터 폴더마다 기록 — 예전엔 마지막에 띄운 폴더 하나만 남아, 같은 코드 폴더로 띄운 다른 폴더(엣지·포탈 등)는
-    # 마운트가 빠져도 지켜지지 않았다(26회차 점검)
+    # 마운트가 빠져도 지켜지지 않았다(26회차 점검). 동시에 뜨는 여러 서비스가 서로의 기록을 덮지 않게 잠금(27회차 점검).
+    lockf = None
+    try:
+        import fcntl
+        lockf = open(_persist_sentinel_path(code_dir) + ".lock", "a")
+        fcntl.flock(lockf, fcntl.LOCK_EX)
+    except (ImportError, OSError):
+        lockf = None
+    try:
+        _mark_initialized_locked(data_dir, code_dir, detail)
+    finally:
+        if lockf is not None:
+            try:
+                lockf.close()
+            except OSError:
+                pass
+
+
+def _mark_initialized_locked(data_dir: str, code_dir: str, detail=None) -> None:
     try:
         with open(_persist_sentinel_path(code_dir), encoding="utf-8") as fh:
             old_mark = json.load(fh)
@@ -627,6 +645,7 @@ def mark_initialized(data_dir: str, code_dir: str, proxies, detail=None) -> None
         elif old_mark.get("data_dir"):
             dirs[os.path.abspath(old_mark["data_dir"])] = {k: v for k, v in old_mark.items()
                                                           if k not in ("initialized", "data_dir", "data_dirs")}
+    dirs.pop(data_dir, None)               # 다시 띄운 폴더는 맨 뒤로(가장 최근) — 쓰는 폴더가 밀려나지 않게(27회차 점검)
     dirs[data_dir] = dict(detail or {})
     while len(dirs) > 50:
         dirs.pop(next(iter(dirs)))
@@ -635,7 +654,7 @@ def mark_initialized(data_dir: str, code_dir: str, proxies, detail=None) -> None
         rec.update(detail)
     try:
         p = _persist_sentinel_path(code_dir)
-        tmp = p + ".tmp"
+        tmp = "%s.%d.tmp" % (p, os.getpid())
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(rec, fh, ensure_ascii=False)
         os.replace(tmp, p)

@@ -1277,11 +1277,13 @@ class PortalController:
         every = float(self.settings.get("backup_every_hours") or 1)
         keep = int(self.settings.get("backup_keep") or 100)
         files = self._list_backups(bdir)
-        last = files[-1]["mtime"] if files else 0
+        # 미래 시각 파일(시계가 뒤로 감)은 '마지막 백업'으로 보지 않는다 — 실제 판단(_maybe_scheduled_backup)과 같은 규칙(27회차)
+        past = [f for f in files if f["mtime"] <= time.time() + 60]
+        last = past[-1]["mtime"] if past else 0
         return {"backup_dir": bdir, "backup_every_hours": every, "backup_keep": keep,
                 "backup_count": len(files),
                 "backup_total_bytes": sum(f["size"] for f in files),
-                "backup_last": last, "backup_newest": (files[-1]["name"] if files else ""),
+                "backup_last": last, "backup_newest": (past[-1]["name"] if past else ""),
                 "backup_next": (last + every * 3600) if (bdir and last) else 0}
 
     def set_backup_config(self, dest_dir, every_hours, keep) -> dict:

@@ -17,6 +17,7 @@ from typing import List, Optional
 
 import argparse
 import os
+import shlex
 import signal
 import socket
 import sys
@@ -316,7 +317,8 @@ def _report_end(manager_db: str, scan_id: int, secs: float) -> int:
     if st == "paused":
         print(f"일시정지(scan #{scan_id}) — 완료되지 않았습니다. 소요 {secs:.1f}s. {reason}".rstrip()
               + f"\n  이어서 하려면: python -m isilon_usage resume {scan_id} --data-dir "
-              + os.path.dirname(os.path.abspath(manager_db)), file=sys.stderr)   # 데이터 폴더도(26회차 점검)
+              + shlex.quote(os.path.dirname(os.path.abspath(manager_db))),   # 데이터 폴더도·공백은 따옴표(26·27회차)
+              file=sys.stderr)
         return 3
     print(f"오류로 끝남(scan #{scan_id}, 상태 {st}). 소요 {secs:.1f}s. {reason}".rstrip(), file=sys.stderr)
     return 1
@@ -1254,7 +1256,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
     # 숫자 인자 범위 — 예전엔 --workers 99999999999 로 메모리 부족 종료(스캔이 '진행 중'으로 남음), -3·0 이 조용히
     # 받아들여졌다(26회차 점검). 이상한 값은 시작 전에 막는다.
-    for _k, _lo, _hi in (("workers", 1, 1024), ("processes", 1, 1024), ("threads", 1, 256)):
+    for _k, _lo, _hi in (("workers", 1, 1024), ("processes", 1, 1024), ("threads", 1, 256), ("procs", 1, 1024)):
         _v = getattr(args, _k, None)
         if isinstance(_v, int) and not (_lo <= _v <= _hi):
             parser.error("--%s 는 %d~%d 사이여야 합니다(받은 값: %d)" % (_k, _lo, _hi, _v))

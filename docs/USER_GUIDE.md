@@ -512,7 +512,7 @@ tools/make_tree.py   tests/   docs/USER_GUIDE.md   README.md   CHANGELOG.md
 - **앱 버전**: `isilon_usage/__init__.py` 의 `__version__` (현재 `1.99.48`).
   `--version`/`version` 으로 확인, 대시보드 헤더에 `v1.99.48` 으로 표시.
 - **데이터 버전**: 각 스캔에 그 스캔을 만든 앱 버전(`app_version`)이 DB 에 기록됩니다.
-- **스키마 버전**: 각 DB 의 `PRAGMA user_version` 에 기록(현재 `9`). 구버전 DB 는
+- **스키마 버전**: 각 DB 의 `PRAGMA user_version` 에 기록(현재 `13`). 구버전 DB 는
   열 때 누락 컬럼을 자동 보강합니다.
 - **릴리즈**: 변경 이력은 [CHANGELOG.md](../CHANGELOG.md), 릴리즈 태그는 `v<버전>`
   (예: `v1.0.0`).

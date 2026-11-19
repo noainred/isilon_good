@@ -3057,6 +3057,68 @@ def check_bt_round26_cli() -> None:
     print("[VV1~VV8] OK  포트 안내·재개 안내·정지 사유·영속 표식 여러 폴더·reset-password 뒤 초기값·CLI 범위·3.6·문서 예시")
 
 
+def check_bu_round27_regress() -> None:
+    """WW1 영속 표식 50개 넘으면 쓰는 폴더가 밀려남 WW2 동시 표식 기록 유실 WW3 재개 안내 경로 공백 WW4 autotune --procs 범위
+    WW5 미래 백업 파일이 '마지막 백업'으로."""
+    import contextlib
+    import io
+    import multiprocessing as mp
+    from isilon_usage import settings as SE, cli as C, portal as P
+    d = tempfile.mkdtemp(prefix="iu_bu_")
+    try:
+        code = os.path.join(d, "code")
+        os.makedirs(code)
+
+        def mk(nm):
+            p = os.path.join(d, nm)
+            os.makedirs(p, exist_ok=True)
+            open(os.path.join(p, "settings.json"), "w").close()
+            return p
+        prod = mk("prod")
+        SE.mark_initialized(prod, code, ("settings.json",))
+        for i in range(55):                                                                          # WW1
+            SE.mark_initialized(mk("o%d" % i), code, ("settings.json",))
+            if i % 10 == 0:
+                SE.mark_initialized(prod, code, ("settings.json",))     # 운영 폴더는 계속 다시 뜬다
+        os.remove(os.path.join(prod, "settings.json"))
+        assert SE.check_persistence(prod, code, ("settings.json",))[0] is False
+        code2 = os.path.join(d, "code2")                                                             # WW2
+        os.makedirs(code2)
+        dirs = [mk("c%d" % i) for i in range(6)]
+        ps = [mp.Process(target=_mark_many, args=(x, code2)) for x in dirs]
+        for p_ in ps:
+            p_.start()
+        for p_ in ps:
+            p_.join(60)
+        with open(os.path.join(code2, ".iu_data_persist.json"), encoding="utf-8") as fh:
+            got = __import__("json").load(fh)["data_dirs"]
+        assert all(x in got for x in dirs), (len(got), sorted(got))
+        try:                                                                                          # WW4
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                C.main(["autotune", d, "--procs", "0"])
+            raise AssertionError("--procs 0 받아들여짐")
+        except SystemExit as e:
+            assert e.code == 2
+        pc = P.PortalController(os.path.join(d, "hq"))                                               # WW5
+        bdir = os.path.join(d, "bk")
+        os.makedirs(bdir)
+        fut = os.path.join(bdir, "isilon_portal_backup-20991231-000000.tar.gz")
+        open(fut, "wb").close()
+        os.utime(fut, (time.time() + 3600, time.time() + 3600))
+        pc.settings["backup_dir"] = bdir
+        assert pc.backup_info()["backup_last"] == 0
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert "shlex.quote(os.path.dirname(os.path.abspath(manager_db)))" in _read("cli.py")             # WW3
+    print("[WW1~WW5] OK  영속 표식 LRU·동시 기록 잠금·재개 안내 따옴표·autotune 범위·마지막 백업 표시")
+
+
+def _mark_many(x, code):
+    from isilon_usage import settings as SE
+    for _ in range(30):
+        SE.mark_initialized(x, code, ("settings.json",))
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -3081,7 +3143,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bd_round20_stress, check_be_round21_sec_regress,
             check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser, check_bj_round23_regress, check_bk_round23_portal, check_bl_round23_engine, check_bm_round24_regress,
             check_bn_round24_consistency, check_bo_round24_perf, check_bp_round25_regress, check_bq_round25_schedule, check_br_round25_client,
-            check_bs_round26_regress, check_bt_round26_cli]
+            check_bs_round26_regress, check_bt_round26_cli, check_bu_round27_regress]
 
 
 def main() -> int:
