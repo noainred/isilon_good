@@ -2366,9 +2366,26 @@ class PortalController:
                         old_scans = (json.load(fh).get("scans") or [])
                 except (OSError, ValueError):
                     old_scans = []
+                merged = self._merge_scan_lists(old_scans, new_meta.get("scans"))
+                # 엣지에서 사용자가 지운 스캔은 복제본에서도 지운다 — 예전엔 남아 비교 화면이 지운 스캔을 '최신'으로
+                # 보여 엣지·홈 값과 어긋났다(18회차 점검). 구버전 엣지는 이 목록을 안 보내 예전과 같다.
+                dels = {os.path.basename(x) for x in (new_meta.get("deleted_db_filenames") or [])
+                        if isinstance(x, str) and x}
+                if dels:
+                    keep_m = []
+                    for sc in merged:
+                        dbf = os.path.basename(str((sc or {}).get("db_filename") or ""))
+                        if dbf and dbf in dels:
+                            for sfx in ("", "-wal", "-shm"):
+                                try:
+                                    os.remove(os.path.join(dest, "scans", dbf + sfx))
+                                except OSError:
+                                    pass
+                            continue
+                        keep_m.append(sc)
+                    merged = keep_m
                 new_meta["scans"] = self._prune_replica_scans(
-                    dest, self._merge_scan_lists(old_scans, new_meta.get("scans")),
-                    int(self.settings.get("replica_keep_per_root", 5) or 0))
+                    dest, merged, int(self.settings.get("replica_keep_per_root", 5) or 0))
                 tmp_meta = os.path.join(dest, "meta.json.tmp")
                 with open(tmp_meta, "w", encoding="utf-8") as w:
                     json.dump(new_meta, w, ensure_ascii=False)

@@ -901,6 +901,7 @@ class ScanController:
         self._scans: Dict[int, dict] = {}   # manager scan_id -> {stop, thread}
         self._partial_jobs: Dict[int, dict] = {}   # scan_id -> 멈춘 자료 집계(부분 집계) 작업
         self._live_snaps: Dict[int, dict] = {}     # scan_id -> 진행 중 스캔 스냅샷 작업(멈추지 않고 결과 보기)
+        self._tomb_lock = threading.Lock()        # 삭제 표시(deleted_scans.json) 쓰기 직렬화
         # (지난 실행의 스냅샷 정리는 관리 DB 를 볼 수 있는 아래쪽에서 — _clean_snapshots)
         setmod.clean_stale_tmp(self.data_dir)   # 저장 도중 강제 종료로 남은 settings.json.*.tmp
         self._lock = threading.Lock()
@@ -2878,7 +2879,41 @@ class ScanController:
             return {"ok": False, "reason": "부분 집계가 진행 중인 스캔은 삭제할 수 없습니다(먼저 중단)."}
         from . import livesnap
         livesnap.remove(self.live_snapshot_path(scan_id))   # 진행 중 스냅샷(있으면)도 함께
-        return mgrmod.delete_scan(self.data_dir, scan_id)
+        dbf = None
+        try:
+            mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+            try:
+                row = mgrmod.get_scan(mconn, scan_id)
+            finally:
+                mconn.close()
+            dbf = os.path.basename(row["db_path"] or "") if row is not None else None
+        except Exception:  # noqa: BLE001
+            dbf = None
+        res = mgrmod.delete_scan(self.data_dir, scan_id)
+        if res.get("ok") and dbf:
+            self._record_deleted(dbf)
+        return res
+
+    # 사용자가 지운 스캔의 표시(포탈 복제본도 지우게) — 포탈은 증분 복제라 엣지에서 지운 것을 알 길이 없어, 지운 스캔이
+    # 복제본에 남아 비교 화면에서 계속 '최신'으로 보였다(18회차 점검). 보존 정리(prune)는 표시하지 않는다 —
+    # 포탈은 자기 보관 규칙(replica_keep_per_root)으로 이력을 따로 둔다.
+    def _deleted_path(self) -> str:
+        return os.path.join(self.data_dir, "deleted_scans.json")
+
+    def _record_deleted(self, db_filename: str) -> None:
+        with self._tomb_lock:
+            try:
+                d = setmod.read_json_with_backup(self._deleted_path()) or {}
+                lst = [x for x in (d.get("deleted") or []) if isinstance(x, dict) and x.get("db_filename")]
+                lst.append({"db_filename": db_filename, "at": time.time()})
+                setmod.write_json_atomic(self._deleted_path(), {"deleted": lst[-2000:]})
+            except Exception as exc:  # noqa: BLE001
+                self._log("삭제 표시 기록 실패: %s" % exc)
+
+    def deleted_db_filenames(self) -> list:
+        d = setmod.read_json_with_backup(self._deleted_path()) or {}
+        return [str(x["db_filename"]) for x in (d.get("deleted") or [])
+                if isinstance(x, dict) and isinstance(x.get("db_filename"), str)]
 
     def prune(self, *, keep_per_root=None, older_than_days=None) -> dict:
         return mgrmod.prune_scans(
@@ -4088,6 +4123,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "storage": (self.controller.storage_status() if self.controller else []),
             "scans": [dict(s, db_filename=os.path.basename(s.get("db_path") or ""))
                       for s in finished],
+            # 사용자가 지운 스캔(포탈이 복제본에서도 지운다) — 증분 목록만으론 삭제를 알 수 없다
+            "deleted_db_filenames": (self.controller.deleted_db_filenames() if self.controller else []),
         }
         self.send_response(200)
         self.send_header("Content-Type", "application/gzip")

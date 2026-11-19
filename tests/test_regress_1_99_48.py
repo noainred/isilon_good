@@ -1880,6 +1880,56 @@ def check_ax_round18_data() -> None:
     print("[Y1~Y4] OK  du 부분 집계 하한값·잘린 목록 표시·--json 표준출력·죽은 스캔 CLI 부분 집계")
 
 
+def check_ay_round18_portal_delete() -> None:
+    """Z1 엣지에서 지운 스캔이 포탈 복제본에 남아 비교 화면에서 계속 '최신'으로 보임."""
+    import json as _json
+    from isilon_usage import server as SV, portal as P
+    d = tempfile.mkdtemp(prefix="iu_ay_")
+    cwd = os.getcwd()
+    os.chdir(d)
+    edge = None
+    try:
+        m = os.path.join(d, "m")
+        tree = os.path.join(m, "t")
+        os.makedirs(os.path.join(tree, "a"))
+        with open(os.path.join(tree, "a", "f"), "wb") as fh:
+            fh.write(b"x" * 1000)
+        edge = SV.serve(os.path.join(d, "edata"), host="127.0.0.1", port=0,
+                        initial_settings={"mount_bases": [m], "api_token": "TOK"}, enable_scan=True)
+        threading.Thread(target=edge.serve_forever, daemon=True).start()
+        ec = edge.RequestHandlerClass.controller
+        ids = []
+        for _ in range(2):
+            r = ec.start_scan(tree)
+            ids.append(r["scan_id"])
+            for _ in range(200):
+                if r["scan_id"] not in ec.running_ids():
+                    break
+                time.sleep(0.05)
+            time.sleep(0.05)
+        pc = P.PortalController(os.path.join(d, "hq"))
+        pc.upsert_node({"id": "e1", "url": "http://127.0.0.1:%d" % edge.server_address[1], "token": "TOK"})
+        pc._sync_one("e1", True)
+        rep = os.path.join(d, "hq", "replicas", "e1")
+        with open(os.path.join(rep, "meta.json"), encoding="utf-8") as fh:
+            before = [s["db_filename"] for s in _json.load(fh)["scans"]]
+        assert len(before) == 2, before
+        assert ec.delete_scan(ids[1])["ok"]
+        assert len(ec.deleted_db_filenames()) == 1
+        pc._sync_one("e1", True)
+        with open(os.path.join(rep, "meta.json"), encoding="utf-8") as fh:
+            after = [s["db_filename"] for s in _json.load(fh)["scans"]]
+        gone = [x for x in before if x not in after]
+        assert len(after) == 1 and len(gone) == 1, (before, after)
+        assert not os.path.exists(os.path.join(rep, "scans", gone[0])), os.listdir(os.path.join(rep, "scans"))
+    finally:
+        if edge is not None:
+            edge.shutdown()
+        os.chdir(cwd)
+        shutil.rmtree(d, ignore_errors=True)
+    print("[Z1] OK  엣지에서 지운 스캔은 포탈 복제본에서도 지움")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1898,7 +1948,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_ar_crash_round15, check_as_regress_round16,
             check_at_livesnap_round16, check_au_regress_round17,
             check_av_round17_flow, check_aw_round18_regress,
-            check_ax_round18_data]
+            check_ax_round18_data, check_ay_round18_portal_delete]
 
 
 def main() -> int:
