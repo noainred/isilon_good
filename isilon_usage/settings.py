@@ -19,6 +19,28 @@ import time as _time
 _SAVE_LOCK = threading.Lock()
 
 
+def clean_stale_tmp(dir_path: str, *, older_than: float = 60.0) -> int:
+    """write_json_atomic 이 남긴 임시 파일(<이름>.<무작위>.tmp)을 지운다 — 저장 도중 강제 종료되면 남아 쌓였다
+    (2026-11 강제 종료 점검: 30번 종료에 18개). 다른 프로세스가 지금 쓰는 중일 수 있어 1분 넘은 것만."""
+    n = 0
+    try:
+        names = os.listdir(dir_path)
+    except OSError:
+        return 0
+    now = _time.time()
+    for nm in names:
+        if not (nm.endswith(".tmp") and ".json." in nm):
+            continue
+        p = os.path.join(dir_path, nm)
+        try:
+            if now - os.path.getmtime(p) >= older_than and os.path.isfile(p):
+                os.remove(p)
+                n += 1
+        except OSError:
+            continue
+    return n
+
+
 def write_json_atomic(path: str, obj, *, mode: int = 0o600) -> None:
     """JSON 을 원자적으로 저장한다 — 매번 고유한 임시 파일(동시 저장끼리 같은 .tmp 를 덮어써 반쯤 쓴
     파일이 교체되던 경합 방지), fsync 후 교체, 직전 정상본은 .bak 으로 남긴다(2026-11 리뷰)."""

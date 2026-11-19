@@ -627,6 +627,7 @@ class PortalController:
                              or os.path.join(self.data_dir, "replicas"))
         os.makedirs(self.replicas_dir, exist_ok=True)
         self._clean_replica_temps()
+        setmod.clean_stale_tmp(self.data_dir)   # 저장 도중 강제 종료로 남은 portal_*.json.*.tmp(14회차 점검)
         self._launch_cwd = os.getcwd()      # 임시 비밀번호 파일(portal_info.MD)을 둘 '실행한 디렉터리'
         self._op_auto = False               # 기동(ensure_op_password) 후엔 '비밀번호 없음'을 두지 않는다
         self._op_sync_lock = threading.Lock()

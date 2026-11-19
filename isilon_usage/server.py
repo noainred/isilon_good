@@ -20,6 +20,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import sqlite3
 import sys
@@ -87,6 +88,8 @@ def _scans_with_partial(scans, ctrl, key="id"):
     prun = ctrl.partial_running_ids() if ctrl is not None else set()
     for s_ in scans:
         s_["partial_agg_running"] = s_.get(key) in prun
+        if ctrl is not None and s_.get("status") in ("discovering", "sizing"):
+            s_["live_snap"] = ctrl.live_snapshot_info(s_.get(key))   # 진행 중 스캔의 '지금까지 결과' 스냅샷
     return scans
 
 
@@ -872,6 +875,9 @@ class ScanController:
         self.settings = setmod.load(data_dir)
         self._scans: Dict[int, dict] = {}   # manager scan_id -> {stop, thread}
         self._partial_jobs: Dict[int, dict] = {}   # scan_id -> 멈춘 자료 집계(부분 집계) 작업
+        self._live_snaps: Dict[int, dict] = {}     # scan_id -> 진행 중 스캔 스냅샷 작업(멈추지 않고 결과 보기)
+        shutil.rmtree(os.path.join(self.data_dir, "snapshots"), ignore_errors=True)   # 지난 실행의 스냅샷(언제든 다시 만듦)
+        setmod.clean_stale_tmp(self.data_dir)   # 저장 도중 강제 종료로 남은 settings.json.*.tmp
         self._lock = threading.Lock()
         # '중복 검사 → 등록 → 실행' 임계 구역(start_scan·resume_scan). 동시 요청(더블클릭·포탈 중복 등록 노드·
         # 예약 동시 발화)이 같은 루트를 두 번 등록하지 못하게 한다. _lock 과 별개(내부에서 _lock 을 잡음).
@@ -2423,6 +2429,13 @@ class ScanController:
 
     def _on_scan_finished(self, scan_id: int) -> None:
         """스캔 종료 후: 웹훅 알림 + 보존(retention) 자동 정리."""
+        try:   # 진행 중 스냅샷은 끝나면 필요 없다(완료값·멈춘 자료 집계가 원본에 있다)
+            from . import livesnap
+            livesnap.remove(self.live_snapshot_path(scan_id))
+            with self._lock:
+                self._live_snaps.pop(int(scan_id), None)
+        except Exception:  # noqa: BLE001
+            pass
         try:
             mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
             try:
@@ -2680,6 +2693,93 @@ class ScanController:
         t.start()
         return {"ok": True, "scan_id": scan_id}
 
+    # ----- 진행 중 스캔의 '지금까지 결과' 스냅샷(스캔을 멈추지 않고 폴더별 하한값 보기) -----
+    def live_snapshot_path(self, scan_id: int) -> str:
+        return os.path.join(self.data_dir, "snapshots", "scan_%d_live.db" % int(scan_id))
+
+    def live_snapshot_info(self, scan_id) -> dict:
+        """스냅샷 상태: building(만드는 중)·at(만든 시각)·rows·error·progress."""
+        if scan_id is None:
+            return {"building": False, "at": None}
+        with self._lock:
+            job = dict(self._live_snaps.get(int(scan_id)) or {})
+        p = self.live_snapshot_path(scan_id)
+        th = job.get("thread")
+        return {"building": bool(th and th.is_alive()), "at": job.get("at") if os.path.exists(p) else None,
+                "rows": job.get("rows"), "error": job.get("error"), "progress": dict(job.get("progress") or {})}
+
+    def live_snapshot_start(self, scan_id: int) -> dict:
+        """진행 중 스캔의 스냅샷을 백그라운드로 만든다(스캔은 계속). 이미 만드는 중이면 그대로."""
+        mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+        try:
+            row = mgrmod.get_scan(mconn, scan_id)
+        finally:
+            mconn.close()
+        if row is None:
+            return {"ok": False, "reason": "없는 scan"}
+        row = dict(row)
+        if row["status"] not in ("discovering", "sizing"):
+            return {"ok": False, "reason": "진행 중인 스캔만 스냅샷을 만듭니다(멈춘 스캔은 '멈춘 자료 집계'를 쓰세요)."}
+        with self._lock:
+            rec = dict(self._scans.get(int(scan_id)) or {})
+        if rec.get("engine") == "pscan":
+            return {"ok": False, "reason": "빠르게(pscan) 스캔은 끝날 때 한 번에 기록해 진행 중 폴더 결과가 없습니다."}
+        src = row.get("db_path") or ""
+        if not os.path.exists(src):
+            return {"ok": False, "reason": "아직 스캔 DB 가 없습니다 — 잠시 뒤 다시 시도하세요."}
+        try:   # 디스크 여유: 복사본은 원본 정도 크기(+WAL) — 여유가 없으면 만들지 않는다(스캔을 방해하지 않게)
+            need = int(os.path.getsize(src) * 1.3) + 64 * 1024 * 1024
+            st = os.statvfs(self.data_dir)
+            if st.f_bavail * st.f_frsize < need:
+                return {"ok": False, "reason": "디스크 여유가 부족합니다(스냅샷에 약 %s 필요)." % _human_bytes(need)}
+        except OSError:
+            pass
+        with self._lock:
+            job = self._live_snaps.get(int(scan_id))
+            if job and job.get("thread") and job["thread"].is_alive():
+                return {"ok": True, "building": True, "scan_id": scan_id}
+            job = {"thread": None, "at": (job or {}).get("at"), "rows": (job or {}).get("rows"),
+                   "error": None, "progress": {}}
+            self._live_snaps[int(scan_id)] = job
+        dst = self.live_snapshot_path(scan_id)
+
+        def _prog(pg):
+            job["progress"] = dict(pg or {})
+
+        def _run():
+            from . import livesnap
+            try:
+                res = livesnap.build(src, dst, on_progress=_prog)
+                if res.get("ok"):
+                    job.update(at=res["at"], rows=res["rows"], error=None)
+                    self._log("스냅샷 scan #%s: 폴더 %d개 · %.1f초" % (scan_id, res["rows"], res["elapsed"]))
+                else:
+                    job["error"] = res.get("reason")
+            except Exception as exc:  # noqa: BLE001
+                job["error"] = str(exc)
+        t = threading.Thread(target=_run, name="live-snapshot-%s" % scan_id, daemon=True)
+        job["thread"] = t
+        t.start()
+        return {"ok": True, "building": True, "scan_id": scan_id}
+
+    def live_snapshot_db(self, row):
+        """분석 화면용 DB: 스캔이 진행 중이고 스냅샷이 있으면 스냅샷 경로, 아니면 None(원본).
+        끝났거나 멈춘 스캔의 스냅샷은 지운다 — 그때는 원본(완료값·멈춘 자료 집계)이 맞다."""
+        try:
+            sid = int(row["id"])
+        except (TypeError, ValueError, KeyError, IndexError):
+            return None
+        p = self.live_snapshot_path(sid)
+        if not os.path.exists(p):
+            return None
+        if row["status"] in ("discovering", "sizing"):
+            return p
+        from . import livesnap
+        livesnap.remove(p)
+        with self._lock:
+            self._live_snaps.pop(sid, None)
+        return None
+
     def partial_aggregate_status(self, scan_id) -> dict:
         with self._lock:
             job = self._partial_jobs.get(scan_id) if scan_id is not None else None
@@ -2701,6 +2801,8 @@ class ScanController:
             return {"ok": False, "reason": "실행 중인 스캔은 삭제할 수 없습니다(먼저 중지)."}
         if scan_id in self.partial_running_ids():
             return {"ok": False, "reason": "부분 집계가 진행 중인 스캔은 삭제할 수 없습니다(먼저 중단)."}
+        from . import livesnap
+        livesnap.remove(self.live_snapshot_path(scan_id))   # 진행 중 스냅샷(있으면)도 함께
         return mgrmod.delete_scan(self.data_dir, scan_id)
 
     def prune(self, *, keep_per_root=None, older_than_days=None) -> dict:
@@ -3110,8 +3212,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return v if -(2 ** 63) <= v < 2 ** 63 else None
         return None
 
-    def _resolve_scan_db(self, mconn, scan_id):
-        """scan_id(없으면 기본 스캔)에 해당하는 per-run DB 경로와 manager 행을 반환."""
+    def _resolve_scan_db(self, mconn, scan_id, *, analysis: bool = False):
+        """scan_id(없으면 기본 스캔)에 해당하는 per-run DB 경로와 manager 행을 반환.
+
+        analysis=True(폴더 트리·상위 폴더·리포트·검색·오류·내보내기): 진행 중 스캔에 '지금까지 결과' 스냅샷이 있으면
+        그 복사본을 읽는다(스캔은 멈추지 않음, 값은 하한값). 진행 표시(status)는 늘 원본 — 한 곳에서만 고른다."""
         if scan_id is None:
             scan_id = mgrmod.pick_default_scan(mconn)
         if scan_id is None:
@@ -3119,6 +3224,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         row = mgrmod.get_scan(mconn, scan_id)
         if row is None:
             return None, None
+        if analysis and self.controller is not None:
+            snap = self.controller.live_snapshot_db(row)
+            if snap:
+                row = dict(row, db_path=snap, live_snapshot=True)
         return int(row["id"]), row
 
     def _ask_llm_cfg(self) -> dict:
@@ -3337,6 +3446,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                                 if self.controller else {"ok": False, "reason": "웹 스캔 비활성"})
                 return
 
+            if path == "/api/scan/live-snapshot":      # 진행 중 스캔 스냅샷 상태(만드는 중·만든 시각)
+                self._send_json(dict({"ok": True}, **self.controller.live_snapshot_info(self._query_int(qs, "scan")))
+                                if self.controller else {"ok": False, "reason": "웹 스캔 비활성"})
+                return
+
             if path == "/api/troubleshoot/history":
                 self._send_json(self.controller.troubleshoot_history(
                     limit=self._query_int(qs, "limit") or 200)   # 잘못된 limit 값에도 500 안 나게 안전 파싱
@@ -3500,7 +3614,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             if path == "/api/children":
-                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"), analysis=True)
                 if row is None:
                     self._send_json({"ok": False, "reason": "no_runs"})
                     return
@@ -3521,7 +3635,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             if path == "/api/topdirs":
-                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"), analysis=True)
                 if row is None or not os.path.exists(row["db_path"]):
                     self._send_json({"ok": True, "rows": []})
                     return
@@ -3547,7 +3661,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             if path in ("/api/search", "/api/errors"):
-                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"), analysis=True)
                 if row is None or not os.path.exists(row["db_path"]):
                     self._send_json({"ok": True, "results": [], "errors": []})
                     return
@@ -3566,7 +3680,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             if path == "/api/stats":
                 # 파일 나이/소유자/확장자별 집계 리포트
-                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"), analysis=True)
                 if row is None or not os.path.exists(row["db_path"]):
                     self._send_json({"ok": True, "age": [], "atime_age": [],
                                      "owners": [], "extensions": [], "sizes": []})
@@ -3793,7 +3907,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             if path == "/api/export":
-                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"), analysis=True)
                 if row is None or not os.path.exists(row["db_path"]):
                     self._send_json({"ok": False, "reason": "no_runs"}, status=404)
                     return
@@ -4182,6 +4296,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             if path == "/api/troubleshoot/history/clear":
                 self._send_json(self.controller.troubleshoot_history_clear())
+                return
+
+            if path == "/api/scan/live-snapshot":      # 진행 중 스캔의 '지금까지 결과' 만들기(스캔은 계속)
+                try:
+                    sid = int(body.get("scan_id"))
+                except (TypeError, ValueError, OverflowError):
+                    self._send_json({"ok": False, "reason": "scan_id 필요"}, status=400)
+                    return
+                if not (0 < sid < 2 ** 63):
+                    self._send_json({"ok": False, "reason": "scan_id 범위가 올바르지 않습니다"}, status=400)
+                    return
+                res = self.controller.live_snapshot_start(sid)
+                self._send_json(res, status=200 if res.get("ok") else 400)
                 return
 
             if path in ("/api/scan/stop", "/api/scan/resume", "/api/scan/delete",

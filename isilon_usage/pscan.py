@@ -98,6 +98,32 @@ def _other_fs(e, ref_dev) -> bool:
         return True
 
 
+_BOUND_TO_PARENT = False
+
+
+def _bind_to_parent() -> None:
+    """워커 프로세스가 부모(서버)와 함께 죽게 한다(리눅스 PR_SET_PDEATHSIG). 서버가 강제 종료(kill -9)되면
+    fork 로 물려받은 '듣기 소켓'을 쥔 워커가 남아 다음 기동이 'Address already in use' 로 실패했다
+    (2026-11 강제 종료 점검, 12회 중 2회). 워커 안에서만, 프로세스당 한 번. 다른 OS·실패는 무시."""
+    global _BOUND_TO_PARENT
+    if _BOUND_TO_PARENT:
+        return
+    _BOUND_TO_PARENT = True
+    try:
+        import multiprocessing
+        if multiprocessing.current_process().name == "MainProcess":
+            return                          # 서버 자신에는 걸지 않는다(단일 프로세스로 부를 때)
+        import ctypes
+        import signal
+        ppid = os.getppid()
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.prctl(1, int(signal.SIGKILL), 0, 0, 0)   # 1 = PR_SET_PDEATHSIG
+        if os.getppid() != ppid or ppid == 1:          # 걸기 직전에 부모가 이미 죽었으면 바로 끝낸다
+            os._exit(1)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def scan_subtree(path: str, size_mode: str = "disk", per_file_work: int = 0,
                  threads: int = 1, recursive: bool = True, deadline: float = 0.0,
                  opts: Optional[dict] = None) -> tuple:
@@ -116,6 +142,7 @@ def scan_subtree(path: str, size_mode: str = "disk", per_file_work: int = 0,
     opts: {"one_fs": 다른 파일시스템 디렉터리 제외, "hardlink_dedup": 하드링크 용량 1회(기본 True)}.
     open_hardlinks: {(dev, ino): bytes} — 이 단위에서 링크를 다 못 본 inode(코디네이터가 단위 간 중복 차감).
     """
+    _bind_to_parent()
     if not recursive:
         return _scan_shallow(path, size_mode, deadline, opts)
     if threads and threads > 1 and not per_file_work:
@@ -287,6 +314,7 @@ def _scan_shallow(path: str, size_mode: str, deadline: float = 0.0,
     자식 디렉터리들은 각각 별도 단위로 재귀 스캔되므로, 부모는 자기 inode + 직속 파일만
     세면 누락/중복이 없다. dirs=1(자기 자신). 반환은 scan_subtree 와 같은 6-튜플.
     """
+    _bind_to_parent()
     dedup = _opt(opts, "hardlink_dedup", True)
     hl = _HardLinks()
     total_bytes = files = errors = 0

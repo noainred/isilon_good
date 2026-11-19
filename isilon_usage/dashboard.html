@@ -397,8 +397,8 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
 <div class="wrap view" id="view-analysis" style="display:none;">
   <div id="analysisNotice" class="card"
        style="display:none; margin-bottom:14px; border-color:var(--warn); background:#F5F1E5; color:#6A5011;">
-    ⚠ <b>스캔 진행 중</b> — 집계가 끝나기 전이라 재귀 용량·비율·파일 수 등 일부 값은
-    <b>임시 표시(직속 용량 기준)</b>입니다. 스캔이 <b>완료</b>되면 정확한 값으로 바뀝니다.
+    ⚠ <b>스캔 진행 중</b> — 폴더별 용량(하위 포함)은 2단계(용량 집계)에서 한꺼번에 계산돼, 지금은 <b>0 이거나 일부만</b>
+    보입니다. 스캔이 <b>완료</b>되면 정확한 값으로 바뀝니다.
   </div>
 </div>
 
@@ -4423,6 +4423,40 @@ async function staggerSchedules() {
   } catch (e) { msg.textContent = " 요청 오류: " + e; }
 }
 
+// ---- 진행 중 스캔의 '지금까지 결과'(스냅샷) — 스캔을 멈추지 않고 폴더별 용량(하한값)을 본다 ----
+function liveSnapHtml(ls, sid) {
+  const engine = ((allScans || []).find(x => x.id === sid) || {}).engine;
+  if (engine === "pscan") return '<div class="sub" style="margin-top:6px;">빠르게(pscan) 스캔은 끝날 때 한 번에 기록해 중간 결과를 볼 수 없습니다.</div>';
+  const btn = (label) => `<button type="button" class="primary" data-livesnap="${sid}" style="margin-left:6px;">${label}</button>`;
+  if (ls && ls.building) {
+    const pg = ls.progress || {};
+    return `<div style="margin-top:8px;">⏳ <b>지금까지 결과를 만드는 중</b>(스캔은 계속됩니다)${pg.total_rows ? ` — ${fmtNum(pg.rows || 0)} / ${fmtNum(pg.total_rows)}행` : ""}</div>`;
+  }
+  if (ls && ls.at) {
+    return `<div style="margin-top:8px;">📸 <b>${new Date(ls.at * 1000).toLocaleString(_LOC)} 기준 결과</b>를 보고 있습니다 — 폴더 ${fmtNum(ls.rows || 0)}개까지 합한 <b>하한값</b>이고, 그 뒤에 찾은 폴더는 아직 안 들어갔습니다. 스캔은 계속 진행 중입니다.${btn("새로 만들기")}</div>`;
+  }
+  return `<div style="margin-top:8px;">스캔을 멈추지 않고 <b>지금까지 찾은 폴더</b>로 폴더별 용량(하한값)을 계산해 볼 수 있습니다.${btn("📸 지금까지 결과로 보기")}`
+    + (ls && ls.error ? ` <span class="err">— ${escHtml(ls.error)}</span>` : "") + `</div>`;
+}
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest && e.target.closest("button[data-livesnap]");
+  if (!b) return;
+  const sid = parseInt(b.dataset.livesnap, 10);
+  b.disabled = true; b.textContent = "만드는 중…";
+  try {
+    const j = await (await fetch("/api/scan/live-snapshot", {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify({scan_id: sid})})).json();
+    if (!j.ok) { alert("지금까지 결과를 만들지 못했습니다: " + (j.reason || "실패")); b.disabled = false; b.textContent = "다시 시도"; return; }
+    for (let i = 0; i < 600; i++) {            // 끝날 때까지(행 수에 비례) — 최대 10분 확인
+      await new Promise(r => setTimeout(r, 1000));
+      const st = await (await fetch("/api/scan/live-snapshot?scan=" + sid, {cache: "no-store"})).json();
+      if (!st.building) { if (st.error) alert("지금까지 결과를 만들지 못했습니다: " + st.error); break; }
+    }
+  } catch (err) { alert("요청 오류: " + err); }
+  if (typeof loadScans === "function") await loadScans();
+  lastDetailScan = null; poll();
+});
+
 function render(d) {
   const r = d.run, p = d.progress, rs = d.resources;
   // 다른 스캔이 실행 중이면 /api/status 는 '실행 중 스캔'(진행 패널용)을 돌려준다. 분석 화면(배너·드릴
@@ -4450,7 +4484,15 @@ function render(d) {
     const _st = _sel ? _sel.status : r.status;
     const _paAt = _sel ? _sel.partial_agg_at : r.partial_agg_at;
     const _running = (_st === "discovering" || _st === "sizing");
-    if (_running) { _an.style.display = "block"; _an.innerHTML = window._anRunningHtml; }
+    if (_running) {
+      _an.style.display = "block";
+      const _sid = _sel ? _sel.id : d.scan_id;
+      const _ls = ((allScans || []).find(x => x.id === _sid) || {}).live_snap || null;   // 선택=실행 중이면 _sel 은 비어 있다
+      // 스냅샷이 새로 만들어지면 분석 패널을 다시 불러온다(같은 스캔이라도 값이 바뀜)
+      const _lsAt = _ls && _ls.at ? _ls.at : null;
+      if (_lsAt && window._liveSnapSeen !== _sid + ":" + _lsAt) { window._liveSnapSeen = _sid + ":" + _lsAt; lastDetailScan = null; }
+      _an.innerHTML = window._anRunningHtml + liveSnapHtml(_ls, _sid);
+    }
     else if (_pa && _pa.running) {
       const pg = _pa.progress || {};
       _an.style.display = "block";

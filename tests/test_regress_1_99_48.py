@@ -1492,6 +1492,126 @@ def check_ap_explore_round14() -> None:
     print("[Q1·Q2] OK  설정은 바뀐 칸만 저장(브라우저 두 탭 확인)·새 노드는 '확인 중'")
 
 
+# ------------------------------------------------------------------ 사용자 요청: 스캔을 멈추지 않고 지금까지 결과 보기
+def check_aq_live_snapshot() -> None:
+    """R1 진행 중 스캔의 폴더별 용량이 0 → 스냅샷(일관 복사+부분 집계)으로 하한값을 본다. 스캔은 계속, 끝나면 스냅샷 삭제."""
+    from isilon_usage import server as SV, scanner as scanmod
+    d = tempfile.mkdtemp(prefix="iu_aq_")
+    orig = scanmod.Scanner._safe_stat
+    try:
+        m = os.path.join(d, "m")
+        for a in range(4):
+            for b in range(6):
+                p = os.path.join(m, "t", "a%d" % a, "b%d" % b)
+                os.makedirs(p)
+                for f in range(6):
+                    with open(os.path.join(p, "f%d" % f), "wb") as fh:
+                        fh.write(b"x" * 1000)
+        scanmod.Scanner._safe_stat = lambda self, e: (time.sleep(0.03), orig(self, e))[1]
+        httpd = SV.serve(os.path.join(d, "data"), host="127.0.0.1", port=0,
+                         initial_settings={"mount_bases": [m]}, enable_scan=True)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        base = "http://127.0.0.1:%d" % httpd.server_address[1]
+        c = httpd.RequestHandlerClass.controller
+
+        def g(path):
+            return json.loads(urllib.request.urlopen(base + path).read().decode())
+        sid = c.start_scan(os.path.join(m, "t"))["scan_id"]
+        for _ in range(100):
+            if any(r["total_bytes"] == 0 for r in g("/api/topdirs?scan=%d&limit=5" % sid)["rows"]):
+                break
+            time.sleep(0.05)
+        assert c.live_snapshot_start(sid)["ok"]
+        for _ in range(200):
+            if not c.live_snapshot_info(sid)["building"]:
+                break
+            time.sleep(0.05)
+        info = c.live_snapshot_info(sid)
+        assert info["at"] and not info["error"], info
+        row = [x for x in g("/api/scans")["scans"] if x["id"] == sid][0]
+        assert row["status"] in ("discovering", "sizing") and row["live_snap"]["at"], row       # 스캔은 계속
+        tops = g("/api/topdirs?scan=%d&limit=5" % sid)["rows"]
+        assert tops and max(r["total_bytes"] for r in tops) > 0, tops                          # 하한값이 보임
+        assert c.live_snapshot_start(10 ** 6)["ok"] is False
+        scanmod.Scanner._safe_stat = orig
+        for _ in range(400):
+            if sid not in c.running_ids():
+                break
+            time.sleep(0.05)
+        time.sleep(0.3)
+        assert not os.path.exists(c.live_snapshot_path(sid))                                   # 끝나면 지움
+        assert c.live_snapshot_start(sid)["ok"] is False                                        # 끝난 스캔은 거부
+        httpd.shutdown()
+    finally:
+        scanmod.Scanner._safe_stat = orig
+        shutil.rmtree(d, ignore_errors=True)
+    dh = _read("dashboard.html")
+    assert "button[data-livesnap]" in dh and "function liveSnapHtml(ls, sid)" in dh
+    print("[R1] OK  진행 중 스캔 '지금까지 결과' — 멈추지 않고 하한값·끝나면 스냅샷 정리")
+
+
+# ------------------------------------------------------------------ 15회차(강제 종료)
+def check_ar_crash_round15() -> None:
+    """S1 빠른 스캔 중 서버를 kill -9 하면 남은 워커가 듣기 소켓을 쥐어 재기동 실패 S2 저장 중 강제 종료로 .tmp 가 쌓임."""
+    from isilon_usage import settings as setmod
+    d = tempfile.mkdtemp(prefix="iu_ar_")
+    try:
+        for a in range(6):
+            for b in range(10):
+                p = os.path.join(d, "m", "t", "a%d" % a, "b%d" % b)
+                os.makedirs(p)
+                with open(os.path.join(p, "f"), "wb") as fh:
+                    fh.write(b"x")
+        srv = os.path.join(d, "srv.py")
+        with open(srv, "w") as fh:
+            fh.write("""import os, sys, time
+sys.path.insert(0, %r)
+from isilon_usage import pscan, server as SV
+_o = os.scandir
+pscan.os.scandir = lambda p=".": (time.sleep(0.2), _o(p))[1]
+d = sys.argv[1]
+h = SV.serve(os.path.join(d, "data"), host="127.0.0.1", port=0, initial_settings={"mount_bases": [os.path.join(d, "m")]}, enable_scan=True)
+h.RequestHandlerClass.controller.start_scan(os.path.join(d, "m", "t"), engine="pscan")
+open(os.path.join(d, "ready"), "w").write(str(os.getpid()))
+h.serve_forever()
+""" % os.path.dirname(HERE))
+        proc = subprocess.Popen([sys.executable, srv, d], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(100):
+            if os.path.exists(os.path.join(d, "ready")):
+                break
+            time.sleep(0.1)
+        time.sleep(1.5)
+        kids = subprocess.run(["pgrep", "-P", str(proc.pid)], capture_output=True, text=True).stdout.split()
+        assert kids, "pscan 워커가 떠 있어야 함"
+        proc.kill()
+        proc.wait()
+        time.sleep(1.0)
+        def _live(pid):   # 좀비(Z, 이미 죽었고 거둬 가기만 남음)는 살아 있는 것이 아니다
+            try:
+                with open("/proc/%s/stat" % pid) as fh:
+                    return fh.read().rsplit(")", 1)[1].split()[0] not in ("Z", "X")
+            except OSError:
+                return False
+        alive = [k for k in kids if _live(k)]
+        for k in alive:
+            try:
+                os.kill(int(k), 9)
+            except OSError:
+                pass
+        assert not alive, "부모가 죽은 뒤에도 남은 워커: %s" % alive                       # S1
+        stale = os.path.join(d, "settings.json.abc123.tmp")                                    # S2
+        with open(stale, "w") as fh:
+            fh.write("{")
+        os.utime(stale, (time.time() - 3600, time.time() - 3600))
+        fresh = os.path.join(d, "portal_nodes.json.zzz.tmp")
+        with open(fresh, "w") as fh:
+            fh.write("{")
+        assert setmod.clean_stale_tmp(d) == 1 and not os.path.exists(stale) and os.path.exists(fresh)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    print("[S1·S2] OK  강제 종료 시 pscan 워커도 함께 종료·오래된 임시 파일 정리")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1506,7 +1626,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_ai_edge_round10, check_aj_adverse_fs_round11,
             check_ak_round11_misc, check_al_tools_round12, check_am_remote_round13,
             check_an_fuzz_round13, check_ao_regress_round14,
-            check_ap_explore_round14]
+            check_ap_explore_round14, check_aq_live_snapshot,
+            check_ar_crash_round15]
 
 
 def main() -> int:
