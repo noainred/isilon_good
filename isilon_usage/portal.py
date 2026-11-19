@@ -1258,6 +1258,9 @@ class PortalController:
     def _prune_backups(self, bdir, keep) -> int:
         """최신 keep 개만 남기고 오래된 백업을 지운다(지운 개수 반환)."""
         files = self._list_backups(bdir)
+        # 미래 시각 파일(시계가 뒤로 감)은 가장 오래된 것으로 보고 먼저 정리 — 계속 '최신'으로 남아 진짜 이력이 먼저 지워졌다
+        _now = time.time()
+        files = sorted(files, key=lambda f: f["mtime"] if f["mtime"] <= _now + 60 else -1)
         keep = max(1, int(keep or 1))
         removed = 0
         for f in (files[:-keep] if len(files) > keep else []):
@@ -1309,9 +1312,10 @@ class PortalController:
             return
         every = max(300.0, float(self.settings.get("backup_every_hours") or 1) * 3600)
         files = self._list_backups(bdir)
-        last = files[-1]["mtime"] if files else 0
-        if last > now + 60:   # 시계가 뒤로 감(미래 시각의 백업 파일) — 기다리지 않는다(25회차 점검)
-            last = 0
+        # 미래 시각의 백업 파일(시계가 뒤로 감)은 '마지막 백업' 판단에서 뺀다 — 25회차에 0 으로만 바꿔, 그 파일이 계속
+        # 최신으로 남아 매 틱(5초)마다 백업을 새로 만들었다(26회차 점검). 남은 것 중 가장 최근 것으로 판단.
+        past = [f for f in files if f["mtime"] <= now + 60]
+        last = past[-1]["mtime"] if past else 0
         if now - last < every:
             return
         # 실패 백오프: 저장이 실패(권한·디스크 부족)하면 예전엔 매 주기(수십 초) 전체 백업을 다시 만들며
@@ -2220,7 +2224,10 @@ class PortalController:
                         if start_poll:
                             self._inflight.add(nid)
                         try:   # 노드 하나의 비정상 상태가 뒤 노드들의 폴링·복제를 막지 않게(노드별 격리)
-                            start_rep = nid not in self._rep_inflight and self._rep_due(n, now)
+                            # 자가 업그레이드 설치 중엔 새 복제를 시작하지 않는다 — 설치가 별도 스레드로 옮겨진 뒤(25회차)
+                            # 재시작(execv)이 복제를 중간에 끊을 수 있었다(26회차 점검)
+                            start_rep = (nid not in self._rep_inflight and not self._upg_state.get("installing")
+                                         and self._rep_due(n, now))
                         except Exception:  # noqa: BLE001
                             start_rep = False
                         if start_rep:
@@ -2427,10 +2434,15 @@ class PortalController:
         except Exception as e:  # noqa: BLE001
             self._clock_rewound.pop(nid, None)   # 실패한 시도의 표시가 다음 성공에 잘못 남지 않게
             with self._lock:
+                if self._get(nid) is None:       # 복제 도중 지워진 노드 — 상태를 되살리지 않는다(26회차 점검)
+                    return
                 self._rep_fail[nid] = int(self._rep_fail.get(nid, 0)) + 1
                 self._rep_err[nid] = "replicate: " + str(e)
             return
         with self._lock:
+            if self._get(nid) is None:           # 복제 도중 지워진 노드 — 상태·저장을 되살리지 않는다(26회차 점검)
+                self._clock_rewound.pop(nid, None)
+                return
             cur = self._get(nid) or n
             self._rep_ok_at[nid] = time.time()
             if self._clock_rewound.pop(nid, None) is not None:

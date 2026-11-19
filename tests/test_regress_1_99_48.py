@@ -2890,7 +2890,10 @@ def check_bq_round25_schedule() -> None:
     def ts(y, mo, dd, h=0, mi=0):
         return _d.datetime(y, mo, dd, h, mi).timestamp()
     now = ts(2026, 11, 20, 12)
+    # SS1: 간격형은 미래 기록이면 바로 차례, 달력형은 같은 날짜 기록이면 오늘 슬롯은 돈 것으로(26회차: 같은 슬롯 두 번 방지)
     assert SE.schedule_due({"unit": "minute", "every": 5, "last_run": now + 7200}, now)               # SS1
+    assert not SE.schedule_due({"unit": "day", "every": 1, "at": "03:00", "anchor": ts(2026, 11, 1),
+                                "last_run": ts(2026, 11, 20, 3, 10)}, ts(2026, 11, 20, 3, 5))
     assert SE.schedule_due({"unit": "day", "every": 1, "at": "03:00", "anchor": ts(2026, 11, 1),
                             "last_run": now + 2 * 86400}, now)
     sc = {"unit": "month", "every": 1, "start_month": 11, "start_day": 5, "at": "03:00",               # SS4
@@ -2948,6 +2951,38 @@ def check_br_round25_client() -> None:
     print("[TT1~TT6] OK  사라진 작업 감지·요청 쌓임 방지·팝업 처리기 정리·트리 응답 순서·연결 끊김 안내·로그인 창 하나")
 
 
+def check_bs_round26_regress() -> None:
+    """UU1 시계 역행 뒤 미래 시각 백업 파일 때문에 매 틱 백업 UU2 같은 슬롯 두 번 실행(26회차 SS1 보강)
+    UU3 자가 업그레이드 설치 중 새 복제 시작 UU4 복제 도중 지운 노드 상태 되살림 UU5 '연결 끊김' 오안내."""
+    from isilon_usage import portal as P
+    d = tempfile.mkdtemp(prefix="iu_bs_")
+    try:
+        pc = P.PortalController(os.path.join(d, "hq"))                                                  # UU1
+        bdir = os.path.join(d, "bk")
+        os.makedirs(bdir)
+        fut = os.path.join(bdir, "isilon_portal_backup-20991231-000000.tar.gz")
+        open(fut, "wb").close()
+        now = time.time()
+        os.utime(fut, (now + 3600, now + 3600))
+        pc.settings["backup_dir"] = bdir
+        pc.settings["backup_every_hours"] = 1
+        for i in range(5):
+            pc._maybe_scheduled_backup(now + i * 5)
+        n = len([x for x in os.listdir(bdir) if x.endswith(".tar.gz")])
+        assert n == 2, n                     # 미래 파일 + 첫 틱 백업 1개(그 뒤 틱은 기다림)
+        pc.settings["backup_keep"] = 1
+        pc._prune_backups(bdir, 1)
+        assert not os.path.exists(fut), os.listdir(bdir)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    pt = _read("portal.py")
+    assert 'not self._upg_state.get("installing")' in pt                                                # UU3
+    assert pt.count("복제 도중 지워진 노드") == 2                                                         # UU4
+    dh = _read("dashboard.html")
+    assert "window._ovFail = false;                    // 응답이 왔다" in dh                               # UU5
+    print("[UU1~UU5] OK  미래 백업 파일·같은 슬롯·설치 중 복제·삭제 경합·연결 끊김 안내")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -2971,7 +3006,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bb_round20_regress, check_bc_round20_upgrade,
             check_bd_round20_stress, check_be_round21_sec_regress,
             check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser, check_bj_round23_regress, check_bk_round23_portal, check_bl_round23_engine, check_bm_round24_regress,
-            check_bn_round24_consistency, check_bo_round24_perf, check_bp_round25_regress, check_bq_round25_schedule, check_br_round25_client]
+            check_bn_round24_consistency, check_bo_round24_perf, check_bp_round25_regress, check_bq_round25_schedule, check_br_round25_client,
+            check_bs_round26_regress]
 
 
 def main() -> int:

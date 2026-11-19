@@ -3845,7 +3845,8 @@ function scheduleSummary(s) {
     const d = (s.weekdays || []).map(i => SCHED_DOW[i]).join(",");
     return `${d || "?"}요일 ${s.at || "03:00"} · 매 ${y}주마다`;
   }
-  if (u === "month") return `${s.start_month || 1}월 ${s.start_day || 1}일 ${s.at || "04:00"} · 매 ${y}개월마다`;
+  // 2개월 이상 간격은 '그 월·일을 기준으로 한 격자'(올해 시작 월부터 N개월씩) — 첫 실행이 그 월이 아닐 수 있어 '기준'으로 표시(26회차 점검)
+  if (u === "month") return `${s.start_month || 1}월 ${s.start_day || 1}일 ${s.at || "04:00"}${y > 1 ? " 기준" : ""} · 매 ${y}개월마다`;
   return "—";
 }
 function buildSchWeekdays() {
@@ -4359,11 +4360,16 @@ async function poll() {
   // 앞의 개요 요청이 아직이면 또 보내지 않는다 — 서버가 멈추면 주기마다 쌓여 164개까지 밀렸다(25회차 점검)
   if (!window._scansInFlight) {
     window._scansInFlight = true;
+    let sj = null;
     try {
-      const sj = await fetchJsonTimeout("/api/scans", 8000);
-      if (sj.ok) { renderOverview(sj); window._ovFail = false; window._lastOvOk = Date.now(); }
+      sj = await fetchJsonTimeout("/api/scans", 8000);
+      window._ovFail = false;                    // 응답이 왔다 = 서버에 닿음(401 등 ok:false 여도, 26회차 점검)
     } catch (e) { window._ovFail = true; }
     finally { window._scansInFlight = false; }
+    if (sj && sj.ok) {                             // 화면 그리기 오류를 '연결 끊김'으로 보이지 않게 try 밖에서
+      window._lastOvOk = Date.now();
+      try { renderOverview(sj); } catch (e) { console.error(e); }
+    }
   }
   pollAutotune();   // 오토튜닝 진행 카드 갱신(진행 중이 아니면 카드 숨김 — 가벼움)
   // 2) 상세(/api/status) — 한 번에 하나만. 거대 DB(수십억 파일)에서 느린 요청이

@@ -439,9 +439,14 @@ def schedule_due(sc: dict, now: float) -> bool:
     every = max(1, int(sc.get("every", 1) or 1))
     last = float(sc.get("last_run", 0) or 0)
     if last > now + 60:
-        # 시계가 뒤로 갔다(NTP 보정 등) — 미래의 '마지막 실행'은 믿지 않는다. 예전엔 그 차이만큼(예: 1시간·이틀)
-        # 실행이 멈췄다(25회차 점검: 일 단위 이틀 앞이면 2회 놓침)
-        last = 0.0
+        # 시계가 뒤로 갔다(NTP 보정 등) — 미래의 '마지막 실행'은 그대로 믿지 않는다. 예전엔 그 차이만큼(예: 1시간·이틀)
+        # 실행이 멈췄다(25회차 점검). (저장된 last_run 은 실제로 돌 때만 바뀌므로, 여기서 '지금'으로 고쳐 보면 계속 미래라
+        # 결국 같은 침묵이 된다.) 간격형은 바로 차례로(한 번 더 도는 정도), 달력형은 '오늘 날짜'의 기록이면 오늘 슬롯은
+        # 이미 돈 것으로(같은 슬롯 두 번 방지, 26회차 점검), 다른 날짜(하루 넘게 앞섬)면 기록 없음으로.
+        if unit in ("minute", "hour"):
+            last = 0.0
+        elif _dt.datetime.fromtimestamp(last).date() != _dt.datetime.fromtimestamp(now).date():
+            last = 0.0
     if unit == "minute":
         return (now - last) >= every * 60
     if unit == "hour":
