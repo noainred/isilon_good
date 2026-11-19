@@ -1918,15 +1918,28 @@ class ScanController:
                 "total_bytes": tb, "total_files": tf, "total_dirs": td}
 
     # ----- 테스트 데이터 생성 -----
+    def _gentest_path_ok(self, path):
+        """테스트 데이터 대상도 허용 마운트 경로 안이어야 한다(스캔·분석과 같은 규칙) — 예전엔 /tmp·/etc/x·
+        <마운트>/../밖 에도 만들 수 있었다(2026-11 점검). 아직 없는 경로라 실제 경로(realpath)로 판정."""
+        if self.mount_bases and not self._under_bases(os.path.abspath(str(path or ""))):
+            return "허용된 마운트 경로 밖입니다. 허용: " + ", ".join(self.mount_bases)
+        return None
+
     def gentest_validate(self, *, path, n_dirs, n_subdirs, n_files, file_size) -> dict:
         from . import gentest as genmod
         ok, why, plan = genmod.validate(path, n_dirs, n_subdirs, n_files, file_size)
+        bad = self._gentest_path_ok(path)
+        if bad:
+            ok, why = False, bad
         return {"ok": ok, "error": why, "plan": plan}
 
     def gentest_start(self, *, path, n_dirs, n_subdirs, n_files, file_size) -> dict:
         """백그라운드로 샘플 디렉터리/파일을 생성한다(진행 폴링용)."""
         from . import gentest as genmod
         ok, why, plan = genmod.validate(path, n_dirs, n_subdirs, n_files, file_size)
+        bad = self._gentest_path_ok(path)
+        if bad:
+            ok, why = False, bad
         if not ok:
             return {"ok": False, "error": why, "plan": plan}
         with self._gen_lock:

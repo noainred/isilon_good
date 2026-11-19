@@ -16,6 +16,8 @@ MAX_TOTAL_FILES = 50_000_000  # 안전 상한(실수로 디스크/아이노드 �
 # 생성을 거부할 시스템 경로(정확히 이 경로면 거부)
 _DENY = {"/", "/bin", "/sbin", "/usr", "/lib", "/lib64", "/etc", "/boot",
          "/sys", "/proc", "/dev", "/run", "/var", "/root", "/home", "/tmp"}
+# 그 '아래'도 막는 시스템 트리(데이터를 둘 일이 없는 곳). /home·/tmp·/var·/root 는 그 자체만 막는다(아래엔 데이터가 있을 수 있음)
+_DENY_TREE = ("/bin", "/sbin", "/usr", "/lib", "/lib64", "/etc", "/boot", "/sys", "/proc", "/dev", "/run")
 
 
 def plan_of(n_dirs: int, n_subdirs: int, n_files: int, file_size: int) -> dict:
@@ -40,7 +42,10 @@ def validate(base: str, n_dirs: int, n_subdirs: int, n_files: int, file_size: in
     base = os.path.abspath(base or "")
     plan = plan_of(n_dirs, n_subdirs, n_files, file_size)
     plan["base"] = base
-    if not base or base in _DENY:
+    real = os.path.realpath(base)
+    # 시스템 경로 '아래'도 막는다 — 예전엔 정확히 같은 경로만 막아 /etc/x · /usr/... 에 만들 수 있었다(2026-11 점검)
+    if (not base or base in _DENY or real in _DENY
+            or any((real + "/").startswith(p + "/") for p in _DENY_TREE)):
         return False, "안전하지 않은 경로입니다(시스템 경로에는 생성할 수 없습니다).", plan
     if plan["n_dirs"] < 1:
         return False, "디렉터리 수는 1 이상이어야 합니다.", plan

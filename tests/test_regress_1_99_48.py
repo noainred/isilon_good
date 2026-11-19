@@ -1321,6 +1321,34 @@ def check_ak_round11_misc() -> None:
     print("[K1~K4] OK  멈추는 중 대기·푸시 모달은 시작 뒤 조회·이미 최신은 성공·감시 폴더 유지")
 
 
+# ------------------------------------------------------------------ 12회차(엣지 도구 화면)
+def check_al_tools_round12() -> None:
+    """M1 테스트 데이터 생성이 허용 경로 밖·시스템 경로 아래(/etc/x)에도 만들 수 있었음 M2 두 권장 결과가 함께 남아 서로 다른 값."""
+    from isilon_usage import gentest as G, server as SV
+    for p in ("/etc/x", "/usr/local/zz", "/proc/1/x"):
+        assert G.validate(p, 1, 1, 1, 1)[0] is False, p                               # M1(시스템 트리 아래)
+    d = tempfile.mkdtemp(prefix="iu_al_")
+    try:
+        m = os.path.join(d, "m")
+        os.makedirs(m)
+        httpd = SV.serve(os.path.join(d, "data"), host="127.0.0.1", port=0,
+                         initial_settings={"mount_bases": [m]}, enable_scan=True)
+        c = httpd.RequestHandlerClass.controller
+        kw = dict(n_dirs=1, n_subdirs=1, n_files=1, file_size=1)
+        assert c.gentest_validate(path=os.path.join(m, "g"), **kw)["ok"] is True
+        for bad in (os.path.join(d, "outside"), os.path.join(m, "..", "escape")):
+            r = c.gentest_validate(path=bad, **kw)
+            assert r["ok"] is False and "허용된 마운트 경로 밖" in (r["error"] or ""), (bad, r)
+            assert c.gentest_start(path=bad, **kw)["ok"] is False
+        httpd.server_close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    dh = _read("dashboard.html")                                                       # M2
+    assert 'if ($("setTuneResult")) $("setTuneResult").innerHTML = "";' in dh
+    assert 'if ($("benchResult") && !_benchTimer) $("benchResult").innerHTML = "";' in dh
+    print("[M1·M2] OK  테스트 데이터는 허용 경로 안·시스템 트리 밖에만·권장 결과는 하나만")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1333,7 +1361,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_ad_portal_round8, check_ae_regress_round8, check_af_multinode_round9,
             check_ag_edge_flow_round9, check_ah_clock_rewind_round10,
             check_ai_edge_round10, check_aj_adverse_fs_round11,
-            check_ak_round11_misc]
+            check_ak_round11_misc, check_al_tools_round12]
 
 
 def main() -> int:

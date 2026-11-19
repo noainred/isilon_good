@@ -2066,6 +2066,8 @@ async function loadSettings() {
 
 async function tuneWorkers() {
   const out = $("setTuneResult");   // 설정 화면의 권장 계산 결과(도구의 튜닝 점검 #tuneResult 와 다른 칸 — 예전엔 id 가 같아 점검 결과가 안 보였다)
+  // 두 권장(사양 기반 / 실측)은 서로 다른 값을 낼 수 있다 — 새로 계산하면 다른 쪽 결과는 지워 하나만 보이게(2026-11 점검)
+  if ($("benchResult") && !_benchTimer) $("benchResult").innerHTML = "";   // 실측이 진행 중이면 그대로 둔다
   out.textContent = "서버 사양 확인 중…";
   try {
     const j = await fetchJsonTimeout("/api/recommend-workers", 8000);
@@ -2132,6 +2134,7 @@ function _benchRender(j) {
 let _benchTimer = null;
 async function tuneBenchmark() {
   const out = $("benchResult");
+  if ($("setTuneResult")) $("setTuneResult").innerHTML = "";   // 사양 기반 권장은 지운다(실측이 더 정확 — 하나만 보이게)
   const path = ($("scanPath") && $("scanPath").value.trim()) || "";
   out.innerHTML = '<span style="color:var(--warn)">시범 탐색 시작 중… (스레드를 메모리 2배 한도까지 단계적으로 올립니다)</span>';
   if (_benchTimer) { clearInterval(_benchTimer); _benchTimer = null; }
