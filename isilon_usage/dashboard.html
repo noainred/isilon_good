@@ -4215,6 +4215,7 @@ function renderArrayHtml(a) {
   const cap = a.capacity || {}, nd = a.nodes || {};
   const health = a.health === "ok" ? '<span class="badge done">정상</span>'
     : a.health === "critical" ? '<span class="badge" style="background:#F2DADA; color:#8A0F0F;">위험</span>'
+    : a.health === "unknown" ? `<span class="badge" title="${escHtml(a.events_error || "이벤트/알림을 읽지 못했습니다")}">확인 불가</span>`
     : '<span class="badge paused">주의</span>';
   const _esc = s => String(s == null ? "" : s).replace(/[<>&"]/g,
     c => ({"<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;"}[c]));

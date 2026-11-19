@@ -10,6 +10,7 @@
 """
 
 import os
+import re
 import resource
 from typing import Optional
 
@@ -45,7 +46,7 @@ def parse_nfs_mounts():
         p = line.split()
         if len(p) < 4:
             continue
-        dev, mnt, fstype, opts = p[0], p[1], p[2], p[3]
+        dev, mnt, fstype, opts = p[0], _mount_unescape(p[1]), p[2], p[3]
         if fstype not in ("nfs", "nfs4"):
             continue
         od = {}
@@ -59,6 +60,12 @@ def parse_nfs_mounts():
     return out
 
 
+def _mount_unescape(s: str) -> str:
+    """/proc/mounts 의 8진 이스케이프(공백 \\040, 탭 \\011 등)를 푼다 — 안 풀어 공백 든 마운트를 못 찾고
+    '/' 로 진단했다(21회차 점검). 스캐너의 마운트 처리와 같은 규칙."""
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), s)
+
+
 def parse_all_mounts():
     """/proc/mounts 의 모든 마운트(옵션 포함). fstype 제한 없음."""
     out = []
@@ -69,7 +76,7 @@ def parse_all_mounts():
         p = line.split()
         if len(p) < 4:
             continue
-        dev, mnt, fstype, opts = p[0], p[1], p[2], p[3]
+        dev, mnt, fstype, opts = p[0], _mount_unescape(p[1]), p[2], p[3]
         od = {}
         for tok in opts.split(","):
             if "=" in tok:
@@ -257,9 +264,10 @@ def _limits_section():
     items = []
     try:
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        unl = soft == resource.RLIM_INFINITY   # 무제한(-1)을 '부족(경고)'으로 보였다(21회차 점검)
         items.append(_item(
-            "open files(nofile, soft)", soft, "≥ 65536",
-            "ok" if soft >= 65536 else ("warn" if soft < 4096 else "tip"),
+            "open files(nofile, soft)", "무제한" if unl else soft, "≥ 65536",
+            "ok" if (unl or soft >= 65536) else ("warn" if soft < 4096 else "tip"),
             "워커 fd + DB + 소켓. 너무 낮으면 다중 워커/연결에서 부족.",
             "ulimit -n 65536  (또는 limits.conf/systemd LimitNOFILE)"))
     except (ValueError, OSError):

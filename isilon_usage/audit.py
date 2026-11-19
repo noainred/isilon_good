@@ -7,6 +7,7 @@
 
 import json
 import os
+import threading
 import time
 from typing import List
 
@@ -16,12 +17,20 @@ KEEP = 5                      # 보관할 회전 파일 수(예전엔 .1 하나�
 MAX_FIELD = 500               # 항목(action/detail) 최대 길이 — 긴 사유·경로가 로그를 부풀리지 않게
 
 
+_LOCK = threading.Lock()   # 회전·쓰기 직렬화 — 동시 회전이 서로 밀어내 기록이 사라졌다(21회차 점검: 8스레드 → .4 유실)
+
+
 def audit_path(data_dir: str) -> str:
     return os.path.join(data_dir, AUDIT_FILE)
 
 
 def record(data_dir: str, *, action: str, ok: bool, ip: str = "", detail: str = "") -> None:
     """감사 항목 한 줄 추가(JSONL)."""
+    with _LOCK:
+        _record_locked(data_dir, action=action, ok=ok, ip=ip, detail=detail)
+
+
+def _record_locked(data_dir: str, *, action: str, ok: bool, ip: str = "", detail: str = "") -> None:
     try:
         os.makedirs(data_dir, exist_ok=True)
         path = audit_path(data_dir)

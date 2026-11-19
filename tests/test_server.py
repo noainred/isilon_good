@@ -1282,8 +1282,15 @@ def main() -> int:
         assert "mtime" in tf[0] and "uid" in tf[0] and tf[0]["path"].endswith(".bin"), tf[0]
         assert "atime" in tf[0], tf[0]   # 최대 파일에 마지막 접근시각 포함
 
-        # 용량 소진 예측 — 완료 스캔 2회라 추세 계산 가능(증가 0 → 소진 없음)
+        # 용량 소진 예측 — 몇 초 간격 두 스캔은 추세를 내지 않는다(21회차 점검: 하루 이상 걸친 이력만)
         fc = c.get(f"/api/forecast?scan={r2['scan_id']}")
+        assert fc["ok"] and not fc["enough"] and fc.get("reason") and fc["points"] >= 2, fc
+        import sqlite3 as _sq
+        _mc = _sq.connect(os.path.join(data_dir, "manager.db"))
+        _mc.execute("UPDATE scans SET finished_at=finished_at-2*86400 WHERE id=?", (r1["scan_id"],))
+        _mc.commit()
+        _mc.close()
+        fc = c.get(f"/api/forecast?scan={r2['scan_id']}")   # 첫 스캔을 이틀 전으로 → 추세 계산(증가 0 → 소진 없음)
         assert fc["ok"] and fc["enough"] and fc["points"] >= 2, fc
         assert fc["growth_per_day"] is not None and fc["fs_total_bytes"] > 0, fc
 

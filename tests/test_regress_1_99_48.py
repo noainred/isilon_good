@@ -2355,6 +2355,113 @@ def _try(fn, *a):
         return "err: %s" % exc
 
 
+def check_bf_round21_modules() -> None:
+    """HH1 스토리지 조회가 요청마다 겹쳐 쌓임·설정 바꿔도 옛 결과 HH2 이벤트 403·노드 다운에도 '정상'
+    HH3 콜드 스크립트 심볼릭 루트·잘못된 기준 조용히 바꿈 HH4 리다이렉트로 VPLEX 비밀번호·큰 응답
+    HH5 질의응답(1.5년·숫자 지어냄·라우팅) HH6 감사 로그 동시 회전 유실 HH7 마운트 공백·다른 경로 비교·짧은 추세·폴더 이력."""
+    from isilon_usage import server as SV, isilon_api as IA, coldtier as CT, netutil as NU, ask as AK, audit as AU
+    from isilon_usage import systune as ST
+    d = tempfile.mkdtemp(prefix="iu_bf_")
+    try:
+        ctl = SV.ScanController(os.path.join(d, "data"))                                                 # HH1
+        calls = []
+        orig_q = SV.storagemod.query
+        SV.storagemod.query = lambda arr: (calls.append(1), time.sleep(1.0), {"ok": True, "name": arr.get("name")})[2]
+        try:
+            ctl.settings["storage_arrays"] = [{"name": "A"}]
+            outs = []
+            ts = [threading.Thread(target=lambda: outs.append(ctl.storage_status())) for _ in range(3)]
+            for t in ts:
+                t.start()
+                time.sleep(0.05)
+            for t in ts:
+                t.join(10)
+            assert len(calls) == 1, calls
+            ctl.settings["storage_arrays"] = []
+            assert ctl.storage_status() == [], "설정 바꿔도 옛 결과"
+        finally:
+            SV.storagemod.query = orig_q
+        import urllib.error
+
+        class FakeIsi(IA.IsilonClient):                                                                  # HH2
+            def _get(self, path):
+                if "config" in path:
+                    return {"name": "c", "onefs_version": {"release": "9"}}
+                if "nodes" in path:
+                    return {"nodes": [{"status": "up"}, {"status": "down"}], "total": 2}
+                if "event" in path:
+                    raise urllib.error.HTTPError(path, 403, "forbidden", {}, None)
+                return {"stats": []}
+        st = FakeIsi("http://x", "u", "p").status()
+        assert st["health"] == "attention" and st.get("events_error"), st
+        ev = {"eventgroup-occurrences": [{"severity": "critical", "time_noticed": "x", "message": "m"},
+                                         {"severity": "critical", "time_noticed": 5, "message": "n"}]}
+        total, by_sev, alarms = IA._summarize_events(ev)
+        assert len(alarms) == 2, alarms
+        real = os.path.join(d, "real")                                                                   # HH3
+        os.makedirs(real)
+        open(os.path.join(real, "f"), "w").close()
+        os.symlink(real, os.path.join(d, "lnk"))
+        r = CT.plan_cold_move(os.path.join(d, "lnk"), days=0)
+        assert r["ok"] and r["root"] == os.path.realpath(real), r.get("root")
+        assert CT.plan_cold_move(real, field="ctime")["ok"] is False
+        assert CT.plan_cold_move(real, days="abc")["ok"] is False
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert {"username", "password"} <= NU._AUTH_HEADERS                                                   # HH4
+    import io as _io
+    try:
+        NU.read_json(_io.BytesIO(b"x" * 20), limit=10)
+        raise AssertionError("상한 없음")
+    except ValueError as e:
+        assert "너무 큽니다" in str(e)
+    try:
+        NU.read_json(_io.BytesIO(b"<html>login</html>"))
+        raise AssertionError("HTML 통과")
+    except ValueError as e:
+        assert "JSON 이 아닌" in str(e)
+    assert AK.parse_threshold_days("1.5년 이상") == 548 and AK.parse_threshold_days("2024년") is None   # HH5
+    assert not AK._numbers_grounded("숫자 9999 TB 입니다", {"총": "200.46 KB"}, "200.46 KB")
+    assert AK._numbers_grounded("총 200.46 KB 입니다", {"총": "200.46 KB"}, "200.46 KB")
+    orig_lp = AK.llm_phrase
+    seen = []
+    AK.llm_phrase = lambda q, f, c: (seen.append(1), "숫자 9999 TB 입니다")[1]
+    try:
+        data = {"overall": {"roots": [{"root_path": "/a", "scanned_bytes": 1000, "status": "done"}],
+                            "scan_count": 1, "active_scans": 0}}
+        r = AK.respond("전체 용량 얼마야?", data, {"enabled": True, "endpoint": "http://x"})
+        assert "9999" not in r["answer"], r
+    finally:
+        AK.llm_phrase = orig_lp
+    assert AK._h_scan_status("파일 개수 알려줘", {"overall": {}}) is None
+    assert AK._h_forecast("디스크 꽉 찼어?", {}) is None
+    d = tempfile.mkdtemp(prefix="iu_bf2_")                                                               # HH6
+    orig_mb = AU.MAX_BYTES
+    AU.MAX_BYTES = 20000
+    try:
+        def w():
+            for i in range(150):
+                AU.record(d, action="a", ok=True, detail="x" * 50)
+        ts = [threading.Thread(target=w) for _ in range(8)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        n = 0
+        for f in os.listdir(d):
+            with open(os.path.join(d, f), encoding="utf-8") as fh:
+                n += sum(1 for _ in fh)
+        files = sorted(os.listdir(d))
+        assert files == sorted(["audit.log"] + ["audit.log.%d" % i for i in range(1, len(files))]), files
+    finally:
+        AU.MAX_BYTES = orig_mb
+        shutil.rmtree(d, ignore_errors=True)
+    assert ST._mount_unescape("/mnt/my\\040share") == "/mnt/my share"                                    # HH7
+    sv = _read("server.py")
+    assert '"root_mismatch": True' in sv and "max(xs) - min(xs) < 86400" in sv and '"absent": True' in sv
+    print("[HH1~HH7] OK  스토리지 조회 한 번·설정 반영·상태 판정·콜드 심볼릭·리다이렉트 헤더·응답 상한·질의응답·감사 회전·마운트·비교·추세·이력")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -2376,7 +2483,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_ax_round18_data, check_ay_round18_portal_delete,
             check_az_round19_regress, check_ba_round19_portal_edge,
             check_bb_round20_regress, check_bc_round20_upgrade,
-            check_bd_round20_stress, check_be_round21_sec_regress]
+            check_bd_round20_stress, check_be_round21_sec_regress,
+            check_bf_round21_modules]
 
 
 def main() -> int:

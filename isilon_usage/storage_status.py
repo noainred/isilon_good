@@ -44,7 +44,7 @@ def _req(url, user, password, *, verify_ssl=False, headers=None, data=None,
     ctx = _ctx(verify_ssl) if url.lower().startswith("https") else None
     resp = netutil.urlopen(req, timeout=timeout, context=ctx)
     try:
-        return json.loads(resp.read().decode("utf-8"))
+        return netutil.read_json(resp)
     finally:
         resp.close()
 
@@ -184,7 +184,9 @@ def xtremio_status(url, user, password, *, verify_ssl=False, timeout=10.0):
         c = arr[0]
         out["name"] = c.get("name")
         out["version"] = c.get("sys-sw-version")
-        out["health"] = "ok" if str(c.get("sys-health-state", "")).lower() in ("healthy", "") else "attention"
+        # 상태 칸이 없으면 '정상'이 아니라 '확인 불가'(21회차 점검)
+        _hs = str(c.get("sys-health-state", "") or "").lower()
+        out["health"] = "unknown" if not _hs else ("ok" if _hs == "healthy" else "attention")
         # XtremIO 용량 단위는 KB
         total = c.get("ud-ssd-space")
         used = c.get("ud-ssd-space-in-use")
@@ -233,7 +235,9 @@ def vplex_status(url, user, password, *, verify_ssl=False, timeout=10.0):
                 names.append(nm)
         out["name"] = ", ".join(names) if names else "VPLEX"
         out["nodes"] = {"total": len(ctxs), "online": len(ctxs)}
-        out["health"] = "ok"
+        # 클러스터 이름만 읽어 상태는 알 수 없다 — 예전엔 늘 '정상'이라 했다(21회차 점검). 연결 확인만 된 것.
+        out["health"] = "unknown"
+        out["events_error"] = "VPLEX 는 연결만 확인(상태·알림은 이 화면에서 읽지 않음)"
         out["ok"] = True
     except urllib.error.HTTPError as e:
         out["error"] = _httperr(e)

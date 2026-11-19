@@ -83,7 +83,15 @@ def send_email(settings: dict, subject: str, body: str, *, timeout: float = 20.0
             if port != 465 and settings.get("smtp_tls", True):
                 srv.starttls()
             if user:
-                srv.login(user, pw)
+                try:
+                    srv.login(user, pw)
+                except UnicodeEncodeError:
+                    # smtplib 은 계정·비밀번호를 ASCII 로만 보내 한글 등이 들어가면 늘 실패했다(21회차 점검) — UTF-8 로 AUTH PLAIN
+                    import base64
+                    tok = base64.b64encode(("\0%s\0%s" % (user, pw)).encode("utf-8")).decode("ascii")
+                    code, resp = srv.docmd("AUTH", "PLAIN " + tok)
+                    if code not in (235, 503):
+                        raise smtplib.SMTPAuthenticationError(code, resp)
             srv.send_message(msg)
         finally:
             try:
@@ -91,5 +99,11 @@ def send_email(settings: dict, subject: str, body: str, *, timeout: float = 20.0
             except Exception:
                 pass
         return True
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # 실패 이유를 남긴다 — 예전엔 STARTTLS 없는 중계 서버·인증 실패가 아무 기록 없이 사라졌다(21회차 점검)
+        try:
+            import sys
+            sys.stderr.write("[notify] 메일 보내기 실패(%s:%s): %s: %s\n" % (host, port, type(exc).__name__, exc))
+        except Exception:  # noqa: BLE001
+            pass
         return False

@@ -1951,12 +1951,13 @@ function renderPortalDash(){
       const tl = escAttr(a.label||a.type);
       return a.ok ? (a.health === "ok"
           ? ` <span class="badge b-online" title="${tl} 정상">${lab} ✓</span>`
+          : a.health === "unknown" ? ` <span class="badge" title="${tl} 상태 확인 불가(이벤트/알림 조회 실패)">${lab} ?</span>`
           : ` <span class="badge" style="background:#F4EFE0;color:#8A3B00" title="${tl} 주의">${lab} ⚠</span>`)
         : ` <span class="badge b-offline" title="${tl} 연결 실패">${lab} ✕</span>`;
     }).join("");
     const arrRows = cfgArr.map(a => `<tr class="rr-${idx}" style="display:${_openNodeRows.has(n.id)?"table-row":"none"}; background:#E7EDF5;"><td></td><td colspan="8" class="sub">${
       a.type === "isilon" ? "🟦" : "🟧"} ${_he(a.label||a.type)} ${
-      a.ok ? `<b>${_he(a.name||"?")}</b> · ${_he(a.version||"")} · 노드 ${(a.nodes&&a.nodes.online)!=null?_he(a.nodes.online):"?"}/${(a.nodes&&a.nodes.total)!=null?_he(a.nodes.total):"?"} · 용량 ${(a.capacity&&a.capacity.used_pct!=null)?_he(a.capacity.used_pct)+"%":"—"} · 이벤트/알림 ${a.events_unresolved!=null?_he(a.events_unresolved):"—"} · ${a.health==="ok"?"정상":"주의"}`
+      a.ok ? `<b>${_he(a.name||"?")}</b> · ${_he(a.version||"")} · 노드 ${(a.nodes&&a.nodes.online)!=null?_he(a.nodes.online):"?"}/${(a.nodes&&a.nodes.total)!=null?_he(a.nodes.total):"?"} · 용량 ${(a.capacity&&a.capacity.used_pct!=null)?_he(a.capacity.used_pct)+"%":"—"} · 이벤트/알림 ${a.events_unresolved!=null?_he(a.events_unresolved):"—"} · ${a.health==="ok"?"정상":(a.health==="unknown"?"확인 불가":"주의")}`
            : `연결 실패: ${_he(a.error||"")}`}</td></tr>`).join("");
     const roots = arrRows + (n.roots||[]).map(r=>{
       const act=(r.status==="discovering"||r.status==="sizing");

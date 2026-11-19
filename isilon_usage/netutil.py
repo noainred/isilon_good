@@ -7,11 +7,13 @@
 """
 
 import urllib.parse
+import json
 import urllib.request
 
 # 리다이렉트로 다른 origin 에 넘기지 않을 헤더(소문자). urllib 은 키를 capitalize() 해서 보관한다.
+# VPLEX 는 계정을 Username/Password 헤더로 보낸다 — 빠져 있어 다른 서버로의 리다이렉트에 비밀번호가 넘어갔다(21회차 점검).
 _AUTH_HEADERS = {"authorization", "x-auth-token", "x-op-token", "dell-emc-token", "cookie",
-                 "proxy-authorization"}
+                 "proxy-authorization", "username", "password", "x-api-key", "api-key"}
 
 
 def _origin(url: str):
@@ -42,3 +44,19 @@ def urlopen(req, timeout=None, context=None):
     if timeout is None:
         return opener.open(req)
     return opener.open(req, timeout=timeout)
+
+
+MAX_JSON_RESPONSE = 8 * 1024 * 1024
+
+
+def read_json(resp, limit: int = MAX_JSON_RESPONSE):
+    """응답을 상한(8MB)까지 읽어 JSON 으로 — 엉뚱한 주소가 큰 파일을 주면 통째로 읽어 메모리가 800MB 를 넘었고,
+    로그인 HTML 이면 'Expecting value: line 1 column 1' 같은 알아보기 힘든 오류였다(21회차 점검)."""
+    raw = resp.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError("응답이 너무 큽니다(%dMB 초과) — 주소(API 경로)를 확인하세요" % (limit // (1024 * 1024)))
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        head = raw[:60].decode("utf-8", "replace").strip().replace("\n", " ")
+        raise ValueError("JSON 이 아닌 응답입니다(주소·포트·API 경로 확인): %s" % head)

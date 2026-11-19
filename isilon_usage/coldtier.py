@@ -166,17 +166,23 @@ def plan_cold_move(root: str, *, days: int = 365, field: str = "mtime",
        script, rollback}  또는 {ok:False, error, root}
     """
     root = os.path.abspath(root or "")
-    field = field if field in VALID_FIELDS else "mtime"
+    # 모르는 기준·숫자가 아닌 일수는 조용히 mtime·365 로 바꾸지 않고 거부한다(21회차 점검: ctime 이 mtime 으로)
+    if field not in VALID_FIELDS:
+        return {"ok": False, "error": "기준(field)은 %s 중 하나여야 합니다." % ", ".join(sorted(VALID_FIELDS)), "root": root}
     try:
         days = max(0, int(days))
     except (TypeError, ValueError):
-        days = 365
+        return {"ok": False, "error": "일수(days)는 0 이상의 정수여야 합니다.", "root": root}
     try:
         min_size = max(0, int(min_size))
     except (TypeError, ValueError):
         min_size = 0
     if not os.path.isdir(root):
         return {"ok": False, "error": "디렉터리가 아니거나 접근할 수 없습니다.", "root": root}
+    # 루트가 심볼릭 링크면 실제 경로로 — 미리보기(os.walk)는 링크를 따라가 개수를 세는데 생성 스크립트의 find 는
+    # 링크를 따라가지 않아 '옮길 콜드 파일 없음'이 됐다(21회차 점검)
+    if os.path.islink(root):
+        root = os.path.realpath(root)
 
     target = os.path.abspath(target) if target else ""
     if target and _overlaps(root, target):

@@ -1134,8 +1134,10 @@ def check_bad_request_bodies() -> None:
         def __init__(self, body, headers):
             self.rfile = io.BytesIO(body)
             self.headers = headers
-    ok = SV.read_json_body(H(b'{"a":1}', {"Content-Length": "7"}))
+    ok = SV.read_json_body(H(b'{"a":1}', {"Content-Length": "7", "Content-Type": "application/json"}))
     assert ok == ({"a": 1}, None), ok
+    # 21회차 점검: Content-Type 이 없거나(타입 없는 Blob — 다른 사이트에서 사전 확인 없이 보냄) JSON 이 아니면 415
+    assert SV.read_json_body(H(b'{"a":1}', {"Content-Length": "7"}))[1][0] == 415
     cases = [
         (b"[1,2]", {"Content-Length": "5"}, 400),
         (b'{"a":', {"Content-Length": "50"}, 400),
@@ -1145,6 +1147,7 @@ def check_bad_request_bodies() -> None:
         (b"xx", {"Content-Length": "-3"}, 400),
     ]
     for body, hd, st in cases:
+        hd = dict(hd, **{"Content-Type": "application/json"})   # 본문 검사 대상(21회차부터 JSON 타입 필수)
         _b, err = SV.read_json_body(H(body, hd))
         assert err and err[0] == st, (body, hd, err)
     h = SV.DashboardHandler.__new__(SV.DashboardHandler) if hasattr(SV, "DashboardHandler") else None

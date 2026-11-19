@@ -61,7 +61,7 @@ class PowerStoreClient:
             tok = resp.headers.get("DELL-EMC-TOKEN")
             if tok:
                 self._token = tok
-            return json.loads(resp.read().decode("utf-8"))
+            return netutil.read_json(resp)
         finally:
             resp.close()
 
@@ -74,7 +74,7 @@ class PowerStoreClient:
             req.add_header("DELL-EMC-TOKEN", self._token)
         resp = netutil.urlopen(req, timeout=self.timeout, context=self._ctx())
         try:
-            return json.loads(resp.read().decode("utf-8"))
+            return netutil.read_json(resp)
         finally:
             resp.close()
 
@@ -139,16 +139,21 @@ class PowerStoreClient:
         except Exception:  # noqa: BLE001
             pass
         # 5) 활성 알림(건강) — Critical/Major 개수
+        ev_ok = False
         try:
             al = self._get("/alert?select=id,severity,is_active&is_active=eq.true")
             if isinstance(al, list):
                 out["events_unresolved"] = sum(
-                    1 for a in al if str(a.get("severity", "")).lower() in ("critical", "major"))
-        except Exception:  # noqa: BLE001
-            pass
+                    1 for a in al if isinstance(a, dict) and str(a.get("severity", "")).lower() in ("critical", "major"))
+                ev_ok = True
+        except Exception as e:  # noqa: BLE001
+            out["events_error"] = "알림 조회 실패: %s" % str(e)[:120]
         bad_state = state not in (None, "Configured", "Operational", "Unconfigured")
-        out["health"] = ("ok" if (out["events_unresolved"] in (0, None) and not bad_state)
-                         else "attention")
+        # 알림을 못 읽었으면 '정상'이라 말할 수 없다 — 예전엔 403 이어도 초록 '정상'(21회차 점검)
+        if bad_state or out["events_unresolved"] not in (0, None):
+            out["health"] = "attention"
+        else:
+            out["health"] = "ok" if ev_ok else "unknown"
         return out
 
 

@@ -799,6 +799,11 @@ def forecast_capacity(mconn, scan_row) -> dict:
     n = len(pts)
     xs = [float(p["ts"]) for p in pts]
     ys = [float(p["scanned_bytes"]) for p in pts]
+    if max(xs) - min(xs) < 86400:
+        # 몇 분 간격 스캔들로 '하루 +63GB · 0일 뒤 가득' 같은 추세를 냈다(21회차 점검) — 하루 이상 걸친 이력만
+        out["enough"] = False
+        out["reason"] = "완료 스캔들이 하루 이상 걸쳐 있어야 추세를 낼 수 있습니다."
+        return out
     mx = sum(xs) / n
     my = sum(ys) / n
     denom = sum((x - mx) ** 2 for x in xs)
@@ -833,6 +838,11 @@ def diff_scans(data_dir: str, base_id: int, target_id: int, *,
             return {"ok": False, "not_done": True,
                     "reason": "%s 스캔 #%s 가 완료되지 않아(%s) 비교할 수 없습니다 — 완료된 스캔을 고르거나 "
                               "'멈춘 자료 집계'를 먼저 하세요." % (_nm, _s.get("id"), _s.get("status"))}
+    if (base["root_path"] or "") != (target["root_path"] or ""):
+        # 다른 경로끼리 비교하면 기준 쪽 전체가 '삭제됨'으로, 총 변화량이 행과 어긋났다(21회차 점검) — 같은 경로만
+        return {"ok": False, "root_mismatch": True,
+                "reason": "같은 경로의 스캔끼리만 비교할 수 있습니다(기준 %s · 대상 %s)."
+                          % (dbmod.fs_text(base["root_path"]), dbmod.fs_text(target["root_path"]))}
     if not (os.path.exists(base["db_path"]) and os.path.exists(target["db_path"])):
         return {"ok": False, "reason": "per-run DB 가 없습니다."}
 
@@ -1005,27 +1015,62 @@ class ScanController:
         self._load_auto_restart()           # 저장된 반복(자동 재시작) 설정 복원 — 재개될 스캔이 끝나면 이어서 반복
         self._resume_after_upgrade()        # 업그레이드 재시작 직전 돌던 스캔을 자동 재개
 
-    def storage_status(self, force: bool = False) -> list:
-        """설정된 스토리지 어레이(아이실론/PowerStore) 상태 목록을 캐시(60초)와 함께 반환."""
-        now = time.time()
-        if (not force) and self._storage_cache is not None and (now - self._storage_ts) < 60:
-            return self._storage_cache
+    def _storage_cfg_key(self) -> str:
         s = self.settings
-        arrays = []
-        if (s.get("isilon_url") or "").strip():
-            arrays.append(isilonmod.cluster_status(
-                s.get("isilon_url", ""), s.get("isilon_user", ""), s.get("isilon_password", ""),
-                verify_ssl=bool(s.get("isilon_verify_ssl", False)), timeout=10.0))
-        if (s.get("powerstore_url") or "").strip():
-            arrays.append(powerstoremod.cluster_status(
-                s.get("powerstore_url", ""), s.get("powerstore_user", ""),
-                s.get("powerstore_password", ""),
-                verify_ssl=bool(s.get("powerstore_verify_ssl", False)), timeout=10.0))
-        for arr in (s.get("storage_arrays") or []):   # Unity/PowerMax/VMAX/XtremIO/VPLEX 등
-            arrays.append(storagemod.query(arr))
-        self._storage_cache = arrays
-        self._storage_ts = now
-        return arrays
+        keys = ("isilon_url", "isilon_user", "isilon_password", "isilon_verify_ssl", "powerstore_url",
+                "powerstore_user", "powerstore_password", "powerstore_verify_ssl")
+        return json.dumps([s.get(k) for k in keys] + [s.get("storage_arrays") or []], sort_keys=True, default=str)
+
+    def storage_status(self, force: bool = False) -> list:
+        """설정된 스토리지 어레이 상태 목록을 캐시(60초)와 함께 반환.
+
+        - 한 번에 하나만 조회(single-flight): 느린 어레이에 화면 새로고침마다 새 30초 조회가 겹쳐 쌓였다(21회차 점검).
+          조회 중이면 기다리지 않고 직전 결과를 돌려준다(처음이면 그 조회를 기다림).
+        - 어레이는 병렬로 조회(하나가 느려도 전체가 그 합만큼 늦지 않게).
+        - 연결 설정이 바뀌면 캐시를 버린다(예전엔 지운 어레이가 최대 60초 계속 보였다)."""
+        now = time.time()
+        key = self._storage_cfg_key()
+        cache_ok = (self._storage_cache is not None and getattr(self, "_storage_key", None) == key)
+        if (not force) and cache_ok and (now - self._storage_ts) < 60:
+            return self._storage_cache
+        lk = getattr(self, "_storage_lock", None)
+        if lk is None:
+            lk = self._storage_lock = threading.Lock()
+        if not lk.acquire(blocking=not cache_ok):
+            return self._storage_cache            # 다른 요청이 조회 중 — 직전 결과
+        try:
+            if (not force) and self._storage_cache is not None and getattr(self, "_storage_key", None) == key \
+                    and (time.time() - self._storage_ts) < 60:
+                return self._storage_cache        # 기다리는 사이 다른 요청이 새로 받아 둠
+            s = self.settings
+            jobs = []
+            if (s.get("isilon_url") or "").strip():
+                jobs.append(lambda: isilonmod.cluster_status(
+                    s.get("isilon_url", ""), s.get("isilon_user", ""), s.get("isilon_password", ""),
+                    verify_ssl=bool(s.get("isilon_verify_ssl", False)), timeout=10.0))
+            if (s.get("powerstore_url") or "").strip():
+                jobs.append(lambda: powerstoremod.cluster_status(
+                    s.get("powerstore_url", ""), s.get("powerstore_user", ""),
+                    s.get("powerstore_password", ""),
+                    verify_ssl=bool(s.get("powerstore_verify_ssl", False)), timeout=10.0))
+            for arr in (s.get("storage_arrays") or []):   # Unity/PowerMax/VMAX/XtremIO/VPLEX 등
+                jobs.append(lambda arr=arr: storagemod.query(arr))
+            arrays = []
+            if jobs:
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as ex:
+                    futs = [ex.submit(j) for j in jobs]
+                    for f in futs:
+                        try:
+                            arrays.append(f.result())
+                        except Exception as exc:  # noqa: BLE001
+                            arrays.append({"ok": False, "configured": True, "health": "unknown", "error": str(exc)})
+            self._storage_cache = arrays
+            self._storage_key = key
+            self._storage_ts = time.time()
+            return arrays
+        finally:
+            lk.release()
 
     def isilon_status(self, force: bool = False) -> dict:
         """back-compat: 아이실론 항목만 반환(/api/isilon)."""
@@ -4039,6 +4084,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 # 특정 폴더의 크기·파일수가 완료 스캔들에서 어떻게 변해왔는지(이력)
                 root = (qs.get("root", [""])[0] or "").strip()
                 dpath = (qs.get("path", [""])[0] or "").strip()
+                if len(dpath) > 1:
+                    dpath = dpath.rstrip("/") or "/"   # 끝 '/' 가 붙으면 늘 0건이었다(21회차 점검)
                 if not root or not dpath:
                     self._send_json({"ok": False, "reason": "root/path 필요"}, status=400)
                     return
@@ -4062,13 +4109,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         finally:
                             c.close()
                     except Exception:  # noqa: BLE001
-                        r = None
+                        continue                     # 읽지 못한 스캔은 건너뜀('없음'과 다름)
                     if r is not None:
                         points.append({
                             "scan_id": int(s["id"]), "started_at": s["started_at"],
                             "total_bytes": int(r["total_bytes"]),
                             "total_files": int(r["total_files"])})
+                    else:   # 그 스캔엔 폴더가 없음(지워짐) — 0 으로 남긴다(아래에서 처음 나타나기 전 것은 버림)
+                        points.append({"scan_id": int(s["id"]), "started_at": s["started_at"],
+                                       "total_bytes": 0, "total_files": 0, "absent": True})
                 points.reverse()  # 오래된→최신 순으로
+                # 처음 나타나기 전의 '없음'은 버리고, 그 뒤 사라진 스캔은 0 으로 — 예전엔 지워진 스캔을 건너뛰어
+                # 변화 없음처럼 보였다(21회차 점검: '변화' 화면은 삭제로 보이는데 이력은 그대로)
+                while points and points[0].get("absent"):
+                    points.pop(0)
+                if not any(not p.get("absent") for p in points):
+                    points = []
                 for i, p in enumerate(points):
                     prev = points[i - 1] if i else None
                     p["bytes_delta"] = (p["total_bytes"] - prev["total_bytes"]) if prev else 0

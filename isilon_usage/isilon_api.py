@@ -57,7 +57,12 @@ def _summarize_events(ev: dict):
             "time": o.get("time_noticed") or o.get("last_event") or o.get("time"),
             "count": o.get("event_count") or o.get("count") or 1,
         })
-    alarms.sort(key=lambda a: (_SEV_RANK.get(a["severity"], 9), -(a["time"] or 0)))
+    def _t(v):   # 시각이 숫자가 아니면(문자열 등) 0 — 예전엔 정렬이 TypeError 로 터져 알람 전체가 안 보였다(21회차 점검)
+        try:
+            return float(v or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    alarms.sort(key=lambda a: (_SEV_RANK.get(a["severity"], 9), -_t(a["time"])))
     total = ev.get("total")
     if total is None:
         total = len(occ)
@@ -95,9 +100,12 @@ class IsilonClient:
         ctx = _ssl_context(self.verify_ssl) if url.lower().startswith("https") else None
         resp = netutil.urlopen(req, timeout=self.timeout, context=ctx)
         try:
-            return json.loads(resp.read().decode("utf-8"))
+            j = netutil.read_json(resp)
         finally:
             resp.close()
+        if not isinstance(j, dict):   # 목록·null 이면 "'list' object has no attribute 'get'" 대신 알아보게
+            raise ValueError("예상과 다른 응답 형식(%s) — OneFS PAPI 주소인지 확인하세요" % type(j).__name__)
+        return j
 
     def status(self) -> dict:
         """클러스터 상태 요약(베스트 에포트)."""
@@ -161,9 +169,16 @@ class IsilonClient:
             out["events_unresolved"] = total
             out["events_by_severity"] = by_sev
             out["alarms"] = alarms
-        except Exception:  # noqa: BLE001
-            pass
-        out["health"] = _health_from(out["events_by_severity"], out["events_unresolved"])
+            ev_ok = True
+        except Exception as e:  # noqa: BLE001
+            ev_ok = False
+            out["events_error"] = ("이벤트 조회 권한 없음" if isinstance(e, urllib.error.HTTPError) and e.code in (401, 403)
+                                   else "이벤트 조회 실패: %s" % str(e)[:120])
+        # 이벤트를 못 읽었으면 '정상'이라 말할 수 없다(예전엔 403 이어도 초록 '정상'), 내려간 노드가 있으면 최소 '주의'
+        out["health"] = _health_from(out["events_by_severity"], out["events_unresolved"]) if ev_ok else "unknown"
+        nd = out.get("nodes") or {}
+        if nd.get("total") and int(nd.get("online") or 0) < int(nd["total"]) and out["health"] in ("ok", "unknown"):
+            out["health"] = "attention"
         return out
 
 

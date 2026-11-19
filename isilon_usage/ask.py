@@ -31,6 +31,7 @@ data 형태(호출자가 가진 것만 채운다):
 """
 
 import json
+import threading
 import re
 import time
 import urllib.request
@@ -77,12 +78,14 @@ def _fmt_when(ts) -> str:
 
 def parse_threshold_days(q: str):
     """'30일', '1년', '6개월' 같은 표현을 일수로. 없으면 None."""
-    m = re.search(r"(\d+)\s*(개월|주일|일|주|달|년|연)", q)
+    # 소수 허용 — '1.5년'의 '5년'만 읽어 5년으로 답했다(21회차 점검)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(개월|주일|일|주|달|년|연)", q)
     if not m:
         return None
-    if m.group(2) in ("년", "연") and int(m.group(1)) >= 1000:
+    val = float(m.group(1))
+    if m.group(2) in ("년", "연") and val >= 1000:
         return None        # '2024년 이후' 같은 연도는 기간이 아니다(예전엔 2024년 = 73만 일로 읽었다)
-    return int(m.group(1)) * _UNIT_DAYS.get(m.group(2), 1)
+    return int(round(val * _UNIT_DAYS.get(m.group(2), 1)))
 
 
 def _has(q: str, *words: str) -> bool:
@@ -103,7 +106,9 @@ def _sum_age_over(buckets, threshold_days):
         low = _AGE_LOWER_DAYS.get(b.get("key"), -1)
         if low < 0:
             continue
-        if low >= threshold_days - 1:   # -1: 30일→'30~90일'부터 포함
+        # -1: 30일→'30~90일'부터 포함. 단 하한 0 인 '30일 이내'는 기준이 0일 때만 통째로 — '1일 이상'이 그 버킷 전체를
+        # 범위 안내 없이 더했다(21회차 점검). 그 밖엔 아래에서 '걸친 버킷'으로 안내한다.
+        if low >= threshold_days or (low > 0 and low >= threshold_days - 1):
             tot_b += int(b.get("bytes") or 0)
             tot_f += int(b.get("files") or 0)
             labels.append(b.get("key"))
@@ -178,6 +183,9 @@ def _h_biggest(q, data):
 
 def _h_scan_status(q, data):
     if not _has(q, "진행", "돌고", "스캔 중", "스캔중", "지금 스캔", "몇 개", "몇개", "개수", "상태"):
+        return None
+    # '파일 개수'·'총 몇 개의 파일' 은 스캔 상태가 아니다(예전엔 '진행 중인 스캔 없음'으로 답했다, 21회차 점검)
+    if not _has(q, "진행", "돌고", "스캔", "상태") and _has(q, "파일", "폴더", "디렉"):
         return None
     ov = data.get("overall") or {}
     act = int(ov.get("active_scans") or 0)
@@ -352,6 +360,9 @@ def _h_forecast(q, data):
     if not _has(q, "며칠", "예측", "소진", "가득", "꽉", "추세", "증가", "얼마나 남", "언제 다 차",
                 "언제 차"):
         return None
+    # '디스크 꽉 찼어?'·'디스크 얼마나 남았어?' 는 지금 사용률 질문 — 시점·예측 말이 없으면 사용률로 양보(21회차 점검)
+    if not _has(q, "며칠", "예측", "소진", "추세", "증가", "언제") and _has(q, "디스크", "찼", "남았", "여유", "사용률"):
+        return None
     d = _need_detail(data)
     if not d or not d.get("forecast"):
         return {"answer": _detail_unavailable(data), "facts": {}}
@@ -440,22 +451,49 @@ def llm_phrase(question: str, facts: dict, cfg: dict):
     headers = {"Content-Type": "application/json"}
     if cfg.get("key"):
         headers["Authorization"] = "Bearer " + cfg["key"]
-    try:
-        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-        with netutil.urlopen(req, timeout=float(cfg.get("timeout") or 20)) as resp:
-            j = json.loads(resp.read().decode("utf-8"))
-        txt = (j.get("choices") or [{}])[0].get("message", {}).get("content")
-        return txt.strip() if txt else None
-    except Exception:   # noqa: BLE001 — LLM 실패는 조용히 규칙 답변으로 폴백
-        return None
+    tmo = float(cfg.get("timeout") or 20)
+    box = {}
+
+    def _call():
+        try:
+            req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+            with netutil.urlopen(req, timeout=tmo) as resp:
+                raw = resp.read(4 * 1024 * 1024 + 1)          # 응답 크기 상한(4MB)
+            if len(raw) > 4 * 1024 * 1024:
+                return
+            j = json.loads(raw.decode("utf-8"))
+            txt = (j.get("choices") or [{}])[0].get("message", {}).get("content")
+            box["txt"] = txt.strip() if isinstance(txt, str) and txt.strip() else None
+        except Exception:   # noqa: BLE001 — LLM 실패는 조용히 규칙 답변으로 폴백
+            pass
+    # 전체 시간 상한 — 소켓 timeout 은 '읽기 한 번'마다라, 1초에 1바이트씩 보내는 서버면 60초를 붙잡혔다(21회차 점검)
+    th = threading.Thread(target=_call, name="ask-llm", daemon=True)
+    th.start()
+    th.join(tmo + 1.0)
+    return box.get("txt")
+
+
+_NUM_RE = re.compile(r"\d+(?:[.,]\d+)*")
+
+
+def _nums(text: str) -> set:
+    return {n.replace(",", "") for n in _NUM_RE.findall(text or "")}
+
+
+def _numbers_grounded(phrased: str, facts: dict, rule_answer: str) -> bool:
+    """LLM 문장의 숫자가 모두 사실(facts)·규칙 답변에 있는지 — 없는 숫자를 지어냈으면 False."""
+    allowed = _nums(json.dumps(facts, ensure_ascii=False)) | _nums(rule_answer)
+    return _nums(phrased) <= allowed
 
 
 def respond(question: str, data: dict, llm_cfg: Optional[dict] = None) -> dict:
     """규칙 기반 답을 만들고, 로컬 LLM 이 켜져 있으면 문장만 다듬는다(숫자는 규칙 값 유지)."""
     base = answer(question, data)
-    if llm_cfg and llm_cfg.get("enabled") and (base.get("facts") or base.get("intent") != "help"):
+    # 사실(facts)이 없으면 LLM 을 부르지 않는다 — '[사실] {}' 로 부르면 규칙 안내문을 지어낸 문장으로 바꿨다(21회차 점검).
+    # 다듬은 문장에 사실에 없는 숫자가 있으면 버리고 규칙 답변을 쓴다(설계: 숫자는 규칙 값만).
+    if llm_cfg and llm_cfg.get("enabled") and base.get("facts"):
         phrased = llm_phrase(question, base.get("facts") or {}, llm_cfg)
-        if phrased:
+        if phrased and _numbers_grounded(phrased, base.get("facts") or {}, base.get("answer") or ""):
             return {**base, "answer": phrased, "source": "rules+llm",
                     "rule_answer": base["answer"]}
     return base
