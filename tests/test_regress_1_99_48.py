@@ -2762,6 +2762,53 @@ def check_bm_round24_regress() -> None:
     print("[OO1~OO5] OK  백업 경로 특수 문자·pscan 풀 깨짐 부분 결과·토큰 공백·이름 바꾼 구성 논리 경로·du 대체 기록")
 
 
+def check_bn_round24_consistency() -> None:
+    """화면 간 일관성 PP1 경과가 브라우저 시계 기준 PP2 질의응답 전체 용량·순위가 진행 바이트 PP3 홈 파일 수 중첩 루트 이중 셈
+    PP4 FS 사용량 엣지(최근)·포탈(최대) 다름 PP5 사용량 API 바이트·파일 수 다른 스캔 PP6 질의응답이 스냅샷 무시
+    PP7 비교에 부분 값 표시 없음 PP8 '결과 복제 N전' 엣지 시계 PP9 깊이 제한 스캔 표시 없음."""
+    from isilon_usage import manager as M, db as dbmod, ask as AK, portal as P
+    d = tempfile.mkdtemp(prefix="iu_bn_")
+    try:
+        data = os.path.join(d, "data")
+        M.init_manager(data)
+        c = dbmod.connect(M.manager_db_path(data))
+
+        def reg(root, status, files, byts, upd, fs_used=100, md=None):
+            sid = M.register_scan(data, root_path=root, db_path=os.path.join(d, "%s_%s.db" % (root.strip("/").replace("/", "_"), upd)),
+                                  backend="native", size_mode="disk")
+            c.execute("UPDATE scans SET status=?, phase=?, total_files=?, scanned_bytes=?, updated_at=?, "
+                      "fs_total_bytes=1000, fs_used_bytes=?, fs_source='nas:/x', opt_max_depth=? WHERE id=?",
+                      (status, status, files, byts, upd, fs_used, md, sid))
+            c.commit()
+            return sid
+        reg("/n", "done", 820, 5000, 100, fs_used=300)
+        reg("/n/sub", "done", 360, 2000, 200, fs_used=200)                 # 같은 FS, 더 최근 값 200
+        reg("/e2", "done", 960, 4000, 150, fs_used=250, md=2)
+        reg("/e2", "paused", 100, 999, 300, fs_used=210)
+        ov = M.overall_capacity(c)
+        c.close()
+        assert ov["total_capacity_files"] == 820 + 960, ov["total_capacity_files"]                   # PP3
+        assert ov["fs_total_bytes"] == 1000 and ov["fs_used_bytes"] == 210, (ov["fs_total_bytes"], ov["fs_used_bytes"])  # PP4
+        e2 = [r for r in ov["roots"] if r["root_path"] == "/e2"][0]
+        assert e2["capacity_depth_limit"] == 2                                                       # PP9
+        r = AK._h_total("전체 용량 얼마야", {"overall": ov})                                          # PP2
+        assert AK.fmt_bytes(ov["total_capacity_bytes"]) in r["answer"], r["answer"]
+        rk = AK._rank_roots({"overall": ov})
+        assert rk[0]["root_path"] == "/n" and AK._root_cap(rk[0]) == 5000
+        assert P.PortalController._fs_capacity(ov["roots"])[1] == 210                                # PP4(포탈 같은 값)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    dh = _read("dashboard.html")
+    assert "function _srvNow()" in dh and "const now = _srvNow(), act" in dh                       # PP1
+    assert "o.total_capacity_files" in dh and "o.fs_total_bytes" in dh and "깊이 ${r.capacity_depth_limit}까지만" in dh
+    pt = _read("portal.py")
+    assert '"latest_scan_id": r.get("scan_id")' in pt                                                # PP5
+    assert "_resolve_scan_db(mconn, scan_id, analysis=True)" in _read("server.py")                   # PP6
+    assert '"partial": _partial' in pt and "부분 값</span>" in _read("portal.html")                    # PP7
+    assert '"capacity_finished_at")' in pt and "n.last_repl_at||n.last_sync" in _read("portal.html")  # PP8
+    print("[PP1~PP9] OK  화면 간 일관성: 서버 시계 경과·질의응답 조사 용량·파일 수 중첩 제외·FS 단일 규칙·사용량 API·스냅샷·부분 값·복제 시각·깊이 제한")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -2784,7 +2831,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_az_round19_regress, check_ba_round19_portal_edge,
             check_bb_round20_regress, check_bc_round20_upgrade,
             check_bd_round20_stress, check_be_round21_sec_regress,
-            check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser, check_bj_round23_regress, check_bk_round23_portal, check_bl_round23_engine, check_bm_round24_regress]
+            check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser, check_bj_round23_regress, check_bk_round23_portal, check_bl_round23_engine, check_bm_round24_regress,
+            check_bn_round24_consistency]
 
 
 def main() -> int:

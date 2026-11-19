@@ -2078,7 +2078,7 @@ function renderNodeHeader(){
   $("ndTitle").textContent=n.id;
   const bd=$("ndBadge"); bd.style.display=""; bd.textContent=st.t; bd.style.background=st.bg; bd.style.color=st.fg;
   $("ndMeta").textContent=[n.region||"지역 없음", n.version?("v"+n.version):"", n.last_ok?("마지막 응답 "+ago(n.last_ok)):"아직 응답 없음",
-    n.last_sync?("결과 복제 "+ago(n.last_sync)):""].filter(Boolean).join(" · ");
+    (n.last_repl_at||n.last_sync)?("결과 복제 "+ago(n.last_repl_at||n.last_sync)):""].filter(Boolean).join(" · ");
   if(n.enabled && !st.pending && (!n.online || n.error)){   // 첫 확인 전엔 경고를 띄우지 않는다
     const adv=_nodeAdvice(n.error); $("ndAlert").style.display="flex";
     $("ndAlertT").textContent=adv[0]; $("ndAlertD").textContent=(adv[1]?adv[1]+" ":"")+(n.error?("(받은 오류: "+n.error+")"):"");
@@ -2500,7 +2500,7 @@ function renderCompare(j){
     return `<tr><td><b>${_he(r.id)}</b></td><td>${_he(r.region||"—")}</td>
       <td class="num">${fmtBytes(r.total_bytes)}</td><td class="num">${fmtNum(r.total_files)}</td>
       <td class="num">${pct.toFixed(0)}%</td>
-      <td>${drift?'<span class="badge b-offline">드리프트 ⚠</span>':'<span class="badge b-online">정상</span>'}</td></tr>`;
+      <td>${r.partial?'<span class="badge" title="이 노드의 마지막 스캔이 끝나지 않아(멈춤·오류) 지금까지 센 값(하한값)입니다">부분 값</span> ':''}${drift?'<span class="badge b-offline">드리프트 ⚠</span>':'<span class="badge b-online">정상</span>'}</td></tr>`;
   }).join("") : '<tr><td colspan="6" class="sub">등록된 노드가 없습니다.</td></tr>';
   $("cmpNote").textContent = `${found.length}/${all.length} 노드에서 발견 · ‘최대 대비’ 85% 미만이면 드리프트(복제 지연/누락 의심). 마운트 접두어가 다른 노드는 ‘설정’의 경로 별칭으로 매핑하세요.`;
 }

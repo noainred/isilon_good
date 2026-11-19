@@ -148,7 +148,9 @@ def _h_total(q, data):
     if not _has(q, "용량", "사용량", "얼마", "크기", "쓰고", "차지"):
         return None
     ov = data.get("overall") or {}
-    b = int(ov.get("total_scanned_bytes") or 0)
+    # 홈 KPI 와 같은 '조사 용량'(마지막 완료 스캔·중첩 루트 제외) — 예전엔 진행 중 스캔 바이트 합이라 달랐다(24회차 점검)
+    b = int(ov.get("total_capacity_bytes") if ov.get("total_capacity_bytes") is not None
+            else (ov.get("total_scanned_bytes") or 0))
     facts = {"전체_조사_용량_bytes": b, "전체_조사_용량": fmt_bytes(b),
              "루트_수": ov.get("root_count"), "스캔_수": ov.get("scan_count")}
     return {"answer": f"전체 조사 용량은 **{fmt_bytes(b)}** 입니다 "
@@ -157,10 +159,15 @@ def _h_total(q, data):
             "facts": facts}
 
 
+def _root_cap(r) -> int:
+    """루트 용량 — 마지막 완료 스캔 값(capacity_bytes, 화면과 같은 값). 없으면(포탈 등) scanned_bytes."""
+    v = r.get("capacity_bytes")
+    return int(v if v is not None else (r.get("scanned_bytes") or 0))
+
+
 def _rank_roots(data, n=5):
     ov = data.get("overall") or {}
-    roots = sorted(ov.get("roots") or [],
-                   key=lambda r: int(r.get("scanned_bytes") or 0), reverse=True)
+    roots = sorted(ov.get("roots") or [], key=_root_cap, reverse=True)
     return roots[:n]
 
 
@@ -176,10 +183,10 @@ def _h_biggest(q, data):
     scope = data.get("scope")
     noun = "노드/루트" if scope == "portal" else "루트(경로)"
     lines = [f"{i + 1}. {r.get('label') or r.get('root_path')} — "
-             f"**{fmt_bytes(r.get('scanned_bytes'))}**" for i, r in enumerate(roots)]
+             f"**{fmt_bytes(_root_cap(r))}**" for i, r in enumerate(roots)]
     facts = {"순위": [{"대상": r.get("label") or r.get("root_path"),
-                      "용량": fmt_bytes(r.get("scanned_bytes")),
-                      "bytes": int(r.get("scanned_bytes") or 0)} for r in roots]}
+                      "용량": fmt_bytes(_root_cap(r)),
+                      "bytes": _root_cap(r)} for r in roots]}
     return {"answer": f"용량이 큰 {noun} 순위:\n" + "\n".join(lines), "facts": facts}
 
 

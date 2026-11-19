@@ -3512,7 +3512,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             host = r.get("hostname")
             r["label"] = (host + ":" + r["root_path"]) if host else r["root_path"]
         data = {"scope": "edge", "overall": overall, "detail": None}
-        scan_id, row = self._resolve_scan_db(mconn, scan_id)
+        # 분석 화면과 같은 DB(진행 중 스냅샷 포함) — 예전엔 원본을 읽어 스냅샷이 있는데도 '0 B' 로 답했다(24회차 점검)
+        scan_id, row = self._resolve_scan_db(mconn, scan_id, analysis=True)
         if row is None or not os.path.exists(row["db_path"]):
             return data
         pconn = dbmod.connect(row["db_path"])
@@ -3621,6 +3622,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({
                     "ok": True,
                     "version": __version__,
+                    "server_time": time.time(),   # 화면이 서버 시계 기준으로 경과를 계산(브라우저 시계와 다를 때)
                     "overall": overall,
                     "scans": _scans_with_partial(mgrmod.list_scans(mconn), ctrl),
                     "running": ctrl.running_ids() if ctrl else [],

@@ -763,6 +763,7 @@ class PortalController:
         self._rep_at = {}           # id -> 마지막 복제 '시도' 시각(포탈 시계) — 복제 주기 판정 기준
         self._rep_fail = {}         # id -> 연속 복제 실패 횟수(재시도 백오프)
         self._rep_err = {}          # id -> 마지막 복제 오류(다음 복제 성공 전까지 표시)
+        self._rep_ok_at = {}        # id -> 마지막 복제 성공 시각(포탈 시계) — 화면 '결과 복제 N전'(24회차 점검)
         self._rep_missing = {}      # id -> 마지막 복제에서 meta 에는 있었으나 DB 가 오지 않은 스캔 수
         self._rep_missing_prev = {}  # id -> 그 누락 스캔들의 완료 시각(같은 누락이 반복되면 건너뜀)
         self._clock_rewound = {}    # id -> 이번 복제에서 엣지 시계 역행으로 되돌린 워터마크
@@ -1881,6 +1882,8 @@ class PortalController:
         with self._lock:
             cache = dict(self._cache)
             nodes = [_public_node(n, cache, self._rep_err) for n in self.nodes]
+            for _pn in nodes:   # 복제 성공 시각(포탈 시계) — last_sync 는 엣지 시계 워터마크라 시계가 다르면 '3시간 전'
+                _pn["last_repl_at"] = self._rep_ok_at.get(_pn["id"])
         return {"ok": True, "nodes": nodes}
 
     def upsert_node(self, raw: dict, *, keep_token_on_url_change: bool = True,
@@ -2372,6 +2375,7 @@ class PortalController:
             return
         with self._lock:
             cur = self._get(nid) or n
+            self._rep_ok_at[nid] = time.time()
             if self._clock_rewound.pop(nid, None) is not None:
                 cur["last_sync"] = newest       # 미래로 남은 워터마크를 버리고 되돌린 값으로
                 self._rep_err[nid] = ("replicate: 엣지 시계가 포탈 기록보다 뒤로 갔습니다(시계 보정?) — "
@@ -2604,42 +2608,8 @@ class PortalController:
     # --- 글로벌 롤업 ---
     @staticmethod
     def _fs_capacity(roots_l):
-        """노드의 파일시스템 사용/전체 용량 — 같은 파일시스템은 한 번만 센다.
-
-        같은 FS 판별: ① 엣지가 보낸 마운트 출처(fs_source, 예: isilon01:/ifs/data)가 같으면 같은 FS
-        ② 출처를 모르거나 다르면 전체 용량이 거의 같고(0.1% 또는 4MiB 이내) 사용량도 비슷할 때(전체의 2% 이내)만
-        같은 FS 로 본다. 예전엔 '전체 용량이 같으면 같은 FS' 하나로, 크기만 같은 서로 다른 볼륨(예: 같은 크기
-        쿼터 export 둘)을 하나로 합치고(100TB+100TB → 100TB), 같은 FS 가 몇 KB 다르게 보고되면 두 번 셌다.
-        (아이실론 한 클러스터를 여러 export·노드 IP 로 마운트하면 출처는 달라도 전체·사용량이 같아 ②로 합쳐진다.)
-        """
-        clusters = []   # [{"total", "used", "srcs"}]
-        for rt in roots_l:
-            if not isinstance(rt, dict):
-                continue
-            try:
-                ftot = int(rt.get("fs_total_bytes") or 0)
-                fused = int(rt.get("fs_used_bytes") or 0)
-            except (TypeError, ValueError, OverflowError):
-                continue
-            if ftot <= 0:
-                continue
-            src = str(rt.get("fs_source") or "").strip()
-            hit = None
-            if src:
-                hit = next((c for c in clusters if src in c["srcs"]), None)
-            if hit is None:
-                tol_t = max(4 * 1024 * 1024, ftot * 0.001)
-                hit = next((c for c in clusters
-                            if abs(c["total"] - ftot) <= tol_t and abs(c["used"] - fused) <= ftot * 0.02), None)
-            if hit is None:
-                clusters.append({"total": ftot, "used": fused, "srcs": {src} if src else set()})
-            else:
-                hit["total"] = max(hit["total"], ftot)
-                hit["used"] = max(hit["used"], fused)
-                if src:
-                    hit["srcs"].add(src)
-        ftot = sum(c["total"] for c in clusters)
-        fused = sum(c["used"] for c in clusters)
+        """노드의 파일시스템 (전체, 사용, 여유, %) — 엣지와 같은 규칙(manager.fs_capacity, 단일 소스)."""
+        ftot, fused = mgrmod.fs_capacity(roots_l)
         pct = round(fused / ftot * 100, 1) if ftot else None
         return ftot, fused, max(0, ftot - fused), pct
 
@@ -2656,7 +2626,7 @@ class PortalController:
         if abs(skew) < 60 or not isinstance(rt, dict):
             return rt
         out = dict(rt)
-        for k in ("started_at", "updated_at", "finished_at", "partial_agg_at"):
+        for k in ("started_at", "updated_at", "finished_at", "partial_agg_at", "capacity_finished_at"):
             v = out.get(k)
             if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
                 out[k] = v + skew
@@ -2845,10 +2815,17 @@ class PortalController:
                 "capacity_partial": bool(r.get("capacity_partial")),
                 "fs_total_bytes": int(r.get("fs_total_bytes") or 0),
                 "fs_used_bytes": int(r.get("fs_used_bytes") or 0),
-                "total_files": int(r.get("total_files") or 0),
+                # 파일 수·스캔 번호·완료 시각도 용량과 같은 스캔(마지막 완료)에서 — 예전엔 용량은 완료 스캔, 파일 수는
+                # 진행 중 스캔이라 섞였다(24회차 점검). 진행 중 스캔은 latest_* 로 따로 준다.
+                "total_files": int((r.get("capacity_files") if (r.get("capacity_files") is not None
+                                                                and not r.get("capacity_partial"))
+                                    else r.get("total_files")) or 0),
+                "scan_id": r.get("capacity_scan_id") if r.get("capacity_scan_id") is not None else r.get("scan_id"),
+                "finished_at": (r.get("capacity_finished_at") if r.get("capacity_finished_at") is not None
+                                else r.get("finished_at")),
                 "status": r.get("status"),
-                "scan_id": r.get("scan_id"),
-                "finished_at": r.get("finished_at"),
+                "latest_scan_id": r.get("scan_id"),
+                "latest_status": r.get("status"),
             } for r in (n.get("roots") or [])]
             nodes.append({
                 "id": n.get("id"), "region": n.get("region"),
@@ -3755,6 +3732,11 @@ class PortalController:
                             "SELECT total_bytes, own_bytes, total_files, subdir_count "
                             "FROM directories WHERE run_id=? AND path=?", (rid, local)).fetchone()
                         fa = None if r is not None else self._folded_at(c, rid, local)
+                        try:   # 끝나지 않은(멈춘·오류) 스캔의 값이면 '부분 값'으로 표시(24회차 점검: 완성 값처럼 보였다)
+                            _st = c.execute("SELECT status FROM scan_runs WHERE id=?", (rid,)).fetchone()
+                            _partial = bool(_st) and _st[0] != "done"
+                        except Exception:  # noqa: BLE001
+                            _partial = False
                     finally:
                         c.close()
                 except Exception:  # noqa: BLE001
@@ -3763,7 +3745,7 @@ class PortalController:
                     sz = r["total_bytes"] if r["total_bytes"] else r["own_bytes"]
                     entry.update({"found": True, "total_bytes": sz,
                                   "own_bytes": r["own_bytes"], "total_files": r["total_files"],
-                                  "subdir_count": r["subdir_count"]})
+                                  "subdir_count": r["subdir_count"], "partial": _partial})
                     entry.pop("folded_at", None)
                     break
                 if not fa:

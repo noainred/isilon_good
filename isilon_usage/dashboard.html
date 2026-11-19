@@ -3966,14 +3966,16 @@ function renderHome(o, j) {
   $("kpiCapSub").textContent = roots.length
     ? ("저장소 " + fmtNum(roots.length) + "개 · 마지막 완료 스캔 기준" + (partial ? (" · " + partial + "개는 부분 값") : ""))
     : "아직 스캔한 저장소가 없습니다";
-  const fs = _fsTotals(roots);
+  const fs = (o.fs_total_bytes != null) ? {total: o.fs_total_bytes, used: o.fs_used_bytes || 0} : _fsTotals(roots);   // 서버 단일 계산(포탈과 같은 값)
   const pct = fs.total ? (fs.used / fs.total * 100) : null;
   $("kpiFs").textContent = (pct == null) ? "—" : (pct.toFixed(pct < 10 ? 1 : 0) + "%");
   $("kpiFsBar").style.width = (pct == null) ? "0%" : Math.min(100, pct).toFixed(1) + "%";
   // 사용률 색 기준은 포탈(capColor)과 같다: 보통 파랑 · 70%+ 주황 · 85%+ 빨강
   $("kpiFsBar").style.background = (pct == null) ? "" : (pct >= 85 ? "var(--danger)" : (pct >= 70 ? "var(--warn)" : ""));
   $("kpiFsSub").textContent = fs.total ? ("전체 " + fmtBytes(fs.total) + " 중 " + fmtBytes(fs.used) + " 사용") : "파일시스템 정보 없음";
-  const files = roots.reduce((a, r) => a + ((r.capacity_files != null && !r.capacity_partial) ? r.capacity_files : (r.total_files || 0)), 0);
+  // 중첩 루트(다른 루트 안)는 용량 합처럼 빼고 센다(24회차 점검: 파일 수만 두 번 셈)
+  const files = (o.total_capacity_files != null) ? o.total_capacity_files
+    : roots.reduce((a, r) => a + (r.nested_in ? 0 : ((r.capacity_files != null && !r.capacity_partial) ? r.capacity_files : (r.total_files || 0))), 0);
   $("kpiFiles").textContent = roots.length ? _fmtKoCount(files) : "—";
   $("kpiFiles").title = fmtNum(files) + "개";
   $("kpiFilesSub").textContent = roots.length ? "저장소별 마지막 스캔 합계" : "";
@@ -4045,8 +4047,8 @@ function renderHome(o, j) {
       items.push({k: "info", t: escHtml(r.root_path) + " 완료된 스캔이 아직 없습니다",
                   d: "용량은 지금까지 센 부분 값입니다. 끝까지 스캔하면 정확한 값으로 바뀝니다.", go: "scanrun", gl: "스캔하기"});
     }
-    if (!r.capacity_partial && r.capacity_finished_at && (Date.now() / 1000 - r.capacity_finished_at) > 14 * 86400) {
-      items.push({k: "info", t: escHtml(r.root_path) + " 결과가 " + Math.floor((Date.now() / 1000 - r.capacity_finished_at) / 86400) + "일 전 것입니다",
+    if (!r.capacity_partial && r.capacity_finished_at && (_srvNow() - r.capacity_finished_at) > 14 * 86400) {
+      items.push({k: "info", t: escHtml(r.root_path) + " 결과가 " + Math.floor((_srvNow() - r.capacity_finished_at) / 86400) + "일 전 것입니다",
                   d: "마지막 완료 스캔 이후 바뀐 내용은 반영돼 있지 않습니다.", go: "scanrun", gl: "다시 스캔"});
     }
   });
@@ -4059,6 +4061,7 @@ function renderHome(o, j) {
     : `<div class="attn-item"><span class="attn-ico ok">${_ICO.ok}</span><div><div class="attn-t">모두 정상입니다</div><div class="attn-d">여유 공간 부족·멈춘 스캔·오류가 없습니다.</div></div></div>`;
 }
 function renderOverview(j) {
+  if (j.server_time) _srvSkew = j.server_time - Date.now() / 1000;
   if (j.version) {
     $("verPill").textContent = "v" + j.version;
     if ($("aboutVer")) $("aboutVer").textContent = "v" + j.version;   // About 버전 배지
@@ -4119,6 +4122,7 @@ function renderOverview(j) {
       const capNote = (r.capacity_scan_id != null && r.capacity_scan_id !== r.scan_id)
         ? `<div class="sub" title="용량은 마지막 완료 스캔(#${r.capacity_scan_id}) 기준">#${r.scan_id} ${statusKo[r.status] || escHtml(r.status)}: ${fmtBytes(r.scanned_bytes)}</div>`
         : (r.capacity_partial ? '<div class="sub" title="완료된 스캔이 아직 없어 부분 값입니다">부분 값</div>' : "");
+      const depthNote = r.capacity_depth_limit ? `<div class="sub" title="최대 깊이 ${r.capacity_depth_limit} 로 자른 스캔 — 그보다 깊은 폴더의 용량은 합계에 없습니다">깊이 ${r.capacity_depth_limit}까지만</div>` : "";
       const nestNote = r.nested_in ? `<div class="sub" title="다른 스캔 루트 안에 있어 전체 합계에서 뺐습니다(두 번 세지 않음)">⊂ ${escHtml(r.nested_in)} 에 포함 · 합계 제외</div>` : "";
       const running = runningSet.has(r.scan_id);
       const el = scanActiveSec(r, running);
@@ -4139,7 +4143,7 @@ function renderOverview(j) {
       return `<tr class="ovrow" data-scan="${r.scan_id}" style="cursor:pointer;" title="클릭: 이 스캔 결과를 ‘디렉터리 분석’에서 보기">
         <td class="path" title="${escHtml(r.root_path)}">${escHtml(r.root_path)}</td>
         <td>${escHtml(r.hostname || "—")}</td>
-        <td class="num">${fmtBytes(cap)}${capNote}${nestNote}</td>
+        <td class="num">${fmtBytes(cap)}${capNote}${depthNote}${nestNote}</td>
         <td class="num">${fmtBytes(r.fs_used_bytes)}</td>
         <td class="num">${pct.toFixed(1)}%</td>
         <td class="num" title="${escHtml(scanDurTitle(r, running))}">${el == null ? "—" : fmtDur(el)}</td>
@@ -4200,14 +4204,18 @@ function renderOverview(j) {
 
 // 스캔 소요 시간 = 활성 시간(일시정지 동안 제외) — 12분 쉬었다 재개한 1초짜리 스캔이 '12분 2초'로 보이던 문제.
 // 활성 기록(active_elapsed)이 없으면(구버전 스캔) 시작~끝 벽시계 시간.
+// 서버(엣지) 시계 − 브라우저 시계(초). 스캔 시각은 엣지 시계라, 브라우저 시계로 빼면 시계가 3시간 다를 때
+// '3시간 경과'로 보였다(24회차 점검). /api/scans 응답마다 갱신.
+let _srvSkew = 0;
+function _srvNow() { return Date.now() / 1000 + _srvSkew; }
 function scanActiveSec(r, running) {
-  const now = Date.now() / 1000, act = Number(r.active_elapsed || 0);
+  const now = _srvNow(), act = Number(r.active_elapsed || 0);
   if (act > 0) return act + (running && r.updated_at ? Math.max(0, now - r.updated_at) : 0);
   const endt = running ? now : (r.finished_at || r.updated_at || now);
   return r.started_at ? Math.max(0, endt - r.started_at) : null;
 }
 function scanDurTitle(r, running) {
-  const endt = running ? Date.now() / 1000 : (r.finished_at || r.updated_at);
+  const endt = running ? _srvNow() : (r.finished_at || r.updated_at);
   const wall = (r.started_at && endt) ? Math.max(0, endt - r.started_at) : null;
   const act = scanActiveSec(r, running);
   return (wall != null && act != null && wall - act > 60)

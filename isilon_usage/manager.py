@@ -430,6 +430,42 @@ def prev_total_dirs(conn, root_path, exclude_id=None):
     return prev_totals(conn, root_path, exclude_id)[0]
 
 
+def fs_capacity(roots) -> tuple:
+    """루트들의 파일시스템 (전체, 사용) — 같은 FS 는 한 번만, 그 FS 를 가장 최근에 본 루트의 값으로.
+
+    같은 FS 판별: ① 마운트 출처(fs_source)가 같으면 ② 출처를 모르거나 다르면 전체 용량이 거의 같고(0.1% 또는
+    4MiB 이내) 사용량도 비슷할 때(전체의 2% 이내). 엣지 홈·포탈(노드·전체)이 이 함수 하나를 쓴다(단일 소스) — 예전엔
+    포탈은 최댓값, 엣지는 최근값이라 같은 노드가 5.6% / 5.4% 로 달랐다(24회차 점검)."""
+    clusters = []   # [{"total", "used", "ts", "srcs"}]
+    for rt in roots or []:
+        if not isinstance(rt, dict):
+            continue
+        try:
+            ftot = int(rt.get("fs_total_bytes") or 0)
+            fused = int(rt.get("fs_used_bytes") or 0)
+            ts = float(rt.get("updated_at") or 0)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if ftot <= 0:
+            continue
+        src = str(rt.get("fs_source") or "").strip()
+        hit = None
+        if src:
+            hit = next((c for c in clusters if src in c["srcs"]), None)
+        if hit is None:
+            tol_t = max(4 * 1024 * 1024, ftot * 0.001)
+            hit = next((c for c in clusters
+                        if abs(c["total"] - ftot) <= tol_t and abs(c["used"] - fused) <= ftot * 0.02), None)
+        if hit is None:
+            clusters.append({"total": ftot, "used": fused, "ts": ts, "srcs": {src} if src else set()})
+        else:
+            if ts >= hit["ts"]:
+                hit.update(total=ftot, used=fused, ts=ts)
+            if src:
+                hit["srcs"].add(src)
+    return sum(c["total"] for c in clusters), sum(c["used"] for c in clusters)
+
+
 def active_elapsed(s: dict, now_ts: float) -> float:
     """스캔의 활성 경과 시간(초). 스캐너가 기록한 active_elapsed(일시정지 갭 제외)가 있으면 그것 + 마지막 기록 뒤
     흐른 시간(진행 중일 때만), 없으면(구버전 기록) 시작부터 지금까지."""
@@ -527,6 +563,8 @@ def overall_capacity(conn) -> dict:
             "capacity_scan_id": cap["id"],
             "capacity_finished_at": cap.get("finished_at") if cap.get("status") == "done" else None,
             "capacity_partial": rp not in done_by_root,     # 완료 스캔이 아직 없어 부분 값
+            # 최대 깊이로 자른 스캔이면 그 깊이(그 아래 용량은 합계에 없음) — 화면이 '깊이 N까지'로 표시(24회차 점검)
+            "capacity_depth_limit": int(cap.get("opt_max_depth") or 0),
             # 진행 중이면 남은 시간(초)과 끝날 시각(epoch) 추정 — 상태 화면 '요약'과 같은 계산
             "eta_seconds": eta,
             "eta_at": (now_ts + eta) if eta is not None else None,
@@ -537,9 +575,16 @@ def overall_capacity(conn) -> dict:
     roots.sort(key=lambda x: x["capacity_bytes"], reverse=True)
 
     active = sum(1 for s in scans if s["status"] in ("discovering", "sizing"))
+    fs_t, fs_u = fs_capacity(roots)
     return {
         "total_scanned_bytes": total_scanned,
         "total_capacity_bytes": total_capacity,
+        # 파일 수 합(다른 루트 안에 든 루트 제외 — 용량 합과 같은 규칙, 24회차 점검: 홈 파일 수가 중첩 루트를 두 번 셈)
+        "total_capacity_files": sum((int(r.get("capacity_files") or 0) if not r.get("capacity_partial")
+                                     else int(r.get("total_files") or 0)) for r in roots if not r.get("nested_in")),
+        # 파일시스템 사용량(같은 FS 한 번, 가장 최근 값) — 엣지 홈·포탈이 같은 값(24회차 점검: 5.4% vs 5.6%)
+        "fs_total_bytes": fs_t,
+        "fs_used_bytes": fs_u,
         "root_count": len(latest_by_root),
         "scan_count": len(scans),
         "active_scans": active,
