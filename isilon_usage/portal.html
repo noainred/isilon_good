@@ -2980,7 +2980,8 @@ function openPushModal(){
   if($("pushBarTxt")) $("pushBarTxt").textContent="—";
   if($("pushModalStat")) $("pushModalStat").innerHTML='<span style="color:var(--warn)">⏳ 시작</span>';
   if(_pushTimer){clearTimeout(_pushTimer);_pushTimer=null;}
-  pollPush();
+  // 여기서 바로 조회하지 않는다 — 시작 요청 전이라 '지난 푸시' 결과가 보이고 거기서 갱신이 멈췄다(2026-11 점검).
+  // 시작 요청이 성공한 뒤 pollPush 로 이번 푸시를 끝까지 따라간다.
 }
 if($("pushModalClose")) $("pushModalClose").addEventListener("click", closePushModal);
 if($("ugPushAll")) $("ugPushAll").addEventListener("click", async()=>{
@@ -2989,7 +2990,8 @@ if($("ugPushAll")) $("ugPushAll").addEventListener("click", async()=>{
   openPushModal();
   try{ const j=await (await fetch("/api/portal/upgrade-all",{method:"POST",
       headers:{"Content-Type":"application/json"},body:"{}"})).json();
-    if(j.ok){ $("ugWatchMsg").textContent=" 전파 시작 — 보내는 코드 v"+(j.bundle_version||"?")+" · "+(j.total||0)+"대"; }
+    if(j.ok){ $("ugWatchMsg").textContent=" 전파 시작 — 보내는 코드 v"+(j.bundle_version||"?")+" · "+(j.total||0)+"대";
+      pollPush(); }
     else { $("ugWatchMsg").textContent=" ✗ "+(j.error||j.reason||"실패");
       if($("pushModalStat")) $("pushModalStat").innerHTML=`<span style="color:var(--danger)">시작 실패: ${_he(j.error||j.reason||"")}</span>`; } }
   catch(e){ $("ugWatchMsg").textContent=" ✗ "+e; }

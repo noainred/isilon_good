@@ -1183,15 +1183,16 @@ class PortalController:
                                 detail=str(res.get("reason") or ""))
 
     # --- 자동 업그레이드 ---
-    def set_upgrade_watch(self, watch_dir: str, check_secs=None) -> dict:
-        self.settings["upgrade_watch_dir"] = str(watch_dir or "").strip()
+    def set_upgrade_watch(self, watch_dir, check_secs=None) -> dict:
+        if watch_dir is not None:          # None = 바꾸지 않음
+            self.settings["upgrade_watch_dir"] = str(watch_dir or "").strip()
         if check_secs is not None:
             try:
                 self.settings["upgrade_check_secs"] = max(10, int(check_secs))
             except (TypeError, ValueError, OverflowError):
                 pass
         self._save_settings()
-        return {"ok": True, "upgrade_watch_dir": self.settings["upgrade_watch_dir"],
+        return {"ok": True, "upgrade_watch_dir": self.settings.get("upgrade_watch_dir", ""),
                 "upgrade_check_secs": self.settings["upgrade_check_secs"]}
 
     def upgrade_config(self) -> dict:
@@ -1369,8 +1370,13 @@ class PortalController:
                           else ("   • %s → ✗ %s" % (n["id"], r.get("reason") or "실패")))
         okn = sum(1 for r in results if r.get("ok"))
         if nodes and okn == 0 and any("더 새 버전" in (r.get("reason") or "") for r in results):
-            self._upg_log("⚠ 전부 '더 새 버전 아님'으로 거부 — 포탈 배포 코드 v%s 가 엣지보다 낮거나 "
-                          "같습니다. 포탈을 먼저 최신으로 올린 뒤 다시 푸시하세요." % bver)
+            same = all(("더 새 버전" in (r.get("reason") or "")) and (str(bver) in (r.get("reason") or ""))
+                       for r in results)
+            if same:   # 모두 이미 같은 버전 — 할 일이 없을 뿐 실패가 아니다
+                self._upg_log("✓ 모든 노드가 이미 v%s 입니다 — 올릴 것이 없습니다." % bver)
+            else:
+                self._upg_log("⚠ 전부 '더 새 버전 아님'으로 거부 — 포탈 배포 코드 v%s 가 엣지보다 낮거나 "
+                              "같습니다. 포탈을 먼저 최신으로 올린 뒤 다시 푸시하세요." % bver)
         with self._lock:
             p = self._upg_state.get("push")
             if p:
@@ -1381,7 +1387,8 @@ class PortalController:
         self._upg_log("③ 엣지 전파 완료 — 성공 %d/%d%s (보낸 버전 v%s)"
                       % (okn, len(nodes), (" · 이미 최신 %d" % curn) if curn else "", bver))
         if record:
-            self._record_upgrade(kind="전 노드 푸시", ok=(len(nodes) > 0 and okn > 0 and okn + curn == len(nodes)),
+            # 성공 = 모든 노드가 올라갔거나 이미 같은(또는 더 새) 버전 — 전부 '이미 최신'도 실패가 아니다(7회차 조건 수정)
+            self._record_upgrade(kind="전 노드 푸시", ok=(len(nodes) > 0 and okn + curn == len(nodes)),
                                  to=bver, push=results)
         return results
 
@@ -3842,8 +3849,9 @@ class PortalHandler(BaseHTTPRequestHandler):
                 # 카드별 부분 저장 — 보낸 키만 반영한다(없는 키로 다른 설정을 덮어쓰지 않음).
                 res = {"ok": True}
                 if "upgrade_watch_dir" in body or "upgrade_check_secs" in body:
-                    res.update(c.set_upgrade_watch(body.get("upgrade_watch_dir") or "",
-                                                   body.get("upgrade_check_secs")))
+                    # 보내지 않은 감시 폴더는 그대로(None) — 예전엔 주기만 보내도 폴더가 비워졌다
+                    res.update(c.set_upgrade_watch(body.get("upgrade_watch_dir") if "upgrade_watch_dir" in body
+                                                   else None, body.get("upgrade_check_secs")))
                 if "enroll_token" in body:
                     res.update(c.set_enroll_token(body.get("enroll_token") or ""))
                 if "release_dir" in body:

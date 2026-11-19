@@ -2513,6 +2513,7 @@ class ScanController:
             return self._resume_scan_locked(scan_id)
 
     def _resume_scan_locked(self, scan_id: int) -> dict:
+        self._wait_stopping(scan_id)        # 멈추는 중이면 끝날 때까지(곧바로 '재개'를 눌러도 '이미 실행 중'으로 거절되지 않게)
         if scan_id in self.running_ids():
             return {"ok": False, "reason": "이미 실행 중입니다."}
         if scan_id in self.partial_running_ids():
@@ -2595,7 +2596,19 @@ class ScanController:
         with self._start_lock:
             return self._partial_aggregate_locked(scan_id)
 
+    def _wait_stopping(self, scan_id: int, timeout: float = 5.0) -> None:
+        """중지 요청을 받은(멈추는 중인) 스캔이면 스레드가 끝날 때까지 잠깐 기다린다 — 관리 DB 는 이미 '일시정지'인데
+        스레드가 아직 정리 중이라, 화면에서 멈춘 직후 누른 '멈춘 자료 집계'가 '실행 중'으로 거절되던 경합(2026-11)."""
+        with self._lock:
+            rec = self._scans.get(scan_id)
+        if rec and rec.get("stop") is not None and rec["stop"].is_set() and rec.get("thread") is not None:
+            try:
+                rec["thread"].join(timeout)
+            except RuntimeError:
+                pass
+
     def _partial_aggregate_locked(self, scan_id: int) -> dict:
+        self._wait_stopping(scan_id)
         if scan_id in self.running_ids():
             return {"ok": False, "reason": "실행 중인 스캔입니다(먼저 중지하세요)."}
         if scan_id in self.partial_running_ids():

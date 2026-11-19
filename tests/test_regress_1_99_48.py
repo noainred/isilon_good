@@ -1274,6 +1274,45 @@ def check_aj_adverse_fs_round11() -> None:
     print("[J1~J4] OK  du 비 UTF-8 이름·pscan 오류 목록/이중 계산·stat 실패 오류 집계·링크 루트 크기")
 
 
+def check_ak_round11_misc() -> None:
+    """K1 멈춘 직후 '멈춘 자료 집계'·'재개'가 '실행 중'으로 거절되는 경합 K2 일괄 푸시 모달이 지난 결과에서 멈춤
+    K3 전부 이미 최신인 푸시가 '실패'로 기록 K4 주기만 보낸 설정이 감시 폴더를 비움."""
+    from isilon_usage import server as SV, portal as P
+    d = tempfile.mkdtemp(prefix="iu_ak_")
+    try:
+        httpd = SV.serve(os.path.join(d, "data"), host="127.0.0.1", port=0, enable_scan=True)
+        c = httpd.RequestHandlerClass.controller
+        stop = threading.Event()
+        stop.set()
+        th = threading.Thread(target=lambda: time.sleep(0.4))
+        th.start()
+        with c._lock:
+            c._scans[777] = {"stop": stop, "thread": th, "path": "/x"}
+        t0 = time.time()
+
+        def _cleanup():
+            th.join()
+            with c._lock:
+                c._scans.pop(777, None)
+        threading.Thread(target=_cleanup).start()
+        c._wait_stopping(777)
+        assert time.time() - t0 >= 0.3 and not th.is_alive()                         # K1: 끝날 때까지 기다림
+        httpd.server_close()
+        pc = P.PortalController(os.path.join(d, "hq"))                                 # K4
+        pc.set_upgrade_watch("/w1", 60)
+        pc.set_upgrade_watch(None, 120)
+        assert pc.settings["upgrade_watch_dir"] == "/w1" and pc.settings["upgrade_check_secs"] == 120
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    src, ph = _read("portal.py"), _read("portal.html")
+    assert "ok=(len(nodes) > 0 and okn + curn == len(nodes))" in src                   # K3
+    assert "모든 노드가 이미 v%s 입니다" in src
+    i = ph.index("function openPushModal(){")
+    assert "pollPush();" not in ph[i:ph.index("}", ph.index("_pushTimer=null;}", i)) + 200].split("// 시작 요청이")[0]
+    assert '(j.total||0)+"대";\n      pollPush(); }' in ph                                   # K2
+    print("[K1~K4] OK  멈추는 중 대기·푸시 모달은 시작 뒤 조회·이미 최신은 성공·감시 폴더 유지")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1285,7 +1324,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_aa_round6, check_ab_edge_views_round6, check_ac_round7,
             check_ad_portal_round8, check_ae_regress_round8, check_af_multinode_round9,
             check_ag_edge_flow_round9, check_ah_clock_rewind_round10,
-            check_ai_edge_round10, check_aj_adverse_fs_round11]
+            check_ai_edge_round10, check_aj_adverse_fs_round11,
+            check_ak_round11_misc]
 
 
 def main() -> int:
