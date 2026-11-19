@@ -646,6 +646,7 @@ class PortalController:
         self._rep_err = {}          # id -> 마지막 복제 오류(다음 복제 성공 전까지 표시)
         self._rep_missing = {}      # id -> 마지막 복제에서 meta 에는 있었으나 DB 가 오지 않은 스캔 수
         self._rep_missing_prev = {}  # id -> 그 누락 스캔들의 완료 시각(같은 누락이 반복되면 건너뜀)
+        self._clock_rewound = {}    # id -> 이번 복제에서 엣지 시계 역행으로 되돌린 워터마크
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._thread = None
@@ -2032,11 +2033,33 @@ class PortalController:
         last = float(self._rep_at.get(nid, 0.0))
         if setmod.schedule_due(dict(n, last_run=last), now):
             return True
-        if not self._has_unreplicated(nid, float(n.get("last_sync", 0) or 0)):
+        if not self._has_unreplicated(nid, self._effective_since(nid, float(n.get("last_sync", 0) or 0))[0]):
             return False
         fails = int(self._rep_fail.get(nid, 0))
         gap = min(REP_RETRY_MAX, REP_RETRY_SECS * (2 ** min(fails, 10)))
         return (now - last) >= gap
+
+    def _effective_since(self, nid: str, last_sync: float):
+        """복제 워터마크(엣지 시계의 완료 시각)가 엣지의 '지금'보다 미래면 엣지 시계가 되돌아간 것이다(NTP 보정 등).
+        그대로 쓰면 그 뒤 스캔이 영영 'since 이전'이라 복제가 조용히 멈췄다(2026-11 연동 점검) — 이때는
+        이미 받은 복제본 중 엣지의 지금보다 이른 마지막 완료 시각으로 되돌린다. (워터마크, 되돌렸는지)"""
+        c = self._cache.get(nid) or {}
+        try:
+            edge_now = float(c.get("edge_now") or 0)
+        except (TypeError, ValueError, OverflowError):
+            edge_now = 0.0
+        if not edge_now or last_sync <= edge_now + 300:
+            return last_sync, False
+        best = 0.0
+        try:
+            with open(os.path.join(self.replicas_dir, nid, "meta.json"), encoding="utf-8") as fh:
+                for sc in (json.load(fh).get("scans") or []):
+                    t = float((sc or {}).get("finished_at") or 0)
+                    if t <= edge_now and t > best:
+                        best = t
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+        return best, True
 
     def _has_unreplicated(self, nid: str, wm: float) -> bool:
         """폴링 캐시에 워터마크(wm) 이후 완료된 스캔이 보이는가(호출자가 self._lock 보유)."""
@@ -2158,8 +2181,13 @@ class PortalController:
             return
         with self._lock:
             cur = self._get(nid) or n
-            cur["last_sync"] = max(float(cur.get("last_sync", 0) or 0), newest)
-            self._rep_err.pop(nid, None)
+            if self._clock_rewound.pop(nid, None) is not None:
+                cur["last_sync"] = newest       # 미래로 남은 워터마크를 버리고 되돌린 값으로
+                self._rep_err[nid] = ("replicate: 엣지 시계가 포탈 기록보다 뒤로 갔습니다(시계 보정?) — "
+                                      "복제 기준을 다시 맞췄습니다. 엣지 시계(NTP)를 확인하세요.")
+            else:
+                cur["last_sync"] = max(float(cur.get("last_sync", 0) or 0), newest)
+                self._rep_err.pop(nid, None)
             if self._rep_missing.get(nid):
                 self._rep_err[nid] = ("replicate: 스캔 DB %d건을 받지 못함 — 다음 복제에서 다시 시도"
                                       % self._rep_missing[nid])
@@ -2178,11 +2206,31 @@ class PortalController:
         같은 키는 신규가 갱신한다. 증분 응답의 부분 목록으로 과거 스캔이 사라지는 것을 막는다.
         """
         merged = {}
-        for s in list(old_scans or []) + list(new_scans or []):
+        now = time.time()
+        for s in list(old_scans or []):
             k = s.get("db_filename") or s.get("id")
             if k is not None:
                 merged[k] = s
+        for s in list(new_scans or []):
+            k = s.get("db_filename") or s.get("id")
+            if k is None:
+                continue
+            s = dict(s)
+            # 포탈이 처음 받은 시각(포탈 시계) — '최신' 판단에 엣지 완료 시각보다 우선한다. 엣지 시계가 되돌아가면
+            # 옛 스캔의 완료 시각이 새 스캔보다 미래라, 보관 정리·비교가 새 스캔을 버리고 옛 것을 남겼다(2026-11 연동 점검).
+            s["received_at"] = (merged.get(k) or {}).get("received_at") or now
+            merged[k] = s
         return list(merged.values())
+
+    @staticmethod
+    def _scan_recency(s) -> tuple:
+        """복제 스캔의 '최신' 순서: 포탈이 받은 시각(없으면 0 — 이 기능 전 복제본) → 엣지 완료 시각."""
+        def _f(v):
+            try:
+                return float(v or 0)
+            except (TypeError, ValueError, OverflowError):
+                return 0.0
+        return (_f(s.get("received_at")), _f(s.get("finished_at")))
 
     @staticmethod
     def _prune_replica_scans(dest: str, scans: list, keep: int) -> list:
@@ -2197,7 +2245,7 @@ class PortalController:
             by_root.setdefault(sc.get("root_path") or "", []).append(sc)
         kept = []
         for items in by_root.values():
-            items.sort(key=lambda x: float(x.get("finished_at") or 0), reverse=True)
+            items.sort(key=PortalController._scan_recency, reverse=True)
             keep_set = items[:keep]
             done = [x for x in items if x.get("status") == "done"]
             if done and done[0] not in keep_set:
@@ -2219,7 +2267,9 @@ class PortalController:
 
     def _replicate(self, n: dict) -> float:
         """완료 DB(증분) + meta.json 을 replicas/<id>/ 로 안전하게 내려받는다."""
-        since = float(n.get("last_sync", 0) or 0)
+        since, rewound = self._effective_since(n["id"], float(n.get("last_sync", 0) or 0))
+        if rewound:
+            self._clock_rewound[n["id"]] = since
         # since = '이미 받은 완료 스캔의 finished_at' 워터마크(소수 초). 예전처럼 정수로 자르면
         # (int) 엣지의 'finished_at > since' 가 그 스캔에도 참이 되어, 마지막 완료 DB 를 복제할
         # 때마다 통째로 다시 받았다(대용량이면 수 GB 를 끝없이). repr 은 실수를 정확히 왕복한다.
@@ -2231,7 +2281,7 @@ class PortalController:
             with os.fdopen(fd, "wb") as f:
                 resp = _http_get(url, n.get("token"), timeout=300.0)
                 shutil.copyfileobj(resp, f)
-            newest = float(n.get("last_sync", 0) or 0)
+            newest = since              # (엣지 시계가 되돌아갔으면 되돌린 기준에서 다시 센다)
             new_meta = None
             tf = tarfile.open(tmp, "r:gz")
             try:
@@ -2311,7 +2361,7 @@ class PortalController:
             except OSError:
                 pass
         # meta 의 완료 시각으로 last_sync 전진 — 단 DB 가 안 온 스캔은 넘지 않는다(다음 복제에서 다시 받게)
-        base = float(n.get("last_sync", 0) or 0)
+        base = since
         try:
             with open(os.path.join(dest, "meta.json"), "r", encoding="utf-8") as fh:
                 meta = json.load(fh)
@@ -2319,6 +2369,12 @@ class PortalController:
                 newest = max(newest, float(s.get("finished_at") or 0))
         except (OSError, ValueError):
             pass
+        if rewound:
+            # 되돌아간 엣지 시계보다 미래로 찍힌 옛 스캔이 워터마크를 다시 미래로 끌어올리지 않게 엣지의 '지금'에서 자른다
+            try:
+                newest = min(newest, float((self._cache.get(n["id"]) or {}).get("edge_now") or newest))
+            except (TypeError, ValueError, OverflowError):
+                pass
         miss = sorted(t for t in missing_at if t > base)
         if miss and self._rep_missing_prev.get(n["id"]) != miss:
             # 처음 보는 누락 — 워터마크를 그 앞에 멈추고 다음 복제에서 다시 받는다(일시적 오류 대비)
@@ -3317,8 +3373,7 @@ class PortalController:
                 dbf = s.get("db_filename") or os.path.basename(s.get("db_path") or "")
                 dbp = os.path.join(rep, "scans", dbf)
                 if dbf and os.path.exists(dbp):
-                    cands.append(((s.get("status") == "done", float(s.get("finished_at") or 0),
-                                   len(root)), dbp))
+                    cands.append(((s.get("status") == "done",) + self._scan_recency(s) + (len(root),), dbp))
         cands.sort(key=lambda t: t[0], reverse=True)
         return [dbp for _k, dbp in cands]
 
@@ -3342,8 +3397,7 @@ class PortalController:
                 dbf = s.get("db_filename") or os.path.basename(s.get("db_path") or "")
                 dbp = os.path.join(rep, "scans", dbf)
                 if dbf and os.path.exists(dbp):
-                    cands.append(((s.get("status") == "done", float(s.get("finished_at") or 0), len(root)),
-                                  dbp, root))
+                    cands.append(((s.get("status") == "done",) + self._scan_recency(s) + (len(root),), dbp, root))
         cands.sort(key=lambda t: t[0], reverse=True)
         out, seen = [], set()
         for _k, dbp, root in cands:

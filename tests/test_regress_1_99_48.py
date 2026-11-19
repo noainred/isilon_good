@@ -1131,6 +1131,62 @@ def check_ag_edge_flow_round9() -> None:
     print("[G1~G3] OK  옛 오토튜닝이 선택 안 빼앗음·끝난 pscan 진행 기록 정리·스캔 화면에 진행 카드(중지)")
 
 
+# ------------------------------------------------------------------ 10회차(포탈 연동 심화)
+def check_ah_clock_rewind_round10() -> None:
+    """H1 엣지 시계가 뒤로 가면(NTP 보정) 복제 워터마크가 미래에 걸려 새 스캔을 영영 안 받음
+    H2 보관 정리·비교가 미래로 찍힌 옛 스캔을 '최신'으로 보고 새 스캔을 버림."""
+    import tarfile
+    from isilon_usage import portal as P
+    d = tempfile.mkdtemp(prefix="iu_ah_")
+    try:
+        pc = P.PortalController(os.path.join(d, "hq"))
+        pc.set_replica_keep(1)
+        now = time.time()
+        pc.upsert_node({"id": "B", "url": "http://10.0.0.2:8765", "token": "t", "mode": "replicate"})
+        rep = os.path.join(pc.replicas_dir, "B")
+        os.makedirs(os.path.join(rep, "scans"))
+        _mk_replica_db(os.path.join(rep, "scans", "old.db"), "/x", [("/x", 0, 0, 111)])
+        future = now + 3 * 3600
+        with open(os.path.join(rep, "meta.json"), "w") as fh:
+            json.dump({"scans": [{"id": 4, "root_path": "/x", "status": "done", "finished_at": future,
+                                  "db_filename": "old.db", "received_at": now - 600}]}, fh)
+        with pc._lock:
+            pc._get("B")["last_sync"] = future                        # 시계가 +3h 이던 때 받은 워터마크
+        pc._cache["B"] = {"online": True, "ts": now, "edge_now": now, "overall": P._sanitize_overall(
+            {"roots": [{"root_path": "/x", "status": "done", "finished_at": now - 10, "scan_id": 5}]})}
+        assert pc._effective_since("B", future) == (0.0, True)       # 기준을 되돌림
+        newdb = os.path.join(d, "new.db")
+        _mk_replica_db(newdb, "/x", [("/x", 0, 0, 222)])
+        meta = {"scans": [{"id": 5, "root_path": "/x", "status": "done", "finished_at": now - 10,
+                           "db_filename": "new.db"},
+                          {"id": 4, "root_path": "/x", "status": "done", "finished_at": future,
+                           "db_filename": "old.db"}]}
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            for name, data in (("meta.json", json.dumps(meta).encode()), ("scans/new.db", open(newdb, "rb").read()),
+                               ("scans/old.db", open(os.path.join(rep, "scans", "old.db"), "rb").read())):
+                ti = tarfile.TarInfo(name)
+                ti.size = len(data)
+                tf.addfile(ti, io.BytesIO(data))
+        orig = P._http_get
+        P._http_get = lambda url, token, timeout=0: io.BytesIO(buf.getvalue())
+        try:
+            pc._replicate_one("B")
+        finally:
+            P._http_get = orig
+        ls = pc._get("B")["last_sync"]
+        assert ls <= now + 1, (ls, now)                                      # H1: 미래 워터마크가 풀림
+        assert "시계" in pc._rep_err.get("B", ""), pc._rep_err
+        assert os.path.exists(os.path.join(rep, "scans", "new.db"))
+        row = pc.compare_path("/x")["rows"][0]
+        assert row["found"] and row["total_bytes"] == 222, row                # H2: 새 스캔이 최신
+        kept = [x["db_filename"] for x in json.load(open(os.path.join(rep, "meta.json")))["scans"]]
+        assert kept == ["new.db"], kept                                        # 보관 1개 = 새 스캔
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    print("[H1·H2] OK  엣지 시계가 뒤로 가도 복제 계속·'최신'은 포탈이 받은 시각 기준")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1141,7 +1197,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_y1_y6_integrations_round5, check_z1_z8_portal_ui_round5,
             check_aa_round6, check_ab_edge_views_round6, check_ac_round7,
             check_ad_portal_round8, check_ae_regress_round8, check_af_multinode_round9,
-            check_ag_edge_flow_round9]
+            check_ag_edge_flow_round9, check_ah_clock_rewind_round10]
 
 
 def main() -> int:
