@@ -35,13 +35,17 @@ def record(data_dir: str, *, action: str, ok: bool, ip: str = "", detail: str = 
                 os.replace(path, path + ".1")
         except OSError:
             pass
-        line = json.dumps({"ts": round(time.time(), 3), "action": str(action)[:MAX_FIELD],
-                           "ok": bool(ok), "ip": str(ip or "")[:64],
-                           "detail": str(detail or "")[:MAX_FIELD]},
-                          ensure_ascii=False)
+        rec = {"ts": round(time.time(), 3), "action": str(action)[:MAX_FIELD],
+               "ok": bool(ok), "ip": str(ip or "")[:64],
+               "detail": str(detail or "")[:MAX_FIELD]}
+        line = json.dumps(rec, ensure_ascii=False)
+        try:
+            line.encode("utf-8")
+        except UnicodeEncodeError:       # 비 UTF-8 경로 등(서로게이트) — \u 이스케이프로(감사 기록이 요청을 깨지 않게)
+            line = json.dumps(rec, ensure_ascii=True)
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
-    except OSError:
+    except (OSError, ValueError):
         pass
 
 

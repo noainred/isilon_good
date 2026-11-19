@@ -18,6 +18,7 @@ import hmac
 import io
 import json
 import os
+import re
 import secrets
 import socket
 import sqlite3
@@ -273,6 +274,22 @@ def _has_nul(obj) -> bool:
     return False
 
 
+_BAD_SURROGATE = re.compile("[\ud800-\udc7f\udd00-\udfff]")
+
+
+def _has_bad_surrogate(obj) -> bool:
+    """짝 없는 UTF-16 서로게이트(JSON 의 "\\ud800" 등)가 있으면 참. 파일·감사 로그(UTF-8)에 쓸 때 예외가 나
+    500·연결 끊김·노드 목록 저장 불능이 됐다(2026-11 퍼징). 단 U+DC80~U+DCFF 는 UTF-8 이 아닌 실제 파일 이름을
+    나타내는 값(surrogateescape)이라 허용한다 — 화면이 그 경로로 스캔·탐색을 요청할 수 있어야 한다."""
+    if isinstance(obj, str):
+        return bool(_BAD_SURROGATE.search(obj))
+    if isinstance(obj, dict):
+        return any(_has_bad_surrogate(k) or _has_bad_surrogate(v) for k, v in obj.items())
+    if isinstance(obj, (list, tuple)):
+        return any(_has_bad_surrogate(v) for v in obj)
+    return False
+
+
 MAX_JSON_BODY = 16 * 1024 * 1024        # JSON 본문 상한(메모리 폭주 방지)
 MAX_BUNDLE_BODY = 512 * 1024 * 1024     # 업그레이드 번들 상한
 
@@ -323,6 +340,8 @@ def read_json_body(handler):
         return {}, (400, "JSON 객체({...})만 받습니다")
     if _has_nul(val):
         return {}, (400, "요청에 NUL 문자가 있습니다")
+    if _has_bad_surrogate(val):
+        return {}, (400, "요청에 잘못된 문자(짝 없는 서로게이트)가 있습니다")
     return val, None
 
 
@@ -4171,6 +4190,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     scan_id = int(body.get("scan_id"))
                 except (TypeError, ValueError, OverflowError):   # 1e999 같은 값 → OverflowError(예전엔 500)
                     self._send_json({"ok": False, "reason": "scan_id 필요"}, status=400)
+                    return
+                if not (0 < scan_id < 2 ** 63):   # SQLite 정수 범위 밖이면 DB 조회에서 500 이 났다(2026-11 퍼징)
+                    self._send_json({"ok": False, "reason": "scan_id 범위가 올바르지 않습니다"}, status=400)
                     return
                 if path == "/api/scan/stop":
                     res = self.controller.stop_scan(scan_id)

@@ -27,8 +27,13 @@ def write_json_atomic(path: str, obj, *, mode: int = 0o600) -> None:
     with _SAVE_LOCK:
         fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".", suffix=".tmp", dir=d)
         try:
+            try:
+                text = json.dumps(obj, ensure_ascii=False, indent=2)
+                text.encode("utf-8")
+            except UnicodeEncodeError:   # 비 UTF-8 경로(서로게이트)가 든 값 — \u 이스케이프로 저장(읽으면 같은 값)
+                text = json.dumps(obj, ensure_ascii=True, indent=2)
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(obj, fh, ensure_ascii=False, indent=2)
+                fh.write(text)
                 fh.flush()
                 try:
                     os.fsync(fh.fileno())

@@ -1408,6 +1408,53 @@ def check_am_remote_round13() -> None:
     print("[N1~N5] OK  비밀번호 푸시 실패 표시·시작 직후 중지·엣지 사유 전달·403 안내·감사 대상")
 
 
+def check_an_fuzz_round13() -> None:
+    """O1 짝 없는 서로게이트(\\ud800)가 감사 로그·저장에서 터져 500·연결 끊김·노드 목록 저장 불능
+    O2 SQLite 범위 밖 scan_id 500 O3 포탈 ids 가 목록이 아니면 500."""
+    from isilon_usage import server as SV, portal as P, audit as auditmod
+    d = tempfile.mkdtemp(prefix="iu_an_")
+    cwd = os.getcwd()
+    os.chdir(d)
+    try:
+        m = os.path.join(d, "m")
+        os.makedirs(m)
+        edge = SV.serve(os.path.join(d, "e"), host="127.0.0.1", port=0,
+                        initial_settings={"mount_bases": [m]}, enable_scan=True)
+        threading.Thread(target=edge.serve_forever, daemon=True).start()
+        portal = P.serve_portal(os.path.join(d, "hq"), host="127.0.0.1", port=0)
+        threading.Thread(target=portal.serve_forever, daemon=True).start()
+        pcn = portal.RequestHandlerClass.controller
+        pcn.set_password("test1234", False)
+        ptok = pcn._auth.issue_token()
+
+        def post(port, path, raw, tok=""):
+            rq = urllib.request.Request("http://127.0.0.1:%d%s" % (port, path), data=raw.encode(), method="POST",
+                                        headers={"Content-Type": "application/json", "X-Op-Token": tok})
+            try:
+                return urllib.request.urlopen(rq, timeout=10).status
+            except urllib.error.HTTPError as e:
+                return e.code
+        ep, pp = edge.server_address[1], portal.server_address[1]
+        assert post(ep, "/api/scan/start", '{"path": "\\ud800"}') == 400                       # O1
+        assert post(pp, "/api/portal/sync", '{"id": "\\ud800"}') == 400
+        assert post(pp, "/api/portal/nodes", '{"id": "\\ud800", "url": "http://127.0.0.1:1"}', ptok) == 400
+        assert post(pp, "/api/portal/nodes", '{"id": "ok2", "url": "http://127.0.0.1:1"}', ptok) == 200
+        st = post(ep, "/api/scan/start", '{"path": "%s/b\\udcff"}' % m)                         # 비 UTF-8 이름 값은 통과
+        assert st in (200, 400), st
+        assert post(ep, "/api/scan/partial-aggregate", '{"scan_id": 1000000000000000000000000000000}') == 400   # O2
+        assert P.safe_node_id("\ud800") is False and P.safe_node_id("a\x01") is False and P.safe_node_id("한글") is True
+        assert pcn.set_node_password(5, "abcd1234")["ok"] is False                                   # O3
+        assert pcn.set_node_token(True, "x")["ok"] is False
+        auditmod.record(d, action="x", ok=True, detail="/a/b\udcff")                               # 감사 기록 예외 없음
+        assert auditmod.tail(d, 5)[0]["detail"] == "/a/b\udcff"
+        edge.shutdown()
+        portal.shutdown()
+    finally:
+        os.chdir(cwd)
+        shutil.rmtree(d, ignore_errors=True)
+    print("[O1~O3] OK  짝 없는 서로게이트 400·비 UTF-8 이름은 통과·scan_id 범위·ids 형식")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1420,7 +1467,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_ad_portal_round8, check_ae_regress_round8, check_af_multinode_round9,
             check_ag_edge_flow_round9, check_ah_clock_rewind_round10,
             check_ai_edge_round10, check_aj_adverse_fs_round11,
-            check_ak_round11_misc, check_al_tools_round12, check_am_remote_round13]
+            check_ak_round11_misc, check_al_tools_round12, check_am_remote_round13,
+            check_an_fuzz_round13]
 
 
 def main() -> int:

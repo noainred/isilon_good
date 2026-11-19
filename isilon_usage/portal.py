@@ -122,7 +122,10 @@ def safe_node_id(nid) -> bool:
     replicas 밖(포탈 data_dir 전체)으로 탈출한다. 한글 등 일반 문자는 허용(기존 노드 호환).
     """
     nid = str(nid or "")
-    return bool(nid) and nid not in (".", "..") and not any(c in nid for c in ("/", "\\", "\x00"))
+    if not nid or nid in (".", "..") or any(c in nid for c in ("/", "\\", "\x00")):
+        return False
+    # 제어 문자·서로게이트(파일 이름·JSON 저장에서 깨짐)도 거부 — 예전엔 노드 목록 저장이 영구히 실패했다(2026-11 퍼징)
+    return not any(ord(c) < 32 or 0xD800 <= ord(c) <= 0xDFFF for c in nid)
 
 
 def sanitize_node(raw: dict) -> Optional[dict]:
@@ -1783,7 +1786,9 @@ class PortalController:
         token = str(token or "").strip()
         if not token:
             return {"ok": False, "reason": "토큰이 비어 있습니다(빈 토큰은 인증을 끄므로 거부)."}
-        want = {str(i) for i in (ids or [])}
+        if ids and not isinstance(ids, (list, tuple, str)):   # 숫자·참거짓 → 500 이던 것(2026-11 퍼징)
+            return {"ok": False, "reason": "ids 는 노드 id 목록이어야 합니다."}
+        want = {str(i) for i in ([ids] if isinstance(ids, str) else (ids or []))}
         with self._lock:
             targets = [n for n in self.nodes if (not want or n["id"] in want)]
             if not targets:
@@ -3195,7 +3200,9 @@ class PortalController:
         """
         with self._lock:
             allnodes = [dict(n) for n in self.nodes]
-        idset = {str(i) for i in (ids or [])}
+        if ids and not isinstance(ids, (list, tuple, str)):   # 숫자·참거짓 → 500 이던 것(2026-11 퍼징)
+            return {"ok": False, "reason": "ids 는 노드 id 목록이어야 합니다."}
+        idset = {str(i) for i in ([ids] if isinstance(ids, str) else (ids or []))}
         targets = allnodes if not idset else [n for n in allnodes if n["id"] in idset]
         if not targets:
             return {"ok": False, "reason": "대상 노드가 없습니다."}
