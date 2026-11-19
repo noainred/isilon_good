@@ -713,7 +713,7 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
       <span class="sub" id="repKeepMsg"></span>
     </div>
     <div class="sub" style="margin-top:4px;">반복 스캔마다 복제본이 쌓여 포탈 디스크가 계속 늘지 않도록, 노드의 루트(스캔 경로)마다 최신 N개만 남기고
-      오래된 복제 DB 를 지웁니다. <b>최신 완료 스캔은 N 밖이어도 항상 남깁니다</b>(비교·용량의 기준). 0 = 무제한(지우지 않음).
+      오래된 복제 DB 를 지웁니다. <b>최신 완료 스캔은 항상 그 N개 안에 남깁니다</b>(비교·용량의 기준 — 필요하면 가장 오래된 하나 대신). 0 = 무제한(지우지 않음).
       줄이면 저장할 때 지금 있는 복제본에도 바로 적용됩니다(복제 중인 노드는 그 복제가 끝날 때 적용). 엣지의 원본 DB 는 지우지 않습니다.</div>
   </div>
 
@@ -1425,7 +1425,12 @@ window.fetch=async function(url,opts){
     if(res.status===401){
       let j401={}; try{ j401=await res.clone().json(); }catch(e){}
       const ok=j401.need_setup ? await promptSetup() : (_opRequired=true, updateLoginUI(), await doLogin());
-      if(ok){ opts.headers["X-Op-Token"]=_opToken(); res=await _origFetch(url,opts); } }
+      if(ok){ opts.headers["X-Op-Token"]=_opToken(); res=await _origFetch(url,opts); }
+      else if(j401.reason==="locked"){
+        // 로그인을 취소하면 화면들이 서버 코드 'locked' 를 그대로 '실패: locked' 로 보였다(19회차 점검) — 사람 말로
+        return new Response(JSON.stringify(Object.assign({}, j401, {reason: "로그인이 필요합니다 — 우상단에서 로그인한 뒤 다시 하세요."})),
+          {status: 401, headers: {"Content-Type": "application/json"}});
+      } }
     return res;
   }
   return _origFetch(url,opts);
@@ -2171,7 +2176,8 @@ async function stopAllNodes(){
     if(!j.ok){ msg.textContent="실패: "+(j.reason||"오류 — 로그인이 필요할 수 있습니다"); return; }
     const rs=(j.results||[]).filter(r=>r.stopped>0||(r.reason&&r.reason!=="진행 중 스캔 없음"));
     msg.innerHTML=`⏹ 스캔 ${j.stopped}개 중단`
-      +(rs.length?(" — "+rs.map(r=>`${r.stopped>0?"✅":"⏭️"} ${escAttr(r.id)}`
+      +(j.failed?` · <b style="color:var(--danger)">${j.failed}개 노드 확인 실패</b>`:"")
+      +(rs.length?(" — "+rs.map(r=>`${!r.ok?"❌":(r.stopped>0?"✅":"⏭️")} ${escAttr(r.id)}`
         +((r.reason&&r.reason!=="진행 중 스캔 없음")?(' <span class="sub">('+escAttr(r.reason)+')</span>'):"")).join(" · ")):" (진행 중 스캔 없음)");
     setTimeout(()=>{ loadNodes(); if(typeof loadOverview==="function") loadOverview(); }, 1800);
   }catch(e){ msg.textContent="요청 오류: "+e; }
@@ -2357,6 +2363,8 @@ function nodePayload(){
 }
 $("addBtn").addEventListener("click", async ()=>{
   const pl=nodePayload();
+  // 새 노드(또는 이름을 바꾼 경우)는 같은 이름의 기존 노드를 말없이 덮어쓰지 않게 — 서버가 거부한다(19회차 점검)
+  if(_selNode==null || pl.id!==_selNode) pl.create_only=true;
   const j = await (await fetch("/api/portal/nodes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(pl)})).json();
   $("nodeMsg").textContent = j.ok ? "✓ 저장됨" : ("실패: "+(j.reason||""));
   if(j.ok){ _selNode=pl.id; loadNodes(); loadOverview(); }
@@ -2680,7 +2688,7 @@ if($("repKeepSave")) $("repKeepSave").addEventListener("click", async()=>{
   const msg=$("repKeepMsg"), el=$("repKeep");
   const v=parseInt(el.value,10);
   if(isNaN(v)||v<0||v>1000){ msg.textContent=" ✗ 0~1000 사이 정수(0=무제한)"; return; }
-  if(v>0 && !confirm("노드·루트별 최신 "+v+"개(+최신 완료 스캔)만 남기고 오래된 복제 DB 를 지웁니다.\n엣지의 원본은 지우지 않습니다. 진행할까요?")) return;
+  if(v>0 && !confirm("노드·루트별 최신 "+v+"개만 남기고(최신 완료 스캔은 항상 그 안에 포함) 오래된 복제 DB 를 지웁니다.\n엣지의 원본은 지우지 않습니다. 진행할까요?")) return;
   msg.textContent=" 저장 중…";
   try{ const j=await (await fetch("/api/portal/settings",{method:"POST",
       headers:{"Content-Type":"application/json"},

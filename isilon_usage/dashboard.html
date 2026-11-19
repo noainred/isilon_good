@@ -576,7 +576,7 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
         <label><span class="setlbl">기본 한 파일시스템(-x)</span>
           <select id="setOFS" class="optsel">
             <option value="false">사용 안 함</option>
-            <option value="true">사용</option>
+            <option value="true">사용함</option>
           </select>
         </label>
         <label><span class="setlbl">마운트 읽기전용(ro) 확인</span>
@@ -619,7 +619,7 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
           <input id="setMinFreeGb" type="number" min="0" max="1000000" class="setinput" />
         </label>
         <label><span class="setlbl">하드링크 중복 제거(끄면 메모리 절약·수십억 파일 대비)</span>
-          <select id="setHardlink" class="optsel"><option value="true">사용</option><option value="false">사용 안 함</option></select>
+          <select id="setHardlink" class="optsel"><option value="true">사용함</option><option value="false">사용 안 함</option></select>
         </label>
         <label><span class="setlbl">루트별 보관 스캔 수(0=무제한)</span>
           <input id="setRetention" type="number" min="0" max="100000" class="setinput" />
@@ -784,7 +784,7 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
             <input id="setSmtpPort" type="number" min="1" max="65535" class="setinput" />
           </label>
           <label>STARTTLS
-            <select id="setSmtpTls" class="optsel"><option value="true">사용</option><option value="false">사용 안 함</option></select>
+            <select id="setSmtpTls" class="optsel"><option value="true">사용함</option><option value="false">사용 안 함</option></select>
           </label>
           <label>SMTP 사용자(비우면 인증 안 함)
             <input id="setSmtpUser" type="text" class="setinput mono" />
@@ -818,7 +818,7 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
           <span style="font-weight:400;">반복을 끄려면 위 ‘전체 용량 관리 개요’에서 해당 스캔을 <b>‘중지’</b>하세요.</span>
         </div>
         <div id="schedFormWrap">
-        <table><thead><tr><th>경로</th><th>반복주기</th><th>백엔드</th><th>사용</th><th></th></tr></thead>
+        <table><thead><tr><th>경로</th><th>반복주기</th><th>백엔드</th><th>켜짐</th><th></th></tr></thead>
           <tbody id="schedBody"><tr><td colspan="5" class="sub">예약 없음</td></tr></tbody></table>
         <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; align-items:center;">
           <select id="schPath" class="optsel mono" style="flex:1; min-width:200px;" title="스캔했던 루트 중에서 선택">
@@ -1840,6 +1840,11 @@ window.fetch = async function (url, opts) {
       if (ok) {
         opts.headers["X-Op-Token"] = _opToken();
         res = await _origFetch(url, opts);
+      } else {
+        // 로그인 실패·취소: 이미 안내(비밀번호 틀림 등)를 띄웠으니 화면들이 '실패: locked' 를 또 띄우지 않게
+        // 사람 말 사유 + auth_cancelled 표시로 돌려준다(19회차 점검: 알림 두 번)
+        return new Response(JSON.stringify(Object.assign({}, j401, {ok: false, auth_cancelled: true,
+          reason: "로그인이 필요합니다 — 로그인한 뒤 다시 하세요."})), {status: 401, headers: {"Content-Type": "application/json"}});
       }
     }
     return res;
@@ -1944,6 +1949,7 @@ async function loadSettings() {
     if (!j.ok) return;
     const s = j.settings;
     $("setBackend").value = s.default_backend;
+    if ($("schBackend") && !schedules.length && s.default_backend) $("schBackend").value = s.default_backend;   // 예약 백엔드 기본값
     $("setSize").value = s.default_size_mode;
     $("setOFS").value = String(s.default_one_file_system);
     $("setReadonly").value = String(s.check_readonly !== false);
@@ -3118,7 +3124,7 @@ async function stopScan(id) {
       if (j.engine === "pscan")
         alert("ℹ pscan(멀티프로세스) 스캔은 시작하면 중간에 멈출 수 없습니다.\n"
           + "끝날 때까지 기다리거나, 다음 스캔부터 'threads(스레드)' 엔진을 쓰세요.");
-      else alert("중지 실패: " + (j.reason || j.error || ""));
+      else if (!j.auth_cancelled) alert("중지 실패: " + (j.reason || j.error || ""));
     }
     poll();
   } catch (e) { alert("중지 오류: " + e); }
@@ -3130,7 +3136,7 @@ async function scanAction(action, id) {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({scan_id: id}),
     })).json();
-    if (!j.ok) alert("실패: " + (j.reason || j.error || ""));
+    if (!j.ok && !j.auth_cancelled) alert("실패: " + (j.reason || j.error || ""));
     else if (action === "resume") { selectedScan = id; userPicked = true; }
     poll();
   } catch (e) { alert("오류: " + e); }
@@ -3830,11 +3836,16 @@ function renderSchedules() {
       + (nsk ? ` <span style="color:var(--warn);" title="${escHtml(Object.keys(s.chain_skipped).join(", "))}">⚠ ${nsk}개 건너뜀</span>` : "");
     return `<tr><td class="mono" style="max-width:240px; overflow:hidden; text-overflow:ellipsis;" title="${escHtml(pths.join('  →  '))}">${pcell}</td>
      <td>${scheduleSummary(s)}</td><td>${escHtml(s.backend)}</td>
-     <td>${s.enabled ? "✓" : "✕"}</td>
+     <td><input type="checkbox" data-schen="${i}" ${s.enabled ? "checked" : ""} title="끄면 지우지 않고 잠시 멈춤(저장해야 적용)"></td>
      <td><button class="stopbtn" data-schdel="${i}">✕</button></td></tr>`;
   }).join("");
   tb.querySelectorAll("button[data-schdel]").forEach(b => b.addEventListener("click", () => {
     schedules.splice(parseInt(b.dataset.schdel), 1); renderSchedules();
+  }));
+  // 켜기/끄기 — 예전엔 ✓/✕ 표시만 있고 바꿀 방법이 없어 잠시 멈추려면 지웠다 다시 만들어야 했다(19회차 점검)
+  tb.querySelectorAll("input[data-schen]").forEach(c => c.addEventListener("change", () => {
+    const k = parseInt(c.dataset.schen);
+    if (schedules[k]) schedules[k].enabled = c.checked;
   }));
 }
 
@@ -3963,7 +3974,8 @@ function renderHome(o, j) {
     const disc = (r.status === "discovering" || r.phase === "discovering");
     const t = r.total_dirs || 0, p = r.processed_dirs || 0;
     const pc = (!disc && t) ? Math.min(100, p / t * 100) : null;
-    const el = r.started_at ? ((r.updated_at || Date.now() / 1000) - r.started_at) : null;
+    // 활성 시간(일시정지 동안 제외) — 표·포탈과 같은 계산. 예전엔 시작부터라 30초 쉬고 재개한 스캔이 '35초 경과'(19회차 점검)
+    const el = scanActiveSec(r, true);
     return `<div class="runcard">
       <div style="display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px; align-items:baseline;">
         <span class="mono" style="font-weight:600; overflow-wrap:anywhere;">${escHtml(r.root_path)}</span>
@@ -4470,7 +4482,7 @@ document.addEventListener("click", async (e) => {
   try {
     const j = await (await fetch("/api/scan/live-snapshot", {method: "POST",
       headers: {"Content-Type": "application/json"}, body: JSON.stringify({scan_id: sid})})).json();
-    if (!j.ok) { alert("지금까지 결과를 만들지 못했습니다: " + (j.reason || "실패")); b.disabled = false; b.textContent = "다시 시도"; return; }
+    if (!j.ok) { if (!j.auth_cancelled) alert("지금까지 결과를 만들지 못했습니다: " + (j.reason || "실패")); b.disabled = false; b.textContent = "다시 시도"; return; }
     for (let i = 0; i < 600; i++) {            // 끝날 때까지(행 수에 비례) — 최대 10분 확인
       await new Promise(r => setTimeout(r, 1000));
       const st = await (await fetch("/api/scan/live-snapshot?scan=" + sid, {cache: "no-store"})).json();
@@ -5178,7 +5190,11 @@ $("schAdd").addEventListener("click", () => {
   schedules.push({paths: list, path: list[0], unit: u, every: Math.max(1, parseInt($("schEvery").value) || 1),
     at: $("schAt").value || "03:00", weekdays: [...schWsel].sort((a, b) => a - b),
     start_month: parseInt($("schMonth").value) || 1, start_day: parseInt($("schDay").value) || 1,
-    backend: $("schBackend").value, size_mode: "disk", one_file_system: false,
+    // 용량 기준·-x 는 설정의 '기본값'을 따른다 — 예전엔 disk·끔으로 고정이라 설정을 apparent·-x 로 바꿔도 예약 스캔은
+    // 다른 기준으로 돌아 같은 루트의 용량이 시작 방법에 따라 달랐다(19회차 점검)
+    backend: $("schBackend").value,
+    size_mode: (_setBase && _setBase.default_size_mode) || "disk",
+    one_file_system: !!(_setBase && _setBase.default_one_file_system),
     enabled: true, last_run: 0});
   schPaths = []; renderSchChain();
   $("schPath").value = ""; renderSchedules();

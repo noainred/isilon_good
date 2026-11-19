@@ -71,7 +71,7 @@
     "전 노드 SSH 업그레이드": "SSH-upgrade all nodes", "📡 Ping 체크": "📡 Ping check", "폴더 탐색으로 선택": "Pick via folder browser",
     "이 디렉터리 선택": "Select this directory", "🔬 오토튜닝": "🔬 Auto-tune",
     // --- 상태값/옵션 ---
-    "사용 안 함": "Disabled", "끔(수동)": "Off (manual)", "검증 안 함": "No verify", "검증": "Verify",
+    "사용 안 함": "Disabled", "사용함": "Enabled", "켜짐": "Enabled", "끔(수동)": "Off (manual)", "검증 안 함": "No verify", "검증": "Verify",
     "복제만": "Replicate only", "폴링만": "Poll only", "복제 + 폴링(권장)": "Replicate + poll (recommended)",
     "systemd(권장)": "systemd (recommended)", "nohup(간단)": "nohup (simple)", "설치 방식": "Install method",
     "오토튜닝(최적 자동)": "Auto-tune (best)", "threads (상세 트리)": "threads (detailed tree)",

@@ -2000,6 +2000,64 @@ def check_az_round19_regress() -> None:
     print("[AA1~AA4] OK  du 최대 깊이 부분 집계·재등록 시 삭제 표시 해제·다른 호스트 스캔 보호·하위 목록 정렬")
 
 
+def check_ba_round19_portal_edge() -> None:
+    """BB1 새 노드가 같은 이름의 노드를 말없이 덮어씀·URL/포트/길이 검증 없음 BB2 닿지 않는 노드 중지를 '성공'으로·순차 처리
+    BB3 낡은 캐시로 끝난 노드 스캔을 '진행 중'으로 거부 BB4 설정 값 조용한 변환·거짓 성공
+    CC1~CC5 엣지: 진행 카드 경과에 일시정지 포함·예약이 기본값 무시·예약 끄기 불가·'사용' 오역·알림 두 번."""
+    from isilon_usage import portal as P
+    d = tempfile.mkdtemp(prefix="iu_ba_")
+    try:
+        pc = P.PortalController(os.path.join(d, "hq"))
+        assert pc.upsert_node({"id": "e1", "url": "http://10.0.0.1:8765", "token": "t1", "region": "A"})["ok"]
+        r = pc.upsert_node({"id": "e1", "url": "http://10.0.0.9:8765", "region": "X", "create_only": True})   # BB1
+        assert r["ok"] is False and "이미 있는" in r["reason"], r
+        assert pc._get("e1")["url"] == "http://10.0.0.1:8765" and pc._get("e1")["region"] == "A"
+        assert pc.upsert_node({"id": "e1", "url": "http://10.0.0.1:8765", "region": "B"})["ok"]           # 수정은 됨
+        for bad in ("javascript:alert(1)", "ftp://x", "http://", "not a url", "http://127.0.0.1:99999"):
+            r = pc.upsert_node({"id": "z", "url": bad})
+            assert r["ok"] is False and pc._get("z") is None, (bad, r)
+        assert pc.upsert_node({"id": "z" * 65, "url": "10.0.0.2"})["ok"] is False
+        assert pc.upsert_node({"id": "z", "url": "10.0.0.2", "region": "r" * 81})["ok"] is False
+        assert pc.upsert_node({"id": "z", "url": "10.0.0.2:8765"})["ok"]
+        for port in (99999, "abc", -1):
+            r = pc.provision_plan({"host": "h", "port": port})
+            assert r["ok"] is False and "port" in r["reason"], (port, r)
+        r = pc.provision_plan({"host": "10.9.9.6$(id)", "port": 8765})
+        assert r["ok"] is False and "host" in r["reason"], r
+        pc.upsert_node({"id": "down", "url": "http://127.0.0.1:1", "token": "t"})                          # BB2
+        r = pc.node_stop("down")
+        assert r["ok"] is False and "연결할 수 없어" in r["reason"], r
+        t0 = time.time()
+        ra = pc.node_stop_all()
+        assert ra["failed"] >= 1 and any(x["id"] == "down" and not x["ok"] for x in ra["results"]), ra
+        assert time.time() - t0 < 30
+        with pc._lock:                                                                                    # BB3
+            pc._cache["e1"] = {"overall": {"roots": [{"scan_id": 1, "root_path": "/x", "status": "sizing"}]}}
+
+        def _fresh(nid):
+            with pc._lock:
+                pc._cache[nid] = {"overall": {"roots": [{"scan_id": 1, "root_path": "/x", "status": "done"}]}}
+            return True
+        pc._poll_one = _fresh
+        r = pc.node_scan("e1")
+        assert "이미 스캔 진행 중" not in (r.get("reason") or ""), r
+        assert pc.set_replica_keep(True)["ok"] is False and pc.set_replica_keep(2.7)["ok"] is False        # BB4
+        assert pc.set_replica_keep("3")["ok"] is True
+        assert pc.set_nav_hidden("x")["ok"] is False and pc.set_nav_hidden(["dash"])["ok"] is True
+        assert pc.set_upgrade_watch(None, "q")["ok"] is False
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    ph = _read("portal.html")
+    assert "pl.create_only=true" in ph and 'j401.reason==="locked"' in ph and "개 노드 확인 실패" in ph
+    dh = _read("dashboard.html")
+    assert "const el = scanActiveSec(r, true);" in dh                                                    # CC1
+    assert "size_mode: (_setBase && _setBase.default_size_mode)" in dh                                  # CC2
+    assert "data-schen" in dh                                                                           # CC3
+    assert '>사용함<' in dh and '"사용함": "Enabled"' in _read("i18n_en.js")                             # CC4
+    assert "auth_cancelled: true" in dh and "!j.ok && !j.auth_cancelled" in dh                          # CC5
+    print("[BB1~BB4·CC1~CC5] OK  포탈 노드 입력 검증·중지 실패 보고·낡은 캐시 재확인·설정 검증 / 엣지 화면 5건")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -2019,7 +2077,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_at_livesnap_round16, check_au_regress_round17,
             check_av_round17_flow, check_aw_round18_regress,
             check_ax_round18_data, check_ay_round18_portal_delete,
-            check_az_round19_regress]
+            check_az_round19_regress, check_ba_round19_portal_edge]
 
 
 def main() -> int:

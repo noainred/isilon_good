@@ -129,6 +129,51 @@ def safe_node_id(nid, *, strict: bool = True) -> bool:
     return (not strict) or not any(ord(c) < 32 or 0xD800 <= ord(c) <= 0xDFFF for c in nid)
 
 
+NODE_ID_MAX = 64      # 새로 등록하는 노드 id·지역 길이 한도 — 5000자 지역이 표·범례를 밀어냈다(19회차 점검)
+NODE_REGION_MAX = 80
+_HOST_RE = re.compile(r"^[A-Za-z0-9._:\[\]-]+$")
+
+
+def node_url_error(url: str) -> Optional[str]:
+    """노드 주소가 http(s)://호스트[:포트] 꼴인지 — 아니면 사유. 예전엔 'javascript:alert(1)'·'ftp://x'·
+    포트 99999 가 앞에 http:// 만 붙어 저장되고 홈에 파이썬 예외 문구가 떴다(19회차 점검)."""
+    from urllib.parse import urlsplit
+    u = str(url or "").strip()
+    if not u:
+        return "주소(URL)가 비었습니다."
+    if not re.match(r"^https?://", u, re.I):
+        if "://" in u or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:(?!\d)", u):
+            return "주소는 http:// 또는 https:// 로 시작해야 합니다."
+        u = "http://" + u
+    try:
+        sp = urlsplit(u)
+        port = sp.port
+    except ValueError:
+        return "포트가 올바르지 않습니다(1~65535)."
+    host = sp.hostname or ""
+    if not host or not _HOST_RE.match(host) or any(c.isspace() for c in u):
+        return "호스트(IP/이름)가 올바르지 않습니다."
+    if port is not None and not (1 <= port <= 65535):
+        return "포트가 올바르지 않습니다(1~65535)."
+    return None
+
+
+def node_input_error(raw: dict) -> Optional[str]:
+    """새로 저장하는 노드 입력의 문제(사유) — 없으면 None."""
+    if not isinstance(raw, dict):
+        return "노드 정보 형식이 올바르지 않습니다."
+    nid = str(raw.get("id") or "").strip()
+    if not nid:
+        return "노드 이름(id)이 필요합니다."
+    if not safe_node_id(nid):
+        return "노드 이름에 '/'·'\\'·'..'·제어 문자는 쓸 수 없습니다."
+    if len(nid) > NODE_ID_MAX:
+        return "노드 이름은 %d자까지입니다." % NODE_ID_MAX
+    if len(str(raw.get("region") or "").strip()) > NODE_REGION_MAX:
+        return "지역 이름은 %d자까지입니다." % NODE_REGION_MAX
+    return node_url_error(raw.get("url"))
+
+
 def sanitize_node(raw: dict, *, strict: bool = True) -> Optional[dict]:
     """노드 1건을 보정한다(필수: id, url). 잘못되면 None. strict=False = 저장본 불러오기(id 규칙 완화)."""
     if not isinstance(raw, dict):
@@ -824,7 +869,9 @@ class PortalController:
 
     def set_nav_hidden(self, items) -> dict:
         """상단에 숨길 메뉴 목록을 저장한다('nodes'=설정은 잠금 방지로 숨길 수 없음)."""
-        hidden = [v for v in (items or []) if v in ("dash", "netmon", "compare")]
+        if not isinstance(items, list) or any(v not in ("dash", "netmon", "compare", "nodes") for v in items):
+            return {"ok": False, "reason": "숨길 메뉴는 dash·netmon·compare 목록이어야 합니다."}
+        hidden = [v for v in items if v in ("dash", "netmon", "compare")]
         self.settings["nav_hidden"] = hidden
         self._save_settings()
         return {"ok": True, "nav_hidden": hidden}
@@ -928,6 +975,9 @@ class PortalController:
         """노드·루트별 복제 스캔 보관 수(0=무제한)를 설정하고, 줄였으면 지금 있는 복제본에도 바로 적용한다.
 
         복제 중인 노드는 건너뛴다(그 노드는 이번 복제가 끝날 때 같은 규칙으로 정리된다)."""
+        # true→1·2.7→2 처럼 조용히 바꿔 저장하고 바로 복제본을 지웠다(19회차 점검) — 정수(또는 정수 문자열)만
+        if isinstance(keep, bool) or (isinstance(keep, float) and not keep.is_integer()):
+            return {"ok": False, "reason": "보관 수는 0 이상의 정수여야 합니다(0=무제한)."}
         try:
             n = int(keep)
         except (TypeError, ValueError, OverflowError):
@@ -1189,13 +1239,17 @@ class PortalController:
 
     # --- 자동 업그레이드 ---
     def set_upgrade_watch(self, watch_dir, check_secs=None) -> dict:
+        if check_secs is not None:         # 먼저 검사 — 예전엔 숫자가 아니면 저장 안 하고 ok:true(19회차 점검)
+            try:
+                if isinstance(check_secs, bool):
+                    raise ValueError
+                int(check_secs)
+            except (TypeError, ValueError, OverflowError):
+                return {"ok": False, "reason": "확인 주기(초)는 숫자여야 합니다."}
         if watch_dir is not None:          # None = 바꾸지 않음
             self.settings["upgrade_watch_dir"] = str(watch_dir or "").strip()
         if check_secs is not None:
-            try:
-                self.settings["upgrade_check_secs"] = max(10, int(check_secs))
-            except (TypeError, ValueError, OverflowError):
-                pass
+            self.settings["upgrade_check_secs"] = max(10, int(check_secs))
         self._save_settings()
         return {"ok": True, "upgrade_watch_dir": self.settings.get("upgrade_watch_dir", ""),
                 "upgrade_check_secs": self.settings["upgrade_check_secs"]}
@@ -1705,17 +1759,19 @@ class PortalController:
                                        install_error=str(e))
 
     def set_upgrade_net(self, source, url, auto, check_secs=None, token=None) -> dict:
+        if check_secs is not None and not isinstance(check_secs, bool):   # 먼저 검사 — 반쯤 바뀐 채 남지 않게
+            try:
+                int(check_secs)
+            except (TypeError, ValueError, OverflowError):
+                return {"ok": False, "reason": "확인 주기(초)는 숫자여야 합니다."}
         src = str(source or "off").strip().lower()
         self.settings["upgrade_source"] = src if src in ("off", "github") else "off"
         self.settings["upgrade_url"] = str(url or "").strip()
         if token is not None:               # None=미전송(기존 유지), ""=명시적 비움
             self.settings["upgrade_token"] = str(token or "").strip()
         self.settings["upgrade_auto"] = bool(auto)
-        if check_secs is not None:
-            try:
-                self.settings["upgrade_check_secs"] = max(10, int(check_secs))
-            except (TypeError, ValueError, OverflowError):
-                pass
+        if check_secs is not None and not isinstance(check_secs, bool):
+            self.settings["upgrade_check_secs"] = max(10, int(check_secs))
         self._save_settings()
         return self.upgrade_status()
 
@@ -1747,11 +1803,18 @@ class PortalController:
                 base = {k: v for k, v in cur0.items() if k != "token"}   # 토큰 승계 규칙은 아래에서
                 base.update({k: v for k, v in raw.items() if v not in (None, "")})
                 raw = base
+        bad = node_input_error(raw)
+        if bad:
+            return {"ok": False, "reason": bad}
         n = sanitize_node(raw)
         if not n:
             return {"ok": False, "reason": "id 와 url 은 필수입니다(id 에 '/'·'..' 불가)."}
         with self._lock:
             cur = self._get(n["id"])
+            if cur is not None and isinstance(raw, dict) and raw.get("create_only") is True:
+                # 화면의 '새 노드'로 같은 이름을 저장하면 기존 노드의 주소·지역을 말없이 덮어써, 그 노드의 토큰이 다른
+                # 엣지로 가 인증 오류·오프라인이 났다(19회차 점검) — 고치려면 목록에서 그 노드를 골라 수정한다.
+                return {"ok": False, "reason": "이미 있는 노드 이름입니다: %s — 고치려면 목록에서 그 노드를 선택하세요." % n["id"]}
             if cur is not None:
                 # 토큰이 비어 오면 기존 토큰 유지(마스킹). 단 자기 등록(enroll)으로 URL 이 바뀌면
                 # 기존 토큰을 승계하지 않는다 — 승계하면 다음 폴링이 그 토큰을 새 URL 로 보낸다(토큰 유출).
@@ -3061,6 +3124,17 @@ class PortalController:
         if not roots:
             return {"ok": False, "reason": "이전 스캔 기록이 없습니다(먼저 한 번 스캔)."}
         busy = [r for r in roots if r.get("status") in ("discovering", "sizing")]
+        if busy and not restart_busy:
+            # 캐시가 낡았을 수 있다(방금 끝난 짧은 스캔이 최대 한 폴링 주기 동안 '진행 중'으로 남음) — 한 번 새로 받아
+            # 다시 본다. 예전엔 이미 끝난 노드를 '이미 스캔 진행 중'으로 거부했다(19회차 점검). 중지 쪽과 같은 규칙.
+            try:
+                if self._poll_one(node_id):
+                    with self._lock:
+                        cache = dict(self._cache.get(node_id, {}))
+                    roots = (cache.get("overall") or {}).get("roots") or roots
+                    busy = [r for r in roots if r.get("status") in ("discovering", "sizing")]
+            except Exception:  # noqa: BLE001
+                pass
         if busy:
             if not restart_busy:
                 return {"ok": False, "reason": "이미 스캔 진행 중(건너뜀)."}
@@ -3171,9 +3245,15 @@ class PortalController:
         if not busy:
             # 캐시가 오래됐을 수 있다(방금 포탈에서 시작한 스캔) — 한 번 새로 받아 다시 본다(2026-11 원격 조작 점검)
             try:
-                self._poll_one(node_id)
+                polled = bool(self._poll_one(node_id))
             except Exception:  # noqa: BLE001
-                pass
+                polled = False
+            if not polled:
+                # 닿지 않는 노드를 '진행 중 스캔 없음(성공)'으로 보고했다 — 확인하지 못한 것이다(19회차 점검)
+                with self._lock:
+                    err = next((n.get("last_error") for n in self.nodes if n["id"] == node_id), "") or ""
+                return {"ok": False, "stopped": 0,
+                        "reason": "노드에 연결할 수 없어 진행 중 스캔을 확인하지 못했습니다" + (": " + str(err)[:200] if err else "")}
             with self._lock:
                 cache = dict(self._cache.get(node_id, {}))
             roots = (cache.get("overall") or {}).get("roots") or []
@@ -3199,8 +3279,19 @@ class PortalController:
             ids = [n["id"] for n in self.nodes if n.get("enabled", True)]
         results = []
         stopped_total = 0
+        # 노드별로 병렬 — 예전엔 차례로 해 멈춘(응답 없는) 엣지 하나가 노드당 8~20초씩 전체 중단을 붙잡았다(19회차 점검)
+        from concurrent.futures import ThreadPoolExecutor
+        outs = {}
+        if ids:
+            with ThreadPoolExecutor(max_workers=min(8, len(ids))) as ex:
+                futs = {nid: ex.submit(self.node_stop, nid) for nid in ids}
+                for nid, f in futs.items():
+                    try:
+                        outs[nid] = f.result()
+                    except Exception as exc:  # noqa: BLE001
+                        outs[nid] = {"ok": False, "stopped": 0, "reason": str(exc)}
         for nid in ids:
-            r = self.node_stop(nid)
+            r = outs.get(nid) or {}
             stopped_total += int(r.get("stopped") or 0)
             results.append({"id": nid, "ok": bool(r.get("ok")),
                             "stopped": int(r.get("stopped") or 0),
@@ -3209,7 +3300,7 @@ class PortalController:
                         detail="스캔 %d개 중지 (노드 %d개 대상) — %s" % (stopped_total, len(results), ", ".join(
                             "%s:%d" % (r["id"], r["stopped"]) for r in results if r["stopped"]) or "중지한 노드 없음"))
         return {"ok": True, "stopped": stopped_total, "total": len(results),
-                "results": results}
+                "failed": sum(1 for r in results if not r["ok"]), "results": results}
 
     def set_node_password(self, ids, password: str, *, clear: bool = False) -> dict:
         """선택한(또는 전체) 노드의 작업 보호 비밀번호를 설정/변경/해제한다.
@@ -3278,10 +3369,16 @@ class PortalController:
         host = (raw.get("host") or "").strip()
         if not host:
             return {"ok": False, "reason": "host(IP/주소) 필요"}
+        # host·port 검증 — 예전엔 port 99999·-1·'abc' 가 그대로(또는 기본값으로) 등록되고, 셸 문자가 든 host 는
+        # 노드 주소(원문)와 스크립트에 찍히는 주소(정화)가 달라졌다(19회차 점검)
+        if not _HOST_RE.match(host) or len(host) > 253:
+            return {"ok": False, "reason": "host 는 IP 또는 호스트 이름(영문·숫자·.-:)만 쓸 수 있습니다."}
         try:
             port = int(raw.get("port") or 8765)
         except (TypeError, ValueError, OverflowError):
-            port = 8765
+            return {"ok": False, "reason": "port 는 1~65535 숫자여야 합니다."}
+        if not (1 <= port <= 65535):
+            return {"ok": False, "reason": "port 는 1~65535 숫자여야 합니다."}
         path = (raw.get("path") or "/mnt/hadoop").strip()
         name = ((raw.get("name") or "").strip()
                 or re.sub(r"[^A-Za-z0-9_.-]+", "-", host).strip("-") or "edge")
@@ -3289,6 +3386,8 @@ class PortalController:
             # 먼저 거른다 — 예전엔 같은 서버의 옛 노드(와 복제본)를 지운 뒤에야 새 이름이 거부돼 둘 다 사라졌다
             return {"ok": False, "reason": "노드 이름에 '/'·'\\'·'.'·'..' 는 쓸 수 없습니다."}
         region = (raw.get("region") or "").strip()
+        if len(name) > NODE_ID_MAX or len(region) > NODE_REGION_MAX:
+            return {"ok": False, "reason": "노드 이름은 %d자, 지역은 %d자까지입니다." % (NODE_ID_MAX, NODE_REGION_MAX)}
         install = "nohup" if (raw.get("install") == "nohup") else "systemd"
         hq_base = (raw.get("hq_base") or "").strip()
         edge_url = "http://%s:%d" % (host, port)
