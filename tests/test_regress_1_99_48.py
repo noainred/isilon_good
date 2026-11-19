@@ -1325,7 +1325,7 @@ def check_ak_round11_misc() -> None:
 def check_al_tools_round12() -> None:
     """M1 테스트 데이터 생성이 허용 경로 밖·시스템 경로 아래(/etc/x)에도 만들 수 있었음 M2 두 권장 결과가 함께 남아 서로 다른 값."""
     from isilon_usage import gentest as G, server as SV
-    for p in ("/etc/x", "/usr/local/zz", "/proc/1/x"):
+    for p in ("/etc/x", "/proc/1/x", "/boot/x"):                                     # (14회차: /usr·/run·/dev 아래는 허용)
         assert G.validate(p, 1, 1, 1, 1)[0] is False, p                               # M1(시스템 트리 아래)
     d = tempfile.mkdtemp(prefix="iu_al_")
     try:
