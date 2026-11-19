@@ -352,7 +352,8 @@ _OV_NUM_KEYS = ("total_capacity_bytes", "total_scanned_bytes", "root_count", "ac
 _ROOT_NUM_KEYS = ("capacity_bytes", "scanned_bytes", "fs_total_bytes", "fs_used_bytes", "fs_free_bytes",
                   "total_files", "finished_at", "updated_at", "started_at", "processed_dirs",
                   "total_dirs", "discovered_dirs", "files_per_sec", "bytes_per_sec", "scan_id",
-                  "capacity_scan_id", "eta_seconds", "eta_at")
+                  "capacity_scan_id", "eta_seconds", "eta_at",
+                  "capacity_files", "capacity_finished_at", "capacity_depth_limit")   # 새 칸도 숫자 검사(25회차 점검)
 
 
 def _num(v):
@@ -2104,6 +2105,7 @@ class PortalController:
         # 처리량 이력도 — 지운 노드의 행이 남고, 같은 이름으로 다시 추가하면 옛 마지막 값 때문에 첫 표본이 빠졌다(23회차 점검)
         if before != len(self.nodes):
             self._thru_last.pop(nid, None)
+            self._rep_ok_at.pop(nid, None)       # 같은 이름으로 다시 추가하면 옛 '복제 N전'이 남지 않게(25회차 점검)
             try:
                 conn = dbmod.connect(throughput_history_path(self.data_dir))
                 try:
@@ -2120,7 +2122,10 @@ class PortalController:
         nid = str(raw.get("id") or "").strip()
         n = self._get(nid) if nid else None
         url = str(raw.get("url") or "").strip()
-        token = raw.get("token") or None
+        # 저장·폴링과 같은 토큰 규칙(앞뒤 공백·줄바꿈 제거, ASCII) — 붙여 넣은 'tok\n' 이 테스트에서만 실패했다(25회차 점검)
+        token = str(raw.get("token") or "").strip() or None
+        if token and token_error(token):
+            return {"ok": False, "reason": token_error(token)}
         if url:   # 저장할 때와 같은 주소 검사 — 'http://[1]' 같은 값이 urlparse 에서 500 을 냈다(22회차 점검)
             _ue = node_url_error(url)
             if _ue:
@@ -2823,7 +2828,9 @@ class PortalController:
                 "scan_id": r.get("capacity_scan_id") if r.get("capacity_scan_id") is not None else r.get("scan_id"),
                 "finished_at": (r.get("capacity_finished_at") if r.get("capacity_finished_at") is not None
                                 else r.get("finished_at")),
-                "status": r.get("status"),
+                # status 는 scan_id(용량 스캔)의 상태 — 완료 스캔이면 done, 완료가 없으면(부분 값) 최신 상태(25회차 점검)
+                "status": (r.get("status") if r.get("capacity_partial") or r.get("capacity_scan_id") is None
+                           else "done"),
                 "latest_scan_id": r.get("scan_id"),
                 "latest_status": r.get("status"),
             } for r in (n.get("roots") or [])]

@@ -2840,6 +2840,47 @@ def check_bo_round24_perf() -> None:
     print("[QQ1] OK  완료 스캔 검색은 total_bytes 인덱스 순서(흔한 검색어 1ms 대)")
 
 
+def check_bp_round25_regress() -> None:
+    """RR1 연결 테스트가 토큰 앞뒤 공백·줄바꿈을 그대로 보내 실패 RR2 사용량 API status 가 최신 스캔 상태
+    RR3 새 칸(capacity_files 등) 숫자 검사 없음 → 엣지가 이상한 값을 보내면 500 RR4 파일 시각 '며칠 전'이 브라우저 시계."""
+    import http.server
+    from isilon_usage import portal as P
+    seen = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            seen.append(self.headers.get("X-Auth-Token"))
+            ok = self.headers.get("X-Auth-Token") == "tok"
+            body = b'{"ok": true, "overall": {"roots": []}, "scans": []}' if ok else b'{"ok": false}'
+            self.send_response(200 if ok else 401)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    d = tempfile.mkdtemp(prefix="iu_bp_")
+    try:
+        pc = P.PortalController(os.path.join(d, "hq"))
+        url = "http://127.0.0.1:%d" % srv.server_address[1]
+        r = pc.test_node({"url": url, "token": "tok\n"})                                            # RR1
+        assert "tok" in seen and "Invalid header" not in str(r.get("reason")), (r, seen)
+        assert pc.test_node({"url": url, "token": "한글"})["ok"] is False
+        ov = {"roots": [{"root_path": "/a", "scan_id": 6, "status": "sizing", "capacity_scan_id": 5,     # RR3
+                         "capacity_files": "abc", "capacity_finished_at": 111, "capacity_partial": False}]}
+        clean = P._sanitize_overall(ov)
+        assert isinstance(clean["roots"][0].get("capacity_files", 0), (int, float)) or clean["roots"][0].get("capacity_files") is None
+    finally:
+        srv.shutdown()
+        shutil.rmtree(d, ignore_errors=True)
+    pt = _read("portal.py")
+    assert 'else "done"),' in pt and '"latest_status": r.get("status")' in pt                         # RR2
+    assert "const days = Math.floor((_srvNow() - ts) / 86400);" in _read("dashboard.html")            # RR4
+    print("[RR1~RR4] OK  연결 테스트 토큰 정리·사용량 API 상태·새 칸 숫자 검사·파일 시각 서버 시계")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -2863,7 +2904,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bb_round20_regress, check_bc_round20_upgrade,
             check_bd_round20_stress, check_be_round21_sec_regress,
             check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser, check_bj_round23_regress, check_bk_round23_portal, check_bl_round23_engine, check_bm_round24_regress,
-            check_bn_round24_consistency, check_bo_round24_perf]
+            check_bn_round24_consistency, check_bo_round24_perf, check_bp_round25_regress]
 
 
 def main() -> int:

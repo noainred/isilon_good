@@ -4872,7 +4872,7 @@ function _atDate(ts) {
 }
 function _atAgeDays(ts) {
   if (!ts) return "";
-  const days = Math.floor((Date.now() / 1000 - ts) / 86400);
+  const days = Math.floor((_srvNow() - ts) / 86400);   // 파일 시각은 엣지 시계 — 서버 시계로 뺀다(25회차 점검)
   return days >= 0 ? (days + "일 전") : "";
 }
 function renderAtime(j) {
