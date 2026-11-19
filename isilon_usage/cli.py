@@ -17,6 +17,7 @@ from typing import List, Optional
 import argparse
 import os
 import signal
+import socket
 import sys
 import threading
 import time
@@ -376,6 +377,10 @@ def cmd_partial(args: argparse.Namespace) -> int:
     if busy:
         print("scan #%d 은 실행 중입니다(pid %d) — 먼저 중지하세요." % (args.scan, busy), file=sys.stderr)
         return 2
+    if _scan_maybe_remote_live(row["db_path"]):
+        print("scan #%d 은 다른 호스트(또는 컨테이너)에서 최근까지 진행된 스캔입니다 — 그쪽에서 중지하거나, "
+              "15분 넘게 소식이 없을 때 다시 하세요." % args.scan, file=sys.stderr)
+        return 2
     # 스캐너가 kill -9 등으로 죽어 '진행 중'으로 남은 스캔은 멈춘 것과 같다 — 재개(resume)와 같은 기준으로
     # '일시정지'로 바로잡고 집계한다(예전엔 '실행 중인 스캔입니다'로 거절, 18회차 점검).
     try:
@@ -410,6 +415,30 @@ def cmd_partial(args: argparse.Namespace) -> int:
     print("완료: %s행 %.1f초 (%s행/초) — 하한값. 대시보드에서 이 스캔을 고르면 '부분 집계 값'으로 표시됩니다."
           % (f"{res['rows']:,}", res["elapsed"], f"{int(res['rows_per_sec']):,}"))
     return 0
+
+
+def _scan_maybe_remote_live(db_path: str, stale_secs: float = 900.0) -> bool:
+    """진행 중으로 기록된 스캔이 다른 호스트(컨테이너 등 PID 를 볼 수 없는 곳)에서 돌고 있을 수 있으면 True.
+
+    pid 확인(_scan_writer_alive)은 같은 호스트에서만 믿을 수 있다 — 다른 호스트면 하트비트(updated_at)가
+    서버의 중복 판단과 같은 기준(15분) 안이면 살아 있는 것으로 본다(19회차 점검: 살아 있는 스캔을 '일시정지'로)."""
+    try:
+        c = dbmod.connect(db_path)
+        try:
+            r = c.execute("SELECT status, hostname, updated_at FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()
+        finally:
+            c.close()
+    except Exception:  # noqa: BLE001
+        return False
+    if r is None or r["status"] not in ("discovering", "sizing"):
+        return False
+    try:
+        me = socket.gethostname()
+    except Exception:  # noqa: BLE001
+        me = None
+    if not r["hostname"] or r["hostname"] == me:
+        return False
+    return (time.time() - float(r["updated_at"] or 0)) < stale_secs
 
 
 def _scan_writer_alive(db_path: str) -> int:

@@ -581,22 +581,15 @@ def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 
 
 
 def list_children(conn, run_id: int, parent_id: Optional[int], *, limit: int = 200) -> dict:
+    # 정렬은 화면에 보이는 크기(집계 전이면 own_bytes)로 — total_bytes 만 보면 집계 전 큰 폴더가 '나머지'로 숨었다
+    _sz = "(CASE WHEN total_bytes>0 THEN total_bytes ELSE own_bytes END)"
+    _cols = ("SELECT id, path, name, depth, file_count, subdir_count, own_bytes, total_bytes, total_files, status "
+             "FROM directories WHERE run_id=? AND ")
     if parent_id is None:
-        rows = conn.execute(
-            """SELECT id, path, name, depth, file_count, subdir_count,
-                      own_bytes, total_bytes, total_files, status
-               FROM directories WHERE run_id=? AND parent_id IS NULL
-               ORDER BY total_bytes DESC LIMIT ?""",
-            (run_id, limit + 1),
-        ).fetchall()
+        rows = conn.execute(_cols + "parent_id IS NULL ORDER BY " + _sz + " DESC LIMIT ?", (run_id, limit + 1)).fetchall()
     else:
-        rows = conn.execute(
-            """SELECT id, path, name, depth, file_count, subdir_count,
-                      own_bytes, total_bytes, total_files, status
-               FROM directories WHERE run_id=? AND parent_id=?
-               ORDER BY total_bytes DESC LIMIT ?""",
-            (run_id, parent_id, limit + 1),
-        ).fetchall()
+        rows = conn.execute(_cols + "parent_id=? ORDER BY " + _sz + " DESC LIMIT ?",
+                            (run_id, parent_id, limit + 1)).fetchall()
     rows = list(rows)
     out = {"ok": True, "children": [dict(r) for r in rows[:limit]]}
     if len(rows) > limit:
@@ -604,14 +597,24 @@ def list_children(conn, run_id: int, parent_id: Optional[int], *, limit: int = 2
         # 보이지 않게 한다(18회차 점검: 하위 300개 중 200개만, 아무 표시 없이).
         shown_b = sum(int(r["total_bytes"] or r["own_bytes"] or 0) for r in rows[:limit])
         shown_f = sum(int(r["total_files"] or r["file_count"] or 0) for r in rows[:limit])
-        cond = "parent_id IS NULL" if parent_id is None else "parent_id=?"
-        args = (run_id,) if parent_id is None else (run_id, parent_id)
-        agg = conn.execute("SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN total_bytes>0 THEN total_bytes ELSE own_bytes END),0) AS b, "
-                           "COALESCE(SUM(CASE WHEN total_files>0 THEN total_files ELSE file_count END),0) AS f "
-                           "FROM directories WHERE run_id=? AND " + cond, args).fetchone()
-        out.update(truncated=True, total_count=int(agg["n"]),
-                   rest_count=max(0, int(agg["n"]) - limit), rest_bytes=max(0, int(agg["b"]) - shown_b),
-                   rest_files=max(0, int(agg["f"]) - shown_f))
+        par = None
+        if parent_id is not None:
+            par = conn.execute("SELECT status, own_bytes, total_bytes, file_count, total_files, subdir_count "
+                               "FROM directories WHERE run_id=? AND id=?", (run_id, parent_id)).fetchone()
+        if par is not None and par["status"] == "done" and int(par["total_bytes"] or 0) > 0 and int(par["subdir_count"] or 0) > limit:
+            # 집계가 끝난 부모면 그 합에서 바로 — 자식이 수백만인 폴더에서 매 요청 전체 합산(0.36초)을 피한다(19회차 점검)
+            n = int(par["subdir_count"])
+            ch_b = int(par["total_bytes"]) - int(par["own_bytes"] or 0)
+            ch_f = int(par["total_files"] or 0) - int(par["file_count"] or 0)
+        else:
+            cond = "parent_id IS NULL" if parent_id is None else "parent_id=?"
+            args = (run_id,) if parent_id is None else (run_id, parent_id)
+            agg = conn.execute("SELECT COUNT(*) AS n, COALESCE(SUM(" + _sz + "),0) AS b, "
+                               "COALESCE(SUM(CASE WHEN total_files>0 THEN total_files ELSE file_count END),0) AS f "
+                               "FROM directories WHERE run_id=? AND " + cond, args).fetchone()
+            n, ch_b, ch_f = int(agg["n"]), int(agg["b"]), int(agg["f"])
+        out.update(truncated=True, total_count=n, rest_count=max(0, n - limit),
+                   rest_bytes=max(0, ch_b - shown_b), rest_files=max(0, ch_f - shown_f))
     return out
 
 
@@ -699,7 +702,7 @@ def search_dirs(pconn, run_id: int, q: str, *, limit: int = 200) -> dict:
         """SELECT id, path, name, depth, file_count, subdir_count,
                   own_bytes, total_bytes, total_files, status
            FROM directories WHERE run_id=? AND path LIKE ? ESCAPE '\\'
-           ORDER BY total_bytes DESC LIMIT ?""",
+           ORDER BY (CASE WHEN total_bytes>0 THEN total_bytes ELSE own_bytes END) DESC LIMIT ?""",
         (run_id, "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%", limit + 1),
     ).fetchall()
     return {"ok": True, "results": [dict(r) for r in rows[:limit]], "truncated": len(rows) > limit, "limit": limit}
@@ -901,7 +904,6 @@ class ScanController:
         self._scans: Dict[int, dict] = {}   # manager scan_id -> {stop, thread}
         self._partial_jobs: Dict[int, dict] = {}   # scan_id -> 멈춘 자료 집계(부분 집계) 작업
         self._live_snaps: Dict[int, dict] = {}     # scan_id -> 진행 중 스캔 스냅샷 작업(멈추지 않고 결과 보기)
-        self._tomb_lock = threading.Lock()        # 삭제 표시(deleted_scans.json) 쓰기 직렬화
         # (지난 실행의 스냅샷 정리는 관리 DB 를 볼 수 있는 아래쪽에서 — _clean_snapshots)
         setmod.clean_stale_tmp(self.data_dir)   # 저장 도중 강제 종료로 남은 settings.json.*.tmp
         self._lock = threading.Lock()
@@ -2894,26 +2896,14 @@ class ScanController:
             self._record_deleted(dbf)
         return res
 
-    # 사용자가 지운 스캔의 표시(포탈 복제본도 지우게) — 포탈은 증분 복제라 엣지에서 지운 것을 알 길이 없어, 지운 스캔이
-    # 복제본에 남아 비교 화면에서 계속 '최신'으로 보였다(18회차 점검). 보존 정리(prune)는 표시하지 않는다 —
-    # 포탈은 자기 보관 규칙(replica_keep_per_root)으로 이력을 따로 둔다.
-    def _deleted_path(self) -> str:
-        return os.path.join(self.data_dir, "deleted_scans.json")
-
     def _record_deleted(self, db_filename: str) -> None:
-        with self._tomb_lock:
-            try:
-                d = setmod.read_json_with_backup(self._deleted_path()) or {}
-                lst = [x for x in (d.get("deleted") or []) if isinstance(x, dict) and x.get("db_filename")]
-                lst.append({"db_filename": db_filename, "at": time.time()})
-                setmod.write_json_atomic(self._deleted_path(), {"deleted": lst[-2000:]})
-            except Exception as exc:  # noqa: BLE001
-                self._log("삭제 표시 기록 실패: %s" % exc)
+        try:
+            mgrmod.record_deleted(self.data_dir, db_filename)
+        except Exception as exc:  # noqa: BLE001
+            self._log("삭제 표시 기록 실패: %s" % exc)
 
     def deleted_db_filenames(self) -> list:
-        d = setmod.read_json_with_backup(self._deleted_path()) or {}
-        return [str(x["db_filename"]) for x in (d.get("deleted") or [])
-                if isinstance(x, dict) and isinstance(x.get("db_filename"), str)]
+        return mgrmod.deleted_db_filenames(self.data_dir)
 
     def prune(self, *, keep_per_root=None, older_than_days=None) -> dict:
         return mgrmod.prune_scans(

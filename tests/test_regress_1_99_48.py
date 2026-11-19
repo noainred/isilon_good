@@ -1930,6 +1930,76 @@ def check_ay_round18_portal_delete() -> None:
     print("[Z1] OK  엣지에서 지운 스캔은 포탈 복제본에서도 지움")
 
 
+def check_az_round19_regress() -> None:
+    """AA1 du+최대 깊이 스캔의 부분 집계가 부모를 자식보다 작게 AA2 같은 DB 이름으로 다시 등록해도 삭제 표시가 남아 포탈이
+    새 스캔까지 지움 AA3 다른 호스트의 살아 있는 스캔을 CLI partial 이 '일시정지'로 AA4 하위 목록 정렬·나머지 합계."""
+    import contextlib
+    import io
+    from isilon_usage import server as SV, manager as M, db as dbmod, cli as C
+    from isilon_usage.scanner import partial_aggregate
+    d = tempfile.mkdtemp(prefix="iu_az_")
+    try:
+        pdb = os.path.join(d, "du.db")                                                             # AA1
+        dbmod.init_db(pdb)
+        c = dbmod.connect(pdb)
+        rid = dbmod.create_run(c, "/r", backend="du", size_mode="disk", scanner_pid=0)
+        c.execute("INSERT INTO directories (run_id, path, name, depth, status, own_bytes) VALUES (?,?,?,?,?,?)",
+                  (rid, "/r", "r", 0, "discovered", 4096))
+        rt = c.execute("SELECT id FROM directories WHERE path='/r'").fetchone()[0]
+        c.execute("INSERT INTO directories (run_id, parent_id, path, name, depth, status, own_bytes, total_bytes, subdir_count) "
+                  "VALUES (?,?,?,?,?,?,?,?,?)", (rid, rt, "/r/x", "x", 1, "done", 4096, 6000000, 3))  # 아래는 du 만 잼
+        c.execute("UPDATE scan_runs SET status='paused' WHERE id=?", (rid,))
+        c.commit()
+        c.close()
+        assert partial_aggregate(pdb)["ok"]
+        c = dbmod.connect(pdb)
+        tb = c.execute("SELECT total_bytes FROM directories WHERE path='/r'").fetchone()[0]
+        c.close()
+        assert tb == 4096 + 6000000, tb
+        data = os.path.join(d, "data")                                                             # AA2
+        M.init_manager(data)
+        M.record_deleted(data, "nightly.db")
+        assert M.deleted_db_filenames(data) == ["nightly.db"]
+        M.register_scan(data, root_path="/n", db_path=os.path.join(d, "nightly.db"), backend="native", size_mode="disk")
+        assert M.deleted_db_filenames(data) == [], M.deleted_db_filenames(data)
+        pdb3 = os.path.join(d, "remote.db")                                                        # AA3
+        dbmod.init_db(pdb3)
+        c = dbmod.connect(pdb3)
+        rid3 = dbmod.create_run(c, "/k", backend="native", size_mode="disk", scanner_pid=4000000)
+        c.execute("UPDATE scan_runs SET status='sizing', phase='sizing', hostname='other-host' WHERE id=?", (rid3,))
+        c.commit()
+        c.close()
+        sid = M.register_scan(data, root_path="/k", db_path=pdb3, backend="native", size_mode="disk")
+        mc = dbmod.connect(M.manager_db_path(data))
+        mc.execute("UPDATE scans SET status='sizing', phase='sizing' WHERE id=?", (sid,))
+        mc.commit()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = C.main(["partial", str(sid), "--data-dir", data])
+        st = mc.execute("SELECT status FROM scans WHERE id=?", (sid,)).fetchone()[0]
+        mc.close()
+        assert rc == 2 and st == "sizing", (rc, st)
+        pdb4 = os.path.join(d, "many.db")                                                          # AA4
+        dbmod.init_db(pdb4)
+        c = dbmod.connect(pdb4)
+        rid4 = dbmod.create_run(c, "/m", backend="native", size_mode="disk", scanner_pid=0)
+        c.execute("INSERT INTO directories (run_id, path, name, depth, status, own_bytes, total_bytes, subdir_count) "
+                  "VALUES (?,?,?,?,?,?,?,?)", (rid4, "/m", "m", 0, "done", 0, 300 * 100 + 99999, 301))
+        pm = c.execute("SELECT id FROM directories WHERE path='/m'").fetchone()[0]
+        for i in range(300):
+            c.execute("INSERT INTO directories (run_id, parent_id, path, name, depth, status, own_bytes, total_bytes) "
+                      "VALUES (?,?,?,?,?,?,?,?)", (rid4, pm, "/m/c%03d" % i, "c%03d" % i, 1, "done", 100, 100))
+        c.execute("INSERT INTO directories (run_id, parent_id, path, name, depth, status, own_bytes, total_bytes) "
+                  "VALUES (?,?,?,?,?,?,?,?)", (rid4, pm, "/m/big", "big", 1, "pending", 99999, 0))
+        c.commit()
+        r = SV.list_children(c, rid4, pm)
+        c.close()
+        assert r["children"][0]["name"] == "big", r["children"][0]
+        assert r["total_count"] == 301 and r["rest_bytes"] == 101 * 100, (r["total_count"], r["rest_bytes"])
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    print("[AA1~AA4] OK  du 최대 깊이 부분 집계·재등록 시 삭제 표시 해제·다른 호스트 스캔 보호·하위 목록 정렬")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1948,7 +2018,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_ar_crash_round15, check_as_regress_round16,
             check_at_livesnap_round16, check_au_regress_round17,
             check_av_round17_flow, check_aw_round18_regress,
-            check_ax_round18_data, check_ay_round18_portal_delete]
+            check_ax_round18_data, check_ay_round18_portal_delete,
+            check_az_round19_regress]
 
 
 def main() -> int:

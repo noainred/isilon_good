@@ -1999,10 +1999,17 @@ def partial_aggregate(db_path: str, run_id: Optional[int] = None, *, stop_event=
         if du_run:
             conn.execute("CREATE TEMP TABLE IF NOT EXISTS _pa_disc (id INTEGER PRIMARY KEY, b INTEGER NOT NULL)")
             conn.execute("DELETE FROM _pa_disc")
+            # 단, 하위 폴더가 있는데 그 행이 DB 에 없는 'done' 행(최대 깊이·fold 경계 — 그 아래는 탐색이 안 봤고 du 만 쟀다)은 du 값을
+            # 쓴다. 탐색 값만 쓰면 그 하위 전체가 빠져 부모가 자식보다 작아졌다(19회차 점검: 6.5MB → 0.69MB).
+            # 이 경계를 넘나드는 하드링크만 두 번 셀 수 있다(드묾).
             sql_disc = """INSERT OR REPLACE INTO _pa_disc (id, b)
-                          SELECT d.id, d.own_bytes + COALESCE((
-                              SELECT SUM(t.b) FROM directories c JOIN _pa_disc t ON t.id=c.id
-                              WHERE c.run_id=d.run_id AND c.parent_id=d.id), 0)
+                          SELECT d.id, CASE
+                              WHEN d.status='done' AND d.subdir_count>0 AND NOT EXISTS (SELECT 1 FROM directories c
+                                       WHERE c.run_id=d.run_id AND c.parent_id=d.id)
+                                  THEN MAX(d.total_bytes, d.own_bytes)
+                              ELSE d.own_bytes + COALESCE((
+                                  SELECT SUM(t.b) FROM directories c JOIN _pa_disc t ON t.id=c.id
+                                  WHERE c.run_id=d.run_id AND c.parent_id=d.id), 0) END
                           FROM directories d WHERE d.run_id=? AND d.depth=? AND d.id>=? AND d.id<?"""
             sql = sql.replace("""SET total_bytes = own_bytes + COALESCE((
                          SELECT SUM(c.total_bytes) FROM directories c

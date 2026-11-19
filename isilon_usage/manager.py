@@ -19,6 +19,7 @@ import secrets
 import shutil
 import socket
 import sys
+import threading
 import time
 
 from . import db as dbmod
@@ -187,9 +188,57 @@ def register_scan(
              host, backend, size_mode, now, now, __version__),
         )
         conn.commit()
-        return int(cur.lastrowid)
+        sid = int(cur.lastrowid)
     finally:
         conn.close()
+    try:
+        unrecord_deleted(data_dir, os.path.basename(db_path))
+    except Exception:  # noqa: BLE001
+        pass
+    return sid
+
+
+# ---- 사용자가 지운 스캔의 표시(포탈 복제본도 지우게) ----
+# 포탈은 증분 복제라 엣지에서 지운 것을 알 길이 없어, 지운 스캔이 복제본에 남아 비교 화면에서 계속 '최신'으로
+# 보였다(18회차 점검). 보존 정리(prune)는 표시하지 않는다 — 포탈은 자기 보관 규칙으로 이력을 따로 둔다.
+# 같은 DB 파일 이름으로 다시 등록하면(CLI scan --db 고정 경로) 표시를 지운다 — 남아 있으면 포탈이 새 스캔까지
+# 지웠다(19회차 점검).
+_TOMB_LOCK = threading.Lock()
+
+
+def _deleted_path(data_dir: str) -> str:
+    return os.path.join(data_dir, "deleted_scans.json")
+
+
+def _edit_deleted(data_dir: str, fn) -> None:
+    from . import settings as setmod
+    with _TOMB_LOCK:
+        d = setmod.read_json_with_backup(_deleted_path(data_dir)) or {}
+        lst = [x for x in (d.get("deleted") or []) if isinstance(x, dict) and isinstance(x.get("db_filename"), str)]
+        new = fn(lst)
+        if new is not None:
+            setmod.write_json_atomic(_deleted_path(data_dir), {"deleted": new[-2000:]})
+
+
+def record_deleted(data_dir: str, db_filename: str) -> None:
+    _edit_deleted(data_dir, lambda lst: lst + [{"db_filename": db_filename, "at": time.time()}])
+
+
+def unrecord_deleted(data_dir: str, db_filename: str) -> None:
+    if not os.path.exists(_deleted_path(data_dir)):
+        return
+
+    def _f(lst):
+        kept = [x for x in lst if x["db_filename"] != db_filename]
+        return kept if len(kept) != len(lst) else None
+    _edit_deleted(data_dir, _f)
+
+
+def deleted_db_filenames(data_dir: str) -> list:
+    from . import settings as setmod
+    d = setmod.read_json_with_backup(_deleted_path(data_dir)) or {}
+    return [str(x["db_filename"]) for x in (d.get("deleted") or [])
+            if isinstance(x, dict) and isinstance(x.get("db_filename"), str)]
 
 
 def update_scan(conn, scan_id: int, **fields) -> None:
