@@ -3485,6 +3485,18 @@ def check_cc_round29_flows() -> None:
     print("[EEE1~EEE7] OK  호스트 바뀌면 비밀 삭제·포탈 anchor 검사·목록 충돌 409·같은 이름 어레이·받는 사람 형식·예약 짝짓기·시차 개수")
 
 
+def check_cd_running_block() -> None:
+    """FFF1 (사용자 요청) 스캔이 도는 경로의 '지금 스캔'을 눌러 다시 시작할 수 있었다 — 화면에서 버튼을 끄고, 어느 입구로
+    시작하든(새 스캔·NAS 표·확인 필요) 확인 창 전에 막는다(서버 중복 거부는 그대로). Playwright 로 '스캔 중 #N' 꺼짐·시작 요청 0회 확인."""
+    dh = _read("dashboard.html")
+    assert "function _scanRunningOn(path)" in dh and "_ovRootsLatest = o.roots || [];" in dh
+    assert "const runId = _scanRunningOn(row.path);" in dh and "스캔 중 #${runId}</button>" in dh
+    i = dh.index("async function _startScanImpl()")
+    assert dh.index("_scanRunningOn(path)", i) < dh.index("confirmScanStart(", i)
+    assert "이미 같은 경로를 스캔 중입니다" in _read("server.py")
+    print("[FFF1] OK  진행 중 경로의 '지금 스캔' 차단(화면 버튼 끔·확인 전 차단·서버 중복 거부)")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3519,7 +3531,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bv_round27_security, check_bw_round26_portal_ui,
             check_bx_round28_regress, check_by_round28_install,
             check_bz_round28_dashboard, check_ca_round29_regress,
-            check_cb_round29_numbers, check_cc_round29_flows]
+            check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block]
 
 
 def main() -> int:
