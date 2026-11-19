@@ -2983,6 +2983,80 @@ def check_bs_round26_regress() -> None:
     print("[UU1~UU5] OK  미래 백업 파일·같은 슬롯·설치 중 복제·삭제 경합·연결 끊김 안내")
 
 
+def check_bt_round26_cli() -> None:
+    """VV1 바쁜·잘못된 포트에 traceback VV2 재개 안내에 --data-dir 없음 VV3 디스크 가드 정지 사유가 CLI 에 안 보임
+    VV4 영속화 표식이 데이터 폴더 하나만 VV5 reset-password 뒤 serve 의 --mount-base 무시 VV6 숫자 인자·메시지 검사
+    VV7 livesnap 의 3.6 비호환 import VV8 문서 예시 줄 잇기 주석."""
+    import contextlib
+    import io
+    import socket
+    from isilon_usage import cli as C, settings as SE, manager as M, db as dbmod
+    d = tempfile.mkdtemp(prefix="iu_bt_")
+    cwd = os.getcwd()
+    os.chdir(d)
+    try:
+        sk = socket.socket()
+        sk.bind(("127.0.0.1", 0))
+        sk.listen(1)
+        port = sk.getsockname()[1]
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):           # VV1
+            rc = C.main(["serve", "--data-dir", os.path.join(d, "e"), "--host", "127.0.0.1", "--port", str(port)])
+        sk.close()
+        assert rc == 2 and "이미 다른 프로그램" in err.getvalue(), (rc, err.getvalue()[-300:])
+        t = os.path.join(d, "t")                                                                     # VV2·VV3
+        os.makedirs(t)
+        open(os.path.join(t, "f"), "w").close()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            rc = C.main(["scan", t, "--data-dir", os.path.join(d, "dd"), "--min-free-gb", "99999999"])
+        out = err.getvalue()
+        assert rc == 3 and "--data-dir " + os.path.join(d, "dd") in out and "디스크 공간 부족" in out, out[-400:]
+        code = os.path.join(d, "code")                                                               # VV4
+        os.makedirs(code)
+        for nm in ("A", "B"):
+            os.makedirs(os.path.join(d, nm))
+            open(os.path.join(d, nm, "settings.json"), "w").close()
+            SE.mark_initialized(os.path.join(d, nm), code, ("settings.json",))
+        shutil.rmtree(os.path.join(d, "A"))
+        os.makedirs(os.path.join(d, "A"))
+        assert SE.check_persistence(os.path.join(d, "A"), code, ("settings.json",))[0] is False
+        z = os.path.join(d, "Z")                                                                     # VV5
+        os.makedirs(z)
+        with open(os.path.join(z, "settings.json"), "w") as fh:
+            fh.write('{"op_password": "x"}')
+        st = SE.seed_if_absent(z, {"mount_bases": ["/mnt/x"]})
+        assert st.get("mount_bases") == ["/mnt/x"] and st.get("op_password") == "x", st.get("mount_bases")
+        for argv in (["scan", t, "--workers", "0"], ["pscan", t, "-P", "-2"],                         # VV6
+                     ["prune", "--data-dir", os.path.join(d, "dd"), "--keep-per-root", "0"]):
+            try:
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    C.main(argv)
+                raise AssertionError("받아들여짐: %s" % argv)
+            except SystemExit as e:
+                assert e.code == 2, argv
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            assert C.main(["tunecheck", os.path.join(d, "nope")]) == 2
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            C.main(["scan", t, "--data-dir", os.path.join(d, "d2")])
+            rc = C.main(["partial", "1", "--data-dir", os.path.join(d, "d2")])
+        assert rc == 2 and "이미 완료된" in err.getvalue()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            rc = C.main(["stats", "--scan", "999", "--data-dir", os.path.join(d, "d2")])
+        assert rc == 2 and "scan #999 없음" in err.getvalue(), err.getvalue()
+    finally:
+        os.chdir(cwd)
+        shutil.rmtree(d, ignore_errors=True)
+    assert "from __future__ import annotations" not in _read("livesnap.py")                          # VV7
+    root = os.path.dirname(HERE)
+    for f in ("docs/INSTALL.md", "docs/DOCKER.md"):                                                   # VV8
+        txt = open(os.path.join(root, f), encoding="utf-8").read()
+        assert not re.search(r"\\[ \t]+#", txt), f
+    print("[VV1~VV8] OK  포트 안내·재개 안내·정지 사유·영속 표식 여러 폴더·reset-password 뒤 초기값·CLI 범위·3.6·문서 예시")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -3007,7 +3081,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bd_round20_stress, check_be_round21_sec_regress,
             check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser, check_bj_round23_regress, check_bk_round23_portal, check_bl_round23_engine, check_bm_round24_regress,
             check_bn_round24_consistency, check_bo_round24_perf, check_bp_round25_regress, check_bq_round25_schedule, check_br_round25_client,
-            check_bs_round26_regress]
+            check_bs_round26_regress, check_bt_round26_cli]
 
 
 def main() -> int:

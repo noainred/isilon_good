@@ -1,6 +1,6 @@
 # The Davinci NAS Management — 사용 설명서
 
-버전 **1.99.23** 기준(DB 스키마 9). 정식 명칭은 *Isilon 디렉터리 사용량 스캐너*이며, 화면(대시보드·포탈)에는
+버전 **1.99.48** 기준(DB 스키마 13). 정식 명칭은 *Isilon 디렉터리 사용량 스캐너*이며, 화면(대시보드·포탈)에는
 **The Davinci NAS Management** 로 표시됩니다. 이 문서는 설치부터 운영까지 전체 사용법을 다룹니다.
 **처음이라면 → [처음 시작하기(초보자 가이드)](GETTING_STARTED.md)** 부터 보세요.
 간단 요약은 [README](../README.md), 변경 이력은 [CHANGELOG](../CHANGELOG.md), 컨테이너/시놀로지는
@@ -94,7 +94,7 @@ python3 -m pip install -r requirements.txt      # 온라인
 
 ### 2.4 설치 확인
 ```bash
-python3 -m isilon_usage --version       # isilon_usage 1.99.23 (schema 9)
+python3 -m isilon_usage --version       # isilon_usage 1.99.48 (schema 13)
 python3 -m isilon_usage version         # 상세 환경 정보
 python3 tests/test_scanner.py           # "모든 테스트 통과 ✅"
 python3 tests/test_manager.py
@@ -336,13 +336,13 @@ python3 -m isilon_usage <명령> [옵션]
 ### 공통(스캔) 옵션 — `run`, `scan`
 | 옵션 | 기본값 | 설명 |
 |------|--------|------|
-| `--data-dir DIR` | `isilon_data` | manager.db + scans/ 상위 폴더 |
+| `--data-dir DIR` | `/data/isilon_usage` | manager.db + scans/ 상위 폴더 |
 | `--db FILE` | 자동 | 이 실행의 per-run DB 경로 직접 지정 |
 | `--backend native\|du` | `native` | 측정 방식 |
 | `--size-mode disk\|apparent` | `disk` | 용량 기준 |
 | `--one-file-system`, `-x` | 꺼짐 | 마운트 경계 넘지 않음 |
 | `--batch-size N` | `500` | DB 커밋 배치 크기 |
-| `--workers N` | `1` | 파일 stat 동시 처리 스레드(NFS 가속) |
+| `--workers N` | `4` | 파일 stat 동시 처리 스레드(NFS 가속) |
 | `--sample-interval S` | `2.0` | 자원 샘플링 주기(초) |
 
 ### `run <path>` — 초기 스캔 + 대시보드
@@ -509,8 +509,8 @@ tools/make_tree.py   tests/   docs/USER_GUIDE.md   README.md   CHANGELOG.md
 
 ## 8. 버전 관리
 
-- **앱 버전**: `isilon_usage/__init__.py` 의 `__version__` (현재 `1.99.23`).
-  `--version`/`version` 으로 확인, 대시보드 헤더에 `v1.99.23` 으로 표시.
+- **앱 버전**: `isilon_usage/__init__.py` 의 `__version__` (현재 `1.99.48`).
+  `--version`/`version` 으로 확인, 대시보드 헤더에 `v1.99.48` 으로 표시.
 - **데이터 버전**: 각 스캔에 그 스캔을 만든 앱 버전(`app_version`)이 DB 에 기록됩니다.
 - **스키마 버전**: 각 DB 의 `PRAGMA user_version` 에 기록(현재 `9`). 구버전 DB 는
   열 때 누락 컬럼을 자동 보강합니다.
@@ -778,5 +778,5 @@ HQ 주소는 포탈 접속 주소로 자동 채워지며, 코드 디렉터리/�
 - **보안**: 작업 보호 비밀번호(PBKDF2, 보기는 자유·작업은 비밀번호), 감사 로그(audit), 설정 잠금, 자동 업그레이드 SHA-256 무결성 검증.
 - **고아 스캔 정리**: 서버 재시작 시 죽은 스캔(상태가 '탐색중'으로 남은 것)을 자동 '일시정지'.
 
-> 버전별 상세 변경점은 **[CHANGELOG.md](../CHANGELOG.md)** 를 보세요(현재 v1.99.23, 스키마 9).
+> 버전별 상세 변경점은 **[CHANGELOG.md](../CHANGELOG.md)** 를 보세요(현재 v1.99.48, 스키마 13).
 - **진행 중 안내**: 탐색 단계에서는 집계 전이라 재귀 용량 등이 임시값임을 배너로 안내.

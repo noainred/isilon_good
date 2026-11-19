@@ -550,6 +550,14 @@ def seed_if_absent(data_dir: str, initial: dict) -> dict:
     """
     os.makedirs(data_dir, exist_ok=True)
     if os.path.exists(settings_path(data_dir)):
+        # 비밀번호 칸만 든 파일(reset-password 를 먼저 돌린 새 폴더)은 아직 '설정 없음'으로 본다 — 그 키에 없는 값만
+        # CLI 초기값으로 채운다(예전엔 --mount-base·--lock-settings 가 조용히 무시돼 '허용 경로 제한 없음', 26회차 점검)
+        raw = read_json_with_backup(settings_path(data_dir)) or {}
+        if raw and all(str(k).startswith("op_") for k in raw):
+            base = dict(DEFAULTS)
+            base.update({k: v for k, v in (initial or {}).items() if k in DEFAULTS})
+            base.update(raw)
+            return save(data_dir, base)
         return load(data_dir)
     base = dict(DEFAULTS)
     base.update({k: v for k, v in (initial or {}).items() if k in DEFAULTS})
@@ -585,13 +593,17 @@ def check_persistence(data_dir: str, code_dir: str, proxies):
             mark = json.load(fh)
     except (OSError, ValueError):
         mark = None
-    if (isinstance(mark, dict) and mark.get("initialized")
-            and os.path.abspath(mark.get("data_dir") or "") == data_dir
-            and not _data_present(data_dir, proxies)):
+    known = set()
+    if isinstance(mark, dict) and mark.get("initialized"):
+        if mark.get("data_dir"):
+            known.add(os.path.abspath(mark.get("data_dir")))
+        for k in (mark.get("data_dirs") or {}):     # 같은 코드 폴더로 여러 데이터 폴더(엣지·포탈 등)를 띄우는 경우
+            known.add(os.path.abspath(k))
+    if data_dir in known and not _data_present(data_dir, proxies):
         return False, (
             "이전에 초기화된 데이터 폴더(%s)가 비어 있습니다 — 영속 디스크가 아직 마운트되지 "
             "않은 것으로 보입니다. 새로 초기화하지 않고 마운트를 기다립니다(서비스가 곧 재시도). "
-            "의도적으로 초기화하려면 표식 파일 %s 을(를) 지우세요."
+            "의도적으로 초기화하려면 표식 파일 %s 에서 이 폴더 항목을 지우거나 파일을 지우세요."
             % (data_dir, _persist_sentinel_path(code_dir)))
     return True, None
 
@@ -601,7 +613,24 @@ def mark_initialized(data_dir: str, code_dir: str, proxies, detail=None) -> None
     data_dir = os.path.abspath(data_dir or "")
     if not _data_present(data_dir, proxies):
         return
-    rec = {"initialized": True, "data_dir": data_dir}
+    # 데이터 폴더마다 기록 — 예전엔 마지막에 띄운 폴더 하나만 남아, 같은 코드 폴더로 띄운 다른 폴더(엣지·포탈 등)는
+    # 마운트가 빠져도 지켜지지 않았다(26회차 점검)
+    try:
+        with open(_persist_sentinel_path(code_dir), encoding="utf-8") as fh:
+            old_mark = json.load(fh)
+    except (OSError, ValueError):
+        old_mark = None
+    dirs = {}
+    if isinstance(old_mark, dict):
+        if isinstance(old_mark.get("data_dirs"), dict):
+            dirs.update({str(k): v for k, v in old_mark["data_dirs"].items()})
+        elif old_mark.get("data_dir"):
+            dirs[os.path.abspath(old_mark["data_dir"])] = {k: v for k, v in old_mark.items()
+                                                          if k not in ("initialized", "data_dir", "data_dirs")}
+    dirs[data_dir] = dict(detail or {})
+    while len(dirs) > 50:
+        dirs.pop(next(iter(dirs)))
+    rec = {"initialized": True, "data_dir": data_dir, "data_dirs": dirs}
     if detail:
         rec.update(detail)
     try:

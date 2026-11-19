@@ -84,14 +84,14 @@ sudo systemctl restart isilon-edge
 
 ## 부팅 시 특정 경로를 자동 스캔하고 싶다면
 
-대시보드 없이 스캔만 자동 시작하려면 `serve` 대신 `run` 을 쓰는 별도 유닛을 둡니다.
+대시보드 없이 스캔만 자동 시작하려면 `serve` 대신 `scan` 을 쓰는 별도 유닛을 둡니다(`run` 은 스캔 뒤에도 대시보드를 계속 띄우므로 맞지 않습니다).
 
 ```ini
-ExecStart=/usr/bin/python3 -m isilon_usage run /mnt/hadoop \
+ExecStart=/usr/bin/python3 -m isilon_usage scan /mnt/hadoop \
     --data-dir /var/lib/isilon_usage --fold-depth 5 --min-free-gb 5 --db-max-gb 30
 Restart=no
 ```
-(`run` 은 scan 옵션을 직접 받습니다. 끝나면 종료되므로 `Restart=no`.)
+(`scan` 은 끝나면 종료되므로 `Restart=no`. 종료 코드: 완료 0 · 일시정지 3 · 오류 1.)
 
 ## HQ에서 포탈과 스캐너 분리 운영 (업그레이드 격리)
 

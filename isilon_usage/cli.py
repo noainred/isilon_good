@@ -1,15 +1,16 @@
 """명령행 인터페이스.
 
-서브커맨드:
-  run    <경로>   스캔 + 대시보드를 한 번에 실행(권장).
-  scan   <경로>   스캔만 수행(대시보드 없이, 자원 모니터링 포함).
-  serve           대시보드 웹서버만 실행(이미 만들어진 DB 를 읽음).
+서브커맨드(전체는 `python -m isilon_usage --help`):
+  run    <경로>   스캔을 시작하고 대시보드를 계속 띄운다(스캔이 끝나도 서버는 남음).
+  scan   <경로>   스캔만 수행(대시보드 없이, 끝나면 종료 — 배치·cron 용).
+  serve           대시보드 웹서버 실행(데이터 폴더의 스캔을 보여 주고, 화면에서 스캔 시작·중지).
   status          현재 진행 상태를 콘솔에 출력.
+  resume · partial · stats · prune · analyze · pscan · autotune · tunecheck · reset-password · portal
 
 예)
-  python -m isilon_usage run /ifs/data --port 8765
-  python -m isilon_usage scan /ifs/data --backend du
-  python -m isilon_usage serve --db ./isilon_scan.db --port 8765
+  python -m isilon_usage run /ifs/data --data-dir /data/isilon_usage --port 8765
+  python -m isilon_usage scan /ifs/data --backend du --data-dir /data/isilon_usage
+  python -m isilon_usage serve --data-dir /data/isilon_usage --port 8765
 """
 
 from typing import List, Optional
@@ -121,6 +122,22 @@ def _initial_settings(args, mount_bases) -> dict:
     return initial_settings
 
 
+def _bind_fail(e, host, port) -> int:
+    """포트를 열지 못했을 때 사람이 읽을 안내 — 예전엔 파이썬 오류(traceback)만 나왔다(26회차 점검)."""
+    import errno as _errno
+    if isinstance(e, OverflowError) or not (isinstance(port, int) and 1 <= port <= 65535):
+        print("✗ --port 는 1~65535 숫자여야 합니다(받은 값: %s)." % port, file=sys.stderr)
+    elif getattr(e, "errno", None) == _errno.EADDRINUSE:
+        print("✗ 포트 %s 를 이미 다른 프로그램(또는 이미 떠 있는 이 서버)이 쓰고 있습니다 — "
+              "다른 --port 를 쓰거나 그 프로그램을 멈추세요." % port, file=sys.stderr)
+    elif getattr(e, "errno", None) in (_errno.EACCES, _errno.EPERM):
+        print("✗ 포트 %s 를 열 권한이 없습니다(1024 미만 포트는 root 필요) — 다른 --port 를 쓰세요." % port,
+              file=sys.stderr)
+    else:
+        print("✗ 서버를 %s:%s 에서 열지 못했습니다: %s" % (host, port, e), file=sys.stderr)
+    return 2
+
+
 def _run_server(args, *, initial_path: Optional[str]) -> int:
     """serve/run 공통: 웹 스캔 가능한 대시보드 서버를 띄운다.
 
@@ -145,12 +162,15 @@ def _run_server(args, *, initial_path: Optional[str]) -> int:
         mgrmod.init_manager(data_dir)
         setmod.save(data_dir, initial_settings)   # 기존 settings.json 을 CLI 값으로 덮어씀
 
-    httpd = serve(
-        data_dir, host=args.host, port=args.port,
-        initial_settings=initial_settings, enable_scan=True,
-        lock_settings=getattr(args, "lock_settings", False),
-        auto_op_password=True,     # 관리 비밀번호가 없으면 임시 비밀번호를 실행 디렉터리 info.MD 에
-    )
+    try:
+        httpd = serve(
+            data_dir, host=args.host, port=args.port,
+            initial_settings=initial_settings, enable_scan=True,
+            lock_settings=getattr(args, "lock_settings", False),
+            auto_op_password=True,     # 관리 비밀번호가 없으면 임시 비밀번호를 실행 디렉터리 info.MD 에
+        )
+    except (OSError, OverflowError) as e:
+        return _bind_fail(e, args.host, args.port)
     cur = httpd.controller.settings
     # 데이터가 실제로 있는(=마운트 정상) 시작에서만 '초기화됨' 표식을 코드 폴더에 갱신한다.
     setmod.mark_initialized(data_dir, _code_dir, ("settings.json", "manager.db"),
@@ -295,7 +315,8 @@ def _report_end(manager_db: str, scan_id: int, secs: float) -> int:
         return 0
     if st == "paused":
         print(f"일시정지(scan #{scan_id}) — 완료되지 않았습니다. 소요 {secs:.1f}s. {reason}".rstrip()
-              + f"\n  이어서 하려면: python -m isilon_usage resume {scan_id}", file=sys.stderr)
+              + f"\n  이어서 하려면: python -m isilon_usage resume {scan_id} --data-dir "
+              + os.path.dirname(os.path.abspath(manager_db)), file=sys.stderr)   # 데이터 폴더도(26회차 점검)
         return 3
     print(f"오류로 끝남(scan #{scan_id}, 상태 {st}). 소요 {secs:.1f}s. {reason}".rstrip(), file=sys.stderr)
     return 1
@@ -372,6 +393,10 @@ def cmd_partial(args: argparse.Namespace) -> int:
         return 2
     if not os.path.exists(row["db_path"]):
         print("per-run DB 가 없습니다.", file=sys.stderr)
+        return 2
+    if row["status"] == "done":   # 완료 스캔은 이미 정확한 값 — 부분 집계는 멈춘/오류 스캔용(26회차 점검)
+        print("scan #%d 은 이미 완료된 스캔입니다 — 부분 집계는 일시정지/오류 스캔에만 씁니다." % args.scan,
+              file=sys.stderr)
         return 2
     busy = _scan_writer_alive(row["db_path"])
     if busy:
@@ -544,8 +569,11 @@ def cmd_portal(args: argparse.Namespace) -> int:
     if not _ok:
         print("✗ " + _why, file=sys.stderr)
         return 3
-    httpd = serve_portal(data_dir, host=args.host, port=args.port,
-                         auto_op_password=True)   # 관리 비밀번호가 없으면 임시 비밀번호(portal_info.MD)
+    try:
+        httpd = serve_portal(data_dir, host=args.host, port=args.port,
+                             auto_op_password=True)   # 관리 비밀번호가 없으면 임시 비밀번호(portal_info.MD)
+    except (OSError, OverflowError) as e:
+        return _bind_fail(e, args.host, args.port)
     setmod.mark_initialized(data_dir, _code_dir, _proxies, {"role": "portal"})
     url = _dashboard_url(args.host, args.port)
     print("=" * 64)
@@ -705,6 +733,10 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 def cmd_tunecheck(args: argparse.Namespace) -> int:
     """튜닝 점검 — OS 커널/마운트 설정을 보고 스캔 가속 튜닝 포인트를 체크."""
     from . import systune as sysmod
+    _p = getattr(args, "path", None)
+    if _p and not os.path.isdir(_p):   # 없는 경로는 다른 명령처럼 오류(26회차 점검: 종료 코드 0)
+        print("✗ 경로가 없거나 폴더가 아닙니다: %s" % _p, file=sys.stderr)
+        return 2
     rep = sysmod.check(scan_root=getattr(args, "path", None),
                        data_dir=os.path.abspath(args.data_dir))
     if getattr(args, "json", False):
@@ -967,8 +999,11 @@ def cmd_stats(args: argparse.Namespace) -> int:
             row = mgrmod.get_scan(mconn, scans[0]["id"]) if scans else None
     finally:
         mconn.close()
-    if not row or not os.path.exists(row["db_path"]):
-        print("스캔/per-run DB 가 없습니다.", file=sys.stderr)
+    if not row:   # 다른 명령(status·resume)과 같은 안내(26회차 점검)
+        print("scan #%s 없음" % args.scan if args.scan else "아직 스캔이 없습니다.", file=sys.stderr)
+        return 2
+    if not os.path.exists(row["db_path"]):
+        print("scan #%s 의 per-run DB 파일이 없습니다: %s" % (row["id"], row["db_path"]), file=sys.stderr)
         return 2
     conn = dbmod.connect(row["db_path"])
     try:
@@ -1217,6 +1252,18 @@ def _emit_json(obj) -> None:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    # 숫자 인자 범위 — 예전엔 --workers 99999999999 로 메모리 부족 종료(스캔이 '진행 중'으로 남음), -3·0 이 조용히
+    # 받아들여졌다(26회차 점검). 이상한 값은 시작 전에 막는다.
+    for _k, _lo, _hi in (("workers", 1, 1024), ("processes", 1, 1024), ("threads", 1, 256)):
+        _v = getattr(args, _k, None)
+        if isinstance(_v, int) and not (_lo <= _v <= _hi):
+            parser.error("--%s 는 %d~%d 사이여야 합니다(받은 값: %d)" % (_k, _lo, _hi, _v))
+    _v = getattr(args, "secs", None)
+    if isinstance(_v, float) and not (1.0 <= _v <= 3600.0):
+        parser.error("--secs 는 1~3600 초여야 합니다(받은 값: %g)" % _v)
+    _v = getattr(args, "keep_per_root", None)
+    if isinstance(_v, int) and _v < 1:
+        parser.error("--keep-per-root 는 1 이상이어야 합니다(받은 값: %d)" % _v)
     if not getattr(args, "json", False):
         return args.func(args)
     # --json: 표준출력에는 JSON 만 — 머리말·'\r' 진행 표시가 섞여 json.load 가 실패했다(18회차 점검)

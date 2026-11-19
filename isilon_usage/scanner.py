@@ -740,6 +740,8 @@ class Scanner:
                 fields["sizing_from_active"], fields["sizing_from_processed"] = self._sizing_from
             if self._status == "done":
                 fields["error"] = None           # 오류로 멈췄다 재개해 끝난 스캔에 옛 오류 문구가 남지 않게(20회차 점검)
+            elif getattr(self, "_stop_reason", None):
+                fields["error"] = self._stop_reason   # 정지 사유(디스크 부족 등)를 관리 DB 에도 — CLI·화면이 보게(26회차 점검)
             if finished:
                 fields["finished_at"] = time.time()
             elif self._clear_finished:

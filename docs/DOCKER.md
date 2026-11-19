@@ -16,12 +16,16 @@ docker compose down         # 중지
 ## docker 명령으로 직접
 ```bash
 docker build -t isilon-usage:latest .
+# -v /mnt/isilon…:ro = 스캔 대상 NAS(읽기전용) · -v isilon_data:/data = 설정·DB 영속 볼륨
 docker run -d --name isilon-usage -p 8765:8765 \
-    -v /mnt/isilon:/mnt/isilon:ro \        # 스캔 대상 NAS(읽기전용)
-    -v isilon_data:/data \                 # 설정·DB 영속 볼륨
+    -v /mnt/isilon:/mnt/isilon:ro \
+    -v isilon_data:/data \
     isilon-usage:latest \
     serve --data-dir /data --host 0.0.0.0 --port 8765 --mount-base /mnt/isilon
 ```
+- **임시 관리 비밀번호**: 처음 띄우면 실행 폴더(컨테이너의 `/app`)에 `info.MD` 로 남습니다 — 컨테이너 안이라
+  컨테이너를 다시 만들면 사라집니다(설정의 '임시 비밀번호' 표시는 볼륨에 남음). 처음 띄운 뒤 `docker exec isilon-usage cat /app/info.MD`
+  로 확인해 화면에서 비밀번호를 바꾸거나, 잃었으면 `docker exec isilon-usage python3 -m isilon_usage reset-password --data-dir /data` 로 새로 만드세요.
 - **스캔 대상**은 `-v 호스트경로:컨테이너경로:ro` 로 넣고, `--mount-base` 로 스캔 허용 범위를 그 경로로 제한합니다.
   여러 개면 `-v` 를 여러 번(또는 상위 마운트 하나). 웹 UI 에서 컨테이너 안 경로(예: `/mnt/isilon/...`)를 지정해 스캔합니다.
 - **데이터 영속**: `/data` 를 볼륨으로 두면 설정·스캔 DB 가 컨테이너 교체/업그레이드에도 보존됩니다.
@@ -30,10 +34,10 @@ docker run -d --name isilon-usage -p 8765:8765 \
 ## 폐쇄망(에어갭) 배포
 인터넷 되는 곳에서 이미지를 만들어 파일로 옮깁니다:
 ```bash
-docker build -t isilon-usage:1.99.23 .
-docker save isilon-usage:1.99.23 | gzip > isilon-usage-docker-1.99.23.tar.gz
+docker build -t isilon-usage:1.99.48 .
+docker save isilon-usage:1.99.48 | gzip > isilon-usage-docker-1.99.48.tar.gz
 # → USB 등으로 옮긴 뒤, 대상 호스트에서:
-docker load < isilon-usage-docker-1.99.23.tar.gz
+docker load < isilon-usage-docker-1.99.48.tar.gz
 ```
 사내 레지스트리의 파이썬 베이스만 쓸 수 있다면 빌드 시 지정:
 ```bash

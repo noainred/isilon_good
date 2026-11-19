@@ -13,7 +13,6 @@
 원본 DB 는 읽기만 한다(스캔 결과·재개에 영향 없음).
 """
 
-from __future__ import annotations
 
 import glob
 import itertools

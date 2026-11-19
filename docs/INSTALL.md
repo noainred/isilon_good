@@ -130,7 +130,7 @@ Package Center → **수동 설치**로 올리면 포트 8765에서 뜹니다(no
 ## 5. 설치 확인
 
 ```bash
-python3 -m isilon_usage --version        # isilon_usage 1.99.23 (schema 9)
+python3 -m isilon_usage --version        # isilon_usage 1.99.48 (schema 13)
 python3 -m isilon_usage version          # 상세 환경(파이썬·psutil 유무 등)
 python3 tests/test_scanner.py            # "모든 테스트 통과 ✅"
 python3 tests/test_autotune.py           # 오토튜닝 측정 코어 확인
@@ -148,9 +148,10 @@ python3 -m isilon_usage run /tmp/demo --mount-base /tmp --port 8765
 
 ```bash
 mkdir -p /var/lib/isilon_usage
+# --data-dir: 결과 DB 저장 폴더(계속 같은 걸 쓰세요) · --mount-base: 웹에서 스캔 허용 경로(안전 제한)
 python3 -m isilon_usage serve \
-        --data-dir /var/lib/isilon_usage \   # 결과 DB 저장 폴더(계속 같은 걸 쓰세요)
-        --mount-base /mnt/isilon \            # 웹에서 스캔 허용 경로(안전 제한)
+        --data-dir /var/lib/isilon_usage \
+        --mount-base /mnt/isilon \
         --host 0.0.0.0 --port 8765
 ```
 
