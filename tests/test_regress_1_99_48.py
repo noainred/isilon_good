@@ -1484,7 +1484,7 @@ def check_ao_regress_round14() -> None:
 def check_ap_explore_round14() -> None:
     """Q1 다른 탭에서 먼저 저장한 설정을 오래된 탭이 폼 전체로 조용히 되돌림 Q2 방금 등록한 노드가 1초쯤 '끊김'·오류로 보임."""
     dh, ph = _read("dashboard.html"), _read("portal.html")
-    assert "function _collectSettingsPayload() {" in dh and "_setBase = _collectSettingsPayload();" in dh   # Q1
+    assert "function _collectSettingsPayload() {" in dh and "_setBase = JSON.parse(JSON.stringify(_collectSettingsPayload()));" in dh   # Q1(16회차: 깊은 복사)
     assert "JSON.stringify(_full[k]) !== JSON.stringify(_setBase[k])" in dh
     assert dh.index("let _setBase = null;") < dh.index("async function loadSettings()")               # 선언이 먼저
     assert 'if(!n.online && !n.last_poll && !n.last_error) return {t:"확인 중"' in ph                    # Q2
