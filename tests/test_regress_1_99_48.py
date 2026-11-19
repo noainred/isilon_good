@@ -865,6 +865,13 @@ def check_aa_round6() -> None:
         ls = pc._get("n1")["last_sync"]
         assert 100.0 <= ls < 200.0, ls                       # 예전엔 300(빠진 #2 를 넘어 다시 받지 않음)
         assert "받지 못함" in pc._rep_err.get("n1", ""), pc._rep_err
+        # 같은 누락이 또 오면(구버전 엣지) 건너뛰고 진행 — 매번 뒤의 DB 전부를 다시 받지 않게
+        P._http_get = lambda url, token, timeout=0: io.BytesIO(buf.getvalue())
+        try:
+            pc._replicate_one("n1")
+        finally:
+            P._http_get = orig
+        assert pc._get("n1")["last_sync"] == 300.0 and not pc._rep_err.get("n1"), (pc._get("n1"), pc._rep_err)
     finally:
         shutil.rmtree(d2, ignore_errors=True)
     assert ask.parse_threshold_days("2024년 이후 안 바뀐") is None and ask.parse_threshold_days("0일") == 0   # A3
@@ -1027,6 +1034,30 @@ def check_ad_portal_round8() -> None:
     print("[D1~D5] OK  노드 파일 손상 복구·익명 설정 감춤·익명 LLM 차단·백업 no-store·설정 조용한 초기화 없음")
 
 
+def check_ae_regress_round8() -> None:
+    """E1 'ext별' 같은 붙은 조사로 확장자 질문 인식 E2 CLI 재개가 옛 관리 DB 에 새 칸을 못 써 기록 누락
+    E3 업그레이드 스크립트가 백업이 없어도 백업 경로 표시 E4 느린 응답을 시계 차이로 보정."""
+    from isilon_usage import ask, portal as P, manager as M, db as dbmod
+    assert ask._h_extensions("ext별 용량", {"detail": {"extensions": [{"key": ".txt", "bytes": 1, "files": 1}]}})
+    assert ask._h_extensions("next scan", {"detail": {"extensions": [{"key": ".txt", "bytes": 1, "files": 1}]}}) is None
+    d = tempfile.mkdtemp(prefix="iu_ae_")
+    try:
+        M.init_manager(d)
+        c = dbmod.connect(M.manager_db_path(d))
+        cols = [r[1] for r in c.execute("PRAGMA table_info(scans)")]
+        c.close()
+        assert "active_elapsed" in cols
+        assert "mgrmod.init_manager(data_dir)" in _read("cli.py").split("def cmd_resume", 1)[1][:900]   # E2
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    up = P.build_upgrade_script(hq_base="http://h:1")
+    assert 'BK=""' in up and 'if [ -d "${TARGET}/isilon_usage" ]; then BK=' in up                     # E3
+    rt = {"status": "done", "finished_at": 1000.0}
+    assert P.PortalController._edge_to_portal_clock(rt, 1030.0, 1000.0) is rt                       # E4: 30초 지연
+    assert P.PortalController._edge_to_portal_clock(rt, 11800.0, 1000.0)["finished_at"] == 11800.0
+    print("[E1~E4] OK  붙은 조사 확장자·CLI 재개 스키마·백업 표시·느린 응답 보정 안 함")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1036,7 +1067,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_v1_v6_edge_round3, check_w1_w2_round4, check_x1_x8_settings_round4,
             check_y1_y6_integrations_round5, check_z1_z8_portal_ui_round5,
             check_aa_round6, check_ab_edge_views_round6, check_ac_round7,
-            check_ad_portal_round8]
+            check_ad_portal_round8, check_ae_regress_round8]
 
 
 def main() -> int:

@@ -321,7 +321,7 @@ def _h_owners(q, data):
 
 def _h_extensions(q, data):
     if not _has(q, "확장자", "무슨 파일", "어떤 파일", "무슨 종류", "어떤 종류", "파일 종류",
-                "포맷", "형식") and not re.search(r"\bext(ension)?s?\b", q):
+                "포맷", "형식") and not re.search(r"(?<![a-z])ext(ension)?s?(?![a-z])", q):
         # 'ext' 는 단어로만 — next·text·context 안의 글자에 걸려 확장자 질문으로 오인하던 문제(2026-11 리뷰)
         return None
     d = _need_detail(data)

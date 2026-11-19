@@ -418,6 +418,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
     if not os.path.exists(mgrmod.manager_db_path(data_dir)):   # 없는 폴더면 traceback 대신 안내(status 와 같게)
         print(f"관리 DB 가 없습니다: {mgrmod.manager_db_path(data_dir)} — --data-dir 를 확인하세요.", file=sys.stderr)
         return 2
+    # 업그레이드 직후 서버를 한 번도 띄우지 않은 옛 관리 DB 면 새 칸(active_elapsed 등)이 없어, 재개한 스캔의
+    # 진행·완료가 관리 DB 에 기록되지 않았다 — 먼저 스키마를 맞춘다(멱등).
+    mgrmod.init_manager(data_dir)
     mconn = dbmod.connect(mgrmod.manager_db_path(data_dir))
     try:
         row = mgrmod.get_scan(mconn, args.scan)

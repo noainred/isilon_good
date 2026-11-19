@@ -445,8 +445,9 @@ def _staged_install_sh(target_var: str) -> str:
         'PY\n'
         'then echo "  중단: 받은 코드($NEWV)가 현재($OLDV)보다 낮거나 버전을 읽을 수 없음 — 다운그레이드 방지'
         '(정말 내리려면 ALLOW_DOWNGRADE=1)"; exit 3; fi\n'
-        'BK="${TG}/isilon_usage.bak.$(date +%s)"\n'
-        '[ -d "${TG}/isilon_usage" ] && sudo mv "${TG}/isilon_usage" "$BK"\n'
+        'BK=""\n'
+        'if [ -d "${TG}/isilon_usage" ]; then BK="${TG}/isilon_usage.bak.$(date +%s)"; '
+        'sudo mv "${TG}/isilon_usage" "$BK"; fi\n'
         'sudo cp -a "$STAGE/." "${TG}/"\n'
         "# 낡은 바이트코드 캐시 제거 — 안 그러면 새 코드를 깔아도 옛 버전이 보고/실행될 수 있음\n"
         'sudo find "${TG}" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true\n'
@@ -644,6 +645,7 @@ class PortalController:
         self._rep_fail = {}         # id -> 연속 복제 실패 횟수(재시도 백오프)
         self._rep_err = {}          # id -> 마지막 복제 오류(다음 복제 성공 전까지 표시)
         self._rep_missing = {}      # id -> 마지막 복제에서 meta 에는 있었으나 DB 가 오지 않은 스캔 수
+        self._rep_missing_prev = {}  # id -> 그 누락 스캔들의 완료 시각(같은 누락이 반복되면 건너뜀)
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._thread = None
@@ -2317,12 +2319,19 @@ class PortalController:
                 newest = max(newest, float(s.get("finished_at") or 0))
         except (OSError, ValueError):
             pass
-        miss = [t for t in missing_at if t > base]
-        if miss:
-            newest = max(base, min(newest, min(miss) - 1e-6))
+        miss = sorted(t for t in missing_at if t > base)
+        if miss and self._rep_missing_prev.get(n["id"]) != miss:
+            # 처음 보는 누락 — 워터마크를 그 앞에 멈추고 다음 복제에서 다시 받는다(일시적 오류 대비)
+            newest = max(base, min(newest, miss[0] - 1e-6))
             self._rep_missing[n["id"]] = len(miss)     # _replicate_one 이 오류로 표시하고 백오프 후 다시 받는다
+            self._rep_missing_prev[n["id"]] = miss
         else:
+            # 같은 누락이 다시 오면(구버전 엣지가 DB 없는 스캔을 계속 싣는 경우) 그 스캔은 건너뛰고 진행한다 —
+            # 안 그러면 매번 그 뒤의 모든 DB 를 다시 받는다(2026-11 회귀 점검).
+            if miss:
+                newest = max(newest, miss[-1])
             self._rep_missing.pop(n["id"], None)
+            self._rep_missing_prev.pop(n["id"], None)
         return newest
 
     # --- 글로벌 롤업 ---
@@ -2376,7 +2385,8 @@ class PortalController:
             skew = float(recv_ts) - float(edge_now) if (recv_ts and edge_now) else 0.0
         except (TypeError, ValueError, OverflowError):
             skew = 0.0
-        if abs(skew) < 5 or not isinstance(rt, dict):      # 몇 초 차이는 전송 지연 — 손대지 않는다
+        # 응답 지연(바쁜 엣지는 수 초~수십 초)이 시계 차이로 오인되지 않게 1분 미만은 손대지 않는다
+        if abs(skew) < 60 or not isinstance(rt, dict):
             return rt
         out = dict(rt)
         for k in ("started_at", "updated_at", "finished_at", "partial_agg_at"):
