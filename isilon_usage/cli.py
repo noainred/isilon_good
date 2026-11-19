@@ -645,7 +645,7 @@ def cmd_status(args: argparse.Namespace) -> int:
                 if r.get("capacity_depth_limit"):
                     notes.append(f"깊이 {r['capacity_depth_limit']}까지만")
                 if r.get("capacity_error_dirs"):
-                    notes.append(f"접근 불가 폴더 {r['capacity_error_dirs']}개 미포함")
+                    notes.append(f"읽기 오류 {r['capacity_error_dirs']}건 — 그 항목 용량 미포함")
                 if r.get("nested_in"):
                     notes.append(f"⊂ {r['nested_in']} 에 포함 · 합계 제외")
                 st = "done" if (not r.get("capacity_partial") and r.get("capacity_scan_id") is not None) else r["status"]

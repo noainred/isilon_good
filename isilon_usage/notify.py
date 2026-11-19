@@ -49,10 +49,9 @@ def parse_recipients(raw: str) -> list:
         part = part.strip()
         if not part:
             continue
-        if "<" in part:
-            cands = re.findall(r"<([^<>\s]+@[^<>\s]+)>", part)
-        else:
-            cands = part.split()
+        # '<주소>' 와 같은 조각에 맨 주소가 섞여 있어도(예: 'Kim <a@x> b@y') 둘 다(30회차 점검)
+        cands = re.findall(r"<([^<>\s]+@[^<>\s]+)>", part)
+        cands += re.sub(r"<[^<>]*>", " ", part).split()
         out += [a for a in cands if "@" in a and not re.search(r"[\s<>]", a)]
     return out
 

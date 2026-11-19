@@ -3404,17 +3404,17 @@ def check_cb_round29_numbers() -> None:
         ov = M.overall_capacity(c)
         c.close()
         rt = [r for r in ov["roots"] if r["root_path"] == t][0]
-        assert rt["capacity_error_dirs"] == 2 and "접근 불가 폴더 2개" in ov["capacity_caveat"], (rt, ov["capacity_caveat"])   # DDD2
+        assert rt["capacity_error_dirs"] == 2 and "읽기 오류 2건" in ov["capacity_caveat"], (rt, ov["capacity_caveat"])   # DDD2
         buf = io.StringIO()                                                                                # DDD1
         with contextlib.redirect_stdout(buf):
             C.main(["status", "--data-dir", data])
         out = buf.getvalue()
         assert C._human(ov["total_capacity_bytes"]) in out.split("총 조사 용량:")[1].splitlines()[0], out
-        assert "합계 제외" in out and "접근 불가 폴더 2개" in out, out
+        assert "합계 제외" in out and "읽기 오류 2건" in out, out
         r = SV.diff_scans(data, ids[0], ids[2])                                                            # DDD3
         assert r.get("ok") is False and r.get("size_mode_mismatch"), r
         r = SV.diff_scans(data, ids[0], ids[0])
-        assert r.get("ok") and r.get("compared_depth") is not None, r
+        assert r.get("ok") and "compared_depth" in r, r          # 30회차: 잘린 스캔이 아니면 None(전체 비교)
     finally:
         shutil.rmtree(d, ignore_errors=True)
     assert AK.fmt_bytes(518864672) == "494.8 MB" == C._human(518864672)                                  # DDD4
@@ -3497,6 +3497,51 @@ def check_cd_running_block() -> None:
     print("[FFF1] OK  진행 중 경로의 '지금 스캔' 차단(화면 버튼 끔·확인 전 차단·서버 중복 거부)")
 
 
+def check_ce_round30_regress() -> None:
+    """GGG1 정상 스캔끼리 비교해도 저장된 최대 깊이로 잘라 지운 깊은 폴더가 '삭제'에 안 나옴 GGG2 'prod@dc1' 같은 어레이 이름(id)이
+    '***' 로 가려져 저장 시 두 어레이가 합쳐짐 GGG3 'Kim <a@x> b@y' 에서 b@y 누락 GGG4 '접근 불가 폴더'에 파일 오류까지 셈(문구)."""
+    import json as _json
+    from isilon_usage import manager as M, server as SV, notify as NT
+    from isilon_usage.scanner import run_scan
+    d = tempfile.mkdtemp(prefix="iu_ce_")
+    try:
+        data = os.path.join(d, "data")
+        M.init_manager(data)
+        t = os.path.join(d, "tree")
+        os.makedirs(os.path.join(t, "a", "b", "c"))
+        os.makedirs(os.path.join(t, "d"))
+        with open(os.path.join(t, "a", "b", "c", "f"), "wb") as fh:
+            fh.write(b"x" * 5000)
+        ids = []
+        for n in range(2):
+            if n == 1:
+                shutil.rmtree(os.path.join(t, "a", "b"))
+            dbp = os.path.join(data, "scans", "s%d.db" % n)
+            os.makedirs(os.path.dirname(dbp), exist_ok=True)
+            sid = M.register_scan(data, root_path=t, db_path=dbp, backend="native", size_mode="apparent")
+            run_scan(dbp, t, workers=1, size_mode="apparent", with_monitor=False,
+                     manager_db=M.manager_db_path(data), manager_scan_id=sid)
+            ids.append(sid)
+        r = SV.diff_scans(data, ids[0], ids[1], limit=100)                                            # GGG1
+        removed = [x["path"] for x in r["rows"] if x["target_bytes"] == 0 and x["base_bytes"] > 0]
+        assert any(p.endswith("/a/b/c") for p in removed) and r.get("compared_depth") is None, r
+        ctl = SV.ScanController(os.path.join(d, "edge"))                                              # GGG2
+        arrs = [{"id": "prod@dc1", "name": "prod@dc1", "type": "unity", "url": "https://h1", "password": "p1"},
+                {"id": "prod@dc2", "name": "prod@dc2", "type": "unity", "url": "https://h1", "password": "p2"}]
+        ctl.update_settings({"storage_arrays": arrs})
+        pub = _json.loads(_json.dumps(SV._public_settings(ctl.settings)))["storage_arrays"]
+        assert [a["id"] for a in pub] == ["prod@dc1", "prod@dc2"], pub
+        pub[1]["user"] = "u2"
+        assert ctl.update_settings({"storage_arrays": pub})["ok"]
+        sa = ctl.settings["storage_arrays"]
+        assert [a["id"] for a in sa] == ["prod@dc1", "prod@dc2"] and [a["password"] for a in sa] == ["p1", "p2"], sa
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert NT.parse_recipients("Kim <a@x.com> b@y.com") == ["a@x.com", "b@y.com"]                     # GGG3
+    assert "접근 불가 폴더" not in _read("dashboard.html") and "읽기 오류" in M.capacity_caveats([{"capacity_error_dirs": 1}])   # GGG4
+    print("[GGG1~GGG4] OK  비교는 잘린 스캔 깊이만·어레이 이름 가림 안 함·받는 사람 섞인 형식·읽기 오류 문구")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3531,7 +3576,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bv_round27_security, check_bw_round26_portal_ui,
             check_bx_round28_regress, check_by_round28_install,
             check_bz_round28_dashboard, check_ca_round29_regress,
-            check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block]
+            check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress]
 
 
 def main() -> int:

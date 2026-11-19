@@ -4265,7 +4265,7 @@ function renderOverview(j) {
       const capNote = (r.capacity_scan_id != null && r.capacity_scan_id !== r.scan_id)
         ? `<div class="sub" title="용량은 마지막 완료 스캔(#${r.capacity_scan_id}) 기준">#${r.scan_id} ${statusKo[r.status] || escHtml(r.status)}: ${fmtBytes(r.scanned_bytes)}</div>`
         : (r.capacity_partial ? '<div class="sub" title="완료된 스캔이 아직 없어 부분 값입니다">부분 값</div>' : "");
-      const errNote = r.capacity_error_dirs ? `<div class="sub" style="color:var(--warn)" title="이 스캔에서 접근하지 못한 폴더 — 그 안의 용량은 합계에 없습니다(오류 목록 참고)">접근 불가 폴더 ${fmtNum(r.capacity_error_dirs)}개 미포함</div>` : "";
+      const errNote = r.capacity_error_dirs ? `<div class="sub" style="color:var(--warn)" title="이 스캔에서 읽지 못한 폴더·파일 수 — 그 항목의 용량은 합계에 없습니다(폴더 오류는 스캔 화면의 오류 목록, 파일 오류는 개수만 기록)">읽기 오류 ${fmtNum(r.capacity_error_dirs)}건 미포함</div>` : "";
       const depthNote = r.capacity_depth_limit ? `<div class="sub" title="최대 깊이 ${r.capacity_depth_limit} 로 자른 스캔 — 그보다 깊은 폴더의 용량은 합계에 없습니다">깊이 ${r.capacity_depth_limit}까지만</div>` : "";
       const nestNote = r.nested_in ? `<div class="sub" title="다른 스캔 루트 안에 있어 전체 합계에서 뺐습니다(두 번 세지 않음)">⊂ ${escHtml(r.nested_in)} 에 포함 · 합계 제외</div>` : "";
       const running = runningSet.has(r.scan_id);

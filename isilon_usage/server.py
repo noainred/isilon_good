@@ -509,7 +509,10 @@ def _public_settings(s: dict) -> dict:
         b["password"] = ""
         b["password_set"] = bool(a.get("password"))
         b["url"] = netutil.mask_url_secret(a.get("url"))
-        b["id"] = netutil.mask_url_secret(a.get("id"))     # 옛 설정은 주소를 id 로 썼다 — id 로 토큰이 새지 않게(29회차)
+        # 옛 설정은 주소를 id 로 썼다 — id 로 토큰이 새지 않게(29회차). 주소 모양('://')일 때만 가린다 — 'prod@dc1' 같은
+        # 이름까지 '***' 가 돼, 저장하면 두 어레이가 한 id 로 합쳐지고 비밀번호가 바뀌었다(30회차 점검)
+        if "://" in str(a.get("id") or ""):
+            b["id"] = netutil.mask_url_secret(a.get("id"))
         sa.append(b)
     out["storage_arrays"] = sa
     # URL 속 비밀값(웹훅 경로·사용자 정보·쿼리 토큰)도 가린다 — 이 응답은 인증 없이 읽힌다(27회차 보안 점검).
@@ -1019,9 +1022,16 @@ def diff_scans(data_dir: str, base_id: int, target_id: int, *,
         b_run = conn.execute("SELECT MAX(id) AS i FROM b.scan_runs").fetchone()["i"]
         # 두 스캔이 모두 저장한 깊이까지만 — pscan·접기(fold)·깊이 제한 스캔은 얕은 깊이까지만 행이 있어, 다른 스캔의 더 깊은
         # 폴더가 모두 '삭제됨/신규'로 보였다(29회차 점검). 사용자가 준 max_depth 와 둘 중 얕은 쪽.
-        _da = conn.execute("SELECT MAX(depth) AS d FROM a.directories WHERE run_id=?", (a_run,)).fetchone()["d"]
-        _db = conn.execute("SELECT MAX(depth) AS d FROM b.directories WHERE run_id=?", (b_run,)).fetchone()["d"]
-        _lim = [int(x) for x in (max_depth, _da, _db) if x is not None]
+        # 단, '잘린' 스캔(pscan=1단계·최대 깊이·접기)의 깊이로만 자른다 — 저장된 최대 깊이로 자르면, 폴더가 실제로 지워져
+        # 얕아진 정상 스캔과 비교할 때 지운 깊은 폴더가 '삭제'에 안 나왔다(30회차 점검).
+        def _stored_limit(sc):
+            sc = dict(sc)
+            if str(sc.get("backend") or "") == "pscan":
+                return 1
+            lims = [int(sc.get(k) or 0) for k in ("opt_max_depth", "opt_fold_depth")]
+            lims = [x for x in lims if x > 0]
+            return min(lims) if lims else None
+        _lim = [int(x) for x in (max_depth, _stored_limit(base), _stored_limit(target)) if x is not None]
         eff_depth = min(_lim) if _lim else None
         depth_a = f"AND depth<={int(eff_depth)}" if eff_depth is not None else ""
         depth_b = depth_a

@@ -498,7 +498,7 @@ def _nested_roots(paths) -> Dict[str, str]:
 
 
 def capacity_caveats(roots) -> str:
-    """합계가 덜 센 값인 이유를 한 줄로(화면·CLI·질의응답 공통 문구) — 깊이 제한·접근 불가 폴더·완료 스캔 없음.
+    """합계가 덜 센 값인 이유를 한 줄로(화면·CLI·질의응답 공통 문구) — 깊이 제한·읽기 오류·완료 스캔 없음.
     예전엔 대시보드 표 한 줄에만 '깊이 N까지만'이 있고 다른 곳은 아무 표시 없이 적게 센 값을 보였다(29회차 점검)."""
     rs = [r for r in roots if not r.get("nested_in")]
     out = []
@@ -508,7 +508,7 @@ def capacity_caveats(roots) -> str:
     if dl:
         out.append("깊이 제한 스캔 %d개 루트는 그 아래 용량 미포함" % len(dl))
     if er:
-        out.append("접근 불가 폴더 %s개의 용량 미포함" % "{:,}".format(er))
+        out.append("읽기 오류 %s건(그 항목의 용량 미포함)" % "{:,}".format(er))   # 폴더·파일 읽기 오류 모두(30회차 점검: '폴더'라 했지만 파일 오류도 셈)
     if pa:
         out.append("완료 스캔이 없는 루트 %d개는 부분 값" % len(pa))
     return (" ※ " + " · ".join(out) + ".") if out else ""
