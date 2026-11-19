@@ -964,7 +964,7 @@ def check_ac_round7() -> None:
         httpd.server_close()
     finally:
         shutil.rmtree(d, ignore_errors=True)
-    assert 'okn > 0 and okn + curn == len(nodes)' in _read("portal.py")                # C6
+    assert 'okn + curn == len(nodes)' in _read("portal.py")                         # C6(11회차: 전부 최신도 성공)
     print("[C1~C6] OK  안전한 SSH 업그레이드·재구성 토큰 반영·설치 순서/캐시·릴리스 인자·심볼릭 중복·이미 최신 집계")
 
 
