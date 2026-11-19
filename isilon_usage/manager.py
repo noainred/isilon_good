@@ -498,6 +498,7 @@ def overall_capacity(conn) -> dict:
                                     prev_total_files=prev_files, files_done=s.get("total_files"))
                if s["status"] in ("discovering", "sizing") else None)
         eta_basis = (("prev_scan" if s.get("phase") == "discovering" else "rate") if eta is not None else None)
+        eta_prev_available = bool(prev_total or prev_files)   # 지난 완료 스캔 있음 — 화면이 '기록 없음' 대신 '계산 중'(22회차 점검)
         total_scanned += s.get("scanned_bytes") or 0
         if rp not in nested:      # 다른 루트 안에 든 루트는 바깥 루트 용량에 이미 포함 — 두 번 세지 않는다
             total_capacity += cap_bytes
@@ -530,6 +531,7 @@ def overall_capacity(conn) -> dict:
             "eta_seconds": eta,
             "eta_at": (now_ts + eta) if eta is not None else None,
             "eta_basis": eta_basis,     # prev_scan = 폴더 찾기 중, 이전 완료 스캔의 전체 폴더 수 기준 추정
+            "eta_prev_available": eta_prev_available,
             "nested_in": nested.get(rp),   # 이 루트를 품은 다른 스캔 루트(있으면 합계에서 빠짐)
         })
     roots.sort(key=lambda x: x["capacity_bytes"], reverse=True)

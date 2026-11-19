@@ -2529,6 +2529,35 @@ def check_bh_round22_fuzz() -> None:
     print("[JJ1~JJ8] OK  업그레이드 주기 상한·설정 큰 수·깊은 중첩·벤치 후보·어레이 비번·포탈 비문자열·scan_id 엄격")
 
 
+def check_bi_round22_browser() -> None:
+    """KK1 NAS별 표 파일 수가 멈춘 스캔 값(다른 화면은 완료값) KK2 새 설치에 '지난 실행 설정 불러옴 — 엔진 ?'
+    KK3 지난 완료 스캔이 있어도 1단계 초반에 '완료 스캔 기록이 없어' KK4 '반년'."""
+    from isilon_usage import manager as M, db as dbmod, ask as AK
+    dh = _read("dashboard.html")
+    assert "fmtNum((r.capacity_files != null && !r.capacity_partial) ? r.capacity_files : r.total_files)" in dh   # KK1
+    assert "Object.keys(s.last_scan).length" in dh                                                                # KK2
+    assert "(disc && !r.eta_prev_available)" in dh                                                               # KK3
+    d = tempfile.mkdtemp(prefix="iu_bi_")
+    try:
+        data = os.path.join(d, "data")
+        M.init_manager(data)
+        c = dbmod.connect(M.manager_db_path(data))
+        s1 = M.register_scan(data, root_path="/r", db_path=os.path.join(d, "a.db"), backend="native", size_mode="disk")
+        c.execute("UPDATE scans SET status='done', phase='done', total_dirs=1000, total_files=5000 WHERE id=?", (s1,))
+        c.commit()
+        s2 = M.register_scan(data, root_path="/r", db_path=os.path.join(d, "b.db"), backend="native", size_mode="disk")
+        c.execute("UPDATE scans SET status='discovering', phase='discovering', discovered_dirs=2, updated_at=? WHERE id=?",
+                  (time.time(), s2))
+        c.commit()
+        rt = [x for x in M.overall_capacity(c)["roots"] if x.get("root_path") == "/r"][0]
+        c.close()
+        assert rt["eta_seconds"] is None and rt["eta_prev_available"] is True, rt
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert AK.parse_threshold_days("반년 이상 안 쓴 파일") == 182                                                   # KK4
+    print("[KK1~KK4] OK  NAS별 파일 수 통일·새 설치 안내·지난 스캔 있을 때 '계산 중'·반년")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -2551,7 +2580,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_az_round19_regress, check_ba_round19_portal_edge,
             check_bb_round20_regress, check_bc_round20_upgrade,
             check_bd_round20_stress, check_be_round21_sec_regress,
-            check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz]
+            check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser]
 
 
 def main() -> int:

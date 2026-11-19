@@ -2038,7 +2038,8 @@ async function loadSettings() {
     // 첫 로드 시 "새 스캔 시작" 폼을 채운다 — 지난 실행(last_scan) 설정이 있으면 그걸 우선
     // 복원하고, 없으면 기본 설정값으로 채운다(다음 실행 시 같은 파라미터로 바로 시작).
     if (!settingsLoaded) {
-      const ls = s.last_scan || null;
+      // 저장된 게 없으면(빈 {}) 안내하지 않는다 — 새 설치에서 '엔진 ?, 백엔드 ?' 가 떴다(22회차 점검)
+      const ls = (s.last_scan && Object.keys(s.last_scan).length) ? s.last_scan : null;
       $("optBackend").value = (ls && ls.backend) || s.default_backend;
       $("optSize").value = (ls && ls.size_mode) || s.default_size_mode;
       $("optOFS").checked = ls ? !!ls.one_file_system : !!s.default_one_file_system;
@@ -4005,7 +4006,7 @@ function renderHome(o, j) {
       <div class="sub">지금까지 ${fmtBytes(r.scanned_bytes)} · 파일 ${fmtNum(r.total_files || 0)}개${t ? " · 폴더 " + fmtNum(p) + " / " + fmtNum(t) : ""}</div>
       <div class="eta-line">${(r.eta_seconds != null)
         ? `<span>남은 시간 <b>약 ${fmtDur(r.eta_seconds)}</b></span><span>완료 예상 <b>${fmtEtaClock(r.eta_seconds)}</b></span>${r.eta_basis === "prev_scan" ? '<span class="sub" title="폴더 찾기 중 — 같은 경로의 지난 완료 스캔 폴더 수를 기준으로 추정">이전 스캔 기준 추정</span>' : ""}`
-        : `<span class="sub">완료 예상: ${disc ? "이 경로의 완료 스캔 기록이 없어 폴더를 다 찾은 뒤(2단계부터) 계산됩니다" : "계산 중…"}</span>`}</div>
+        : `<span class="sub">완료 예상: ${(disc && !r.eta_prev_available) ? "이 경로의 완료 스캔 기록이 없어 폴더를 다 찾은 뒤(2단계부터) 계산됩니다" : "계산 중…"}</span>`}</div>
       ${canMutate() ? `<div><button class="stopbtn" data-hstop="${r.scan_id}">중지</button></div>` : ""}
     </div>`;
   }).join("");
@@ -4435,7 +4436,7 @@ function renderNas(roots) {
       <td class="path" title="${escHtml(row.path)}">${tag}${escHtml(row.path)}</td>
       <td class="num">${r ? fmtBytes(r.fs_used_bytes) : "—"}</td>
       <td class="num">${usedPct}</td>
-      <td class="num">${r ? fmtNum(r.total_files) : "—"}</td>
+      <td class="num">${r ? fmtNum((r.capacity_files != null && !r.capacity_partial) ? r.capacity_files : r.total_files) : "—"}</td>
       <td>${last}</td>
       <td>${sch}</td>
       <td>${st}</td>
