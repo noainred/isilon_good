@@ -2881,6 +2881,57 @@ def check_bp_round25_regress() -> None:
     print("[RR1~RR4] OK  연결 테스트 토큰 정리·사용량 API 상태·새 칸 숫자 검사·파일 시각 서버 시계")
 
 
+def check_bq_round25_schedule() -> None:
+    """SS1 시계가 뒤로 가면 그만큼 예약·폴링·복제가 멈춤 SS2 포탈 재시작마다 모든 노드 즉시 재복제 SS3 업그레이드 점검·백업이
+    스케줄러를 붙잡음 SS4 '매 1개월'인데 시작일이 지났으면 1년 대기 SS5 N주마다 묶음이 만든 요일 기준 SS6 빈 요일·삭제 경합."""
+    import datetime as _d
+    from isilon_usage import settings as SE, portal as P
+
+    def ts(y, mo, dd, h=0, mi=0):
+        return _d.datetime(y, mo, dd, h, mi).timestamp()
+    now = ts(2026, 11, 20, 12)
+    assert SE.schedule_due({"unit": "minute", "every": 5, "last_run": now + 7200}, now)               # SS1
+    assert SE.schedule_due({"unit": "day", "every": 1, "at": "03:00", "anchor": ts(2026, 11, 1),
+                            "last_run": now + 2 * 86400}, now)
+    sc = {"unit": "month", "every": 1, "start_month": 11, "start_day": 5, "at": "03:00",               # SS4
+          "anchor": ts(2026, 11, 19, 10)}
+    fired = []
+    t = ts(2026, 11, 19, 10)
+    while t < ts(2027, 3, 1):
+        if SE.schedule_due(dict(sc, last_run=fired[-1] if fired else 0), t):
+            fired.append(t)
+        t += 3600
+    days = [_d.datetime.fromtimestamp(x).strftime("%Y-%m-%d") for x in fired]
+    assert days[:3] == ["2026-12-05", "2027-01-05", "2027-02-05"], days
+    wk = {"unit": "week", "every": 2, "weekdays": [1, 5], "at": "03:00", "anchor": ts(2026, 11, 18, 10)}   # SS5
+    fired = []
+    t = ts(2026, 11, 18, 10)
+    while t < ts(2026, 12, 15):
+        if SE.schedule_due(dict(wk, last_run=fired[-1] if fired else 0), t):
+            fired.append(t)
+        t += 3600
+    days = [_d.datetime.fromtimestamp(x).strftime("%m-%d") for x in fired]
+    assert days[:4] == ["11-20", "11-30", "12-04", "12-14"], days
+    e = {"unit": "week", "every": 1, "weekdays": [], "at": "03:00", "anchor": ts(2026, 11, 18, 10)}      # SS6 빈 요일
+    assert any(SE.schedule_due(dict(e, last_run=0), ts(2026, 11, 25, h)) for h in range(3, 24))
+    d = tempfile.mkdtemp(prefix="iu_bq_")
+    try:
+        pc = P.PortalController(os.path.join(d, "hq"))                                                 # SS2
+        pc.upsert_node({"id": "a", "url": "http://10.0.0.1:8765", "token": "t"})
+        pc._rep_at["a"] = 12345.0
+        pc._save_rep_state()
+        pc2 = P.PortalController(os.path.join(d, "hq"))
+        assert pc2._rep_at.get("a") == 12345.0, pc2._rep_at
+        pc2.delete_node("a")
+        assert "a" not in pc2._rep_at
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    pt = _read("portal.py")
+    assert "def _bg_jobs(self, now: float, do_upg: bool)" in pt                                        # SS3
+    assert pt.count("if self._get(nid) is None:   # 폴링 도중 지워진 노드") == 1 and "폴링 도중 지워진 노드 — 캐시·처리량" in pt
+    print("[SS1~SS6] OK  시계 역행·복제 상태 저장·별도 스레드·월 첫 발생·주 묶음(일요일)·빈 요일·삭제 경합")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -2904,7 +2955,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bb_round20_regress, check_bc_round20_upgrade,
             check_bd_round20_stress, check_be_round21_sec_regress,
             check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser, check_bj_round23_regress, check_bk_round23_portal, check_bl_round23_engine, check_bm_round24_regress,
-            check_bn_round24_consistency, check_bo_round24_perf, check_bp_round25_regress]
+            check_bn_round24_consistency, check_bo_round24_perf, check_bp_round25_regress, check_bq_round25_schedule]
 
 
 def main() -> int:

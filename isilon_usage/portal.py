@@ -762,6 +762,15 @@ class PortalController:
         self._inflight = set()      # 상태 폴링 중인 노드(가벼움 — 수 초)
         self._rep_inflight = set()  # DB 복제 중인 노드(큰 DB 는 수 분~수 시간) — 폴링과 별개
         self._rep_at = {}           # id -> 마지막 복제 '시도' 시각(포탈 시계) — 복제 주기 판정 기준
+        # 재시작해도 이어 가게 파일로 남긴다 — 메모리에만 있어 재시작(업그레이드마다)할 때마다 모든 노드를 곧바로
+        # 다시 복제했다(25회차 점검: 그날 03:00 에 돈 일 단위 노드가 14:00 재시작에 또 돔)
+        try:
+            _st = setmod.read_json_with_backup(os.path.join(data_dir, "replication_state.json")) or {}
+            self._rep_at = {str(k): float(v) for k, v in (_st.get("rep_at") or {}).items()
+                            if isinstance(v, (int, float)) and v == v}
+        except Exception:  # noqa: BLE001
+            self._rep_at = {}
+        self._bg_jobs_busy = False   # 업그레이드 점검·예약 백업(스케줄러 밖 스레드) 실행 중
         self._rep_fail = {}         # id -> 연속 복제 실패 횟수(재시도 백오프)
         self._rep_err = {}          # id -> 마지막 복제 오류(다음 복제 성공 전까지 표시)
         self._rep_ok_at = {}        # id -> 마지막 복제 성공 시각(포탈 시계) — 화면 '결과 복제 N전'(24회차 점검)
@@ -1301,6 +1310,8 @@ class PortalController:
         every = max(300.0, float(self.settings.get("backup_every_hours") or 1) * 3600)
         files = self._list_backups(bdir)
         last = files[-1]["mtime"] if files else 0
+        if last > now + 60:   # 시계가 뒤로 감(미래 시각의 백업 파일) — 기다리지 않는다(25회차 점검)
+            last = 0
         if now - last < every:
             return
         # 실패 백오프: 저장이 실패(권한·디스크 부족)하면 예전엔 매 주기(수십 초) 전체 백업을 다시 만들며
@@ -2105,7 +2116,10 @@ class PortalController:
         # 처리량 이력도 — 지운 노드의 행이 남고, 같은 이름으로 다시 추가하면 옛 마지막 값 때문에 첫 표본이 빠졌다(23회차 점검)
         if before != len(self.nodes):
             self._thru_last.pop(nid, None)
-            self._rep_ok_at.pop(nid, None)       # 같은 이름으로 다시 추가하면 옛 '복제 N전'이 남지 않게(25회차 점검)
+            with self._lock:   # 같은 이름으로 다시 추가하면 옛 복제 상태(시각·실패·오류)가 이어지지 않게(25회차 점검)
+                for _d in (self._rep_ok_at, self._rep_at, self._rep_fail, self._rep_err):
+                    _d.pop(nid, None)
+            self._save_rep_state()
             try:
                 conn = dbmod.connect(throughput_history_path(self.data_dir))
                 try:
@@ -2177,11 +2191,19 @@ class PortalController:
         while not self._stop.is_set():
             try:
                 now = time.time()
-                self._maybe_scheduled_backup(now)
+                # 예약 백업·자가 업그레이드 점검은 따로 도는 스레드에서 — 스케줄러에서 돌리면 느린 업그레이드 서버·큰
+                # 백업이 모든 노드의 폴링·복제를 멈췄다(25회차 점검: 1초에 1바이트 응답에 60초간 폴링 없음)
                 secs = int(self.settings.get("upgrade_check_secs", 60) or 60)
-                if now - self._last_upgrade_check >= max(10, secs):
-                    self._last_upgrade_check = now
-                    self._check_self_upgrade()
+                if self._last_upgrade_check > now + 60:     # 시계가 뒤로 감
+                    self._last_upgrade_check = 0
+                do_upg = now - self._last_upgrade_check >= max(10, secs)
+                if not self._bg_jobs_busy:
+                    if do_upg:
+                        self._last_upgrade_check = now
+                    self._bg_jobs_busy = True
+                    threading.Thread(target=self._bg_jobs, args=(now, do_upg), name="portal-bg",
+                                     daemon=True).start()
+                rep_dirty = False
                 for n in list(self.nodes):
                     if not n.get("enabled"):
                         continue
@@ -2190,7 +2212,9 @@ class PortalController:
                     # 예전엔 한 스레드가 폴링→복제를 이어서 하고 _inflight 하나로 묶여 있어,
                     # 큰 완료 DB 복제가 도는 동안 그 노드의 폴링이 멈춰 포탈 상태가 수 시간 묵었다
                     # (엣지는 '완료'인데 포탈은 '스캔 중'·옛 용량).
-                    due_poll = (now - n.get("last_poll", 0)) >= self.poll_every
+                    _lp = float(n.get("last_poll", 0) or 0)
+                    # 시계가 뒤로 갔으면(미래의 마지막 폴링) 바로 폴링 — 예전엔 그 차이(1시간)만큼 폴링·복제가 멈췄다(25회차 점검)
+                    due_poll = _lp > now + 60 or (now - _lp) >= self.poll_every
                     with self._lock:
                         start_poll = due_poll and nid not in self._inflight
                         if start_poll:
@@ -2202,15 +2226,37 @@ class PortalController:
                         if start_rep:
                             self._rep_inflight.add(nid)
                             self._rep_at[nid] = now
+                            rep_dirty = True
                     if start_poll:
                         threading.Thread(target=self._poll_task, args=(nid,),
                                          daemon=True).start()
                     if start_rep:
                         threading.Thread(target=self._rep_task, args=(nid,),
                                          daemon=True).start()
+                if rep_dirty:
+                    self._save_rep_state()
             except Exception:  # noqa: BLE001 — 스케줄러는 죽지 않는다
                 pass
             self._stop.wait(self.tick)
+
+    def _bg_jobs(self, now: float, do_upg: bool) -> None:
+        try:
+            self._maybe_scheduled_backup(now)
+            if do_upg:
+                self._check_self_upgrade()
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            self._bg_jobs_busy = False
+
+    def _save_rep_state(self) -> None:
+        try:
+            with self._lock:
+                ids = {n["id"] for n in self.nodes}
+                st = {k: v for k, v in self._rep_at.items() if k in ids}
+            setmod.write_json_atomic(os.path.join(self.data_dir, "replication_state.json"), {"rep_at": st})
+        except Exception:  # noqa: BLE001
+            pass
 
     def _rep_due(self, n: dict, now: float) -> bool:
         """이 노드의 DB 복제를 지금 시작할 차례인가(호출자가 self._lock 보유).
@@ -2229,6 +2275,8 @@ class PortalController:
         if not c.get("online"):
             return False
         last = float(self._rep_at.get(nid, 0.0))
+        if last > now + 60:   # 시계가 뒤로 감 — 미래의 마지막 시도는 믿지 않는다(25회차 점검)
+            last = 0.0
         if setmod.schedule_due(dict(n, last_run=last), now):
             return True
         if not self._has_unreplicated(nid, self._effective_since(nid, float(n.get("last_sync", 0) or 0))[0]):
@@ -2337,6 +2385,8 @@ class PortalController:
         except Exception as e:  # noqa: BLE001
             emsg = _poll_error_msg(e)
             with self._lock:
+                if self._get(nid) is None:   # 폴링 도중 지워진 노드 — 흔적(캐시)을 다시 만들지 않는다(25회차 점검)
+                    return False
                 c = self._cache.get(nid, {})
                 c.update({"online": False, "error": emsg})
                 self._cache[nid] = c
@@ -2347,6 +2397,8 @@ class PortalController:
                     cur["last_error"] = emsg
             return False
         with self._lock:
+            if self._get(nid) is None:       # 폴링 도중 지워진 노드 — 캐시·처리량 이력을 되살리지 않는다(25회차 점검)
+                return False
             self._cache[nid] = {
                 "online": True, "ts": time.time(),      # 포탈이 받은 시각(포탈 시계) — 예상 종료 계산의 기준
                 "edge_now": meta.get("exported_at"),    # 엣지가 응답을 만든 시각(엣지 시계) — 엣지 시각 차이 계산에만 사용

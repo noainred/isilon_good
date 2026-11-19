@@ -438,6 +438,10 @@ def schedule_due(sc: dict, now: float) -> bool:
     unit = sc.get("unit", "minute")
     every = max(1, int(sc.get("every", 1) or 1))
     last = float(sc.get("last_run", 0) or 0)
+    if last > now + 60:
+        # 시계가 뒤로 갔다(NTP 보정 등) — 미래의 '마지막 실행'은 믿지 않는다. 예전엔 그 차이만큼(예: 1시간·이틀)
+        # 실행이 멈췄다(25회차 점검: 일 단위 이틀 앞이면 2회 놓침)
+        last = 0.0
     if unit == "minute":
         return (now - last) >= every * 60
     if unit == "hour":
@@ -460,9 +464,20 @@ def schedule_due(sc: dict, now: float) -> bool:
         return delta >= 0 and delta % every == 0
     if unit == "week":
         wd = (n.weekday() + 1) % 7         # 0=일 .. 6=토
-        if wd not in (sc.get("weekdays") or []):
+        # 요일이 비면 만든 날의 요일로 — 예전엔 영영 돌지 않았다(25회차 점검)
+        wds = sc.get("weekdays") or [(anchor.weekday() + 1) % 7]
+        if wd not in wds:
             return False
-        weeks = (n.date() - anchor.date()).days // 7
+        # 주 묶음은 일요일 시작 달력 주로, 0주차 = 만든 뒤 첫 '선택한 요일'이 든 주 — 만든 요일 기준으로 끊으면 월·금이
+        # 서로 다른 주에 들어갔고(25회차 점검), 만든 주 기준이면 만든 다음 첫 해당 요일을 건너뛰었다.
+        def _wk0(d):
+            return d - _dt.timedelta(days=(d.weekday() + 1) % 7)
+        first = anchor.date()
+        for _i in range(7):
+            if (first.weekday() + 1) % 7 in wds:
+                break
+            first += _dt.timedelta(days=1)
+        weeks = (_wk0(n.date()) - _wk0(first)).days // 7
         return weeks >= 0 and weeks % every == 0
     if unit == "month":
         sd = int(sc.get("start_day", 1) or 1)
@@ -472,10 +487,10 @@ def schedule_due(sc: dict, now: float) -> bool:
         if n.day != min(sd, last_dom):
             return False
         sm = int(sc.get("start_month", 1) or 1)
-        # 시작(start_month/day)이 생성 연도에 이미 지났으면 첫 발생은 다음 해
-        fo_year = anchor.year if (sm, sd) >= (anchor.month, anchor.day) else anchor.year + 1
-        months = (n.year - fo_year) * 12 + (n.month - sm)
-        return months >= 0 and months % every == 0
+        # 생성 연도의 시작 월을 기준으로 every 개월 간격의 격자에서, 만든 날 이후 첫 발생부터 — 예전엔 시작일이 이미
+        # 지났으면 첫 발생을 다음 해로 미뤄 '매 1개월'인데 1년을 기다렸다(25회차 점검: 11/5 시작·11/19 생성 → 이듬해 11/5)
+        months = (n.year - anchor.year) * 12 + (n.month - sm)
+        return months >= 0 and months % every == 0 and n.date() >= anchor.date()
     return False
 
 
