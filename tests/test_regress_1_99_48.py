@@ -2710,6 +2710,58 @@ def check_bl_round23_engine() -> None:
     print("[NN1~NN7] OK  pscan 선형·du 최대 깊이/중복 제거·fold 와 최대 깊이·옛 정지 사유·링크 루트·디스크 가득")
 
 
+def check_bm_round24_regress() -> None:
+    """OO1 데이터 폴더에 '#'·'?'·'%' 가 있으면 백업 DB 가 비거나 빠짐 OO2 pscan 워커가 죽으면 전체 중단(부분 결과 대신)
+    OO3 토큰 앞뒤 공백·줄바꿈 저장·업그레이드 토큰 검사 없음 OO4 이름 바꿔 원격 구성하면 논리 경로 유실
+    OO5 du 가 native 로 대체돼도 기록·화면은 'du'."""
+    import io
+    import sqlite3
+    import tarfile as _tar
+    from isilon_usage import portal as P, scanner as S, db as dbmod, pscan as PS
+    d = tempfile.mkdtemp(prefix="iu_bm_")
+    try:
+        for odd in ("pd#3", "pd?3", "pd%41"):                                                       # OO1
+            hq = os.path.join(d, odd)
+            pc = P.PortalController(hq)
+            c = sqlite3.connect(P.ping_history_path(hq))
+            c.execute("CREATE TABLE IF NOT EXISTS t (x)")
+            c.execute("INSERT INTO t VALUES (1)")
+            c.commit()
+            c.close()
+            data, _fn = pc.make_backup_bytes()
+            with _tar.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+                raw = tf.extractfile("portal_backup/ping_history.db").read()
+            chk = os.path.join(d, "chk.db")
+            with open(chk, "wb") as fh:
+                fh.write(raw)
+            cc = sqlite3.connect(chk)
+            assert cc.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1, odd
+            cc.close()
+        assert not os.path.exists(os.path.join(d, "pd")), "옆에 빈 DB 를 만듦"
+        pc = P.PortalController(os.path.join(d, "hq2"))                                             # OO3
+        assert pc.upsert_node({"id": "n1", "url": "http://x:1", "token": "abc\n"})["ok"]
+        assert pc._get("n1")["token"] == "abc"
+        assert pc.set_upgrade_net("github", "http://x", False, token="한글")["ok"] is False
+        pc.upsert_node({"id": "e1", "url": "http://10.0.0.9:8765", "token": "t", "alias_local": "/mnt/new",  # OO4
+                        "alias_logical": "/data"})
+        r = pc.provision_plan({"host": "10.0.0.9", "name": "e1-renamed", "path": "/mnt/new"})
+        assert r["ok"] and pc._get("e1-renamed")["alias_logical"] == "/data", pc._get("e1-renamed")
+        T = os.path.join(d, "tree")                                                                  # OO5
+        os.makedirs(os.path.join(T, "a", "b"))
+        open(os.path.join(T, "a", "b", "f"), "w").close()
+        if shutil.which("du"):
+            db = os.path.join(d, "du.db")
+            S.run_scan(db, T, backend="du", max_depth=1, with_monitor=False)
+            c = dbmod.connect(db)
+            assert c.execute("SELECT backend FROM scan_runs").fetchone()[0] == "native"
+            c.close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    ps = _read("pscan.py")                                                                           # OO2
+    assert "except (RuntimeError, OSError) as exc:   # BrokenProcessPool" in ps
+    print("[OO1~OO5] OK  백업 경로 특수 문자·pscan 풀 깨짐 부분 결과·토큰 공백·이름 바꾼 구성 논리 경로·du 대체 기록")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -2732,7 +2784,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_az_round19_regress, check_ba_round19_portal_edge,
             check_bb_round20_regress, check_bc_round20_upgrade,
             check_bd_round20_stress, check_be_round21_sec_regress,
-            check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser, check_bj_round23_regress, check_bk_round23_portal, check_bl_round23_engine]
+            check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser, check_bj_round23_regress, check_bk_round23_portal, check_bl_round23_engine, check_bm_round24_regress]
 
 
 def main() -> int:

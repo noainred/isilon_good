@@ -159,7 +159,10 @@ def sqlite_snapshot(src: str, dst: str) -> None:
     """SQLite 파일을 한 시점의 일관된 사본으로 dst 에 만든다(쓰는 중이어도). 백업 API 가 있으면 그것으로,
     없으면(옛 파이썬) 한 읽기 트랜잭션 안에서 스키마·행을 복사한다."""
     import sqlite3
-    s_conn = sqlite3.connect("file:%s?mode=ro" % src, uri=True, timeout=30)
+    import pathlib
+    # 경로를 URI 로 제대로 바꾼다 — '#'·'?'·'%' 가 든 데이터 폴더면 경로가 잘려 옆에 빈 DB 를 만들거나 열지 못해
+    # 백업에서 조용히 빠졌다(24회차 점검)
+    s_conn = sqlite3.connect(pathlib.Path(os.path.abspath(src)).as_uri() + "?mode=ro", uri=True, timeout=30)
     try:
         d_conn = sqlite3.connect(dst)
         try:
@@ -288,7 +291,7 @@ def sanitize_node(raw: dict, *, strict: bool = True) -> Optional[dict]:
         "id": nid,
         "region": str(raw.get("region") or "").strip(),
         "url": url,
-        "token": str(raw.get("token") or ""),
+        "token": str(raw.get("token") or "").strip(),   # 앞뒤 공백·줄바꿈은 헤더에 못 실어 폴링이 늘 실패(24회차 점검)
         # 경로 별칭: 이 노드의 로컬 마운트 접두어 ↔ 공통 논리 접두어
         # 예) alias_local=/mnt/isilon/data, alias_logical=/data
         "alias_local": _alias_norm(raw.get("alias_local")),
@@ -1850,6 +1853,8 @@ class PortalController:
                 int(check_secs)
             except (TypeError, ValueError, OverflowError):
                 return {"ok": False, "reason": "확인 주기(초)는 숫자여야 합니다."}
+        if token is not None and str(token or "").strip() and token_error(str(token).strip()):
+            return {"ok": False, "reason": token_error(str(token).strip())}   # 헤더로 보내는 값(24회차 점검)
         src = str(source or "off").strip().lower()
         self.settings["upgrade_source"] = src if src in ("off", "github") else "off"
         self.settings["upgrade_url"] = str(url or "").strip()
@@ -3533,7 +3538,10 @@ class PortalController:
                "alias_local": path, "alias_logical": path}
         if self._get(name) is None:        # 새 노드만 기본 주기·모드(덮어쓰기는 운영자가 바꾼 주기 유지)
             rec.update({"unit": "minute", "every": 30, "mode": "both", "enabled": True})
-        _keep_alias(self._get(name), rec)
+        # 이름을 바꿔 다시 구성해도(같은 주소의 옛 노드) 운영자가 정한 논리 경로는 이어받는다(24회차 점검)
+        _keep_alias(self._get(name) or existing, rec)
+        if self._get(name) is None and existing and str(existing.get("alias_logical") or "").strip():
+            rec["alias_logical"] = existing["alias_logical"]
         node_res = self.upsert_node(rec, partial=True)
         if not node_res.get("ok"):   # 등록 실패를 '성공(노드 이름 없음)'으로 보였다(20회차 점검) — 사유와 함께 실패로
             return {"ok": False, "reason": "노드 등록 실패: %s" % (node_res.get("reason") or "알 수 없음")}

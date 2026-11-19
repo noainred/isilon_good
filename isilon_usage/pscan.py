@@ -496,7 +496,19 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
                     upath, top, rec = units[next_j]
                     sp = (_remap(upath, root, node_mounts[next_j % len(node_mounts)])
                           if node_mounts else upath)
-                    f = ex.submit(scan_subtree, sp, size_mode, 0, tpp if rec else 1, rec, deadline, opts)
+                    try:
+                        f = ex.submit(scan_subtree, sp, size_mode, 0, tpp if rec else 1, rec, deadline, opts)
+                    except (RuntimeError, OSError) as exc:   # BrokenProcessPool(워커가 죽음)도 RuntimeError
+                        # 워커가 죽어 풀이 깨지면 남은 단위는 '실패'로 남기고 멈춘다 — 예전처럼 부분 결과를 돌려준다
+                        # (창으로 바꾼 뒤 BrokenProcessPool 이 전체를 중단시켰다, 24회차 점검)
+                        while next_j < n_units:
+                            _u, _top, _r = units[next_j]
+                            failed_units.append({"path": _u, "top": _top,
+                                                 "error": "%s: %s" % (type(exc).__name__, exc)})
+                            a = top_acc.setdefault(_top, [0, 0, 0, 0, 0])
+                            a[3] += 1
+                            next_j += 1
+                        return
                     futs[f] = (top, sp)
                     f.add_done_callback(doneq.put)
                     next_j += 1

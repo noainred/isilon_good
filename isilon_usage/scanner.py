@@ -721,6 +721,7 @@ class Scanner:
             fields = {
                 "status": self._status,
                 "phase": self._phase,
+                "backend": self.backend,          # 실제로 쓴 방식(du → native 대체 포함, 24회차 점검)
                 "discovered_dirs": self._discovered,
                 "total_dirs": self._discovered,
                 "processed_dirs": self._processed,
@@ -1802,6 +1803,14 @@ class Scanner:
             du_path = None
             self._log("du 백엔드: %s 이라 native 합산을 씁니다"
                       % ("최대 깊이 지정" if self.max_depth else "하드링크 중복 제거 끔"), conn)
+        if self.backend == "du" and du_path is None:
+            # 실제로 쓴 방식을 기록 — 예전엔 로그만 남기고 실행 기록·화면은 계속 'du' 였다(24회차 점검)
+            self.backend = "native"
+            try:
+                dbmod.update_run(conn, self.run_id, backend="native")
+                conn.commit()
+            except Exception:  # noqa: BLE001
+                pass
 
         # 집계 튜닝(이 연결에만 적용): 페이지 캐시 상향 + 자동 체크포인트 간격 상향.
         # 기본 자동 체크포인트(1000페이지)는 윈도우 커밋마다 백필을 돌려 되레 느리다.
