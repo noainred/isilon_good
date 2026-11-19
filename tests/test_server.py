@@ -915,7 +915,7 @@ def _check_partial_aggregate_api() -> None:
         ctl = ScanController(data)
 
         def slow_stat(self, entry):
-            _t.sleep(0.002)
+            _t.sleep(0.01)   # 전체 묶음 실행(부하) 중에도 '실행 중' 확인 전에 끝나지 않게(간헐 실패, 23회차)
             return orig_stat(self, entry)
         scanmod.Scanner._safe_stat = slow_stat                  # 중지할 틈을 만든다
         sid = ctl.start_scan(tree, engine="threads")["scan_id"]
