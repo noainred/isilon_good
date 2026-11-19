@@ -1705,6 +1705,56 @@ def check_au_regress_round17() -> None:
     print("[V1~V4] OK  다른 프로세스 스캔 스냅샷·위치 유지 갱신·진행 중 스냅샷 보존·재개 뒤 옛 작업 무시")
 
 
+def check_av_round17_flow() -> None:
+    """W1 1단계 남은 시간이 폴더 수만 봐서 끝 무렵 수십 초에 멈춤 → 파일 기준 추정도 함께(긴 쪽)
+    W2 멈춘 스캔 분석 화면에 '아직 완성된 값이 아님' 안내 W3 도는 스캔이 없으면 진행 패널은 최근 스캔
+    W4 재개한 1단계의 total_dirs 가 옛 값에 멈춤 W5 배너를 매 폴링 다시 그려 버튼 클릭이 사라짐."""
+    from isilon_usage import server as SV, manager as M, db as dbmod
+    # W1: 이전 완료 스캔 313폴더/30,000파일, 지금 290폴더(정체)·14,000파일·240초
+    eta = M.estimate_eta_seconds("discovering", 0, 0, 290, 240.0, 313, prev_total_files=30000, files_done=14000)
+    assert eta is not None and eta > 200, eta                     # 폴더만이면 약 19초
+    assert M.estimate_eta_seconds("discovering", 0, 0, 290, 240.0, 313) < 30   # 파일 정보가 없으면 예전과 같음
+    assert M.estimate_eta_seconds("discovering", 0, 0, 0, 240.0, 313, prev_total_files=30000, files_done=14000) > 200
+    assert M.estimate_eta_seconds("discovering", 0, 0, 290, 240.0, 313, prev_total_files=30000, files_done=50) < 30   # 파일 50개로는 추정 안 함
+    d = tempfile.mkdtemp(prefix="iu_av_")
+    try:
+        data = os.path.join(d, "data")
+        M.init_manager(data)
+        c = dbmod.connect(M.manager_db_path(data))
+        s1 = M.register_scan(data, root_path="/big", db_path=os.path.join(d, "a.db"), backend="native", size_mode="disk")
+        c.execute("UPDATE scans SET status='done', phase='done', total_dirs=313, total_files=30000 WHERE id=?", (s1,))
+        c.commit()
+        s2 = M.register_scan(data, root_path="/big", db_path=os.path.join(d, "b.db"), backend="native", size_mode="disk")
+        now = time.time()
+        c.execute("UPDATE scans SET status='discovering', phase='discovering', discovered_dirs=290, total_dirs=290, "
+                  "total_files=14000, started_at=?, updated_at=?, active_elapsed=240 WHERE id=?", (now - 240, now, s2))
+        c.commit()
+        assert M.prev_totals(c, "/big", s2) == (313, 30000)
+        ov = M.overall_capacity(c)
+        rt = [x for x in ov["roots"] if x.get("scan_id") == s2 or x.get("root_path") == "/big"][0]
+        assert rt.get("eta_seconds") and rt["eta_seconds"] > 200, rt          # 홈·포탈(같은 계산)
+        c.close()
+        # W4·W1: /api/status 의 build_status — 재개한 1단계(per-run total_dirs 가 멈출 때의 200)
+        pdb = os.path.join(d, "b.db")
+        dbmod.init_db(pdb)
+        pc = dbmod.connect(pdb)
+        rid = dbmod.create_run(pc, "/big", backend="native", size_mode="disk", scanner_pid=0)
+        pc.execute("UPDATE scan_runs SET status='discovering', phase='discovering', total_dirs=200, discovered_dirs=290, "
+                   "total_files=14000, started_at=?, elapsed_accum=240, updated_at=? WHERE id=?", (now - 240, now, rid))
+        pc.commit()
+        st = SV.build_status(pc, None, top=0, prev_total_dirs=313, prev_total_files=30000)
+        pc.close()
+        assert st["run"]["total_dirs"] == 290, st["run"]["total_dirs"]                               # W4
+        assert st["progress"]["eta_seconds"] and st["progress"]["eta_seconds"] > 200, st["progress"]   # W1
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    dh = _read("dashboard.html")
+    assert "data-anpartial" in dh and "스캔 — 아직 완성된 값이 아닙니다" in dh                        # W2
+    assert "else if (!userPicked && allScans && allScans.length) statusScan = allScans[0].id;" in dh  # W3
+    assert "_an._lastHtml !== html" in dh and "_an.innerHTML = window._anRunningHtml" not in dh       # W5
+    print("[W1~W5] OK  1단계 남은 시간 파일 기준·멈춘 스캔 안내·진행 패널 최근 스캔·1단계 전체 수·배너 클릭 유지")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1721,7 +1771,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_an_fuzz_round13, check_ao_regress_round14,
             check_ap_explore_round14, check_aq_live_snapshot,
             check_ar_crash_round15, check_as_regress_round16,
-            check_at_livesnap_round16, check_au_regress_round17]
+            check_at_livesnap_round16, check_au_regress_round17,
+            check_av_round17_flow]
 
 
 def main() -> int:

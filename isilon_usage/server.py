@@ -406,7 +406,7 @@ def _idle_resources() -> dict:
 
 
 def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 20,
-                 prev_total_dirs: Optional[int] = None) -> dict:
+                 prev_total_dirs: Optional[int] = None, prev_total_files: Optional[int] = None) -> dict:
     """대시보드가 한 번의 폴링으로 쓸 수 있는 통합 상태 객체를 만든다."""
     if run_id is None:
         run_id = dbmod.latest_run_id(conn)
@@ -426,6 +426,11 @@ def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 
 
     total_dirs = r.get("total_dirs") or 0
     discovered = r.get("discovered_dirs") or 0
+    if r.get("phase") == "discovering" and not finished:
+        # 1단계엔 전체 수를 아직 모른다 — 관리 DB 처럼 '지금까지 찾은 수'로 맞춘다. 재개한 스캔은 멈출 때 기록된
+        # 옛 값(예: 200)이 그대로 남아 찾은 313개와 어긋나 보였다(17회차 점검).
+        total_dirs = discovered
+        r["total_dirs"] = discovered
     processed = r.get("processed_dirs") or 0
     scanned_bytes = r.get("scanned_bytes") or 0
     fs_total = r.get("fs_total_bytes") or 0
@@ -446,7 +451,8 @@ def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 
     _p, _e = mgrmod.sizing_window(r, _act if _act > 0 else elapsed)
     eta = mgrmod.estimate_eta_seconds(r["phase"], _p, total_dirs, discovered, _e, prev_total_dirs,
                                       already=int(r.get("sizing_from_processed") or 0)
-                                      if (r["phase"] == "sizing" and r.get("sizing_from_active") is not None) else 0)
+                                      if (r["phase"] == "sizing" and r.get("sizing_from_active") is not None) else 0,
+                                      prev_total_files=prev_total_files, files_done=r.get("total_files"))
 
     # 최신 자원 샘플 + 시계열(스파크라인용). 구버전 DB(scanner_cpu/du_cpu 없음) 호환.
     _cols = ("ts, mem_percent, mem_used, mem_total, swap_used, cpu_percent, "
@@ -3625,8 +3631,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 try:
                     # top=0: 상위 디렉터리 정렬(거대 DB 에서 느림)은 생략한다.
                     # 대시보드는 /api/topdirs(깊이 필터, 빠름)를 따로 쓰므로 불필요.
-                    payload = build_status(pconn, None, top=0, prev_total_dirs=mgrmod.prev_total_dirs(
-                        mconn, scan_meta.get("root_path"), scan_id))
+                    _pd, _pf = mgrmod.prev_totals(mconn, scan_meta.get("root_path"), scan_id)
+                    payload = build_status(pconn, None, top=0, prev_total_dirs=_pd, prev_total_files=_pf)
                 except sqlite3.OperationalError:
                     # per-run DB 파일은 생겼지만 아직 테이블 생성 전(스캔 시작 직후 레이스).
                     # 500 대신 "초기화 중"으로 응답해 다음 폴링에 정상 표시되게 한다.

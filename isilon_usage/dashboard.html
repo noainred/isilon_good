@@ -4294,6 +4294,9 @@ async function poll() {
       // 진행 패널이 엉뚱한 DB 를 가리키지 않게). 분석(파이/트리)은 selectedScan 그대로 사용.
       let statusScan = selectedScan;
       if (runningSet && runningSet.size > 0) statusScan = Math.max(...runningSet);
+      // 도는 스캔이 없고 사용자가 고르지 않았으면 진행 패널은 가장 최근 스캔(멈춘 것 포함)을 따른다 — 분석의 기본
+      // 선택(직전 완료 스캔)을 따라가 '중지'한 스캔 대신 예전에 끝난 다른 스캔이 '완료'로 보였다(17회차 점검).
+      else if (!userPicked && allScans && allScans.length) statusScan = allScans[0].id;
       const url = "/api/status" + (statusScan != null ? ("?scan=" + statusScan) : "");
       data = await fetchJsonTimeout(url, 25000);
     } catch (e) {
@@ -4470,6 +4473,19 @@ document.addEventListener("click", async (e) => {
   refreshTreeInPlace(); poll();
 });
 
+// 분석 배너는 폴링마다 다시 그리면 그 안의 버튼이 매번 새 요소가 돼, 누르는 도중 폴링이 끼면 클릭이 사라졌다
+// (17회차 점검) — 내용이 바뀔 때만 바꾼다.
+function _setAn(html) {
+  const _an = $("analysisNotice");
+  if (_an && _an._lastHtml !== html) { _an.innerHTML = html; _an._lastHtml = html; }
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest && e.target.closest("button[data-anpartial]");
+  if (!b) return;
+  if (!confirm("스캔 #" + b.dataset.anpartial + " — 멈춘 자료로 재귀 합계(하한값)를 계산할까요?\n행 수에 비례해 시간이 걸리며, 그동안 재개/삭제는 막힙니다.")) return;
+  scanAction("partial-aggregate", parseInt(b.dataset.anpartial, 10));
+});
+
 function render(d) {
   const r = d.run, p = d.progress, rs = d.resources;
   // 다른 스캔이 실행 중이면 /api/status 는 '실행 중 스캔'(진행 패널용)을 돌려준다. 분석 화면(배너·드릴
@@ -4512,19 +4528,29 @@ function render(d) {
       // 스냅샷이 새로 만들어지면 분석 패널을 다시 불러온다(같은 스캔이라도 값이 바뀜)
       const _lsAt = _ls && _ls.at ? _ls.at : null;
       if (_lsAt && window._liveSnapSeen !== _sid + ":" + _lsAt) { window._liveSnapSeen = _sid + ":" + _lsAt; refreshTreeInPlace(); }
-      _an.innerHTML = window._anRunningHtml + liveSnapHtml(_ls, _sid);
+      _setAn(window._anRunningHtml + liveSnapHtml(_ls, _sid));
     }
     else if (_pa && _pa.running) {
       const pg = _pa.progress || {};
       _an.style.display = "block";
-      _an.innerHTML = '⏳ <b>멈춘 자료 집계(부분 집계) 중</b> — depth ' + (pg.depth == null ? "—" : pg.depth) + ' · '
+      _setAn('⏳ <b>멈춘 자료 집계(부분 집계) 중</b> — depth ' + (pg.depth == null ? "—" : pg.depth) + ' · '
         + fmtNum(pg.rows || 0) + ' / ' + fmtNum(pg.total_rows || 0) + '행 · ' + fmtDur(pg.elapsed || 0)
-        + ' <span class="sub">(행 수에 비례해 걸립니다. 끝나면 이 화면 값이 하한값으로 바뀝니다.)</span>';
+        + ' <span class="sub">(행 수에 비례해 걸립니다. 끝나면 이 화면 값이 하한값으로 바뀝니다.)</span>');
     } else if (_paAt) {
       _an.style.display = "block";
-      _an.innerHTML = '⚠ <b>부분 집계 값(재개 전 · 하한값)</b> — ' + new Date(_paAt * 1000).toLocaleString(_LOC)
+      _setAn('⚠ <b>부분 집계 값(재개 전 · 하한값)</b> — ' + new Date(_paAt * 1000).toLocaleString(_LOC)
         + ' 기준으로 <b>지금까지 발견된 디렉터리만</b> 합산했습니다. 아직 안 훑은 하위는 0 으로 들어가 실제보다 작을 수 있습니다. '
-        + '스캔을 <b>재개해 완료</b>하면 정확한 값으로 바뀝니다.';
+        + '스캔을 <b>재개해 완료</b>하면 정확한 값으로 바뀝니다.');
+    } else if (_st === "paused" || _st === "error") {
+      // 끝까지 가지 못한 스캔은 폴더별 재귀 용량이 아직 계산되지 않아 0·일부만 보인다 — 예전엔 아무 안내 없이
+      // 완성된 값처럼 보였다(17회차 점검: 70MB 를 훑고 멈춘 스캔이 분석 화면에서 5.57MB).
+      const _sid = _sel ? _sel.id : d.scan_id;
+      _an.style.display = "block";
+      _setAn('⚠ <b>' + (_st === "error" ? "오류로 끝난" : "멈춘") + ' 스캔 — 아직 완성된 값이 아닙니다.</b> '
+        + '폴더별 용량은 마지막 단계에서 한 번에 계산하므로, 지금은 0 이거나 일부만 들어 있습니다. '
+        + (_st === "paused" ? '<b>재개해 완료</b>하거나, ' : '')
+        + '<b>멈춘 자료 집계</b>로 지금까지 찾은 폴더의 합계(하한값)를 볼 수 있습니다.'
+        + (canMutate() ? ` <button type="button" data-anpartial="${_sid}" style="margin-left:6px;">멈춘 자료 집계</button>` : ''));
     } else { _an.style.display = "none"; }
   }
   // Summary 진행 카드: 탐색 단계 안내(집계 시작 전)

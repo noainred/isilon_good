@@ -307,7 +307,8 @@ def prune_scans(data_dir: str, *, keep_per_root: Optional[int] = None,
     return {"ok": True, "deleted": deleted, "count": len(deleted)}
 
 
-def estimate_eta_seconds(phase, processed, total_dirs, discovered, elapsed, prev_total_dirs=None, already=0):
+def estimate_eta_seconds(phase, processed, total_dirs, discovered, elapsed, prev_total_dirs=None, already=0,
+                         prev_total_files=None, files_done=None):
     """남은 시간(초) 추정 — 집계(sizing) 단계에서만: 지금까지의 처리 속도로 남은 디렉터리를 나눈다.
 
     대시보드 '요약'·홈 카드·포탈이 모두 이 함수 하나를 쓴다(단일 소스). 폴더 찾기(discovering) 단계는
@@ -328,11 +329,21 @@ def estimate_eta_seconds(phase, processed, total_dirs, discovered, elapsed, prev
             done_dirs = int(discovered or 0)
         except (TypeError, ValueError):
             return None
-        if prev <= 0 or done_dirs <= 0 or elapsed <= 0 or done_dirs >= prev:
+        if elapsed <= 0:
             return None
-        if done_dirs < max(20, prev * 0.005):   # 시작 직후 몇 개만 보고 낸 추정은 크게 튄다(실측: 폴더 1개 → 1227초)
-            return None
-        return (prev - done_dirs) / (done_dirs / elapsed)
+        ests = []
+        if 0 < done_dirs < prev and done_dirs >= max(20, prev * 0.005):   # 시작 직후 몇 개로 낸 추정은 크게 튄다
+            ests.append((prev - done_dirs) / (done_dirs / elapsed))
+        # 파일 기준도 함께 본다 — '찾은 폴더'는 실제로 훑기 전에 빨리 늘어 끝 무렵 정체되는데, 그동안 남은 시간이
+        # 수십 초에 멈춰 줄지 않았다(17회차 점검: 파일 14k→24k/30k 동안 계속 25~50초). 둘 중 긴 쪽(보수적)을 쓴다.
+        try:
+            pf = int(prev_total_files or 0)
+            fd = int(files_done or 0)
+        except (TypeError, ValueError):
+            pf = fd = 0
+        if 0 < fd < pf and fd >= max(100, pf * 0.005):
+            ests.append((pf - fd) / (fd / elapsed))
+        return max(ests) if ests else None
     if phase != "sizing" or processed <= 0 or elapsed <= 0:
         return None
     # processed·elapsed 는 집계 단계 구간(sizing_window)일 수 있다 — 남은 수는 단계 시작 전에 이미 처리한 것(already)까지 뺀다
@@ -355,14 +366,19 @@ def sizing_window(s: dict, active: float):
     return processed, active
 
 
-def prev_total_dirs(conn, root_path, exclude_id=None):
-    """같은 루트의 마지막 완료 스캔의 전체 폴더 수(없으면 None) — 1단계 남은 시간 추정의 기준."""
+def prev_totals(conn, root_path, exclude_id=None):
+    """같은 루트의 마지막 완료 스캔의 (전체 폴더 수, 전체 파일 수) — 1단계 남은 시간 추정의 기준(없으면 (None, None))."""
     try:
-        r = conn.execute("SELECT total_dirs FROM scans WHERE root_path=? AND status='done' AND id<>? "
+        r = conn.execute("SELECT total_dirs, total_files FROM scans WHERE root_path=? AND status='done' AND id<>? "
                          "AND total_dirs>0 ORDER BY id DESC LIMIT 1", (root_path, int(exclude_id or -1))).fetchone()
     except Exception:  # noqa: BLE001
-        return None
-    return int(r[0]) if r else None
+        return None, None
+    return (int(r[0]), int(r[1] or 0) or None) if r else (None, None)
+
+
+def prev_total_dirs(conn, root_path, exclude_id=None):
+    """같은 루트의 마지막 완료 스캔의 전체 폴더 수(없으면 None)."""
+    return prev_totals(conn, root_path, exclude_id)[0]
 
 
 def active_elapsed(s: dict, now_ts: float) -> float:
@@ -424,10 +440,13 @@ def overall_capacity(conn) -> dict:
     for rp, s in latest_by_root.items():
         cap = done_by_root.get(rp) or s
         cap_bytes = int(cap.get("scanned_bytes") or 0)
-        prev_total = (int(cap.get("total_dirs") or 0) or None) if (cap is not s and cap.get("status") == "done") else None
+        _prev_ok = cap is not s and cap.get("status") == "done"
+        prev_total = (int(cap.get("total_dirs") or 0) or None) if _prev_ok else None
+        prev_files = (int(cap.get("total_files") or 0) or None) if _prev_ok else None
         _p, _e = sizing_window(s, active_elapsed(s, now_ts))
         eta = (estimate_eta_seconds(s.get("phase"), _p, s.get("total_dirs"), s.get("discovered_dirs"), _e, prev_total,
-                                    already=int(s.get("sizing_from_processed") or 0))
+                                    already=int(s.get("sizing_from_processed") or 0),
+                                    prev_total_files=prev_files, files_done=s.get("total_files"))
                if s["status"] in ("discovering", "sizing") else None)
         eta_basis = (("prev_scan" if s.get("phase") == "discovering" else "rate") if eta is not None else None)
         total_scanned += s.get("scanned_bytes") or 0
