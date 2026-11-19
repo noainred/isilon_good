@@ -1887,7 +1887,7 @@ function fmtBytes(n) {
   const u = ["KB","MB","GB","TB","PB","EB"];
   let i = -1;
   do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
-  return n.toFixed(n >= 100 ? 0 : (n >= 10 ? 1 : 2)) + " " + u[i];
+  return n.toFixed(1) + " " + u[i];   // 소수 1자리 — CLI·포탈·질의응답과 같은 규칙(29회차 점검: 같은 값이 '495 MB'·'494.8 MB')
 }
 function fmtNum(n) { return (Number(n) || 0).toLocaleString(_LOC); }
 // HTML 이스케이프 — 스캔한 파일/디렉터리 '이름·경로'는 신뢰할 수 없는 입력이므로(파일명에
@@ -3712,7 +3712,9 @@ async function _loadReportNow() {
   try {
     const j = await (await fetch("/api/stats" + q, {cache: "no-store"})).json();
     if (!j.ok) return;
-    if ($("reportScan")) $("reportScan").textContent = (selectedScan != null ? ("· scan #" + selectedScan) : "· 최신 스캔");
+    if ($("reportScan")) $("reportScan").textContent = (selectedScan != null ? ("· scan #" + selectedScan) : "· 최신 스캔")
+      // 분포 합계는 '파일'만 — 트리·홈 용량엔 폴더 자체 크기도 들어 있어 조금 작다(29회차 점검: 14.3 MB vs 15.0 MB)
+      + " · 분포 합계는 파일만(폴더 자체 크기 제외 — 트리 합계보다 조금 작을 수 있음)";
     $("repAge").innerHTML = _statBarList(j.age, i => i.key, 10);
     $("repAtimeAge").innerHTML = _statBarList(j.atime_age, i => i.key, 10);
     // atime 신뢰도 경고(noatime/relatime)
@@ -4079,7 +4081,8 @@ function renderHome(o, j) {
   $("kpiCap").textContent = roots.length ? fmtBytes(cap) : "—";
   const partial = roots.filter(r => r.capacity_partial).length;
   $("kpiCapSub").textContent = roots.length
-    ? ("저장소 " + fmtNum(roots.length) + "개 · 마지막 완료 스캔 기준" + (partial ? (" · " + partial + "개는 부분 값") : ""))
+    ? ("저장소 " + fmtNum(roots.length) + "개 · 마지막 완료 스캔 기준"
+       + (o.capacity_caveat ? (" " + o.capacity_caveat) : (partial ? (" · " + partial + "개는 부분 값") : "")))   // 서버 공통 문구(29회차)
     : "아직 스캔한 저장소가 없습니다";
   const fs = (o.fs_total_bytes != null) ? {total: o.fs_total_bytes, used: o.fs_used_bytes || 0} : _fsTotals(roots);   // 서버 단일 계산(포탈과 같은 값)
   const pct = fs.total ? (fs.used / fs.total * 100) : null;
@@ -4237,6 +4240,7 @@ function renderOverview(j) {
       const capNote = (r.capacity_scan_id != null && r.capacity_scan_id !== r.scan_id)
         ? `<div class="sub" title="용량은 마지막 완료 스캔(#${r.capacity_scan_id}) 기준">#${r.scan_id} ${statusKo[r.status] || escHtml(r.status)}: ${fmtBytes(r.scanned_bytes)}</div>`
         : (r.capacity_partial ? '<div class="sub" title="완료된 스캔이 아직 없어 부분 값입니다">부분 값</div>' : "");
+      const errNote = r.capacity_error_dirs ? `<div class="sub" style="color:var(--warn)" title="이 스캔에서 접근하지 못한 폴더 — 그 안의 용량은 합계에 없습니다(오류 목록 참고)">접근 불가 폴더 ${fmtNum(r.capacity_error_dirs)}개 미포함</div>` : "";
       const depthNote = r.capacity_depth_limit ? `<div class="sub" title="최대 깊이 ${r.capacity_depth_limit} 로 자른 스캔 — 그보다 깊은 폴더의 용량은 합계에 없습니다">깊이 ${r.capacity_depth_limit}까지만</div>` : "";
       const nestNote = r.nested_in ? `<div class="sub" title="다른 스캔 루트 안에 있어 전체 합계에서 뺐습니다(두 번 세지 않음)">⊂ ${escHtml(r.nested_in)} 에 포함 · 합계 제외</div>` : "";
       const running = runningSet.has(r.scan_id);
@@ -4259,7 +4263,7 @@ function renderOverview(j) {
       return `<tr class="ovrow" data-scan="${r.scan_id}" style="cursor:pointer;" title="클릭: 이 스캔 결과를 ‘디렉터리 분석’에서 보기">
         <td class="path" title="${escHtml(r.root_path)}">${escHtml(r.root_path)}</td>
         <td>${escHtml(r.hostname || "—")}</td>
-        <td class="num">${fmtBytes(cap)}${capNote}${depthNote}${nestNote}</td>
+        <td class="num">${fmtBytes(cap)}${capNote}${depthNote}${errNote}${nestNote}</td>
         <td class="num">${fmtBytes(r.fs_used_bytes)}</td>
         <td class="num">${pct.toFixed(1)}%</td>
         <td class="num" title="${escHtml(scanDurTitle(r, running))}">${el == null ? "—" : fmtDur(el)}</td>

@@ -375,7 +375,7 @@ _ROOT_NUM_KEYS = ("capacity_bytes", "scanned_bytes", "fs_total_bytes", "fs_used_
                   "total_files", "finished_at", "updated_at", "started_at", "processed_dirs",
                   "total_dirs", "discovered_dirs", "files_per_sec", "bytes_per_sec", "scan_id",
                   "capacity_scan_id", "eta_seconds", "eta_at",
-                  "capacity_files", "capacity_finished_at", "capacity_depth_limit")   # 새 칸도 숫자 검사(25회차 점검)
+                  "capacity_files", "capacity_finished_at", "capacity_depth_limit", "capacity_error_dirs")   # 새 칸도 숫자 검사(25회차 점검)
 
 
 def _num(v):
@@ -2909,7 +2909,10 @@ class PortalController:
                        "active_scans": active,
                        # 전체 엣지 중 가장 늦게 끝날 예상 시각(진행 중이고 계산 가능한 것만)
                        "eta_at": max((x["eta_at"] for x in running_all if x.get("eta_at")), default=None),
-                       "running_no_eta": sum(1 for x in running_all if not x.get("eta_at"))},
+                       "running_no_eta": sum(1 for x in running_all if not x.get("eta_at")),
+                       # 합계가 덜 센 이유(엣지·CLI·질의응답과 같은 문구 — manager.capacity_caveats 단일 소스, 29회차)
+                       "capacity_caveat": mgrmod.capacity_caveats(
+                           [rt for x in out_nodes for rt in (x.get("roots") or []) if isinstance(rt, dict)]).strip()},
             # 끝나는 순서(예상 시각이 없는 것 — 폴더 찾기 중 — 은 뒤로)
             "running": sorted(running_all, key=lambda x: (x.get("eta_at") is None, x.get("eta_at") or 0)),
             "regions": sorted(regions.values(), key=lambda x: -x["used_bytes"]),
@@ -2934,6 +2937,9 @@ class PortalController:
                 # 용량 = 마지막 완료 스캔(멈춤·오류·진행 중 부분 값 아님). capacity_partial=완료 스캔이 아직 없음
                 "scanned_bytes": _root_capacity(r),
                 "capacity_partial": bool(r.get("capacity_partial")),
+                # 합계가 덜 센 값인 이유(있으면) — 깊이 제한 스캔·접근 불가 폴더(29회차 점검: 사용량 API 에 표시 없음)
+                "capacity_depth_limit": int(r.get("capacity_depth_limit") or 0),
+                "capacity_error_dirs": int(r.get("capacity_error_dirs") or 0),
                 "fs_total_bytes": int(r.get("fs_total_bytes") or 0),
                 "fs_used_bytes": int(r.get("fs_used_bytes") or 0),
                 # 파일 수·스캔 번호·완료 시각도 용량과 같은 스캔(마지막 완료)에서 — 예전엔 용량은 완료 스캔, 파일 수는

@@ -708,7 +708,9 @@ def write_run_db(db_path: str, root: str, result: dict, *,
             conn.execute(
                 "INSERT INTO directories (%s,error) VALUES (%s,?)" % (_dcols, _ph),
                 (run_id, root_id, cp, os.path.basename(cp.rstrip("/")) or cp, 1, "done",
-                 int(c.get("files", 0)), max(0, int(c.get("dirs", 0)) - 1),
+                 # 하위 폴더 행은 저장하지 않으므로 0 — 예전엔 아래 폴더 총수(dirs-1)를 넣어, 화면이 들어갈 수 없는 폴더에
+                 # '하위 7개'·드릴다운 링크를 보였다(29회차 점검)
+                 int(c.get("files", 0)), 0,
                  int(c.get("bytes", 0)), int(c.get("bytes", 0)), int(c.get("files", 0)), now,
                  " · ".join(msg) or None))
         root_err = int(result.get("error_count", 0) or 0) - unit_err

@@ -48,16 +48,17 @@ _UNIT_DAYS = {"일": 1, "주": 7, "주일": 7, "달": 30, "개월": 30, "년": 3
 
 
 def fmt_bytes(n) -> str:
-    """사람이 읽기 좋은 용량(대시보드 fmtBytes 와 같은 기준: 1024, 소수 2자리)."""
+    """사람이 읽기 좋은 용량 — 화면·CLI·포탈과 같은 규칙(1024, 소수 1자리). 예전엔 소수 2자리라 같은 값이
+    '494.83 MB'(질의응답)·'494.8 MB'(포탈)로 달랐다(29회차 점검)."""
     try:
         n = float(n or 0)
     except (TypeError, ValueError):
         return "0 B"
     for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
         if abs(n) < 1024 or unit == "PB":
-            return (f"{n:.0f} {unit}" if unit == "B" else f"{n:.2f} {unit}")
+            return (f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}")
         n /= 1024
-    return f"{n:.2f} PB"
+    return f"{n:.1f} PB"
 
 
 def fmt_num(n) -> str:
@@ -155,8 +156,15 @@ def _h_total(q, data):
              "루트_수": ov.get("root_count"), "스캔_수": ov.get("scan_count")}
     return {"answer": f"전체 조사 용량은 **{fmt_bytes(b)}** 입니다 "
                       f"(루트 {fmt_num(ov.get('root_count'))}개 · 스캔 "
-                      f"{fmt_num(ov.get('scan_count'))}회 기준).",
+                      f"{fmt_num(ov.get('scan_count'))}회 기준)." + capacity_caveats(ov.get("roots") or []),
             "facts": facts}
+
+
+
+def capacity_caveats(roots) -> str:
+    """합계가 덜 센 값인 이유(한 줄) — manager.capacity_caveats 와 같은 함수(단일 소스)."""
+    from . import manager as _mgr
+    return _mgr.capacity_caveats(roots)
 
 
 def _root_cap(r) -> int:

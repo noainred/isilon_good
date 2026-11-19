@@ -970,6 +970,12 @@ def diff_scans(data_dir: str, base_id: int, target_id: int, *,
         return {"ok": False, "root_mismatch": True,
                 "reason": "같은 경로의 스캔끼리만 비교할 수 있습니다(기준 %s · 대상 %s)."
                           % (dbmod.fs_text(base["root_path"]), dbmod.fs_text(target["root_path"]))}
+    # 크기 기준(apparent/disk)이 다르면 변화가 아니라 기준 차이가 '증가'로 보였다(29회차 점검: +48 MB) — 비교하지 않는다
+    _sm_a, _sm_b = (base["size_mode"] or ""), (target["size_mode"] or "")
+    if _sm_a and _sm_b and _sm_a != _sm_b:
+        return {"ok": False, "size_mode_mismatch": True,
+                "reason": "크기 기준이 다른 스캔끼리는 비교할 수 없습니다(기준 #%s=%s · 대상 #%s=%s) — 같은 기준의 스캔을 고르세요."
+                          % (base_id, _sm_a, target_id, _sm_b)}
     if not (os.path.exists(base["db_path"]) and os.path.exists(target["db_path"])):
         return {"ok": False, "reason": "per-run DB 가 없습니다."}
 
@@ -979,7 +985,13 @@ def diff_scans(data_dir: str, base_id: int, target_id: int, *,
         conn.execute("ATTACH DATABASE ? AS b", (target["db_path"],))
         a_run = conn.execute("SELECT MAX(id) AS i FROM a.scan_runs").fetchone()["i"]
         b_run = conn.execute("SELECT MAX(id) AS i FROM b.scan_runs").fetchone()["i"]
-        depth_a = f"AND depth<={int(max_depth)}" if max_depth is not None else ""
+        # 두 스캔이 모두 저장한 깊이까지만 — pscan·접기(fold)·깊이 제한 스캔은 얕은 깊이까지만 행이 있어, 다른 스캔의 더 깊은
+        # 폴더가 모두 '삭제됨/신규'로 보였다(29회차 점검). 사용자가 준 max_depth 와 둘 중 얕은 쪽.
+        _da = conn.execute("SELECT MAX(depth) AS d FROM a.directories WHERE run_id=?", (a_run,)).fetchone()["d"]
+        _db = conn.execute("SELECT MAX(depth) AS d FROM b.directories WHERE run_id=?", (b_run,)).fetchone()["d"]
+        _lim = [int(x) for x in (max_depth, _da, _db) if x is not None]
+        eff_depth = min(_lim) if _lim else None
+        depth_a = f"AND depth<={int(eff_depth)}" if eff_depth is not None else ""
         depth_b = depth_a
         rows = conn.execute(
             f"""
@@ -1008,6 +1020,7 @@ def diff_scans(data_dir: str, base_id: int, target_id: int, *,
             "target": {"scan_id": target_id, "scanned_bytes": target["scanned_bytes"],
                        "started_at": target["started_at"]},
             "total_delta": (target["scanned_bytes"] or 0) - (base["scanned_bytes"] or 0),
+            "compared_depth": eff_depth,     # 두 스캔이 모두 저장한 깊이(이 깊이까지 행을 비교)
             "rows": result,
         }
     finally:
@@ -4203,10 +4216,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 if row is None:
                     self._send_json({"ok": False, "reason": "no_runs"})
                     return
+                # 같은 크기 기준(apparent/disk)의 직전 완료 스캔과 비교(29회차 점검: 기준이 다르면 엉뚱한 증가)
                 prev = mconn.execute(
                     """SELECT id FROM scans WHERE root_path=? AND id<? AND status='done'
+                       AND COALESCE(size_mode,'')=COALESCE(?,'')
                        ORDER BY id DESC LIMIT 1""",
-                    (row["root_path"], scan_id)).fetchone()
+                    (row["root_path"], scan_id, row["size_mode"])).fetchone()
                 if not prev:
                     self._send_json({"ok": True, "has_base": False,
                                      "reason": "비교할 이전 완료 스캔이 없습니다."})

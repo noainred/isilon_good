@@ -1914,6 +1914,7 @@ function renderPortalDash(){
     $("kUsedSub").innerHTML = _ft
       ? `조사 용량 합계 · 아이실론 전체 <b>${fmtBytes(_ft)}</b> 중 사용 ${fmtBytes(_fu)} (${(_fu/_ft*100).toFixed(1)}%)`
       : "조사 용량 합계 (전체 용량은 엣지가 fs 용량을 수집하면 표시)";
+    if(t.capacity_caveat) $("kUsedSub").innerHTML += ' <span style="color:var(--warn)">'+_he(t.capacity_caveat)+'</span>';   // 서버 공통 문구(29회차)
   }
   $("kNodes").textContent=(t.nodes_online||0)+" / "+(t.nodes_total||0); $("kActive").textContent=fmtNum(t.active_scans);
   renderRunAll(j);
@@ -2001,7 +2002,7 @@ function renderPortalDash(){
         +(r.eta_at?(" · 남은 약 "+fmtDur(etaLeft(r.eta_at))+" · 완료 예상 "+fmtEtaAt(r.eta_at)):"")):"";
       const fsTxt=r.fs_total_bytes?(" of "+fmtBytes(r.fs_total_bytes)+" ("+Math.round((r.fs_used_bytes||0)/r.fs_total_bytes*100)+"%)"):"";
       return `<tr class="rr-${idx}" style="display:${_openNodeRows.has(n.id)?"table-row":"none"}; background:#FFFFFF;"><td></td>
-        <td colspan="8" class="sub mono">📁 ${escAttr(r.root_path)} — 조사 ${fmtBytes(r.capacity_bytes!=null?r.capacity_bytes:r.scanned_bytes)}${(r.capacity_scan_id!=null&&r.capacity_scan_id!==r.scan_id)?(" (마지막 완료 기준 · 최신 스캔 "+fmtBytes(r.scanned_bytes)+")"):(r.capacity_partial?" (부분 값)":"")}${r.nested_in?(" · ⊂ "+escAttr(r.nested_in)+" 에 포함(합계 제외)"):""} · fs ${fmtBytes(r.fs_used_bytes)}${fsTxt} · ${scanProgress(r)}${startTxt}${r.finished_at?(" · 완료 "+ago(r.finished_at)):(r.updated_at?(" · 갱신 "+ago(r.updated_at)):"")}</td></tr>`;
+        <td colspan="8" class="sub mono">📁 ${escAttr(r.root_path)} — 조사 ${fmtBytes(r.capacity_bytes!=null?r.capacity_bytes:r.scanned_bytes)}${(r.capacity_scan_id!=null&&r.capacity_scan_id!==r.scan_id)?(" (마지막 완료 기준 · 최신 스캔 "+fmtBytes(r.scanned_bytes)+")"):(r.capacity_partial?" (부분 값)":"")}${r.capacity_depth_limit?(" · 깊이 "+fmtNum(r.capacity_depth_limit)+"까지만"):""}${r.capacity_error_dirs?(" · 접근 불가 폴더 "+fmtNum(r.capacity_error_dirs)+"개 미포함"):""}${r.nested_in?(" · ⊂ "+escAttr(r.nested_in)+" 에 포함(합계 제외)"):""} · fs ${fmtBytes(r.fs_used_bytes)}${fsTxt} · ${scanProgress(r)}${startTxt}${r.finished_at?(" · 완료 "+ago(r.finished_at)):(r.updated_at?(" · 갱신 "+ago(r.updated_at)):"")}</td></tr>`;
     }).join("");
     const outdated = j.version && n.version && _verCmp(n.version, j.version) < 0;   // 숫자 비교(1.99.9 < 1.99.10), 더 새 엣지는 구버전 아님
     const verBadge = n.version

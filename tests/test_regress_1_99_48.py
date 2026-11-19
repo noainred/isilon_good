@@ -3373,6 +3373,59 @@ def check_ca_round29_regress() -> None:
     print("[CCC1~CCC6] OK  행 버튼 복구·어레이 id 가림·트리 재조회 정리·URL 가리기 정규식·설치 루트 거부·systemd 없음 안내")
 
 
+def check_cb_round29_numbers() -> None:
+    """DDD1 CLI status 합계가 최신(멈춘 것 포함)·중첩 루트 포함으로 다른 값 DDD2 깊이 제한·접근 불가 폴더로 덜 센 합계에 표시 없음
+    DDD3 크기 기준이 다른 스캔 비교 시 엉터리 변화·얕게 저장한 스캔과 비교하면 '삭제' DDD4 같은 값 형식이 화면마다 다름
+    DDD5 pscan 행의 하위 폴더 수(들어갈 수 없는 폴더에 '하위 7개') DDD6 리포트 합계가 트리보다 작은 이유 표시 없음."""
+    import contextlib
+    import io
+    from isilon_usage import manager as M, db as dbmod, cli as C, ask as AK, server as SV
+    from isilon_usage.scanner import run_scan
+    d = tempfile.mkdtemp(prefix="iu_cb_")
+    try:
+        data = os.path.join(d, "data")
+        M.init_manager(data)
+        t = os.path.join(d, "T")
+        os.makedirs(os.path.join(t, "sub", "a", "b"))
+        for p_, n in ((t, 3000), (os.path.join(t, "sub"), 1000), (os.path.join(t, "sub", "a", "b"), 500)):
+            with open(os.path.join(p_, "f"), "wb") as fh:
+                fh.write(b"x" * n)
+        ids = []
+        for root, mode in ((t, "apparent"), (os.path.join(t, "sub"), "apparent"), (t, "disk")):
+            dbp = os.path.join(data, "scans", "s%d.db" % len(ids))
+            os.makedirs(os.path.dirname(dbp), exist_ok=True)
+            sid = M.register_scan(data, root_path=root, db_path=dbp, backend="native", size_mode=mode)
+            run_scan(dbp, root, workers=2, size_mode=mode, with_monitor=False,
+                     manager_db=M.manager_db_path(data), manager_scan_id=sid)
+            ids.append(sid)
+        c = dbmod.connect(M.manager_db_path(data))
+        c.execute("UPDATE scans SET error_dirs=2 WHERE id=?", (ids[2],))
+        c.commit()
+        ov = M.overall_capacity(c)
+        c.close()
+        rt = [r for r in ov["roots"] if r["root_path"] == t][0]
+        assert rt["capacity_error_dirs"] == 2 and "접근 불가 폴더 2개" in ov["capacity_caveat"], (rt, ov["capacity_caveat"])   # DDD2
+        buf = io.StringIO()                                                                                # DDD1
+        with contextlib.redirect_stdout(buf):
+            C.main(["status", "--data-dir", data])
+        out = buf.getvalue()
+        assert C._human(ov["total_capacity_bytes"]) in out.split("총 조사 용량:")[1].splitlines()[0], out
+        assert "합계 제외" in out and "접근 불가 폴더 2개" in out, out
+        r = SV.diff_scans(data, ids[0], ids[2])                                                            # DDD3
+        assert r.get("ok") is False and r.get("size_mode_mismatch"), r
+        r = SV.diff_scans(data, ids[0], ids[0])
+        assert r.get("ok") and r.get("compared_depth") is not None, r
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert AK.fmt_bytes(518864672) == "494.8 MB" == C._human(518864672)                                  # DDD4
+    dh = _read("dashboard.html")
+    assert 'return n.toFixed(1) + " " + u[i];' in dh
+    assert "int(c.get(\"files\", 0)), 0," in _read("pscan.py")                                        # DDD5
+    assert "분포 합계는 파일만" in dh                                                                       # DDD6
+    assert "t.capacity_caveat" in _read("portal.html") and "o.capacity_caveat" in dh
+    print("[DDD1~DDD6] OK  CLI 합계 통일·덜 센 이유 공통 문구·비교 기준/깊이·용량 형식 통일·pscan 하위 수·리포트 합계 안내")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3406,7 +3459,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bs_round26_regress, check_bt_round26_cli, check_bu_round27_regress,
             check_bv_round27_security, check_bw_round26_portal_ui,
             check_bx_round28_regress, check_by_round28_install,
-            check_bz_round28_dashboard, check_ca_round29_regress]
+            check_bz_round28_dashboard, check_ca_round29_regress,
+            check_cb_round29_numbers]
 
 
 def main() -> int:

@@ -625,14 +625,32 @@ def cmd_status(args: argparse.Namespace) -> int:
         print("전체 용량 관리 개요")
         print(f"  등록된 스캔 : {overall['scan_count']}개  "
               f"(루트 {overall['root_count']}개, 진행중 {overall['active_scans']}개)")
-        print(f"  총 조사 용량: {_human(overall['total_scanned_bytes'])} "
-              f"(루트별 최신 스캔 합계)")
+        # 화면·질의응답·포탈과 같은 값 — 루트별 마지막 완료 스캔, 다른 루트 안에 든 루트는 빼고(29회차 점검: CLI 만
+        # 최신(멈춘 것 포함) 스캔 합계에 중첩 루트까지 더해 다른 값이었다)
+        from . import ask as _askmod
+        _tot = overall.get("total_capacity_bytes")
+        print(f"  총 조사 용량: {_human(_tot if _tot is not None else overall['total_scanned_bytes'])} "
+              f"(루트별 마지막 완료 스캔 합계 · 중첩 루트 제외)"
+              + _askmod.capacity_caveats(overall["roots"]))
         if overall["roots"]:
-            print("  루트별 최신:")
+            print("  루트별(용량 = 마지막 완료 스캔):")
             for r in overall["roots"]:
-                pct = (r["scanned_bytes"] / r["fs_used_bytes"] * 100.0) if r["fs_used_bytes"] else 0
-                print(f"    - {_human(r['scanned_bytes']):>10}  "
-                      f"({pct:4.1f}% of used)  [{r['status']}]  {r['root_path']}")
+                cap = r.get("capacity_bytes") if r.get("capacity_bytes") is not None else r["scanned_bytes"]
+                pct = (cap / r["fs_used_bytes"] * 100.0) if r["fs_used_bytes"] else 0
+                notes = []
+                if r.get("capacity_scan_id") is not None and r.get("capacity_scan_id") != r.get("scan_id"):
+                    notes.append(f"최신 #{r['scan_id']} {r['status']}: {_human(r['scanned_bytes'])}")
+                if r.get("capacity_partial"):
+                    notes.append("부분 값")
+                if r.get("capacity_depth_limit"):
+                    notes.append(f"깊이 {r['capacity_depth_limit']}까지만")
+                if r.get("capacity_error_dirs"):
+                    notes.append(f"접근 불가 폴더 {r['capacity_error_dirs']}개 미포함")
+                if r.get("nested_in"):
+                    notes.append(f"⊂ {r['nested_in']} 에 포함 · 합계 제외")
+                st = "done" if (not r.get("capacity_partial") and r.get("capacity_scan_id") is not None) else r["status"]
+                print(f"    - {_human(cap):>10}  ({pct:4.1f}% of used)  [{st}]  {r['root_path']}"
+                      + (f"  ({'; '.join(notes)})" if notes else ""))
         print("=" * 70)
 
         # ── 특정/최신 스캔 상세 ─────────────────────────────────────

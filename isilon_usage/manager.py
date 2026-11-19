@@ -497,6 +497,23 @@ def _nested_roots(paths) -> Dict[str, str]:
     return out
 
 
+def capacity_caveats(roots) -> str:
+    """합계가 덜 센 값인 이유를 한 줄로(화면·CLI·질의응답 공통 문구) — 깊이 제한·접근 불가 폴더·완료 스캔 없음.
+    예전엔 대시보드 표 한 줄에만 '깊이 N까지만'이 있고 다른 곳은 아무 표시 없이 적게 센 값을 보였다(29회차 점검)."""
+    rs = [r for r in roots if not r.get("nested_in")]
+    out = []
+    dl = [r for r in rs if int(r.get("capacity_depth_limit") or 0) > 0]
+    er = sum(int(r.get("capacity_error_dirs") or 0) for r in rs)
+    pa = [r for r in rs if r.get("capacity_partial")]
+    if dl:
+        out.append("깊이 제한 스캔 %d개 루트는 그 아래 용량 미포함" % len(dl))
+    if er:
+        out.append("접근 불가 폴더 %s개의 용량 미포함" % "{:,}".format(er))
+    if pa:
+        out.append("완료 스캔이 없는 루트 %d개는 부분 값" % len(pa))
+    return (" ※ " + " · ".join(out) + ".") if out else ""
+
+
 def overall_capacity(conn) -> dict:
     """전체 용량 관리 집계.
 
@@ -565,6 +582,8 @@ def overall_capacity(conn) -> dict:
             "capacity_partial": rp not in done_by_root,     # 완료 스캔이 아직 없어 부분 값
             # 최대 깊이로 자른 스캔이면 그 깊이(그 아래 용량은 합계에 없음) — 화면이 '깊이 N까지'로 표시(24회차 점검)
             "capacity_depth_limit": int(cap.get("opt_max_depth") or 0),
+            # 그 스캔에서 접근하지 못한 폴더 수 — 그 안의 용량은 합계에 없다. 예전엔 '완료'로만 보여 조용히 적게 셌다(29회차 점검)
+            "capacity_error_dirs": int(cap.get("error_dirs") or 0),
             # 진행 중이면 남은 시간(초)과 끝날 시각(epoch) 추정 — 상태 화면 '요약'과 같은 계산
             "eta_seconds": eta,
             "eta_at": (now_ts + eta) if eta is not None else None,
@@ -585,6 +604,7 @@ def overall_capacity(conn) -> dict:
         # 파일시스템 사용량(같은 FS 한 번, 가장 최근 값) — 엣지 홈·포탈이 같은 값(24회차 점검: 5.4% vs 5.6%)
         "fs_total_bytes": fs_t,
         "fs_used_bytes": fs_u,
+        "capacity_caveat": capacity_caveats(roots).strip(),   # 합계가 덜 센 이유(화면·CLI·질의응답 같은 문구)
         "root_count": len(latest_by_root),
         "scan_count": len(scans),
         "active_scans": active,
