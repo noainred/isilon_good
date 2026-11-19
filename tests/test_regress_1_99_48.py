@@ -1058,6 +1058,45 @@ def check_ae_regress_round8() -> None:
     print("[E1~E4] OK  붙은 조사 확장자·CLI 재개 스키마·백업 표시·느린 응답 보정 안 함")
 
 
+# ------------------------------------------------------------------ 9회차(엣지 2대+포탈 연동)
+def check_af_multinode_round9() -> None:
+    """F1 같은 루트를 다시 스캔해 지운 폴더가 옛 복제 스캔에서 '있음'으로 보임(2회차 후보 순회의 부작용)
+    F2 비활성으로 바꾼 노드의 옛 '온라인·스캔 중'이 합계·진행 목록에 남음."""
+    from isilon_usage import portal as P
+    d = tempfile.mkdtemp(prefix="iu_af_")
+    try:
+        pc = P.PortalController(os.path.join(d, "hq"))
+        pc.upsert_node({"id": "B", "url": "http://10.0.0.2:8765", "token": "t"})
+        rep = os.path.join(pc.replicas_dir, "B")
+        os.makedirs(os.path.join(rep, "scans"))
+        _mk_replica_db(os.path.join(rep, "scans", "old.db"), "/p",
+                       [("/p", 0, 2, 900), ("/p/d5", 1, 1, 300), ("/p/d5/s0", 2, 0, 300), ("/p/a", 1, 0, 600)])
+        _mk_replica_db(os.path.join(rep, "scans", "new.db"), "/p",
+                       [("/p", 0, 2, 700), ("/p/a", 1, 0, 600), ("/p/newdir", 1, 0, 100)])
+        with open(os.path.join(rep, "meta.json"), "w") as fh:
+            json.dump({"scans": [
+                {"root_path": "/p", "status": "done", "finished_at": 100, "db_filename": "old.db"},
+                {"root_path": "/p", "status": "done", "finished_at": 200, "db_filename": "new.db"}]}, fh)
+        row = pc.compare_path("/p/d5")["rows"][0]
+        assert row["found"] is False and not row.get("folded_at"), row             # F1: 지운 폴더는 없음
+        cm = pc.compare_matrix("/p/d5")
+        assert cm["children"] == [] and cm["folded_nodes"] == [], cm
+        names = sorted(e["name"] for e in pc.compare_matrix("/p")["children"])
+        assert names == ["a", "newdir"], names                                    # 부모와 자식 화면이 일치
+        now = time.time()                                                          # F2
+        pc._cache["B"] = {"online": True, "ts": now, "edge_now": now, "overall": P._sanitize_overall(
+            {"root_count": 1, "active_scans": 1, "roots": [{"root_path": "/p", "status": "sizing", "phase": "sizing",
+             "started_at": now - 100, "updated_at": now - 1, "processed_dirs": 5, "total_dirs": 10}]})}
+        assert pc.overview()["totals"]["active_scans"] == 1
+        pc.upsert_node({"id": "B", "url": "http://10.0.0.2:8765", "token": "", "enabled": False})
+        ov = pc.overview()
+        assert ov["totals"]["active_scans"] == 0 and ov["running"] == [], (ov["totals"], ov["running"])
+        assert not ov["nodes"][0]["online"]
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    print("[F1·F2] OK  다시 스캔해 지운 폴더는 '없음'(옛 스캔 안 봄)·비활성 노드는 온라인/진행에서 제외")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1067,7 +1106,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_v1_v6_edge_round3, check_w1_w2_round4, check_x1_x8_settings_round4,
             check_y1_y6_integrations_round5, check_z1_z8_portal_ui_round5,
             check_aa_round6, check_ab_edge_views_round6, check_ac_round7,
-            check_ad_portal_round8, check_ae_regress_round8]
+            check_ad_portal_round8, check_ae_regress_round8, check_af_multinode_round9]
 
 
 def main() -> int:

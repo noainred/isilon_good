@@ -310,7 +310,7 @@ def _public_node(n: dict, cache: dict, rep_err: Optional[dict] = None) -> dict:
     out = dict(n)
     out["token"] = ""
     out["token_set"] = bool(n.get("token"))
-    out["online"] = bool(c.get("online"))
+    out["online"] = bool(c.get("online")) and bool(n.get("enabled", True))   # 비활성 노드의 캐시는 옛 값
     out["version"] = c.get("version")
     out["hostname"] = c.get("hostname")
     out["error"] = n.get("last_error") or c.get("error") or (rep_err or {}).get(n["id"], "")
@@ -2481,7 +2481,9 @@ class PortalController:
                 ov = c.get("overall") or {}
                 used = _ov_capacity(ov)
                 st = int(ov.get("root_count") or 0)
-                is_on = bool(c.get("online"))
+                # 비활성(운영자가 끈) 노드는 폴링하지 않아 캐시가 옛 값으로 남는다 — 온라인·진행 중으로 세지 않는다
+                # (예전엔 끄기 전에 받은 '스캔 중'이 다시 켤 때까지 합계·진행 목록에 남았다, 2026-11 연동 점검)
+                is_on = bool(c.get("online")) and bool(n.get("enabled", True))
                 if is_on:
                     online += 1
                     # 끊긴 노드의 '진행 중'은 끊기기 전 옛 값 — 합계·진행 표·완료 예상에 넣지 않는다(표와 KPI 일치)
@@ -3320,6 +3322,37 @@ class PortalController:
         cands.sort(key=lambda t: t[0], reverse=True)
         return [dbp for _k, dbp in cands]
 
+    def _replica_cands(self, node_id: str, path: str) -> list:
+        """비교용 후보 (DB 경로, 루트) — _replica_dbs_for 와 같은 순서에서 '같은 루트의 옛 스캔'은 뺀다.
+
+        다음 후보로 넘어가는 건 최신 스캔이 그 경로를 접어(fold) 행이 없을 때뿐이고, 그때도 같은 루트의 옛 스캔은
+        보지 않는다 — 옛 스캔엔 지금은 지워진 폴더가 남아 있어, 삭제된 폴더가 '있음·차이 없음'으로 보였다(2026-11 연동 점검)."""
+        if not safe_node_id(node_id):
+            return []
+        rep = os.path.join(self.replicas_dir, node_id)
+        try:
+            with open(os.path.join(rep, "meta.json"), "r", encoding="utf-8") as fh:
+                meta = json.load(fh)
+        except (OSError, ValueError):
+            return []
+        cands = []
+        for s in meta.get("scans", []):
+            root = (s.get("root_path") or "").rstrip("/")
+            if path == root or path.startswith(root + "/") or (not root and path.startswith("/")):
+                dbf = s.get("db_filename") or os.path.basename(s.get("db_path") or "")
+                dbp = os.path.join(rep, "scans", dbf)
+                if dbf and os.path.exists(dbp):
+                    cands.append(((s.get("status") == "done", float(s.get("finished_at") or 0), len(root)),
+                                  dbp, root))
+        cands.sort(key=lambda t: t[0], reverse=True)
+        out, seen = [], set()
+        for _k, dbp, root in cands:
+            if root in seen:
+                continue           # 같은 루트는 가장 좋은(완료·최신) 스캔 하나만
+            seen.add(root)
+            out.append((dbp, root))
+        return out
+
     @staticmethod
     def _folded_at(c, rid, local: str):
         """local 에 행이 없을 때, 접기(fold) 때문인지 판별한다 — 가장 가까운 상위 폴더가 '하위 폴더가 있는데
@@ -3348,27 +3381,29 @@ class PortalController:
             entry = {"id": n["id"], "region": n.get("region"), "found": False,
                      "total_bytes": 0, "own_bytes": 0, "total_files": 0, "subdir_count": 0}
             local = self._to_local(n, path)   # 논리 경로 → 이 노드의 로컬 경로(별칭)
-            for i, dbp in enumerate(self._replica_dbs_for(n["id"], local)):
+            for dbp, _root in self._replica_cands(n["id"], local):
                 try:
                     c = dbmod.connect(dbp)
-                    rid = dbmod.latest_run_id(c)
-                    r = c.execute(
-                        "SELECT total_bytes, own_bytes, total_files, subdir_count "
-                        "FROM directories WHERE run_id=? AND path=?", (rid, local)).fetchone()
-                    if r is None and i == 0:
-                        fa = self._folded_at(c, rid, local)
-                        if fa:
-                            entry["folded_at"] = fa
-                    c.close()
-                    if r is not None:
-                        sz = r["total_bytes"] if r["total_bytes"] else r["own_bytes"]
-                        entry.update({"found": True, "total_bytes": sz,
-                                      "own_bytes": r["own_bytes"], "total_files": r["total_files"],
-                                      "subdir_count": r["subdir_count"]})
-                        entry.pop("folded_at", None)
-                        break
+                    try:
+                        rid = dbmod.latest_run_id(c)
+                        r = c.execute(
+                            "SELECT total_bytes, own_bytes, total_files, subdir_count "
+                            "FROM directories WHERE run_id=? AND path=?", (rid, local)).fetchone()
+                        fa = None if r is not None else self._folded_at(c, rid, local)
+                    finally:
+                        c.close()
                 except Exception:  # noqa: BLE001
                     continue
+                if r is not None:
+                    sz = r["total_bytes"] if r["total_bytes"] else r["own_bytes"]
+                    entry.update({"found": True, "total_bytes": sz,
+                                  "own_bytes": r["own_bytes"], "total_files": r["total_files"],
+                                  "subdir_count": r["subdir_count"]})
+                    entry.pop("folded_at", None)
+                    break
+                if not fa:
+                    break              # 이 루트의 최신 스캔에 없고 접힌 것도 아님 = 정말 없다(옛 스캔을 보지 않는다)
+                entry.setdefault("folded_at", fa)   # 접힘 — 더 구체적인 다른 루트 스캔이 있으면 그걸 본다
             rows.append(entry)
         return {"ok": True, "path": path, "rows": rows}
 
@@ -3376,7 +3411,7 @@ class PortalController:
         """노드의 복제 후보들에서 local 의 직속 자식 행을 찾는다 — (자식 행, 접힘 여부) 또는 None(경로 없음).
         첫 후보에 행이 없거나 그 아래가 접혀 있으면 다음 후보(더 깊이 저장한 다른 스캔)를 본다."""
         folded = False
-        for dbp in self._replica_dbs_for(node_id, local):
+        for dbp, _root in self._replica_cands(node_id, local):
             try:
                 c = dbmod.connect(dbp)
                 try:
@@ -3384,7 +3419,10 @@ class PortalController:
                     prow = c.execute("SELECT depth, subdir_count FROM directories WHERE run_id=? AND path=?",
                                      (rid, local)).fetchone()
                     if prow is None:
-                        folded = folded or bool(self._folded_at(c, rid, local))
+                        if not self._folded_at(c, rid, local):
+                            # 이 루트의 최신 스캔에 없고 접힌 것도 아님 — 정말 없다(옛 스캔으로 넘어가지 않는다)
+                            return ([], True) if folded else None
+                        folded = True
                         continue
                     # 범위 비교(대소문자 구분·인덱스 사용): LIKE 는 ASCII 대소문자를 무시해 /data/FOO 의 자식이
                     # /data/foo 매트릭스에 섞였다(2026-11 리뷰). prefix ≤ path < prefix 의 '/' 다음 문자('0').
