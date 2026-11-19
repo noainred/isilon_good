@@ -495,6 +495,10 @@ def cmd_resume(args: argparse.Namespace) -> int:
         print("scan #%d 은 이미 실행 중입니다(pid %d). 서버 화면에서 재개/중지하세요."
               % (args.scan, busy), file=sys.stderr)
         return 2
+    if _scan_maybe_remote_live(row["db_path"]):   # 다른 호스트·컨테이너에서 도는 중일 수 있음 — partial 과 같은 규칙(20회차 점검)
+        print("scan #%d 은 다른 호스트(또는 컨테이너)에서 최근까지 진행된 스캔입니다 — 그쪽에서 중지하거나, "
+              "15분 넘게 소식이 없을 때 다시 하세요." % args.scan, file=sys.stderr)
+        return 2
     s = setmod.load(data_dir)
     stop = threading.Event()
     signal.signal(signal.SIGINT, lambda *a: stop.set())

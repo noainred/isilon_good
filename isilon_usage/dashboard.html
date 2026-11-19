@@ -1806,6 +1806,7 @@ function showTempPasswordNotice(force) {
   setTimeout(() => okBtn.focus(), 0);
 }
 async function promptUnlock() {
+  window._unlockAlerted = false;     // 비밀번호 틀림 안내를 이미 띄웠는지(띄웠으면 호출한 화면은 다시 알리지 않음)
   const pw = await passwordPrompt(_opTemp ? ("로그인 — " + _tempPwText() + " 비밀번호를 입력하세요:")
                                           : "로그인 — 비밀번호를 입력하세요:");
   if (pw == null) return false;
@@ -1819,6 +1820,7 @@ async function promptUnlock() {
       return true;
     }
   } catch (e) {}
+  window._unlockAlerted = true;
   window.alert("비밀번호가 올바르지 않습니다.");
   return false;
 }
@@ -1843,8 +1845,11 @@ window.fetch = async function (url, opts) {
       } else {
         // 로그인 실패·취소: 이미 안내(비밀번호 틀림 등)를 띄웠으니 화면들이 '실패: locked' 를 또 띄우지 않게
         // 사람 말 사유 + auth_cancelled 표시로 돌려준다(19회차 점검: 알림 두 번)
-        return new Response(JSON.stringify(Object.assign({}, j401, {ok: false, auth_cancelled: true,
-          reason: "로그인이 필요합니다 — 로그인한 뒤 다시 하세요."})), {status: 401, headers: {"Content-Type": "application/json"}});
+        // 그냥 '취소'만 누른 경우는 아무 안내도 없었다(20회차 점검) — 그때는 호출한 화면이 사유를 한 번 알린다
+        const _alerted = !!window._unlockAlerted;
+        return new Response(JSON.stringify(Object.assign({}, j401, {ok: false, auth_cancelled: _alerted,
+          reason: _alerted ? "로그인이 필요합니다 — 로그인한 뒤 다시 하세요." : "로그인을 취소해 작업하지 않았습니다."})),
+          {status: 401, headers: {"Content-Type": "application/json"}});
       }
     }
     return res;

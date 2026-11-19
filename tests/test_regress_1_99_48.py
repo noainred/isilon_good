@@ -2054,8 +2054,63 @@ def check_ba_round19_portal_edge() -> None:
     assert "size_mode: (_setBase && _setBase.default_size_mode)" in dh                                  # CC2
     assert "data-schen" in dh                                                                           # CC3
     assert '>사용함<' in dh and '"사용함": "Enabled"' in _read("i18n_en.js")                             # CC4
-    assert "auth_cancelled: true" in dh and "!j.ok && !j.auth_cancelled" in dh                          # CC5
+    assert "auth_cancelled: _alerted" in dh and "!j.ok && !j.auth_cancelled" in dh                       # CC5
     print("[BB1~BB4·CC1~CC5] OK  포탈 노드 입력 검증·중지 실패 보고·낡은 캐시 재확인·설정 검증 / 엣지 화면 5건")
+
+
+def check_bb_round20_regress() -> None:
+    """DD1 저장된 긴 이름·지역 노드의 수정·재등록·CSV 가 영영 막힘 DD2 대문자 HTTP:// 가 'http://HTTP://' 로 저장
+    DD3 맨 IPv6 원격 구성이 등록 없이 '성공' DD4 설정 여러 칸 저장 때 실패가 성공에 덮임 DD5 CLI resume 원격 검사 없음
+    DD6 로그인 '취소'에 아무 안내 없음."""
+    import contextlib
+    import io
+    import json as _json
+    from isilon_usage import portal as P, manager as M, db as dbmod, cli as C
+    d = tempfile.mkdtemp(prefix="iu_bb_")
+    try:
+        hq = os.path.join(d, "hq")
+        os.makedirs(hq)
+        with open(P.nodes_path(hq), "w", encoding="utf-8") as fh:
+            _json.dump([{"id": "L" * 100, "url": "http://10.0.0.1:8765", "region": "r" * 200}], fh)
+        pc = P.PortalController(hq)
+        assert pc._get("L" * 100) is not None
+        r = pc.upsert_node({"id": "L" * 100, "url": "http://10.0.0.1:8765", "region": "r" * 200, "token": "t"})   # DD1
+        assert r["ok"], r
+        assert pc.upsert_node({"id": "L" * 100, "url": "http://10.0.0.1:8765", "region": "x" * 81})["ok"] is False
+        assert pc.upsert_node({"id": "L" * 100, "url": "http://10.0.0.1:8765", "region": "short"})["ok"]
+        r = pc.upsert_node({"id": "a", "url": "HTTP://Foo/"})                                                    # DD2
+        assert r["ok"] and pc._get("a")["url"] == "http://Foo", pc._get("a")
+        r = pc.provision_plan({"host": "fe80::1", "path": "/mnt/x"})                                             # DD3
+        assert r["ok"] and r["registered"] and r["edge_url"] == "http://[fe80::1]:8765" and r["node"]["id"], r
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    src = _read("portal.py")
+    assert "def _mg(r):" in src and src.count("res.update(c.set_") == 0                                          # DD4
+    d = tempfile.mkdtemp(prefix="iu_bb2_")                                                                       # DD5
+    try:
+        data = os.path.join(d, "data")
+        M.init_manager(data)
+        pdb = os.path.join(d, "remote.db")
+        dbmod.init_db(pdb)
+        c = dbmod.connect(pdb)
+        rid = dbmod.create_run(c, "/k", backend="native", size_mode="disk", scanner_pid=4000000)
+        c.execute("UPDATE scan_runs SET status='sizing', phase='sizing', hostname='other-host' WHERE id=?", (rid,))
+        c.commit()
+        c.close()
+        sid = M.register_scan(data, root_path="/k", db_path=pdb, backend="native", size_mode="disk")
+        mc = dbmod.connect(M.manager_db_path(data))
+        mc.execute("UPDATE scans SET status='paused', phase='sizing' WHERE id=?", (sid,))
+        mc.commit()
+        mc.close()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            rc = C.main(["resume", str(sid), "--data-dir", data])
+        assert rc == 2 and "다른 호스트" in err.getvalue(), (rc, err.getvalue())
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    dh = _read("dashboard.html")
+    assert "window._unlockAlerted = true;" in dh and "로그인을 취소해 작업하지 않았습니다." in dh                # DD6
+    print("[DD1~DD6] OK  저장된 긴 노드 수정·대문자 scheme·IPv6 원격 구성·설정 실패 보존·CLI resume 원격 검사·로그인 취소 안내")
 
 
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
@@ -2077,7 +2132,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_at_livesnap_round16, check_au_regress_round17,
             check_av_round17_flow, check_aw_round18_regress,
             check_ax_round18_data, check_ay_round18_portal_delete,
-            check_az_round19_regress, check_ba_round19_portal_edge]
+            check_az_round19_regress, check_ba_round19_portal_edge,
+            check_bb_round20_regress]
 
 
 def main() -> int:

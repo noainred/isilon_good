@@ -158,8 +158,11 @@ def node_url_error(url: str) -> Optional[str]:
     return None
 
 
-def node_input_error(raw: dict) -> Optional[str]:
-    """새로 저장하는 노드 입력의 문제(사유) — 없으면 None."""
+def node_input_error(raw: dict, existing: Optional[dict] = None) -> Optional[str]:
+    """새로 저장하는 노드 입력의 문제(사유) — 없으면 None.
+
+    길이 한도는 새 노드(또는 그 값을 바꿀 때)에만 — 이미 저장된 긴 이름·지역의 노드는 수정·재등록(enroll)·CSV
+    재가져오기가 영영 막혔다(20회차 점검)."""
     if not isinstance(raw, dict):
         return "노드 정보 형식이 올바르지 않습니다."
     nid = str(raw.get("id") or "").strip()
@@ -167,9 +170,10 @@ def node_input_error(raw: dict) -> Optional[str]:
         return "노드 이름(id)이 필요합니다."
     if not safe_node_id(nid):
         return "노드 이름에 '/'·'\\'·'..'·제어 문자는 쓸 수 없습니다."
-    if len(nid) > NODE_ID_MAX:
+    if len(nid) > NODE_ID_MAX and existing is None:
         return "노드 이름은 %d자까지입니다." % NODE_ID_MAX
-    if len(str(raw.get("region") or "").strip()) > NODE_REGION_MAX:
+    region = str(raw.get("region") or "").strip()
+    if len(region) > NODE_REGION_MAX and (existing is None or region != str(existing.get("region") or "").strip()):
         return "지역 이름은 %d자까지입니다." % NODE_REGION_MAX
     return node_url_error(raw.get("url"))
 
@@ -182,7 +186,10 @@ def sanitize_node(raw: dict, *, strict: bool = True) -> Optional[dict]:
     url = str(raw.get("url") or "").strip().rstrip("/")
     if not nid or not url or not safe_node_id(nid, strict=strict):
         return None
-    if not re.match(r"^https?://", url):
+    m_sch = re.match(r"^(https?)://", url, re.I)
+    if m_sch:   # 대문자 HTTP:// 는 검증은 통과하는데 저장 때 앞에 http:// 가 또 붙어 'http://HTTP://..' 가 됐다(20회차 점검)
+        url = m_sch.group(1).lower() + url[m_sch.end(1):]
+    else:
         url = "http://" + url
     try:
         interval = max(1, int(raw.get("interval_minutes", 30)))
@@ -1803,7 +1810,7 @@ class PortalController:
                 base = {k: v for k, v in cur0.items() if k != "token"}   # 토큰 승계 규칙은 아래에서
                 base.update({k: v for k, v in raw.items() if v not in (None, "")})
                 raw = base
-        bad = node_input_error(raw)
+        bad = node_input_error(raw, self._get(str(raw.get("id") or "").strip()) if isinstance(raw, dict) else None)
         if bad:
             return {"ok": False, "reason": bad}
         n = sanitize_node(raw)
@@ -3390,7 +3397,9 @@ class PortalController:
             return {"ok": False, "reason": "노드 이름은 %d자, 지역은 %d자까지입니다." % (NODE_ID_MAX, NODE_REGION_MAX)}
         install = "nohup" if (raw.get("install") == "nohup") else "systemd"
         hq_base = (raw.get("hq_base") or "").strip()
-        edge_url = "http://%s:%d" % (host, port)
+        # 맨 IPv6 주소(fe80::1)는 대괄호로 — 그대로 붙이면 마지막 ':' 뒤가 포트로 읽혀 등록이 조용히 실패했다(20회차 점검)
+        _h = host[1:-1] if (host.startswith("[") and host.endswith("]")) else host
+        edge_url = ("http://[%s]:%d" % (_h, port)) if ":" in _h else ("http://%s:%d" % (_h, port))
         overwrite = raw.get("overwrite", True)
         if isinstance(overwrite, str):
             overwrite = overwrite.strip().lower() not in ("0", "false", "no", "off", "")
@@ -3421,6 +3430,8 @@ class PortalController:
         if self._get(name) is None:        # 새 노드만 기본 주기·모드(덮어쓰기는 운영자가 바꾼 주기 유지)
             rec.update({"unit": "minute", "every": 30, "mode": "both", "enabled": True})
         node_res = self.upsert_node(rec, partial=True)
+        if not node_res.get("ok"):   # 등록 실패를 '성공(노드 이름 없음)'으로 보였다(20회차 점검) — 사유와 함께 실패로
+            return {"ok": False, "reason": "노드 등록 실패: %s" % (node_res.get("reason") or "알 수 없음")}
         # 같은 서버가 다른 이름으로 있었으면 옛 항목 제거 — 새 항목이 '등록된 뒤에만'(실패 시 옛 노드·복제본 보존)
         if node_res.get("ok") and existing and existing["id"] != name:
             replaced_prev = existing["id"]
@@ -4025,31 +4036,41 @@ class PortalHandler(BaseHTTPRequestHandler):
             if path == "/api/portal/settings":
                 # 카드별 부분 저장 — 보낸 키만 반영한다(없는 키로 다른 설정을 덮어쓰지 않음).
                 res = {"ok": True}
+                _fails = []
+
+                def _mg(r):   # 여러 칸을 한 번에 보내면 뒤의 성공이 앞의 실패(ok:False)를 덮었다(20회차 점검) — 실패는 남긴다
+                    r = r if isinstance(r, dict) else {}
+                    if r.get("ok") is False:
+                        _fails.append(str(r.get("reason") or "실패"))
+                    res.update(r)
+                    if _fails:
+                        res["ok"] = False
+                        res["reason"] = "; ".join(_fails)
                 if "upgrade_watch_dir" in body or "upgrade_check_secs" in body:
                     # 보내지 않은 감시 폴더는 그대로(None) — 예전엔 주기만 보내도 폴더가 비워졌다
-                    res.update(c.set_upgrade_watch(body.get("upgrade_watch_dir") if "upgrade_watch_dir" in body
+                    _mg(c.set_upgrade_watch(body.get("upgrade_watch_dir") if "upgrade_watch_dir" in body
                                                    else None, body.get("upgrade_check_secs")))
                 if "enroll_token" in body:
-                    res.update(c.set_enroll_token(body.get("enroll_token") or ""))
+                    _mg(c.set_enroll_token(body.get("enroll_token") or ""))
                 if "release_dir" in body:
-                    res.update(c.set_release_dir(body.get("release_dir") or ""))
+                    _mg(c.set_release_dir(body.get("release_dir") or ""))
                 if "replica_dir" in body:   # 중앙 복제 DB 저장 경로
-                    res.update(c.set_replica_dir(body.get("replica_dir") or ""))
+                    _mg(c.set_replica_dir(body.get("replica_dir") or ""))
                 if "replica_keep_per_root" in body:   # 노드·루트별 복제 스캔 보관 수
-                    res.update(c.set_replica_keep(body.get("replica_keep_per_root")))
+                    _mg(c.set_replica_keep(body.get("replica_keep_per_root")))
                 if "portal_title" in body or "portal_subtitle" in body:
-                    res.update(c.set_title(body.get("portal_title") or "",
+                    _mg(c.set_title(body.get("portal_title") or "",
                                            body.get("portal_subtitle") or ""))
                 if "nav_hidden" in body:
-                    res.update(c.set_nav_hidden(body.get("nav_hidden") or []))
+                    _mg(c.set_nav_hidden(body.get("nav_hidden") or []))
                 if "export_token" in body:
-                    res.update(c.set_export_token(body.get("export_token") or ""))
+                    _mg(c.set_export_token(body.get("export_token") or ""))
                 if any(k in body for k in ("op_ttl_minutes", "show_update_popup",
                                            "log_popup_pos")):
-                    res.update(c.set_session_prefs(body))
+                    _mg(c.set_session_prefs(body))
                 if any(k in body for k in ("ask_llm_enabled", "ask_llm_endpoint",
                                            "ask_llm_model", "ask_llm_key", "ask_llm_timeout")):
-                    res.update(c.set_ask_llm(body))
+                    _mg(c.set_ask_llm(body))
                 self._send_json(res)
                 return
             if path == "/api/portal/upgrade/net":     # 인터넷 자동 업그레이드 설정
