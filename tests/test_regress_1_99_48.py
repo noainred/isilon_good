@@ -1187,6 +1187,27 @@ def check_ah_clock_rewind_round10() -> None:
     print("[H1·H2] OK  엣지 시계가 뒤로 가도 복제 계속·'최신'은 포탈이 받은 시각 기준")
 
 
+def check_ai_edge_round10() -> None:
+    """I1 여러 경로 예약이 첫 경로만 '예약됨' I2 건너뛴 예약 경로의 흔적 없음 I3 임시 비밀번호 안내가 키보드로 못 씀
+    I4 영어 모드 날짜가 한국어 형식."""
+    from isilon_usage import settings as S
+    from isilon_usage.server import ScanController as _SC
+    sc = {"paths": ["/a", "/b"]}
+    assert _SC._mark_chain_skip(sc, "/b", True) is True and "/b" in sc["chain_skipped"]           # I2
+    assert _SC._mark_chain_skip(sc, "/b", True) is False                                        # 처음 시각 유지
+    assert _SC._mark_chain_skip(sc, "/b", False) is True and sc["chain_skipped"] == {}
+    out = S._sanitize_schedules([{"paths": ["/a", "/b"], "unit": "minute", "every": 5,
+                                  "chain_skipped": {"/b": 123.0, "/zz": 1.0}}])
+    assert out[0]["chain_skipped"] == {"/b": 123.0}, out[0]                                       # 저장에도 남음
+    dh, ph = _read("dashboard.html"), _read("portal.html")
+    assert "ps.forEach(p => { if (p && !(p in schByPath)) schByPath[p] = s; });" in dh             # I1
+    assert "⚠ 건너뜀(" in dh and "개 건너뜀</span>" in dh
+    assert 'ov.setAttribute("role", "dialog")' in dh and 'ov.setAttribute("role","dialog")' in ph   # I3
+    for h in (dh, ph):                                                                            # I4
+        assert h.count('"ko-KR"') == 2 and "const _LOC = " in h
+    print("[I1~I4] OK  여러 경로 예약 표시·건너뜀 표시·안내 모달 키보드·영어 모드 날짜")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1197,7 +1218,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_y1_y6_integrations_round5, check_z1_z8_portal_ui_round5,
             check_aa_round6, check_ab_edge_views_round6, check_ac_round7,
             check_ad_portal_round8, check_ae_regress_round8, check_af_multinode_round9,
-            check_ag_edge_flow_round9, check_ah_clock_rewind_round10]
+            check_ag_edge_flow_round9, check_ah_clock_rewind_round10,
+            check_ai_edge_round10]
 
 
 def main() -> int:

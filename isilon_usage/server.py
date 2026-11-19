@@ -2761,7 +2761,9 @@ class ScanController:
                         if sid2 is not None:
                             sc["chain_scan_id"] = sid2
                             sc["chain_i"] = idx
+                            self._mark_chain_skip(sc, paths[idx], False)
                             break
+                        self._mark_chain_skip(sc, paths[idx], True)
                         self._log("예약: 체인 %d/%d 경로를 시작하지 못해 건너뜀(비었음·마운트·실행 중 등): %s"
                                   % (idx + 1, len(paths), paths[idx]))
                     sc["chain_resumes"] = 0
@@ -2773,7 +2775,11 @@ class ScanController:
                 if not setmod.schedule_due(sc, now):
                     continue
                 sid = self._chain_start(sc, paths[0], running, running_paths)
+                if sid is None:
+                    if self._mark_chain_skip(sc, paths[0], True):
+                        changed = True
                 if sid is not None:
+                    self._mark_chain_skip(sc, paths[0], False)
                     sc["chain_i"] = 0
                     sc["chain_scan_id"] = sid
                     sc["chain_resumes"] = 0
@@ -2795,6 +2801,22 @@ class ScanController:
                 merged["schedules"] = cur
             # (틱 도중 예약 목록 자체가 바뀌었으면(드묾) 사용자 편집을 우선 — 런타임 필드는 버린다)
             self._save_settings(merged)
+
+    @staticmethod
+    def _mark_chain_skip(sc, path, skipped: bool) -> bool:
+        """예약 경로를 '시작 못 해 건너뜀'으로 표시/해제한다(화면이 보여 줄 수 있게 — 예전엔 로그 설정이 없으면
+        흔적이 전혀 없었다, 2026-11 사용 흐름 점검). 바뀌었으면 True."""
+        cur = sc.get("chain_skipped") if isinstance(sc.get("chain_skipped"), dict) else {}
+        if skipped:
+            if path in cur:
+                return False         # 이미 표시(매 틱 다시 저장하지 않게 처음 시각 유지)
+            cur = dict(cur, **{path: time.time()})
+        else:
+            if path not in cur:
+                return False
+            cur = {k: v for k, v in cur.items() if k != path}
+        sc["chain_skipped"] = cur
+        return True
 
     def _chain_start(self, sc, path, running, running_paths):
         """예약 체인의 한 단계를 시작한다. 성공 시 scan_id, 실패 시 None."""
@@ -2848,7 +2870,7 @@ class ScanController:
         return out
 
     # 예약의 런타임 필드(서버가 관리) — 설정 저장·틱 병합에서 같은 목록을 쓴다(단일 소스)
-    _SCHED_RUNTIME_KEYS = ("last_run", "chain_i", "chain_scan_id", "chain_resumes")
+    _SCHED_RUNTIME_KEYS = ("last_run", "chain_i", "chain_scan_id", "chain_resumes", "chain_skipped")
     _CHAIN_RESUME_MAX = 3
 
     def _scan_row(self, scan_id):

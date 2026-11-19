@@ -365,12 +365,22 @@ def _sanitize_schedules(raw) -> list:
             chain_resumes = max(0, min(100, int(it.get("chain_resumes", 0) or 0)))
         except (TypeError, ValueError):
             chain_resumes = 0
+        _sk = it.get("chain_skipped")          # 시작 못 해 건너뛴 경로 → 처음 건너뛴 시각(런타임, 화면 표시용)
+        chain_skipped = {}
+        if isinstance(_sk, dict):
+            for _p, _t in _sk.items():
+                if isinstance(_p, str) and _p in plist:
+                    try:
+                        chain_skipped[_p] = float(_t)
+                    except (TypeError, ValueError, OverflowError):
+                        pass
         out.append({
             "path": path,            # 호환: 첫 경로(paths[0])
             "paths": plist,          # 순차 스캔 대상(순서대로)
             "chain_i": chain_i,
             "chain_scan_id": chain_scan_id,
             "chain_resumes": chain_resumes,
+            "chain_skipped": chain_skipped,
             "unit": unit,
             "every": every,
             "at": "%02d:%02d" % (hh, mm),

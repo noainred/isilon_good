@@ -1132,6 +1132,9 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
 </div>
 
 <script>
+// 날짜·시각 표기 언어 — 영어 모드면 영어 형식(예전엔 영어 화면에도 "2026. 11. 19. 오전 1:21"로 나왔다).
+// 스크립트 맨 앞에 둔다(아래 모든 표시 함수가 쓰므로 선언 전 사용 오류가 없게).
+const _LOC = (function(){ try { return localStorage.getItem("iuLang") === "en" ? "en-US" : "ko-KR"; } catch (e) { return "ko-KR"; } })();
 const $ = (id) => document.getElementById(id);
 const escAttr = (s) => String(s==null?"":s).replace(/[&"'<>]/g,c=>({"&":"&amp;",'"':"&quot;","'":"&#39;","<":"&lt;",">":"&gt;"}[c]));
 // ---- 인증(로그인): 엣지와 같은 정책 — '설정'(노드 설정 탭)과 되돌릴 수 없는 작업만 로그인(서버 PORTAL_PROTECTED_POSTS).
@@ -1331,9 +1334,17 @@ function showTempPasswordNotice(){
     +'로그인 후 <b>설정 → 보안·감사 → 접속 보안</b>에서 새 비밀번호로 바꾸면 이 안내가 사라집니다.<br>'
     +'<span class="sub">잊었을 때(포탈 서버에서): <code>python3 -m isilon_usage reset-password --portal --data-dir &lt;포탈 데이터 폴더&gt;</code></span></div>'
     +'<div style="margin-top:12px;text-align:right;"><button type="button" id="pOpTempNoticeOk">확인</button></div></div>';
+  // 키보드: 대화상자 역할·확인 버튼에 포커스·Tab 은 안에서만·Esc 로 닫기(엣지 안내와 같은 동작)
+  ov.setAttribute("role","dialog"); ov.setAttribute("aria-modal","true"); ov.setAttribute("aria-label","임시 관리자 비밀번호 안내");
+  const prevFocus=document.activeElement;
   document.body.appendChild(ov);
-  const close=()=>{ try{document.body.removeChild(ov);}catch(e){} };
-  $("pOpTempNoticeOk").onclick=close;
+  const okBtn=$("pOpTempNoticeOk");
+  const onKey=(e)=>{ if(e.key==="Escape"){ e.preventDefault(); close(); } else if(e.key==="Tab"){ e.preventDefault(); okBtn.focus(); } };
+  const close=()=>{ document.removeEventListener("keydown",onKey,true); try{document.body.removeChild(ov);}catch(e){}
+    try{ if(prevFocus&&prevFocus.focus) prevFocus.focus(); }catch(e){} };
+  document.addEventListener("keydown",onKey,true);
+  setTimeout(()=>okBtn.focus(),0);
+  okBtn.onclick=close;
   ov.addEventListener("mousedown",e=>{ if(e.target===ov) close(); });
 }
 // 비밀번호가 없을 때(임시 비밀번호를 못 만든 경우): 처음 만들기(2회 입력) → 바로 로그인.
@@ -1429,7 +1440,7 @@ function ago(ts){ if(!ts) return "—"; const s=Math.max(0,(_nowSec()-ts));
 function fmtDur(sec){ sec=Math.max(0,Math.floor(sec||0)); const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;
   return h?(h+"시간 "+m+"분"):(m?(m+"분 "+s+"초"):(s+"초")); }
 function fmtClock(ts){ if(!ts) return "—"; const d=new Date(ts*1000);
-  return d.toLocaleString("ko-KR",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}); }
+  return d.toLocaleString(_LOC,{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}); }
 function freshClass(ts){ if(!ts) return ""; const s=_nowSec()-ts;
   return s<120?"fresh-ok":(s<900?"fresh-warn":"fresh-old"); }
 function capColor(p){ return p>=85?"#B42318":(p>=70?"#B45309":"#1D4ED8"); }  // 보통 파랑 · 70%+ 주황(주의) · 85%+ 빨강 — 엣지 홈과 같은 기준
@@ -1560,7 +1571,7 @@ function renderNetmon(nodes){
   if($("nmUp")) $("nmUp").textContent=up;
   if($("nmDown")) $("nmDown").textContent=down;
   if($("nmAvg")) $("nmAvg").textContent=avg!=null?(avg+" ms"):"—";
-  if($("nmAt")) $("nmAt").textContent="최근 "+new Date(_nowSec()*1000).toLocaleTimeString("ko-KR");
+  if($("nmAt")) $("nmAt").textContent="최근 "+new Date(_nowSec()*1000).toLocaleTimeString(_LOC);
   const rows=nodes.slice().sort((a,b)=>(!!a.disabled-!!b.disabled)||(a.online-b.online)||((b.latency_ms||0)-(a.latency_ms||0)));
   $("nmBody").innerHTML = rows.length ? rows.map(n=>{
     const h=netmonHist[n.id]||[]; const ms=h.map(x=>x.ms).filter(v=>v!=null);
@@ -1801,11 +1812,11 @@ function _setPortalClock(j){
 function fmtEtaAt(at){
   if(!at) return "";
   if(_srvTzMin == null){
-    const end=new Date(at*1000), hm=end.toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"});
+    const end=new Date(at*1000), hm=end.toLocaleTimeString(_LOC,{hour:"2-digit",minute:"2-digit"});
     return (end.toDateString()===new Date().toDateString()) ? ("오늘 "+hm) : ((end.getMonth()+1)+"/"+end.getDate()+" "+hm);
   }
   const sh=_srvTzMin*60, end=new Date((at+sh)*1000), now=new Date((_portalNow()+sh)*1000);
-  const hm=end.toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit",timeZone:"UTC"});
+  const hm=end.toLocaleTimeString(_LOC,{hour:"2-digit",minute:"2-digit",timeZone:"UTC"});
   const same=end.getUTCFullYear()===now.getUTCFullYear() && end.getUTCMonth()===now.getUTCMonth() && end.getUTCDate()===now.getUTCDate();
   return same ? ("오늘 "+hm) : ((end.getUTCMonth()+1)+"/"+end.getUTCDate()+" "+hm);
 }
@@ -2568,7 +2579,7 @@ $("ugSshBtn").addEventListener("click", async()=>{
   $("ugSshBtn").disabled=false;
 });
 
-function tickClock(){ const el=$("clock"); if(el) el.textContent=new Date().toLocaleString("ko-KR",{hour12:false}); }
+function tickClock(){ const el=$("clock"); if(el) el.textContent=new Date().toLocaleString(_LOC,{hour12:false}); }
 tickClock(); setInterval(()=>{ tickClock(); tickElapsed(); },1000);
 if($("loginBtn")) $("loginBtn").addEventListener("click", async()=>{
   if(_opRequired && _opLoggedIn()) doLogout(); else await doLogin(); });
@@ -2602,7 +2613,7 @@ async function pLoadAudit(){
     $("pAuditMsg").textContent=" 최근 "+j.events.length+"건";
     const box=$("pAuditBox"); box.style.display="";
     box.innerHTML='<table style="width:100%;font-size:12px;"><thead><tr><th style="text-align:left;">시각</th><th style="text-align:left;">동작</th><th>결과</th><th style="text-align:left;">출처</th><th style="text-align:left;">상세</th></tr></thead><tbody>'
-      +j.events.map(e=>`<tr><td class="mono">${new Date(e.ts*1000).toLocaleString("ko-KR")}</td><td class="mono">${esc(e.action)}</td><td style="text-align:center;">${e.ok?"✓":'<span style="color:#B42318">✗</span>'}</td><td class="mono">${esc(e.ip)||"—"}</td><td class="sub">${esc(e.detail)}</td></tr>`).join("")
+      +j.events.map(e=>`<tr><td class="mono">${new Date(e.ts*1000).toLocaleString(_LOC)}</td><td class="mono">${esc(e.action)}</td><td style="text-align:center;">${e.ok?"✓":'<span style="color:#B42318">✗</span>'}</td><td class="mono">${esc(e.ip)||"—"}</td><td class="sub">${esc(e.detail)}</td></tr>`).join("")
       +"</tbody></table>";
   }catch(e){ $("pAuditMsg").textContent=" 오류: "+e; }
 }
@@ -2680,7 +2691,7 @@ function renderBackup(j){
   if($("bkKeep") && document.activeElement!==$("bkKeep")) $("bkKeep").value=j.backup_keep||100;
   if($("bkStatus")){
     if(j.backup_dir){
-      const nxt=j.backup_next?("다음 예정 "+new Date(j.backup_next*1000).toLocaleString("ko-KR")):"첫 주기 대기";
+      const nxt=j.backup_next?("다음 예정 "+new Date(j.backup_next*1000).toLocaleString(_LOC)):"첫 주기 대기";
       $("bkStatus").innerHTML=`<span style="color:var(--ok)">⏰ 자동 백업 켜짐</span> · 보관 <b>${j.backup_count||0}</b>/${j.backup_keep||100}개 (${fmtBytes(j.backup_total_bytes||0)})`
         +(j.backup_newest?` · 최근 <span class="mono">${j.backup_newest}</span>`:"")+` · ${nxt}`;
     } else $("bkStatus").innerHTML='<span class="sub">자동 백업 꺼짐 — 폴더를 넣고 ‘일정 저장’ 하면 켜집니다.</span>';
@@ -2702,7 +2713,7 @@ function renderNetUpg(j){
   const a=!!j.available;
   $("nuInfo").innerHTML=`현재 <b>v${_he(j.current||"?")}</b> · 최신 `+(j.latest?`<b>v${_he(j.latest)}</b>`:"—")
     +(a?' <span style="color:var(--warn);font-weight:700">⬆ 업데이트 가능</span>':(j.latest?' <span style="color:var(--ok)">✓ 최신</span>':""))
-    +(j.last_check?` · 확인 ${new Date(j.last_check*1000).toLocaleString("ko-KR")}`:" · 아직 확인 안 함")
+    +(j.last_check?` · 확인 ${new Date(j.last_check*1000).toLocaleString(_LOC)}`:" · 아직 확인 안 함")
     +` · 엣지 ${j.node_count||0}대`
     +(j.edges_outdated>0
         ? ` · <span style="color:var(--warn);font-weight:700">⚠ ${j.edges_outdated}대 구버전</span>`
@@ -2728,7 +2739,7 @@ function renderNetUpg(j){
   $("nuInstallBtn").style.display=a?"inline-block":"none";
   const log=j.log||[];
   if(log.length){ $("nuLog").style.display="block";
-    $("nuLog").textContent=log.slice().reverse().map(e=>`${new Date(e.t*1000).toLocaleTimeString("ko-KR")}  ${e.msg}`).join("\n"); }
+    $("nuLog").textContent=log.slice().reverse().map(e=>`${new Date(e.t*1000).toLocaleTimeString(_LOC)}  ${e.msg}`).join("\n"); }
 }
 if($("nuSaveBtn")) $("nuSaveBtn").addEventListener("click", async()=>{
   $("nuMsg").textContent="저장 중…";
@@ -2750,7 +2761,7 @@ if($("nuCheckBtn")) $("nuCheckBtn").addEventListener("click", async()=>{
   catch(e){ $("nuMsg").textContent="✗ "+e; }
 });
 function _upgLine(e){
-  const t=new Date(e.t*1000).toLocaleTimeString("ko-KR");
+  const t=new Date(e.t*1000).toLocaleTimeString(_LOC);
   let cls="";
   if(/✓|성공|완료|돌아옵|복귀/.test(e.msg)) cls="color:var(--ok)";
   else if(/✗|실패|오류|거부/.test(e.msg)) cls="color:var(--danger)";
@@ -3008,7 +3019,7 @@ function renderHist(){
         const ver=(e.from?("v"+e.from+" → "):"")+(e.to?("v"+e.to):(e.bundle_version?("v"+e.bundle_version):"—"));
         const edges=(e.push_total!=null)?((e.push_ok||0)+"/"+e.push_total):"—";
         return '<tr style="border-top:1px solid #E1E5F0">'
-          +'<td class="mono" style="padding:5px 8px;">'+new Date(e.ts*1000).toLocaleString("ko-KR")+'</td>'
+          +'<td class="mono" style="padding:5px 8px;">'+new Date(e.ts*1000).toLocaleString(_LOC)+'</td>'
           +'<td style="padding:5px 8px;">'+esc(e.kind||"")+'</td>'
           +'<td class="mono" style="padding:5px 8px;">'+esc(ver)+'</td>'
           +'<td style="padding:5px 8px;">'+res+(e.error?(' <span class="sub">'+esc(e.error)+'</span>'):'')+'</td>'
@@ -3023,12 +3034,12 @@ function renderHist(){
 }
 function showHist(i){
   const e=(window._histEvents||[])[i]; if(!e) return; const m=$("histModal"); if(!m) return;
-  $("histModalTitle").textContent=(e.kind||"업그레이드")+" — "+new Date(e.ts*1000).toLocaleString("ko-KR")+" ("+(e.ok?"성공":"실패")+")";
+  $("histModalTitle").textContent=(e.kind||"업그레이드")+" — "+new Date(e.ts*1000).toLocaleString(_LOC)+" ("+(e.ok?"성공":"실패")+")";
   const ver=(e.from?("v"+e.from+" → "):"")+(e.to||e.bundle_version||"?");
   let html='<div class="sub" style="margin-bottom:8px;">버전 <b>'+esc(ver)+'</b>'+(e.error?(' · <span style="color:var(--danger)">'+esc(e.error)+'</span>'):'')+'</div>';
   const log=(e.log||[]);
   if(log.length) html+='<div class="sub" style="margin-bottom:4px;">단계 로그</div><pre class="mono" style="background:#F7F8FA;border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;max-height:240px;overflow:auto;font-size:12px;">'
-    +log.map(l=>new Date(l.t*1000).toLocaleTimeString("ko-KR")+"  "+esc(l.msg)).join("\n")+'</pre>';
+    +log.map(l=>new Date(l.t*1000).toLocaleTimeString(_LOC)+"  "+esc(l.msg)).join("\n")+'</pre>';
   const nodes=(e.nodes||[]);
   if(nodes.length){ html+='<div class="sub" style="margin:8px 0 4px;">엣지별 결과 ('+(e.push_ok||0)+'/'+(e.push_total||nodes.length)+')</div>'
     +'<table style="width:100%;font-size:12px;border-collapse:collapse;"><tbody>'

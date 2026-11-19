@@ -1617,6 +1617,9 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
   </div>
 
 <script>
+// 날짜·시각 표기 언어 — 영어 모드면 영어 형식(예전엔 영어 화면에도 "2026. 11. 19. 오전 1:21"로 나왔다).
+// 스크립트 맨 앞에 둔다(아래 모든 표시 함수가 쓰므로 선언 전 사용 오류가 없게).
+const _LOC = (function(){ try { return localStorage.getItem("iuLang") === "en" ? "en-US" : "ko-KR"; } catch (e) { return "ko-KR"; } })();
 const $ = (id) => document.getElementById(id);
 
 // ===== 작업 보호(비밀번호) =====
@@ -1781,10 +1784,26 @@ function showTempPasswordNotice(force) {
     + '로그인 후 <b>설정 → 작업 보호</b>에서 새 비밀번호로 바꾸면 이 안내가 사라집니다.<br>'
     + '<span class="sub">잊었을 때(서버에서): <code>python3 -m isilon_usage reset-password --data-dir &lt;데이터 폴더&gt;</code></span></div>'
     + '<div style="margin-top:12px;text-align:right;"><button type="button" id="opTempNoticeOk">확인</button></div></div>';
+  // 키보드로도 쓸 수 있게: 대화상자 역할·포커스를 확인 버튼으로·Tab 은 안에서만·Esc 로 닫기(2026-11 사용 흐름 점검 —
+  // 예전엔 Tab 이 뒤 화면으로 빠져 확인 버튼까지 40번을 눌러야 했고 Esc 도 안 됐다)
+  ov.setAttribute("role", "dialog"); ov.setAttribute("aria-modal", "true");
+  ov.setAttribute("aria-label", "임시 관리자 비밀번호 안내");
+  const prevFocus = document.activeElement;
   document.body.appendChild(ov);
-  const close = () => { try { document.body.removeChild(ov); } catch (e) {} };
-  document.getElementById("opTempNoticeOk").onclick = close;
+  const okBtn = document.getElementById("opTempNoticeOk");
+  const onKey = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); close(); }
+    else if (e.key === "Tab") { e.preventDefault(); okBtn.focus(); }   // 안의 조작 요소는 확인 버튼 하나
+  };
+  const close = () => {
+    document.removeEventListener("keydown", onKey, true);
+    try { document.body.removeChild(ov); } catch (e) {}
+    try { if (prevFocus && prevFocus.focus) prevFocus.focus(); } catch (e) {}
+  };
+  document.addEventListener("keydown", onKey, true);
+  okBtn.onclick = close;
   ov.addEventListener("mousedown", e => { if (e.target === ov) close(); });
+  setTimeout(() => okBtn.focus(), 0);
 }
 async function promptUnlock() {
   const pw = await passwordPrompt(_opTemp ? ("로그인 — " + _tempPwText() + " 비밀번호를 입력하세요:")
@@ -1836,7 +1855,7 @@ function fmtBytes(n) {
   do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
   return n.toFixed(n >= 100 ? 0 : (n >= 10 ? 1 : 2)) + " " + u[i];
 }
-function fmtNum(n) { return (Number(n) || 0).toLocaleString("ko-KR"); }
+function fmtNum(n) { return (Number(n) || 0).toLocaleString(_LOC); }
 // HTML 이스케이프 — 스캔한 파일/디렉터리 '이름·경로'는 신뢰할 수 없는 입력이므로(파일명에
 // <script> 같은 게 들어올 수 있음) innerHTML 에 넣기 전 반드시 통과시킨다(저장형 XSS 방지).
 function escHtml(s) {
@@ -2009,7 +2028,7 @@ async function loadSettings() {
       syncScanMethod();   // 지난 설정으로 채운 값에 '방식' 표시를 맞춘다
       const lsNote = $("lastScanNote");
       if (lsNote && ls) {
-        const t = ls.ts ? new Date(ls.ts * 1000).toLocaleString("ko-KR") : "";
+        const t = ls.ts ? new Date(ls.ts * 1000).toLocaleString(_LOC) : "";
         lsNote.textContent = "↩ 지난 실행 설정 불러옴" + (t ? " (" + t + ")" : "")
           + " — 엔진 " + (ls.engine || "?") + ", 백엔드 " + (ls.backend || "?")
           + ", 용량 " + (ls.size_mode || "?") + ", 워커 " + (ls.workers || "?")
@@ -2660,7 +2679,7 @@ async function loadAudit() {
     const box = $("auditBox"); box.style.display = "";
     box.innerHTML = '<table style="width:100%; font-size:12px;"><thead><tr><th style="text-align:left;">시각</th>'
       + '<th style="text-align:left;">동작</th><th>결과</th><th style="text-align:left;">출처</th><th style="text-align:left;">상세</th></tr></thead><tbody>'
-      + j.events.map(e => `<tr><td class="mono">${new Date(e.ts * 1000).toLocaleString("ko-KR")}</td>`
+      + j.events.map(e => `<tr><td class="mono">${new Date(e.ts * 1000).toLocaleString(_LOC)}</td>`
         + `<td class="mono">${esc(e.action)}</td><td style="text-align:center;">${e.ok ? "✓" : '<span style="color:var(--danger)">✗</span>'}</td>`
         + `<td class="mono">${esc(e.ip) || "—"}</td><td class="sub">${esc(e.detail)}</td></tr>`).join("")
       + "</tbody></table>";
@@ -3500,8 +3519,8 @@ function renderRepTopFiles() {
     '<tr><td style="padding:2px 8px; text-align:right; color:var(--muted);">' + (i + 1) + '</td>'
     + '<td class="mono" style="padding:2px 8px; max-width:520px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + escHtml(f.path) + '">' + escHtml(f.path) + '</td>'
     + '<td style="padding:2px 8px; text-align:right;"><b>' + fmtBytes(f.bytes) + '</b></td>'
-    + '<td style="padding:2px 8px; white-space:nowrap;">' + (f.mtime ? new Date(f.mtime * 1000).toLocaleDateString("ko-KR") : "—") + '</td>'
-    + '<td style="padding:2px 8px; white-space:nowrap;">' + (f.atime ? new Date(f.atime * 1000).toLocaleDateString("ko-KR") : "—") + '</td>'
+    + '<td style="padding:2px 8px; white-space:nowrap;">' + (f.mtime ? new Date(f.mtime * 1000).toLocaleDateString(_LOC) : "—") + '</td>'
+    + '<td style="padding:2px 8px; white-space:nowrap;">' + (f.atime ? new Date(f.atime * 1000).toLocaleDateString(_LOC) : "—") + '</td>'
     + '<td style="padding:2px 8px;">' + escHtml(f.owner || ("uid " + (f.uid != null ? f.uid : "?"))) + '</td></tr>').join("");
   const table = '<table style="border-collapse:collapse; width:100%;"><tr style="color:var(--muted)">'
     + '<td style="padding:2px 8px; text-align:right">#</td><td style="padding:2px 8px">파일</td>'
@@ -3571,10 +3590,10 @@ async function _loadReportNow() {
           + (g >= 0 ? "+" : "−") + fmtBytes(Math.abs(g)) + '/일</b>'
           + ' <span class="sub">(' + fc.points + '회 스캔 기준)</span><br>';
         if (g > 0 && fc.days_to_90pct != null) {
-          const d90 = new Date(Date.now() + fc.days_to_90pct * 86400000).toLocaleDateString("ko-KR");
+          const d90 = new Date(Date.now() + fc.days_to_90pct * 86400000).toLocaleDateString(_LOC);
           html += 'FS 90% 도달: <b style="color:var(--warn)">약 ' + Math.round(fc.days_to_90pct) + '일 후</b> (' + d90 + ')<br>';
           if (fc.days_to_full != null) {
-            const dF = new Date(Date.now() + fc.days_to_full * 86400000).toLocaleDateString("ko-KR");
+            const dF = new Date(Date.now() + fc.days_to_full * 86400000).toLocaleDateString(_LOC);
             html += 'FS 가득 참: <b style="color:var(--danger)">약 ' + Math.round(fc.days_to_full) + '일 후</b> (' + dF + ')';
           }
         } else {
@@ -3617,7 +3636,7 @@ function populateDiff(rootPath) {
   // 비교는 완료(또는 부분 집계한) 스캔끼리만 — 진행 중·일시정지 스캔은 합계가 없어 모든 폴더가 '삭제'로 보였다
   const usable = allScans.filter(s => s.root_path === rootPath && (s.status === "done" || s.partial_agg_at));
   const opts = usable
-    .map(s => `<option value="${s.id}">#${s.id} · ${s.started_at ? new Date(s.started_at*1000).toLocaleString("ko-KR") : ""}${s.status === "done" ? "" : " (부분 집계)"}</option>`).join("");
+    .map(s => `<option value="${s.id}">#${s.id} · ${s.started_at ? new Date(s.started_at*1000).toLocaleString(_LOC) : ""}${s.status === "done" ? "" : " (부분 집계)"}</option>`).join("");
   $("diffBase").innerHTML = opts; $("diffTarget").innerHTML = opts;
   // 다른 스캔으로 바꾸면 이전 비교 결과·폴더 이력은 지운다(예전엔 다른 루트의 결과가 남아 '이력 보기'가 엉뚱한 경로를 물었다)
   if ($("diffSummary")) $("diffSummary").textContent = "";
@@ -3667,7 +3686,7 @@ async function loadFolderHistory(p) {
       const bd = pt.bytes_delta||0, fd = pt.files_delta||0;
       const bcol = bd>0?'#B42318':(bd<0?'#166534':'var(--muted)');
       const fcol = fd>0?'#B42318':(fd<0?'#166534':'var(--muted)');
-      const when = pt.started_at ? new Date(pt.started_at*1000).toLocaleString("ko-KR") : "";
+      const when = pt.started_at ? new Date(pt.started_at*1000).toLocaleString(_LOC) : "";
       return `<tr><td>#${pt.scan_id}</td><td class="sub">${when}</td>
         <td class="num">${fmtBytes(pt.total_bytes)}</td>
         <td class="num" style="color:${bcol}">${bd===0?'—':(bd>0?'+':'−')+fmtBytes(Math.abs(bd))}</td>
@@ -3771,9 +3790,11 @@ function renderSchedules() {
   if (!schedules.length) { tb.innerHTML = '<tr><td colspan="5" class="sub">예약 없음</td></tr>'; return; }
   tb.innerHTML = schedules.map((s, i) => {
     const pths = (s.paths && s.paths.length) ? s.paths : (s.path ? [s.path] : []);
-    const pcell = pths.length > 1
+    const nsk = s.chain_skipped ? Object.keys(s.chain_skipped).length : 0;
+    const pcell = (pths.length > 1
       ? `${escHtml(pths[0])} <span class="sub">외 ${pths.length - 1}개 · 순차</span>`
-      : escHtml(pths[0] || "");
+      : escHtml(pths[0] || ""))
+      + (nsk ? ` <span style="color:var(--warn);" title="${escHtml(Object.keys(s.chain_skipped).join(", "))}">⚠ ${nsk}개 건너뜀</span>` : "");
     return `<tr><td class="mono" style="max-width:240px; overflow:hidden; text-overflow:ellipsis;" title="${escHtml(pths.join('  →  '))}">${pcell}</td>
      <td>${scheduleSummary(s)}</td><td>${escHtml(s.backend)}</td>
      <td>${s.enabled ? "✓" : "✕"}</td>
@@ -3855,7 +3876,7 @@ const _ICO = {
 // 완료 예상시각: 지금 + 남은 초 → '오늘 HH:MM' / 'M/D HH:MM' (요약 카드·홈 카드 공용 — 같은 표기)
 function fmtEtaClock(etaSeconds) {
   const end = new Date(Date.now() + etaSeconds * 1000);
-  const hm = end.toLocaleTimeString("ko-KR", {hour: "2-digit", minute: "2-digit"});
+  const hm = end.toLocaleTimeString(_LOC, {hour: "2-digit", minute: "2-digit"});
   return (end.toDateString() === new Date().toDateString())
     ? ("오늘 " + hm) : ((end.getMonth() + 1) + "/" + end.getDate() + " " + hm);
 }
@@ -4061,7 +4082,7 @@ function renderOverview(j) {
         <td class="num">${fmtBytes(r.fs_used_bytes)}</td>
         <td class="num">${pct.toFixed(1)}%</td>
         <td class="num" title="${escHtml(scanDurTitle(r, running))}">${el == null ? "—" : fmtDur(el)}</td>
-        <td>${running && (r.status === "paused" || r.status === "done") ? "실행 중" : (statusKo[r.status] || r.status)}${loopBadge}${(!running && r.partial_agg_at && r.status !== "done") ? ' <span class="badge paused" title="지금까지 발견된 행으로 계산한 하한값(재개 전). 재개해 완료하면 정확한 값으로 바뀝니다.">부분 집계 ' + new Date(r.partial_agg_at * 1000).toLocaleString("ko-KR") + '</span>' : ''}</td>
+        <td>${running && (r.status === "paused" || r.status === "done") ? "실행 중" : (statusKo[r.status] || r.status)}${loopBadge}${(!running && r.partial_agg_at && r.status !== "done") ? ' <span class="badge paused" title="지금까지 발견된 행으로 계산한 하한값(재개 전). 재개해 완료하면 정확한 값으로 바뀝니다.">부분 집계 ' + new Date(r.partial_agg_at * 1000).toLocaleString(_LOC) + '</span>' : ''}</td>
         <td>${act}</td>
       </tr>`;
     }).join("");
@@ -4097,7 +4118,7 @@ function renderOverview(j) {
   const sel = $("scanSelect");
   const scans = j.scans || [];
   sel.innerHTML = scans.map(s => {
-    const t = s.started_at ? new Date(s.started_at * 1000).toLocaleString("ko-KR") : "";
+    const t = s.started_at ? new Date(s.started_at * 1000).toLocaleString(_LOC) : "";
     return `<option value="${s.id}">#${s.id} · ${escHtml(s.root_path)} · ${statusKo[s.status] || s.status} · ${t}</option>`;
   }).join("");
 
@@ -4158,7 +4179,7 @@ function renderArrayHtml(a) {
       + '<table style="width:100%; font-size:12px; margin-top:4px;"><tbody>'
       + a.alarms.map(al => `<tr><td style="white-space:nowrap; vertical-align:top;"><b style="color:${sevCol[al.severity] || "#537C7C"}">${sevKo[al.severity] || al.severity}</b></td>`
         + `<td>${_esc(al.message)}</td>`
-        + `<td class="sub" style="white-space:nowrap; vertical-align:top;">${al.time ? new Date(al.time * 1000).toLocaleString("ko-KR") : ""}</td></tr>`).join("")
+        + `<td class="sub" style="white-space:nowrap; vertical-align:top;">${al.time ? new Date(al.time * 1000).toLocaleString(_LOC) : ""}</td></tr>`).join("")
       + "</tbody></table></details>";
   }
   const onl = (nd.online != null) ? nd.online : "?", tot = (nd.total != null) ? nd.total : "?";
@@ -4213,7 +4234,7 @@ function tickHeartbeat() {
   const age = Math.max(0, _hbAgeBase + (Date.now() - _hbPollClientMs) / 1000);
   const agoI = Math.floor(age);
   // 마지막 체크(스캐너 갱신) 절대 시각 — 경과시간을 브라우저 시계에 매핑(시간대 안전)
-  const lastClock = new Date(_hbPollClientMs - _hbAgeBase * 1000).toLocaleTimeString("ko-KR");
+  const lastClock = new Date(_hbPollClientMs - _hbAgeBase * 1000).toLocaleTimeString(_LOC);
   if (agoI > 60) {
     hb.innerHTML = `<span style="color:var(--danger)">🔴 마지막 체크 ${lastClock} (${agoI}초 전) — 멈춤 의심</span>` + nextTxt;
   } else {
@@ -4304,8 +4325,12 @@ async function poll() {
 function renderNas(roots) {
   const byRoot = {};
   (roots || []).forEach(r => { byRoot[r.root_path] = r; });
+  // 여러 경로 예약(순차)은 모든 경로에 표시 — 예전엔 첫 경로만 '예약됨'으로 보였다(2026-11 사용 흐름 점검)
   const schByPath = {};
-  (schedules || []).forEach(s => { if (s.path && !(s.path in schByPath)) schByPath[s.path] = s; });
+  (schedules || []).forEach(s => {
+    const ps = (s.paths && s.paths.length) ? s.paths : (s.path ? [s.path] : []);
+    ps.forEach(p => { if (p && !(p in schByPath)) schByPath[p] = s; });
+  });
   const rows = [], seen = new Set();
   const add = (path, configured) => {
     if (!path || seen.has(path)) return;
@@ -4314,6 +4339,7 @@ function renderNas(roots) {
   };
   (mountBases || []).forEach(p => add(p, true));        // 선언된 NAS(허용 경로) 먼저
   (roots || []).forEach(r => add(r.root_path, false));  // 그 외 스캔된 루트
+  Object.keys(schByPath).forEach(p => add(p, false));   // 예약만 있고 아직(또는 계속) 스캔 못 한 경로 — 건너뜀이 보이게
   const body = $("nasBody");
   if (!rows.length) {
     body.innerHTML = '<tr><td colspan="8" style="color:var(--muted)">'
@@ -4325,9 +4351,11 @@ function renderNas(roots) {
     const usedPct = (r && r.fs_total_bytes > 0)
       ? (r.fs_used_bytes / r.fs_total_bytes * 100).toFixed(1) + "%" : "—";
     const endt = r && (r.finished_at || r.updated_at);
-    const last = endt ? new Date(endt * 1000).toLocaleString("ko-KR") : "—";
+    const last = endt ? new Date(endt * 1000).toLocaleString(_LOC) : "—";
+    const skAt = (s && s.chain_skipped) ? s.chain_skipped[row.path] : null;   // 예약이 이 경로를 시작 못 해 건너뜀
     const sch = s
-      ? (scheduleSummary(s) + (s.enabled === false ? ' <span class="sub">(중지)</span>' : ''))
+      ? (scheduleSummary(s) + (s.enabled === false ? ' <span class="sub">(중지)</span>' : '')
+         + (skAt ? ` <span style="color:var(--warn); font-weight:600;" title="예약이 이 경로를 시작하지 못해 건너뛰고 있습니다(비었음·마운트 빠짐·이미 실행 중 등) — 아래 값은 마지막으로 성공한 스캔입니다">⚠ 건너뜀(${new Date(skAt * 1000).toLocaleString(_LOC)}부터)</span>` : ''))
       : '<span class="sub">없음</span>';
     const st = r ? (statusKo[r.status] || r.status) : '<span class="sub">미점검</span>';
     const tag = row.configured ? '★ ' : '';
@@ -4415,7 +4443,7 @@ function render(d) {
         + ' <span class="sub">(행 수에 비례해 걸립니다. 끝나면 이 화면 값이 하한값으로 바뀝니다.)</span>';
     } else if (_paAt) {
       _an.style.display = "block";
-      _an.innerHTML = '⚠ <b>부분 집계 값(재개 전 · 하한값)</b> — ' + new Date(_paAt * 1000).toLocaleString("ko-KR")
+      _an.innerHTML = '⚠ <b>부분 집계 값(재개 전 · 하한값)</b> — ' + new Date(_paAt * 1000).toLocaleString(_LOC)
         + ' 기준으로 <b>지금까지 발견된 디렉터리만</b> 합산했습니다. 아직 안 훑은 하위는 0 으로 들어가 실제보다 작을 수 있습니다. '
         + '스캔을 <b>재개해 완료</b>하면 정확한 값으로 바뀝니다.';
     } else { _an.style.display = "none"; }
@@ -4524,7 +4552,7 @@ function render(d) {
   if (resumed) {
     const end = running ? (d.server_time || (Date.now()/1000)) : (r.finished_at || d.server_time);
     const sess = Math.max(0, end - r.session_started_at);
-    const firstAt = new Date(r.started_at * 1000).toLocaleString("ko-KR");
+    const firstAt = new Date(r.started_at * 1000).toLocaleString(_LOC);
     $("sessionElapsed").innerHTML = fmtDur(sess)
       + ` <span style="color:var(--muted)">(처음 시작: ${firstAt})</span>`;
     $("sessionElapsedRow").style.display = "flex";
@@ -4644,7 +4672,7 @@ function render(d) {
     populateDiff(currentRoot);
   }
 
-  $("lastUpd").textContent = new Date().toLocaleTimeString("ko-KR");
+  $("lastUpd").textContent = new Date().toLocaleTimeString(_LOC);
 }
 
 let timer = null;
@@ -4681,7 +4709,7 @@ let _atLastRows = null;
 function _atDate(ts) {
   if (!ts) return "—";
   const d = new Date(ts * 1000);
-  return d.toLocaleString("ko-KR", {year: "numeric", month: "2-digit", day: "2-digit",
+  return d.toLocaleString(_LOC, {year: "numeric", month: "2-digit", day: "2-digit",
                                     hour: "2-digit", minute: "2-digit"});
 }
 function _atAgeDays(ts) {
@@ -4873,7 +4901,7 @@ function renderThruPopup(buckets) {
   const rows = buckets.slice().reverse();   // 최신 시간대가 위로
   const peak = Math.max(1, ...buckets.map(b => b.bytes || 0));
   let total = 0; buckets.forEach(b => { total += b.bytes || 0; });
-  const fmtH = (t) => new Date(t * 1000).toLocaleString("ko-KR",
+  const fmtH = (t) => new Date(t * 1000).toLocaleString(_LOC,
     {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"});
   const tbl = '<table style="border-collapse:collapse; width:100%; margin-top:8px;">'
     + '<tr style="color:var(--muted)"><td style="padding:3px 8px">시간대(시작)</td>'
@@ -5189,7 +5217,7 @@ function renderUpgrade(j) {
     + (j.latest ? `<b>v${escHtml(j.latest)}</b>` : "—")
     + (avail ? ' <span style="color:var(--warn);font-weight:700">⬆ 업데이트 가능</span>'
              : (j.latest ? ' <span style="color:var(--ok)">✓ 최신</span>' : ""))
-    + (j.last_check ? ` · 확인 ${new Date(j.last_check * 1000).toLocaleString("ko-KR")}`
+    + (j.last_check ? ` · 확인 ${new Date(j.last_check * 1000).toLocaleString(_LOC)}`
                     : " · 아직 확인 안 함")
     + (j.check_error ? `<br><span class="err">확인 오류: ${escHtml(j.check_error)}</span>` : "")
     + `<br><span class="sub">소스: ${escHtml(j.url || "—")}</span>`
@@ -5207,7 +5235,7 @@ function renderUpgrade(j) {
   if (log.length) {
     $("upgLog").style.display = "block";
     $("upgLog").textContent = log.slice().reverse().map(e =>
-      `${new Date(e.t * 1000).toLocaleTimeString("ko-KR")}  ${e.msg}`).join("\n");
+      `${new Date(e.t * 1000).toLocaleTimeString(_LOC)}  ${e.msg}`).join("\n");
   }
 }
 $("upgCheckBtn").addEventListener("click", async () => {
