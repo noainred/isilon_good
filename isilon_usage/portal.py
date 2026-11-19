@@ -302,6 +302,10 @@ def sanitize_node(raw: dict, *, strict: bool = True) -> Optional[dict]:
                        if isinstance(d, int) and 0 <= d <= 6})
     hh, mm = setmod.parse_at(raw.get("at"))
     anchor = _f(raw.get("anchor")) or time.time()
+    # 엣지 예약과 같은 범위 검사(0 < anchor < 지금+100년) — 1e300 같은 값이 저장되면 schedule_due 가 예외를 내고
+    # 그 노드의 복제가 조용히 멈췄다(29회차 점검)
+    if not (0 < anchor < time.time() + 100 * 365 * 86400):
+        anchor = time.time()
 
     def _i(key, lo, hi, dflt):
         try:
@@ -1414,6 +1418,11 @@ class PortalController:
                 return {"ok": False, "reason": "가려진(***) 주소의 일부만 바꿀 수 없습니다 — 주소 전체를 다시 입력하세요."}
         if "ask_llm_enabled" in body:
             self.settings["ask_llm_enabled"] = _truthy(body.get("ask_llm_enabled"))
+        if ("ask_llm_endpoint" in body and body.get("ask_llm_key") in (None, "") and self.settings.get("ask_llm_key")
+                and not netutil.same_origin(
+                    str(netutil.keep_masked(str(body.get("ask_llm_endpoint") or ""), self.settings.get("ask_llm_endpoint")) or ""),
+                    self.settings.get("ask_llm_endpoint") or "")):
+            self.settings["ask_llm_key"] = ""    # 호스트가 바뀌면 옛 키를 새 호스트로 보내지 않는다(29회차 점검)
         if "ask_llm_endpoint" in body:
             self.settings["ask_llm_endpoint"] = str(netutil.keep_masked(
                 str(body.get("ask_llm_endpoint") or ""), self.settings.get("ask_llm_endpoint")) or "").strip()
@@ -1908,7 +1917,12 @@ class PortalController:
             return {"ok": False, "reason": "가려진(***) 주소의 일부만 바꿀 수 없습니다 — 주소 전체를 다시 입력하세요."}
         src = str(source or "off").strip().lower()
         self.settings["upgrade_source"] = src if src in ("off", "github") else "off"
-        self.settings["upgrade_url"] = str(netutil.keep_masked(str(url or ""), self.settings.get("upgrade_url")) or "").strip()
+        _new_u = str(netutil.keep_masked(str(url or ""), self.settings.get("upgrade_url")) or "").strip()
+        if (not str(token or "").strip() and self.settings.get("upgrade_token")
+                and not netutil.same_origin(_new_u or upgrademod.DEFAULT_UPGRADE_BASE,
+                                            self.settings.get("upgrade_url") or upgrademod.DEFAULT_UPGRADE_BASE)):
+            self.settings["upgrade_token"] = ""   # 호스트가 바뀌면 옛 토큰을 넘기지 않는다(29회차 점검)
+        self.settings["upgrade_url"] = _new_u
         if token is not None:               # None=미전송(기존 유지), ""=명시적 비움
             self.settings["upgrade_token"] = str(token or "").strip()
         self.settings["upgrade_auto"] = bool(auto)
@@ -1953,6 +1967,7 @@ class PortalController:
         n = sanitize_node(raw)
         if not n:
             return {"ok": False, "reason": "id 와 url 은 필수입니다(id 에 '/'·'..' 불가)."}
+        token_dropped = False
         with self._lock:
             cur = self._get(n["id"])
             if cur is not None and isinstance(raw, dict) and raw.get("create_only") is True:
@@ -1963,8 +1978,13 @@ class PortalController:
                 # 토큰이 비어 오면 기존 토큰 유지(마스킹). 단 자기 등록(enroll)으로 URL 이 바뀌면
                 # 기존 토큰을 승계하지 않는다 — 승계하면 다음 폴링이 그 토큰을 새 URL 로 보낸다(토큰 유출).
                 url_changed = (cur.get("url") or "").rstrip("/") != n["url"]
-                if not n["token"] and (keep_token_on_url_change or not url_changed):
+                # 화면 수정도 주소의 호스트(스킴·호스트·포트)가 바뀌면 옛 토큰을 넘기지 않는다 — 예전엔 화면 저장은 늘 승계해,
+                # 다음 폴링이 옛 엣지의 토큰을 새 호스트로 보냈다(29회차 점검). 경로만 바뀐 경우는 승계.
+                _same = netutil.same_origin(cur.get("url") or "", n["url"])
+                if not n["token"] and (not url_changed or (keep_token_on_url_change and _same)):
                     n["token"] = cur.get("token", "")
+                elif not n["token"] and cur.get("token"):
+                    token_dropped = True
                 n["last_sync"] = cur.get("last_sync", 0)
                 # 복제 주기의 기준일(anchor)은 수정 때 승계 — 예전엔 지역·별칭만 고쳐도 일/주/월 주기의 기준이
                 # 저장한 날로 옮겨졌다. 화면이 anchor 를 보내지 않으므로 값이 명시돼 오지 않으면 기존 값 유지.
@@ -1980,7 +2000,11 @@ class PortalController:
             else:
                 self.nodes.append(n)
             self._save()
-        return {"ok": True, "node": _public_node(n, self._cache)}
+        out = {"ok": True, "node": _public_node(n, self._cache)}
+        if token_dropped:
+            out["token_dropped"] = True
+            out["note"] = "주소의 호스트가 바뀌어 저장된 API 토큰을 지웠습니다 — 새 엣지의 토큰을 입력하세요."
+        return out
 
     def set_node_token(self, ids, token: str) -> dict:
         """선택한(또는 전체) 노드의 api_token 을 포탈 저장값에 강제로 맞춘다.
@@ -2324,7 +2348,11 @@ class PortalController:
         last = float(self._rep_at.get(nid, 0.0))
         if last > now + 60:   # 시계가 뒤로 감 — 미래의 마지막 시도는 믿지 않는다(25회차 점검)
             last = 0.0
-        if setmod.schedule_due(dict(n, last_run=last), now):
+        try:
+            _due = setmod.schedule_due(dict(n, last_run=last), now)
+        except (ValueError, OverflowError, OSError, TypeError):   # 이상한 주기 값이 아래 '새 완료 스캔' 판단까지 막지 않게
+            _due = False
+        if _due:
             return True
         if not self._has_unreplicated(nid, self._effective_since(nid, float(n.get("last_sync", 0) or 0))[0]):
             return False

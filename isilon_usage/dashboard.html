@@ -2847,6 +2847,13 @@ async function saveSettings() {
   Object.keys(_full).forEach(k => {
     if (!_setBase || JSON.stringify(_full[k]) !== JSON.stringify(_setBase[k])) payload[k] = _full[k];
   });
+  // 목록(예약·어레이·마운트)은 통째로 바꾸므로, 불러온 뒤 다른 곳에서 바뀌었으면 서버가 거부하도록 기준을 함께 보낸다
+  // (29회차 점검: 두 탭에서 예약을 각각 추가하면 늦게 저장한 쪽이 다른 쪽 예약을 말없이 지웠다)
+  if (_setBase) {
+    const _lb = {};
+    ["schedules", "storage_arrays", "mount_bases"].forEach(k => { if (k in payload) _lb[k] = _setBase[k]; });
+    if (Object.keys(_lb).length) payload._list_base = _lb;
+  }
   // 비밀번호는 입력했을 때만 전송(빈값이면 기존 유지)
   const _pw = $("setSmtpPass").value;
   if (_pw) payload.smtp_password = _pw;

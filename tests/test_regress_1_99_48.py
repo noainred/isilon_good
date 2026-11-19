@@ -3426,6 +3426,65 @@ def check_cb_round29_numbers() -> None:
     print("[DDD1~DDD6] OK  CLI 합계 통일·덜 센 이유 공통 문구·비교 기준/깊이·용량 형식 통일·pscan 하위 수·리포트 합계 안내")
 
 
+def check_cc_round29_flows() -> None:
+    """EEE1 주소(호스트)만 바꾸면 저장된 LLM 키·업그레이드 토큰·노드 토큰이 새 호스트로 감 EEE2 포탈 노드 anchor 이상값으로 복제 멈춤
+    EEE3 두 탭 예약 저장 — 늦은 쪽이 다른 쪽 예약을 지움 EEE4 이름 같은 어레이 하나를 지우면 다른 어레이 비밀번호 사라짐
+    EEE5 '이름 <주소>' 받는 사람이면 메일 전부 실패 EEE6 같은 경로의 다른 예약을 지우면 남은 예약이 마지막 실행을 물려받음 EEE7 시차 배치 개수."""
+    from isilon_usage import server as SV, portal as P, notify as NT, settings as SE
+    d = tempfile.mkdtemp(prefix="iu_cc_")
+    try:
+        ctl = SV.ScanController(os.path.join(d, "edge"))
+        ctl.update_settings({"ask_llm_endpoint": "http://llm-a:1/v1", "ask_llm_key": "K1",
+                             "upgrade_url": "https://m-a.example/dl", "upgrade_token": "T1"})            # EEE1
+        ctl.update_settings({"ask_llm_endpoint": "http://llm-a:1/v2"})           # 같은 호스트 경로만 → 유지
+        assert ctl.settings["ask_llm_key"] == "K1"
+        ctl.update_settings({"ask_llm_endpoint": "http://evil:1/v1", "upgrade_url": ""})
+        assert ctl.settings["ask_llm_key"] == "" and ctl.settings["upgrade_token"] == "", ctl.settings
+        pc = P.PortalController(os.path.join(d, "hq"))
+        assert pc.upsert_node({"id": "n1", "url": "http://e1:8765", "token": "tokA"})["ok"]
+        r = pc.upsert_node({"id": "n1", "url": "http://e1:8765/x"})
+        assert pc._get("n1")["token"] == "tokA", r
+        r = pc.upsert_node({"id": "n1", "url": "http://e2:8765"})
+        assert pc._get("n1")["token"] == "" and r.get("token_dropped"), r
+        pc.set_ask_llm({"ask_llm_endpoint": "http://l1:1/v1", "ask_llm_key": "PK"})
+        pc.set_ask_llm({"ask_llm_endpoint": "http://l2:1/v1"})
+        assert pc.settings.get("ask_llm_key") == ""
+        assert pc.upsert_node({"id": "n2", "url": "http://e3:8765", "token": "t", "unit": "day", "every": 1,
+                               "at": "00:01", "anchor": 1e300})["ok"]                                 # EEE2
+        assert pc._get("n2")["anchor"] < time.time() + 10
+        pc._get("n2")["anchor"] = 1e300
+        pc._rep_due(pc._get("n2"), time.time())                    # 예외 없이 돈다
+        base = [{"paths": ["/a"], "unit": "day", "at": "03:00"}]                                     # EEE3
+        ctl.update_settings({"schedules": base})
+        r = ctl.update_settings({"schedules": base + [{"paths": ["/b"], "unit": "day", "at": "04:00"}],
+                                 "_list_base": {"schedules": []}})
+        assert r.get("ok") is False and r.get("conflict"), r
+        r = ctl.update_settings({"schedules": base + [{"paths": ["/b"], "unit": "day", "at": "04:00"}],
+                                 "_list_base": {"schedules": base}})
+        assert r.get("ok"), r
+        arrs = [{"id": "U1", "name": "U1", "type": "unity", "url": "https://unity.example", "password": "pw1"},
+                {"id": "U1", "name": "U1", "type": "unity", "url": "https://other.example", "password": "pw3"}]   # EEE4
+        ctl.update_settings({"storage_arrays": arrs})
+        pub = SV._public_settings(ctl.settings)["storage_arrays"][1:]
+        assert ctl.update_settings({"storage_arrays": pub})["ok"]
+        assert ctl.settings["storage_arrays"][0]["password"] == "pw3", ctl.settings["storage_arrays"]
+        assert NT.parse_recipients('a@x.com, 김철수 <b@x.com>; c@x.com d@y.com') == \
+            ["a@x.com", "b@x.com", "c@x.com", "d@y.com"]                                                 # EEE5
+        now = time.time()                                                                              # EEE6
+        ctl.settings["schedules"] = [{"paths": ["/d"], "unit": "minute", "every": 5, "last_run": now - 10, "anchor": now - 999},
+                                     {"paths": ["/d"], "unit": "day", "at": "03:00", "last_run": 0, "anchor": now - 5}]
+        out = ctl._merge_sched_runtime([{"paths": ["/d"], "unit": "day", "at": "03:00"}])
+        assert out[0].get("last_run") in (0, None), out
+        out = ctl._merge_sched_runtime([{"paths": ["/d", "/e"], "unit": "day", "at": "03:00"}])
+        assert out[0].get("last_run") == 0 and "chain_i" not in out[0], out
+        assert '"minute", "hour"))' in _read("server.py")                                              # EEE7
+        assert SE.schedule_due is not None
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert "_list_base" in _read("dashboard.html")
+    print("[EEE1~EEE7] OK  호스트 바뀌면 비밀 삭제·포탈 anchor 검사·목록 충돌 409·같은 이름 어레이·받는 사람 형식·예약 짝짓기·시차 개수")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3460,7 +3519,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bv_round27_security, check_bw_round26_portal_ui,
             check_bx_round28_regress, check_by_round28_install,
             check_bz_round28_dashboard, check_ca_round29_regress,
-            check_cb_round29_numbers]
+            check_cb_round29_numbers, check_cc_round29_flows]
 
 
 def main() -> int:

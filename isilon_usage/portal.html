@@ -2421,7 +2421,7 @@ $("addBtn").addEventListener("click", async ()=>{
   const b=$("addBtn"); if(b.disabled) return; b.disabled=true; $("nodeMsg").textContent="저장 중…";
   try{
     const j = await (await fetch("/api/portal/nodes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(pl)})).json();
-    $("nodeMsg").textContent = j.ok ? "✓ 저장됨" : ("실패: "+(j.reason||""));
+    $("nodeMsg").textContent = j.ok ? ("✓ 저장됨" + (j.note ? (" — ⚠ " + j.note) : "")) : ("실패: "+(j.reason||""));
     if(j.ok){ _selNode=pl.id; loadNodes(); loadOverview(); }
   }catch(e){ $("nodeMsg").textContent="실패: 포탈에 연결할 수 없습니다 ("+e+")"; }
   finally{ b.disabled=false; }

@@ -22,6 +22,14 @@ def _origin(url: str):
     return (p.scheme.lower(), (p.hostname or "").lower(), port)
 
 
+def same_origin(a, b) -> bool:
+    """두 URL 이 같은 곳(스킴·호스트·포트)인가 — 저장된 비밀(토큰·키)을 새 주소로 넘겨도 되는지 판단(29회차 점검)."""
+    try:
+        return _origin(str(a or "").strip()) == _origin(str(b or "").strip())
+    except ValueError:
+        return False
+
+
 class _StripAuthOnCrossOrigin(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         new = super().redirect_request(req, fp, code, msg, headers, newurl)

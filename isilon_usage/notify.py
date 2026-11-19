@@ -42,6 +42,21 @@ def send(webhook_url: str, payload: dict, *, timeout: float = 5.0) -> bool:
         return False
 
 
+def parse_recipients(raw: str) -> list:
+    """받는 사람 목록 — 쉼표·세미콜론·줄바꿈·공백으로 여럿, '이름 <주소>' 형식도 주소만 뽑는다."""
+    out = []
+    for part in re.split(r"[,;\n]+", str(raw or "")):
+        part = part.strip()
+        if not part:
+            continue
+        if "<" in part:
+            cands = re.findall(r"<([^<>\s]+@[^<>\s]+)>", part)
+        else:
+            cands = part.split()
+        out += [a for a in cands if "@" in a and not re.search(r"[\s<>]", a)]
+    return out
+
+
 def send_email(settings: dict, subject: str, body: str, *, timeout: float = 20.0) -> bool:
     """설정의 SMTP 로 완료/오류 메일을 보낸다(베스트 에포트, 실패해도 무시).
 
@@ -50,7 +65,9 @@ def send_email(settings: dict, subject: str, body: str, *, timeout: float = 20.0
     포트 465 는 SSL, 그 외(587/25)는 STARTTLS(smtp_tls).
     """
     raw = (settings.get("notify_email") or "").strip()
-    recipients = [a for a in re.split(r"[,;\s]+", raw) if a]
+    # '이름 <주소>' 형식도 받는다 — 예전엔 공백으로 쪼개 '김철수'·'<b@x.com>' 가 주소로 들어가, 서버가 거부하면
+    # 다른 받는 사람에게도 한 통도 가지 않았다(29회차 점검). 주소 모양(@)이 아닌 조각은 버린다.
+    recipients = parse_recipients(raw)
     host = (settings.get("smtp_host") or "").strip()
     if not recipients or not host:
         return False

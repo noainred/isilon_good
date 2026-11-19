@@ -525,6 +525,35 @@ _URL_SECRET_KEYS = (("notify_webhook", True), ("ask_llm_endpoint", False), ("upg
                     ("isilon_url", False), ("powerstore_url", False))
 
 
+def _list_conflict(base: dict, cur: dict, new: dict):
+    """목록 설정(예약·어레이·마운트)을 화면이 불러온 뒤 다른 곳에서 바꿨는가 — 바꿨으면 그 이름, 아니면 None.
+
+    목록은 통째로 바꾸므로, 다른 탭·다른 사람이 그 사이 추가한 항목이 늦게 저장한 쪽에 의해 말없이 지워졌다(29회차 점검).
+    비교는 항목의 정체(예약=경로+주기 단위, 어레이=id, 마운트=경로)만 — 런타임 값(마지막 실행 등)·서식 차이는 무시."""
+    def _sched(xs):
+        out = []
+        for sc in xs or []:
+            if isinstance(sc, dict):
+                ps = sc.get("paths") if isinstance(sc.get("paths"), list) else [sc.get("path")]
+                out.append(repr((tuple(os.path.abspath(str(p)) for p in ps if str(p or "").strip()), str(sc.get("unit") or ""))))
+        return sorted(out)
+
+    def _arr(xs):
+        return sorted(netutil.mask_url_secret(str(a.get("id") or "")) for a in (xs or []) if isinstance(a, dict))
+
+    def _mnt(xs):
+        return sorted(str(x).strip().rstrip("/") or "/" for x in (xs or []) if str(x or "").strip())
+    for k, fn, label in (("schedules", _sched, "예약 목록"), ("storage_arrays", _arr, "스토리지 어레이 목록"),
+                         ("mount_bases", _mnt, "허용 경로 목록")):
+        if k in base and k in new and isinstance(base.get(k), list):
+            try:
+                if fn(base.get(k)) != fn((cur or {}).get(k)):
+                    return label
+            except Exception:   # noqa: BLE001 — 비교 실패는 충돌로 보지 않는다(저장을 막지 않게)
+                continue
+    return None
+
+
 def _unmask_settings(new: dict, cur: dict):
     """화면이 받은 '가린 값'을 그대로 돌려보내면 저장된 원래 값으로 되돌린다(제자리 수정).
 
@@ -542,10 +571,13 @@ def _unmask_settings(new: dict, cur: dict):
                 continue
             # id·이름으로만 찾는다 — 가린 주소로 찾으면, 그 주소를 손으로 입력한 새 어레이가 옛 어레이의 비밀 주소·
             # 비밀번호를 물려받았다(28회차 점검)
-            old = (next((o for o in olds if a.get("id") and o.get("id") == a.get("id")), None)
-                   or next((o for o in olds if a.get("id") and netutil.MASK in str(a.get("id"))
-                            and netutil.mask_url_secret(o.get("id")) == a.get("id")), None)
-                   or next((o for o in olds if a.get("name") and o.get("name") == a.get("name")), None))
+            # 같은 id·이름이 여럿이면(이름 중복 허용) 가린 주소가 일치하는 쪽을 먼저(29회차 점검)
+            _mu = a["url"].strip()
+            _cand = ([o for o in olds if a.get("id") and o.get("id") == a.get("id")]
+                     or [o for o in olds if a.get("id") and netutil.MASK in str(a.get("id"))
+                         and netutil.mask_url_secret(o.get("id")) == a.get("id")]
+                     or [o for o in olds if a.get("name") and o.get("name") == a.get("name")])
+            old = next((o for o in _cand if netutil.mask_url_secret(o.get("url")) == _mu), None) or (_cand[0] if _cand else None)
             if old is not None and a.get("id") and netutil.MASK in str(a.get("id")):
                 a["id"] = old.get("id")                  # 가린 id 는 원래 id 로
             if old is not None:
@@ -1670,6 +1702,13 @@ class ScanController:
         new = dict(new or {})
         if isinstance(new.get("storage_arrays"), list):
             new["storage_arrays"] = [dict(a) if isinstance(a, dict) else a for a in new["storage_arrays"]]
+        _lb = new.pop("_list_base", None)
+        if isinstance(_lb, dict):
+            _conf = _list_conflict(_lb, self.settings, new)
+            if _conf:
+                return {"ok": False, "_status": 409, "conflict": True,
+                        "reason": "%s 가 이 화면을 연 뒤 다른 곳에서 바뀌었습니다 — 새로고침해 최신 내용을 본 뒤 다시 저장하세요"
+                                  "(다른 사람이 추가한 항목이 지워지지 않게)." % _conf}
         _merr = _unmask_settings(new, self.settings)
         if _merr:
             return {"ok": False, "_status": 400, "reason": _merr}
@@ -1711,6 +1750,14 @@ class ScanController:
                     new[_pw] = ""
                 else:
                     new.pop(_pw, None)
+        # LLM 키·업그레이드 토큰도 같은 규칙 — 주소의 호스트가 바뀌었는데 새 키를 안 주면 옛 키를 지운다. 예전엔 남아,
+        # 다음 질의응답·업그레이드 확인이 옛 키를 새(다른) 호스트로 보냈다(29회차 점검)
+        for _pw, _url, _dflt in (("ask_llm_key", "ask_llm_endpoint", ""),
+                                 ("upgrade_token", "upgrade_url", upgrademod.DEFAULT_UPGRADE_BASE)):
+            if (not str(new.get(_pw) or "").strip() and _url in new and self.settings.get(_pw)
+                    and not netutil.same_origin(str(new.get(_url) or "").strip() or _dflt,
+                                                str(self.settings.get(_url) or "").strip() or _dflt)):
+                new[_pw] = ""
         # 어레이 목록: 빈 비밀번호는 기존 값(같은 id·같은 주소) 유지
         if isinstance(new.get("storage_arrays"), list):
             olds = [a for a in (self.settings.get("storage_arrays") or []) if isinstance(a, dict)]
@@ -1720,9 +1767,12 @@ class ScanController:
                     return {"ok": False, "reason": "스토리지 어레이의 password·url·user·name 은 문자열이어야 합니다."}
             for a in new["storage_arrays"]:
                 if isinstance(a, dict) and not (a.get("password") or "").strip():
-                    old = (next((o for o in olds if a.get("id") and o.get("id") == a.get("id")), None)
-                           or next((o for o in olds if a.get("name") and o.get("name") == a.get("name")), None)
-                           or next((o for o in olds if a.get("url") and _same_url(o.get("url"), a.get("url"))), None))
+                    # 같은 주소인 옛 항목 중에서 id → 이름 → 주소 순으로 — 예전엔 같은 id/이름의 '첫' 항목만 보고 주소가
+                    # 다르면 포기해, 이름이 같은 어레이 하나를 지우면 다른 어레이의 비밀번호가 지워졌다(29회차 점검)
+                    same = [o for o in olds if a.get("url") and _same_url(o.get("url"), a.get("url"))]
+                    old = (next((o for o in same if a.get("id") and o.get("id") == a.get("id")), None)
+                           or next((o for o in same if a.get("name") and o.get("name") == a.get("name")), None)
+                           or (same[0] if same else None))
                     if old and _same_url(old.get("url"), a.get("url")):
                         a["password"] = old.get("password", "")
         self._sync_op_from_disk()
@@ -3353,27 +3403,47 @@ class ScanController:
 
         화면은 불러온 시점의 값을 그대로 돌려보내므로, 그 사이 예약이 돌았으면 옛 last_run/chain_i 로
         되돌아가 같은 예약이 다시 돌거나 순차 체인이 처음부터 다시 시작됐다(2026-11 리뷰).
-        같은 예약 판별: 대상 경로 목록이 같은 것(같은 경로 예약이 여럿이면 순서대로 짝짓는다)."""
-        def _key(sc):
-            if not isinstance(sc, dict):
-                return None
+        같은 예약 판별(예약에 id 가 없어 3단계로 짝짓는다 — 29회차 점검: 경로만으로 짝지어, 같은 경로의 다른 예약을
+        지우면 남은 예약이 지운 예약의 마지막 실행을 물려받아 오늘 실행을 건너뛰었고, 경로만 하나 더한 예약은 바로 다시 돌았다):
+          ① 경로+주기 설정이 모두 같은 것 ② 경로가 같은 것(주기만 고친 예약) ③ 주기 설정이 같은 것(경로만 고친 예약 —
+          마지막 실행·기준 시각만 잇고 체인 진행은 처음부터)."""
+        def _paths(sc):
             ps = sc.get("paths") if isinstance(sc.get("paths"), list) else [sc.get("path")]
             return tuple(os.path.abspath(str(p)) for p in ps if str(p or "").strip())
-        pool: dict = {}
-        for cur in self.settings.get("schedules") or []:
-            pool.setdefault(_key(cur), []).append(cur)
+
+        _skip = set(self._SCHED_RUNTIME_KEYS) | {"anchor", "enabled", "paths", "path"}
+
+        def _cfg(sc):
+            return json.dumps({k: v for k, v in sc.items() if k not in _skip}, sort_keys=True, default=str)
+        cur_list = [c for c in (self.settings.get("schedules") or []) if isinstance(c, dict)]
+        used = set()
+        inc = [dict(sc) if isinstance(sc, dict) else sc for sc in incoming]
+        pair: dict = {}
+        for stage in (lambda a, b: _paths(a) == _paths(b) and _cfg(a) == _cfg(b),
+                      lambda a, b: _paths(a) == _paths(b),
+                      lambda a, b: _cfg(a) == _cfg(b)):
+            for n, sc in enumerate(inc):
+                if not isinstance(sc, dict) or n in pair:
+                    continue
+                for m, cur in enumerate(cur_list):
+                    if m not in used and stage(sc, cur):
+                        pair[n] = m
+                        used.add(m)
+                        break
         out = []
-        for sc in incoming:
+        for n, sc in enumerate(inc):
             if isinstance(sc, dict):
-                sc = dict(sc)
-                cands = pool.get(_key(sc))
-                if cands:
-                    cur = cands.pop(0)
+                if n in pair:
+                    cur = cur_list[pair[n]]
+                    same_paths = _paths(sc) == _paths(cur)
                     for k in self._SCHED_RUNTIME_KEYS:
-                        sc[k] = cur.get(k)
+                        if k == "last_run" or same_paths:
+                            sc[k] = cur.get(k)
+                        else:
+                            sc.pop(k, None)   # 경로 목록이 바뀌면 체인 진행은 처음부터
                     if cur.get("anchor"):
                         sc["anchor"] = cur.get("anchor")
-                else:                      # 새 예약(또는 경로가 바뀐 예약) — 진행 상태는 처음부터
+                else:                      # 새 예약 — 진행 상태는 처음부터
                     for k in self._SCHED_RUNTIME_KEYS:
                         sc.pop(k, None)
             out.append(sc)
@@ -4815,7 +4885,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 # 시차 배치는 서버가 last_run 을 일부러 바꾸는 저장 — 런타임 병합으로 되돌리지 않는다(1.99.41 회귀)
                 res = self.controller.update_settings({"schedules": staggered}, merge_runtime=False)
                 if res.get("ok"):
-                    res["staggered"] = sum(1 for s in staggered if s.get("enabled", True))
+                    # 시차 배치는 간격형(분·시간) 예약만 — 일·주·월 예약까지 세어 '4개 배치함'처럼 부풀었다(29회차 점검)
+                    res["staggered"] = sum(1 for s in staggered if s.get("enabled", True)
+                                           and s.get("unit") in ("minute", "hour"))
                 self._send_json(res, status=200 if res.get("ok") else 403)
                 return
 
