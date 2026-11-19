@@ -3156,6 +3156,9 @@ class ScanController:
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
+    # 연결 소켓 시간 제한(초) — 없으면 아무것도 안 보내는 연결 하나가 스레드·fd 를 끝없이 잡았다(20회차 점검: 400개 연결
+    # → 스레드 404개가 65초 넘게 유지). 계산 시간에는 걸리지 않고, 받기/보내기가 이만큼 멈출 때만 연결을 끊는다.
+    timeout = 120
     data_dir = ""  # 서버 생성 시 클래스 속성으로 주입(manager.db + scans/ 의 상위 폴더)
     controller = None  # ScanController (웹에서 스캔 시작/중지)
 
@@ -4036,6 +4039,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "reason": "unknown_endpoint"}, status=404)
         except ConnectionError:
             pass  # 클라이언트가 응답 도중 연결을 끊음 — 무시
+        except sqlite3.OperationalError as exc:
+            # 스캔 시작 직후 per-run DB 파일은 생겼는데 테이블이 아직 없을 때 — 진행 표시(/api/status)처럼 '초기화 중'으로.
+            # 예전엔 내보내기·하위 폴더·검색·오류·통계가 500 'no such table' 을 냈다(20회차 점검: 부하 중 1/14,000).
+            if "no such table" in str(exc):
+                self._send_json({"ok": False, "reason": "initializing",
+                                 "error": "스캔 DB 를 준비하는 중입니다 — 잠시 뒤 다시 시도하세요."})
+            else:
+                self._send_json({"ok": False, "error": str(exc)}, status=500)
         except Exception as exc:  # API 오류가 서버를 죽이지 않도록
             self._send_json({"ok": False, "error": str(exc)}, status=500)
         finally:

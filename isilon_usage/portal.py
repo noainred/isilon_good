@@ -3723,6 +3723,9 @@ class PortalController:
 
 # ------------------------------------------------------------------ HTTP 핸들러
 class PortalHandler(BaseHTTPRequestHandler):
+    # 연결 소켓 시간 제한(초) — 없으면 아무것도 안 보내는 연결 하나가 스레드·fd 를 끝없이 잡았다(20회차 점검: 400개 연결
+    # → 스레드 404개가 65초 넘게 유지). 계산 시간에는 걸리지 않고, 받기/보내기가 이만큼 멈출 때만 연결을 끊는다.
+    timeout = 120
     data_dir = ""
     controller = None  # PortalController
 

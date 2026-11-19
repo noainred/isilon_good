@@ -501,7 +501,8 @@ class Scanner:
         conn 을 주면 scan_log 에도 저장(커밋은 스캔의 주기 커밋에 얹혀 간다).
         """
         try:
-            sys.stderr.write("[scan#%s %s] %s\n" % (self.run_id, self._phase, msg))
+            # 관리 DB 의 스캔 번호(화면과 같은 #N)로 — per-run DB 의 run_id 는 늘 1 이라 모든 줄이 scan#1 이었다(20회차 점검)
+            sys.stderr.write("[scan#%s %s] %s\n" % (getattr(self, "manager_scan_id", None) or self.run_id, self._phase, msg))
             sys.stderr.flush()
         except Exception:
             pass
@@ -1555,6 +1556,8 @@ class Scanner:
     # ----- 파일 청크 처리(공통) + 작업 나눔 -----
     def _dispatch_chunk(self, acc: _DirAcc, chunk: list, cur_dir: str) -> None:
         """파일 청크를 유휴 워커가 있으면 큐에 넘기고, 없거나 큐가 차면 직접 처리한다."""
+        if self._stopped():          # 멈추는 중 — 이 디렉터리는 버려진다(재개 때 다시 훑음)
+            return
         q = self._chunk_q
         if (q is not None and self._idle_workers > 0 and not acc.abandoned
                 and self._stat_us_ema >= SHARE_MIN_STAT_US):
@@ -1633,7 +1636,14 @@ class Scanner:
         """
         t0 = time.monotonic()
         self._stat_tls.err = 0
-        stats = [self._safe_stat(e) for e in entries]   # I/O — 락 밖(_safe_stat 이 읽기 오류를 스레드별로 센다)
+        # I/O — 락 밖(_safe_stat 이 읽기 오류를 스레드별로 센다). 64개마다 중지를 본다 — 예전엔 청크(2000개)를
+        # 다 stat 해야 멈춰, 느린 NAS(stat 10ms)에선 '중지' 뒤 17초, stat 이 걸리면 몇 분씩 '탐색 중'에 머물렀다
+        # (20회차 점검). 멈추면 이 디렉터리는 버려져(미완료) 재개 때 다시 훑으므로 부분 결과를 더하지 않는다.
+        stats = []
+        for i, e in enumerate(entries):
+            if i and not (i & 63) and self._stopped():
+                return 0, 0
+            stats.append(self._safe_stat(e))
         n_stat_err = getattr(self._stat_tls, "err", 0)
         if None in stats:                               # 파일이 사라짐: 보통 churn, 대상 전체 소실이면 일시정지
             self._pause_if_root_lost()

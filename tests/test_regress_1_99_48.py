@@ -2171,6 +2171,58 @@ def check_bc_round20_upgrade() -> None:
     print("[EE1~EE5] OK  깨진 묶음은 단계 폴더에서 거부·쓰기 실패 정리·자동 설치 실패 간격·설치 스크립트 단계 복사·옛 오류 문구")
 
 
+def check_bd_round20_stress() -> None:
+    """FF1 느린 NAS 에서 '중지' 뒤 청크(2000개)를 다 stat 할 때까지 멈추지 않음 FF2 아무것도 안 보내는 연결이 스레드·fd 를
+    끝없이 잡음 FF3 테이블 준비 전 조회가 500 'no such table' FF4 로그가 늘 scan#1."""
+    import json as _json
+    import urllib.request
+    from isilon_usage import server as SV, manager as M, scanner as scanmod, portal as P
+    d = tempfile.mkdtemp(prefix="iu_bd_")
+    orig = scanmod.Scanner._safe_stat
+    try:
+        flat = os.path.join(d, "flat")
+        os.makedirs(flat)
+        for i in range(3000):
+            open(os.path.join(flat, "f%04d" % i), "w").close()
+        scanmod.Scanner._safe_stat = lambda self, e: (time.sleep(0.005), orig(self, e))[1]
+        ev = threading.Event()
+        t = threading.Thread(target=lambda: scanmod.run_scan(os.path.join(d, "s.db"), flat, workers=1,
+                                                              stop_event=ev, with_monitor=False), daemon=True)
+        t.start()
+        time.sleep(1.0)
+        t0 = time.time()
+        ev.set()
+        t.join(30)
+        took = time.time() - t0
+        assert not t.is_alive() and took < 3.0, took                       # FF1 (예전: 최대 2000×5ms=10초)
+    finally:
+        scanmod.Scanner._safe_stat = orig
+    assert SV.DashboardHandler.timeout and P.PortalHandler.timeout                                   # FF2
+    httpd = None
+    try:                                                                                             # FF3
+        data = os.path.join(d, "data")
+        M.init_manager(data)
+        empty = os.path.join(d, "empty.db")
+        open(empty, "w").close()
+        sid = M.register_scan(data, root_path="/e", db_path=empty, backend="native", size_mode="disk")
+        httpd = SV.serve(data, host="127.0.0.1", port=0, initial_settings={"mount_bases": [d]}, enable_scan=True)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        base = "http://127.0.0.1:%d" % httpd.server_address[1]
+        for ep in ("/api/children", "/api/export", "/api/search?q=a&", "/api/errors", "/api/stats"):
+            url = base + ep + ("&" if "?" in ep else "?") + "scan=%d" % sid
+            url = url.replace("&&", "&")
+            r = urllib.request.urlopen(url)
+            assert r.status == 200, (ep, r.status)
+            j = _json.loads(r.read().decode() or "{}")
+            assert j.get("reason") == "initializing" or j.get("ok") is not False, (ep, j)
+    finally:
+        if httpd is not None:
+            httpd.shutdown()
+        shutil.rmtree(d, ignore_errors=True)
+    assert 'getattr(self, "manager_scan_id", None) or self.run_id' in _read("scanner.py")          # FF4
+    print("[FF1~FF4] OK  느린 NAS 중지 즉시·연결 시간 제한·준비 전 조회 '초기화 중'·로그 스캔 번호")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -2191,7 +2243,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_av_round17_flow, check_aw_round18_regress,
             check_ax_round18_data, check_ay_round18_portal_delete,
             check_az_round19_regress, check_ba_round19_portal_edge,
-            check_bb_round20_regress, check_bc_round20_upgrade]
+            check_bb_round20_regress, check_bc_round20_upgrade,
+            check_bd_round20_stress]
 
 
 def main() -> int:
