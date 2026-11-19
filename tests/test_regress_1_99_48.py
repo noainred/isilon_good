@@ -1455,6 +1455,32 @@ def check_an_fuzz_round13() -> None:
     print("[O1~O3] OK  짝 없는 서로게이트 400·비 UTF-8 이름은 통과·scan_id 범위·ids 형식")
 
 
+# ------------------------------------------------------------------ 14회차(12~13회차 수정분 회귀)
+def check_ao_regress_round14() -> None:
+    """P1 테스트 데이터: /run/media·/dev/shm·/usr/local 까지 막던 과잉 차단 P2 저장된 노드 id 에 제어 문자가 있으면
+    불러올 때 조용히 빠지고 다음 저장에서 사라짐."""
+    from isilon_usage import gentest as G, portal as P
+    for p in ("/run/media/u/disk/x", "/dev/shm/t", "/usr/local/data/x"):
+        ok, why, _plan = G.validate(p, 1, 1, 1, 1)
+        assert "안전하지 않은" not in (why or ""), (p, why)                               # P1
+    for p in ("/etc/x", "/proc/1/x", "/usr", "/run", "/dev"):
+        assert G.validate(p, 1, 1, 1, 1)[0] is False, p
+    d = tempfile.mkdtemp(prefix="iu_ao_")
+    try:
+        hq = os.path.join(d, "hq")
+        os.makedirs(hq)
+        with open(P.nodes_path(hq), "w") as fh:
+            json.dump({"nodes": [{"id": "a\tb", "url": "http://10.0.0.1:1"}, {"id": "ok", "url": "http://10.0.0.2:1"}]}, fh)
+        pc = P.PortalController(hq)
+        assert sorted(n["id"] for n in pc.nodes) == ["a\tb", "ok"], pc.nodes                # P2
+        pc.upsert_node({"id": "new", "url": "http://10.0.0.3:1"})
+        assert sorted(n["id"] for n in P.load_nodes(hq)) == ["a\tb", "new", "ok"]
+        assert pc.upsert_node({"id": "x\ty", "url": "http://10.0.0.4:1"})["ok"] is False   # 새 등록은 여전히 거부
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    print("[P1·P2] OK  테스트 데이터 경로 과잉 차단 해소·저장된 노드는 id 규칙 완화로 보존")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1468,7 +1494,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_ag_edge_flow_round9, check_ah_clock_rewind_round10,
             check_ai_edge_round10, check_aj_adverse_fs_round11,
             check_ak_round11_misc, check_al_tools_round12, check_am_remote_round13,
-            check_an_fuzz_round13]
+            check_an_fuzz_round13, check_ao_regress_round14]
 
 
 def main() -> int:

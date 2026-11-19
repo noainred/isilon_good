@@ -115,7 +115,7 @@ def _audit_target(body) -> str:
     return " ".join(out)
 
 
-def safe_node_id(nid) -> bool:
+def safe_node_id(nid, *, strict: bool = True) -> bool:
     """노드 id 가 복제본 폴더 이름으로 안전한지(경로 구분자·'.'/'..'·NUL 금지).
 
     id 는 replicas/<id> 폴더 이름으로 쓰인다 — "..", "a/b" 같은 값은 rmtree·복제 쓰기가
@@ -124,17 +124,18 @@ def safe_node_id(nid) -> bool:
     nid = str(nid or "")
     if not nid or nid in (".", "..") or any(c in nid for c in ("/", "\\", "\x00")):
         return False
-    # 제어 문자·서로게이트(파일 이름·JSON 저장에서 깨짐)도 거부 — 예전엔 노드 목록 저장이 영구히 실패했다(2026-11 퍼징)
-    return not any(ord(c) < 32 or 0xD800 <= ord(c) <= 0xDFFF for c in nid)
+    # 새로 등록하는 id 는 제어 문자·서로게이트도 거부(2026-11 퍼징). 이미 저장된 노드를 불러올 때(strict=False)는
+    # 허용한다 — 그러지 않으면 기존 노드가 조용히 빠지고 다음 저장에서 영영 사라졌다(14회차 점검).
+    return (not strict) or not any(ord(c) < 32 or 0xD800 <= ord(c) <= 0xDFFF for c in nid)
 
 
-def sanitize_node(raw: dict) -> Optional[dict]:
-    """노드 1건을 보정한다(필수: id, url). 잘못되면 None."""
+def sanitize_node(raw: dict, *, strict: bool = True) -> Optional[dict]:
+    """노드 1건을 보정한다(필수: id, url). 잘못되면 None. strict=False = 저장본 불러오기(id 규칙 완화)."""
     if not isinstance(raw, dict):
         return None
     nid = str(raw.get("id") or "").strip()
     url = str(raw.get("url") or "").strip().rstrip("/")
-    if not nid or not url or not safe_node_id(nid):
+    if not nid or not url or not safe_node_id(nid, strict=strict):
         return None
     if not re.match(r"^https?://", url):
         url = "http://" + url
@@ -224,7 +225,7 @@ def load_nodes(data_dir: str) -> list:
         return []
     out = []
     for it in (raw.get("nodes") if isinstance(raw, dict) else raw) or []:
-        n = sanitize_node(it)
+        n = sanitize_node(it, strict=False)
         if n:
             out.append(n)
     return out
@@ -1928,7 +1929,7 @@ class PortalController:
             self._save()
         # 복제본·핑 이력도 정리(베스트 에포트). 실제 있던 노드 + 안전한 id 일 때만 지운다
         # (id=".." 같은 요청이 replicas 밖 data_dir 전체를 rmtree 하던 문제).
-        if len(self.nodes) < before and safe_node_id(nid):
+        if len(self.nodes) < before and safe_node_id(nid, strict=False):
             shutil.rmtree(os.path.join(self.replicas_dir, nid), ignore_errors=True)
         try:
             conn = dbmod.connect(ping_history_path(self.data_dir))
@@ -3418,7 +3419,7 @@ class PortalController:
 
     def _replica_dbs_for(self, node_id: str, path: str) -> list:
         """path 를 덮는 복제 스캔 DB 후보들(좋은 순서). 비교는 첫 후보에 그 폴더 행이 없으면(접힘 등) 다음 후보를 본다."""
-        if not safe_node_id(node_id):
+        if not safe_node_id(node_id, strict=False):
             return []
         rep = os.path.join(self.replicas_dir, node_id)
         try:
@@ -3445,7 +3446,7 @@ class PortalController:
 
         다음 후보로 넘어가는 건 최신 스캔이 그 경로를 접어(fold) 행이 없을 때뿐이고, 그때도 같은 루트의 옛 스캔은
         보지 않는다 — 옛 스캔엔 지금은 지워진 폴더가 남아 있어, 삭제된 폴더가 '있음·차이 없음'으로 보였다(2026-11 연동 점검)."""
-        if not safe_node_id(node_id):
+        if not safe_node_id(node_id, strict=False):
             return []
         rep = os.path.join(self.replicas_dir, node_id)
         try:

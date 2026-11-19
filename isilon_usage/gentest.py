@@ -17,7 +17,8 @@ MAX_TOTAL_FILES = 50_000_000  # 안전 상한(실수로 디스크/아이노드 �
 _DENY = {"/", "/bin", "/sbin", "/usr", "/lib", "/lib64", "/etc", "/boot",
          "/sys", "/proc", "/dev", "/run", "/var", "/root", "/home", "/tmp"}
 # 그 '아래'도 막는 시스템 트리(데이터를 둘 일이 없는 곳). /home·/tmp·/var·/root 는 그 자체만 막는다(아래엔 데이터가 있을 수 있음)
-_DENY_TREE = ("/bin", "/sbin", "/usr", "/lib", "/lib64", "/etc", "/boot", "/sys", "/proc", "/dev", "/run")
+# /usr·/run·/dev 는 그 자체만 막는다 — /usr/local·/run/media(이동식 디스크)·/dev/shm(tmpfs)엔 데이터가 있을 수 있다(14회차 점검)
+_DENY_TREE = ("/bin", "/sbin", "/lib", "/lib64", "/etc", "/boot", "/sys", "/proc")
 
 
 def plan_of(n_dirs: int, n_subdirs: int, n_files: int, file_size: int) -> dict:
