@@ -916,6 +916,51 @@ def check_ab_edge_views_round6() -> None:
     print("[B1~B7] OK  중복 id 없음·미완료 비교 거부·지운 스캔 선택 해제·비교 초기화·활성 소요 시간·검색 복귀·추세 완료만")
 
 
+# ------------------------------------------------------------------ 7회차(업그레이드·설치·동시성)
+def check_ac_round7() -> None:
+    """C1 SSH 업그레이드·프로비저닝: 잘린 묶음을 운영 폴더에 바로 풀고 다운그레이드·되돌리기 없음 C2 재구성 시 토큰·경로 무시
+    C3 설치 스크립트: cp 경로의 낡은 바이트코드·데이터 폴더 검사 전에 서비스 중지 C4 make_release --help 가 발행본을 덮음
+    C5 심볼릭 링크로 같은 루트 중복 스캔 C6 일괄 푸시에서 이미 최신 노드를 실패로 기록."""
+    from isilon_usage import portal as P
+    up = P.build_upgrade_script(hq_base="http://h:1")
+    pv = P.build_provision_script(host="10.0.0.1", port=8765, token="T", path="/mnt/x", hq_base="http://h:1",
+                                  install="systemd")
+    for sc in (up, pv):                                                              # C1: 공용 안전 설치 조각
+        assert "gzip -t" in sc and "ALLOW_DOWNGRADE" in sc and "되돌림" in sc and "| sudo tar -xz" not in sc
+        assert "@@STAGED@@" not in sc
+        r = subprocess.run(["bash", "-n"], input=sc, text=True, capture_output=True)
+        assert r.returncode == 0, r.stderr
+    assert 's["api_token"] = tok' in pv                                               # C2
+    for f in ("install_edge.sh", "install_portal.sh"):                               # C3
+        sh = open(os.path.join(os.path.dirname(HERE), "tools", f), encoding="utf-8").read()
+        assert sh.index("이 설치 폴더($INSTALL_DIR) 안에 있습니다") < sh.index('systemctl stop "$SERVICE"'), f
+        assert "-name __pycache__ -type d -prune -exec rm -rf" in sh, f
+    r = subprocess.run([sys.executable, os.path.join(os.path.dirname(HERE), "tools", "make_release.py"), "--x"],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 2, r.returncode                                           # C4: 인자 오면 아무것도 안 만듦
+    from isilon_usage import server as SV                                            # C5
+    d = tempfile.mkdtemp(prefix="iu_ac_")
+    try:
+        tree = os.path.join(d, "m", "t")
+        os.makedirs(tree)
+        os.symlink(tree, os.path.join(d, "m", "link"))
+        httpd = SV.serve(os.path.join(d, "data"), host="127.0.0.1", port=0,
+                         initial_settings={"mount_bases": [os.path.join(d, "m")]}, enable_scan=True)
+        c = httpd.RequestHandlerClass.controller
+        with c._lock:
+            c._scans[999] = {"path": tree}
+        try:
+            assert c._active_scan_on(os.path.join(d, "m", "link")) == 999
+        finally:
+            with c._lock:
+                c._scans.pop(999, None)
+        httpd.server_close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert 'okn > 0 and okn + curn == len(nodes)' in _read("portal.py")                # C6
+    print("[C1~C6] OK  안전한 SSH 업그레이드·재구성 토큰 반영·설치 순서/캐시·릴리스 인자·심볼릭 중복·이미 최신 집계")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -924,7 +969,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_t1_t5_portal_round3, check_u1_u3_ui_round3,
             check_v1_v6_edge_round3, check_w1_w2_round4, check_x1_x8_settings_round4,
             check_y1_y6_integrations_round5, check_z1_z8_portal_ui_round5,
-            check_aa_round6, check_ab_edge_views_round6]
+            check_aa_round6, check_ab_edge_views_round6, check_ac_round7]
 
 
 def main() -> int:

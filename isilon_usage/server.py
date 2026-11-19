@@ -2010,17 +2010,28 @@ class ScanController:
         하트비트로 판정한다(죽은 스캔의 잔여 상태로 영원히 막히지 않도록 오래된 건 무시).
         """
         path = os.path.abspath(path)
+        # 심볼릭 링크로 가리킨 같은 트리도 같은 루트로 본다(실제 경로 비교) — 예전엔 링크 경로로 같은 데이터를
+        # 동시에 두 번 스캔할 수 있었다(2026-11 리뷰). 경로 문자열이 같으면 당연히 같다.
+        def _same(a):
+            a = os.path.abspath(a or "")
+            if a == path:
+                return True
+            try:
+                return os.path.realpath(a) == os.path.realpath(path)
+            except (OSError, ValueError):
+                return False
         with self._lock:
             for sid, rec in self._scans.items():
-                if sid != exclude and os.path.abspath(rec.get("path") or "") == path:
+                if sid != exclude and _same(rec.get("path")):
                     return sid
             mine = set(self._scans.keys())
         try:
             mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
             try:
-                rows = mc.execute(
-                    "SELECT id, updated_at FROM scans WHERE root_path=? "
-                    "AND status IN ('discovering','sizing')", (dbmod.db_text(path),)).fetchall()
+                rows = [r for r in mc.execute(
+                    "SELECT id, updated_at, root_path FROM scans "
+                    "WHERE status IN ('discovering','sizing')").fetchall()
+                        if _same(dbmod.fs_text(r["root_path"]))]
             finally:
                 mc.close()
         except Exception:  # noqa: BLE001 — 매니저 DB 가 없으면(첫 실행) 중복도 없다

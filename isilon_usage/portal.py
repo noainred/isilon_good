@@ -425,6 +425,46 @@ def _poll_error_msg(exc) -> str:
     return str(exc)
 
 
+def _staged_install_sh(target_var: str) -> str:
+    """HQ 의 agent-bundle 을 ${target_var} 에 '안전하게' 까는 bash 조각(업그레이드·프로비저닝 공용 — 단일 소스).
+
+    받은 묶음을 파일로 받아 gzip 검사 → 임시 폴더에 풀어 버전 확인(다운그레이드 방지, ALLOW_DOWNGRADE=1 로 허용)
+    → 기존 코드 백업 후 교체 → __pycache__ 제거 → 핵심 모듈 불러오기 확인(실패 시 백업으로 되돌림).
+    앞쪽에서 HQ·OLDV 가 정해져 있어야 한다. 백업은 최근 3개만 남긴다."""
+    return (
+        "# 받은 묶음을 먼저 파일로 받아 검사 → 임시 폴더에 풀어 버전 확인 → 백업 후 교체 → 불러오기 확인(실패 시 되돌림).\n"
+        "# 예전엔 받는 즉시 운영 코드 폴더에 풀어, 잘린 묶음이면 반쯤 바뀐 코드가 남았고 HQ 가 옛 버전이면\n"
+        "# 엣지를 다운그레이드했다(포탈 푸시 경로는 막는데 SSH 경로는 안 막았다 — 2026-11 리뷰).\n"
+        'TMPF=$(mktemp); STAGE=$(mktemp -d)\n'
+        'trap \'rm -f "$TMPF"; rm -rf "$STAGE"\' EXIT\n'
+        'curl -fsSL "$HQ/api/portal/agent-bundle" -o "$TMPF"\n'
+        'gzip -t "$TMPF" || { echo "  ERROR: 받은 묶음이 손상/잘림 — 중단(기존 코드 그대로)"; exit 4; }\n'
+        'tar -xzf "$TMPF" -C "$STAGE"\n'
+        '[ -f "$STAGE/isilon_usage/__init__.py" ] || { echo "  ERROR: 묶음에 isilon_usage 가 없음 — 중단"; exit 4; }\n'
+        'NEWV=$(cd "$STAGE" && python3 -m isilon_usage --version 2>/dev/null || echo "?")\n'
+        'if [ "${ALLOW_DOWNGRADE:-0}" != "1" ] && ! python3 - "$OLDV" "$NEWV" <<\'PY\'\n'
+        'import re, sys\n'
+        'def v(s):\n'
+        '    m = re.search(r"(\\d+)\\.(\\d+)\\.(\\d+)", s or "")\n'
+        '    return tuple(int(x) for x in m.groups()) if m else None\n'
+        'o, n = v(sys.argv[1]), v(sys.argv[2])\n'
+        'sys.exit(0 if (n is not None and (o is None or n >= o)) else 3)\n'
+        'PY\n'
+        'then echo "  중단: 받은 코드($NEWV)가 현재($OLDV)보다 낮거나 버전을 읽을 수 없음 — 다운그레이드 방지'
+        '(정말 내리려면 ALLOW_DOWNGRADE=1)"; exit 3; fi\n'
+        'BK="${TG}/isilon_usage.bak.$(date +%s)"\n'
+        '[ -d "${TG}/isilon_usage" ] && sudo mv "${TG}/isilon_usage" "$BK"\n'
+        'sudo cp -a "$STAGE/." "${TG}/"\n'
+        "# 낡은 바이트코드 캐시 제거 — 안 그러면 새 코드를 깔아도 옛 버전이 보고/실행될 수 있음\n"
+        'sudo find "${TG}" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true\n'
+        'if ! (cd "${TG}" && python3 -c "import isilon_usage.cli, isilon_usage.server, isilon_usage.scanner"); then\n'
+        '  echo "  ERROR: 새 코드를 불러오지 못함 — 이전 코드로 되돌림"\n'
+        '  sudo rm -rf "${TG}/isilon_usage"; [ -d "${BK:-}" ] && sudo mv "$BK" "${TG}/isilon_usage"; exit 5\n'
+        'fi\n'
+        '{ ls -dt "${TG}"/isilon_usage.bak.* 2>/dev/null | tail -n +4 | xargs -r sudo rm -rf; } || true\n'
+    ).replace("${TG}", "${%s}" % target_var)
+
+
 def build_provision_script(*, host, port, token, path, hq_base, install="systemd",
                            data_dir="/data/isilon_edge_data",
                            edge_dir="/opt/isilon_edge") -> str:
@@ -469,10 +509,36 @@ def build_provision_script(*, host, port, token, path, hq_base, install="systemd
         "fi\n\n"
         'echo "[2/4] HQ 포탈에서 코드 받기 (인터넷 불필요)"\n'
         'sudo mkdir -p "$EDGE_DIR" "$DATA"\n'
-        'curl -fsSL "$HQ/api/portal/agent-bundle" | sudo tar -xz -C "$EDGE_DIR"\n'
-        'sudo find "$EDGE_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true\n'
+        'OLDV=$(cd "$EDGE_DIR" 2>/dev/null && python3 -m isilon_usage --version 2>/dev/null || echo "?")\n'
+        "@@STAGED@@"
         '(cd "$EDGE_DIR" && python3 -m isilon_usage --version)\n'
+        "# 이미 설정 파일이 있는 엣지(재구성)는 기동 플래그(--api-token·--mount-base)가 '처음 설정'에만 쓰여 무시된다 —\n"
+        "# 포탈이 기록한 토큰·경로와 엣지가 달라 401 이 나던 문제(2026-11 리뷰). 있으면 그 파일에 직접 맞춘다(권한 600).\n"
+        'sudo python3 - "$DATA" "$TOKEN" "$MOUNT" <<\'PY\'\n'
+        'import json, os, sys\n'
+        'd, tok, mnt = sys.argv[1:4]\n'
+        'p = os.path.join(d, "settings.json")\n'
+        'try:\n'
+        '    with open(p, encoding="utf-8") as fh:\n'
+        '        s = json.load(fh)\n'
+        'except (OSError, ValueError):\n'
+        '    s = None\n'
+        'if isinstance(s, dict):\n'
+        '    if tok:\n'
+        '        s["api_token"] = tok\n'
+        '    mb = [x for x in (s.get("mount_bases") or []) if isinstance(x, str)]\n'
+        '    if mnt and os.path.abspath(mnt) not in [os.path.abspath(x) for x in mb]:\n'
+        '        mb.append(mnt)\n'
+        '    s["mount_bases"] = mb\n'
+        '    tmp = p + ".tmp"\n'
+        '    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)\n'
+        '    with os.fdopen(fd, "w", encoding="utf-8") as fh:\n'
+        '        json.dump(s, fh, ensure_ascii=False, indent=2)\n'
+        '    os.replace(tmp, p)\n'
+        '    print("  -> 기존 설정에 포탈의 토큰·경로 반영: " + p)\n'
+        'PY\n'
     ) % (q(edge_dir), q(data_dir), q(path), int(port), q(token), q(hq))
+    head = head.replace("@@STAGED@@", _staged_install_sh("EDGE_DIR"))
     if install == "nohup":
         tail = (
             '\necho "[3/4] nohup 으로 기동 (포트 $PORT)"\n'
@@ -521,7 +587,7 @@ def build_upgrade_script(*, hq_base, edge_dir="/opt/isilon_edge",
     """
     q = shlex.quote
     hq = (hq_base or "http://<HQ-IP>:8800").rstrip("/")
-    return (
+    return ((
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         "# === isilon_usage 엣지 원격 업그레이드 (HQ 포탈 생성) ===\n"
@@ -538,11 +604,9 @@ def build_upgrade_script(*, hq_base, edge_dir="/opt/isilon_edge",
         'OLDV=$(cd "$TARGET" 2>/dev/null && python3 -m isilon_usage --version 2>/dev/null || echo "?")\n'
         'echo "[1/3] HQ 에서 최신 코드 받기 -> $TARGET (현재 $OLDV)"\n'
         'sudo mkdir -p "$TARGET"\n'
-        'curl -fsSL "$HQ/api/portal/agent-bundle" | sudo tar -xz -C "$TARGET"\n'
-        "# 낡은 바이트코드 캐시 제거 — 안 그러면 새 코드를 깔아도 옛 버전이 보고/실행될 수 있음\n"
-        'sudo find "$TARGET" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true\n'
+        "@@STAGED@@"
         'NEWV=$(cd "$TARGET" && python3 -m isilon_usage --version 2>/dev/null || echo "?")\n'
-        'echo "  -> 새 코드: $NEWV"\n'
+        'echo "  -> 새 코드: $NEWV (이전 코드 백업: ${BK:-없음})"\n'
         'echo "[2/3] 서비스 재시작: $SERVICE"\n'
         'if systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE}\\.service"; then\n'
         '  sudo systemctl restart "$SERVICE"\n'
@@ -551,7 +615,7 @@ def build_upgrade_script(*, hq_base, edge_dir="/opt/isilon_edge",
         '  echo "  WARN: systemd 유닛 ${SERVICE} 없음 - 코드는 $TARGET 에 갱신됨, 서비스를 수동 재시작하세요"\n'
         "fi\n"
         'echo "[3/3] 업그레이드 $OLDV -> $NEWV (대상 $TARGET, 서비스 $SERVICE)"\n'
-    ) % (q(edge_dir), q(hq), q(service))
+    ) % (q(edge_dir), q(hq), q(service))).replace("@@STAGED@@", _staged_install_sh("TARGET"))
 
 
 # ------------------------------------------------------------------ 컨트롤러
@@ -1309,9 +1373,12 @@ class PortalController:
             if p:
                 p["active"] = False
                 p["finished"] = time.time()
-        self._upg_log("③ 엣지 전파 완료 — 성공 %d/%d (보낸 버전 v%s)" % (okn, len(nodes), bver))
+        # 이미 같거나 더 새 버전인 노드는 '실패'가 아니다 — 예전엔 일부가 최신이면 이력 전체가 실패로 남았다(2026-11 리뷰)
+        curn = sum(1 for r in results if not r.get("ok") and "더 새 버전" in (r.get("reason") or ""))
+        self._upg_log("③ 엣지 전파 완료 — 성공 %d/%d%s (보낸 버전 v%s)"
+                      % (okn, len(nodes), (" · 이미 최신 %d" % curn) if curn else "", bver))
         if record:
-            self._record_upgrade(kind="전 노드 푸시", ok=(len(nodes) > 0 and okn == len(nodes)),
+            self._record_upgrade(kind="전 노드 푸시", ok=(len(nodes) > 0 and okn > 0 and okn + curn == len(nodes)),
                                  to=bver, push=results)
         return results
 

@@ -192,6 +192,10 @@ echo -n "→ 패키지 검증: "
   || { echo "✗ 검증 실패 — 설치 중단(기존 설치 그대로 유지)."; rm -rf "$TMP_DIR"; exit 1; }
 
 # ----- 4) 검증 통과분만 설치 경로로 반영 -----
+# (서비스를 멈추기 '전'에 검사 — 예전엔 멈춘 뒤 거부해 서비스가 꺼진 채 끝났다) 데이터 폴더가 설치 폴더 안이면 rsync --delete 가 DB·설정을 통째로 지운다 → 거부.
+case "${DATA_DIR%/}/" in
+  "${INSTALL_DIR%/}"/*) echo "✗ --data-dir($DATA_DIR)이 설치 폴더($INSTALL_DIR) 안에 있습니다 — 업그레이드 때 삭제됩니다. 다른 경로를 지정하세요."; rm -rf "$TMP_DIR"; exit 1;;
+esac
 echo "→ 설치: $INSTALL_DIR"
 # 파일 교체 전에 기존 엣지를 안전하게 중단(포트 충돌 방지):
 #  현재 서비스 + 구버전 isilon_usage 서비스(있으면 유닛까지 제거) + 잔여 serve 프로세스
@@ -207,16 +211,15 @@ if pgrep -f 'isilon_usage serve' >/dev/null 2>&1; then
   pkill -f 'isilon_usage serve' >/dev/null 2>&1 || true
   sleep 1
 fi
-# 데이터 폴더가 설치 폴더 안이면 rsync --delete 가 DB·설정을 통째로 지운다 → 거부.
-case "${DATA_DIR%/}/" in
-  "${INSTALL_DIR%/}"/*) echo "✗ --data-dir($DATA_DIR)이 설치 폴더($INSTALL_DIR) 안에 있습니다 — 업그레이드 때 삭제됩니다. 다른 경로를 지정하세요."; rm -rf "$TMP_DIR"; exit 1;;
-esac
 mkdir -p "$INSTALL_DIR" "$DATA_DIR"
 if command -v rsync >/dev/null 2>&1; then
   # --delete 는 설치 폴더(서비스 WorkingDirectory)에 앱이 쓰는 런타임 파일까지 지운다 → 보호.
   rsync -a --delete --exclude info.MD --exclude portal_info.MD --exclude .iu_data_persist.json "$TMP_DIR"/ "$INSTALL_DIR"/
 else
   cp -a "$TMP_DIR"/. "$INSTALL_DIR"/
+  # 릴리스 파일은 수정 시각이 고정(2020-01-01)이라, cp 는 옛 __pycache__ 를 남겨 크기가 같은 모듈의 옛 바이트코드가
+  # 그대로 실행됐다(새 버전을 깔아도 옛 버전으로 보고) — 캐시를 지운다(rsync --delete 는 이미 지움).
+  find "$INSTALL_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
 fi
 rm -rf "$TMP_DIR"
 cd "$INSTALL_DIR"

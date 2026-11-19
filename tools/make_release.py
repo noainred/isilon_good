@@ -250,6 +250,15 @@ def write_index(out_dir: str) -> None:
 
 
 def main() -> int:
+    # 인자는 받지 않는다 — 예전엔 --help 도 그냥 실행돼 이미 발행한 압축본(sha256)을 다시 만들어 덮었다(2026-11 리뷰).
+    args = sys.argv[1:]
+    if args:
+        if args[0] in ("-h", "--help"):
+            print(__doc__)
+            return 0
+        print("알 수 없는 인자: %s — 인자 없이 실행합니다(python3 tools/make_release.py). --help 참고." % " ".join(args),
+              file=sys.stderr)
+        return 2
     out_dir = os.path.join(ROOT, "download")
     os.makedirs(out_dir, exist_ok=True)
 
