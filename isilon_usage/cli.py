@@ -372,6 +372,29 @@ def cmd_partial(args: argparse.Namespace) -> int:
     if not os.path.exists(row["db_path"]):
         print("per-run DB 가 없습니다.", file=sys.stderr)
         return 2
+    busy = _scan_writer_alive(row["db_path"])
+    if busy:
+        print("scan #%d 은 실행 중입니다(pid %d) — 먼저 중지하세요." % (args.scan, busy), file=sys.stderr)
+        return 2
+    # 스캐너가 kill -9 등으로 죽어 '진행 중'으로 남은 스캔은 멈춘 것과 같다 — 재개(resume)와 같은 기준으로
+    # '일시정지'로 바로잡고 집계한다(예전엔 '실행 중인 스캔입니다'로 거절, 18회차 점검).
+    try:
+        pc = dbmod.connect(row["db_path"])
+        try:
+            pc.execute("UPDATE scan_runs SET status='paused' WHERE id=(SELECT MAX(id) FROM scan_runs) "
+                       "AND status IN ('discovering','sizing')")
+            pc.commit()
+        finally:
+            pc.close()
+        if row["status"] in ("discovering", "sizing"):
+            mc = dbmod.connect(mgrmod.manager_db_path(data_dir))
+            try:
+                mgrmod.update_scan(mc, args.scan, status="paused")
+                mc.commit()
+            finally:
+                mc.close()
+    except Exception:  # noqa: BLE001
+        pass
     print(f"부분 집계(멈춘 자료): scan #{args.scan}  {row['root_path']}  (상태 {row['status']})")
     last = [0.0]
 
@@ -618,7 +641,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         return 2
     if getattr(args, "json", False):
         import json
-        print(json.dumps(res, ensure_ascii=False, indent=2))
+        _emit_json(res)
         return 0
     print("  깊이 | 디렉터리 수 | 누적(fold 시 보존) | 예시 경로")
     print("  " + "-" * 62)
@@ -653,7 +676,7 @@ def cmd_tunecheck(args: argparse.Namespace) -> int:
                        data_dir=os.path.abspath(args.data_dir))
     if getattr(args, "json", False):
         import json
-        print(json.dumps(rep, ensure_ascii=False, indent=2))
+        _emit_json(rep)
         return 0
     print("튜닝 점검 — OS 커널/마운트 설정 분석")
     if rep.get("nfs_mounts"):
@@ -729,7 +752,7 @@ def cmd_pscan(args: argparse.Namespace) -> int:
         return 2
     if getattr(args, "json", False):
         import json
-        print(json.dumps(res, ensure_ascii=False, indent=2))
+        _emit_json(res)
         return 0 if res.get("complete", True) else 1
     print("-" * 56)
     print("  총 용량      : %s" % _human(res["total_bytes"]))
@@ -784,7 +807,7 @@ def cmd_autotune(args: argparse.Namespace) -> int:
     print("  참고: %s" % r.get("note", ""))
     if getattr(args, "json", False):
         import json
-        print(json.dumps(r, ensure_ascii=False, indent=2))
+        _emit_json(r)
     return 0
 
 
@@ -1148,7 +1171,27 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+_JSON_STDOUT = None   # --json 일 때 진짜 표준출력(나머지 안내·진행 표시는 표준에러로)
+
+
+def _emit_json(obj) -> None:
+    import json
+    out = _JSON_STDOUT or sys.stdout
+    out.write(json.dumps(obj, ensure_ascii=False, indent=2) + "\n")
+    out.flush()
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    if not getattr(args, "json", False):
+        return args.func(args)
+    # --json: 표준출력에는 JSON 만 — 머리말·'\r' 진행 표시가 섞여 json.load 가 실패했다(18회차 점검)
+    global _JSON_STDOUT
+    _JSON_STDOUT, saved = sys.stdout, sys.stdout
+    sys.stdout = sys.stderr
+    try:
+        return args.func(args)
+    finally:
+        sys.stdout = saved
+        _JSON_STDOUT = None

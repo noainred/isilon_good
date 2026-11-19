@@ -3459,15 +3459,17 @@ async function loadTree(parentId, crumb) {
     const url = "/api/children?scan=" + selectedScan +
       (parentId != null ? "&parent=" + parentId : "");
     const j = await (await fetch(url, {cache: "no-store"})).json();
-    renderTree(j.children || []);
+    renderTree(j.children || [], j);
   } catch (e) { $("treeBody").innerHTML = '<tr><td colspan="6" class="err">' + escHtml(String(e)) + '</td></tr>'; }
 }
-function renderTree(rows) {
+function renderTree(rows, meta) {
   $("treeCrumb").textContent = treeStack.length
     ? "📂 " + treeStack.map(c => c.name).join(" / ") : "(루트)";
   const tb = $("treeBody");
   if (!rows.length) { tb.innerHTML = '<tr><td colspan="6" class="sub">하위 디렉터리가 없거나 아직 집계 전입니다.</td></tr>'; return; }
-  const parentTotal = rows.reduce((a, r) => a + (r.total_bytes || r.own_bytes || 0), 0) || 1;
+  // 서버는 큰 순 상위 200개만 보낸다 — 나머지(rest_*)까지 합한 값을 비율의 분모로(예전엔 보인 것만 합해 100% 가 됐다)
+  const _rest = (meta && meta.truncated) ? meta : null;
+  const parentTotal = (rows.reduce((a, r) => a + (r.total_bytes || r.own_bytes || 0), 0) + (_rest ? (_rest.rest_bytes || 0) : 0)) || 1;
   tb.innerHTML = rows.map(r => {
     const sz = r.total_bytes > 0 ? r.total_bytes : r.own_bytes;
     const pct = (sz / parentTotal * 100);
@@ -3481,7 +3483,9 @@ function renderTree(rows) {
       <td class="num">${fmtNum(r.total_files || r.file_count)}</td>
       <td class="num">${fmtNum(r.subdir_count)}</td>
       <td><a href="#" class="tdescbtn" data-id="${r.id}" data-name="${escHtml(r.name)}" ${canDesc ? "" : 'style="display:none"'}>열기 ▶</a></td></tr>`;
-  }).join("");
+  }).join("") + (_rest ? `<tr><td class="sub">… 나머지 ${fmtNum(_rest.rest_count || 0)}개 폴더(큰 순 상위 ${fmtNum(rows.length)}개만 표시 · 전체 ${fmtNum(_rest.total_count || 0)}개)</td>
+      <td class="num sub">${fmtBytes(_rest.rest_bytes || 0)}</td><td class="num sub">${((_rest.rest_bytes || 0) / parentTotal * 100).toFixed(1)}%</td>
+      <td class="num sub">${fmtNum(_rest.rest_files || 0)}</td><td></td><td></td></tr>` : "");
   tb.querySelectorAll("a.tdesc, a.tdescbtn").forEach(a => a.addEventListener("click", (e) => {
     e.preventDefault();
     loadTree(parseInt(a.dataset.id), treeStack.concat([{id: parseInt(a.dataset.id), name: a.dataset.name}]));
@@ -3493,7 +3497,7 @@ async function treeSearch(q) {
   try {
     const j = await (await fetch("/api/search?scan=" + selectedScan + "&q=" + encodeURIComponent(q), {cache: "no-store"})).json();
     const rows = j.results || [];
-    $("treeCrumb").textContent = `🔎 "${q}" 검색 ${rows.length}건`;
+    $("treeCrumb").textContent = `🔎 "${q}" 검색 ${rows.length}건` + (j.truncated ? ` 이상 — 큰 순 상위 ${rows.length}개만 표시(검색어를 더 구체적으로)` : "");
     const tb = $("treeBody");
     tb.innerHTML = rows.length ? rows.map(r => {
       const sz = r.total_bytes > 0 ? r.total_bytes : r.own_bytes;
@@ -3733,7 +3737,7 @@ async function loadErrors() {
   try {
     const j = await (await fetch("/api/errors?scan=" + selectedScan, {cache:"no-store"})).json();
     const errs = j.errors || [];
-    $("errCount").textContent = errs.length;
+    $("errCount").textContent = j.truncated ? (fmtNum(j.total_count || errs.length) + " (앞 " + fmtNum(errs.length) + "개만 표시)") : errs.length;
     $("errBody").innerHTML = errs.length ? errs.map(e =>
       `<tr><td class="mono" style="max-width:520px; overflow:hidden; text-overflow:ellipsis;" title="${escHtml(e.path)}">${escHtml(e.path)}</td><td class="sub">${escHtml(e.error||"")}</td></tr>`
     ).join("") : '<tr><td colspan="2" class="sub">오류 없음</td></tr>';

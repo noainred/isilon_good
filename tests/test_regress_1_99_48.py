@@ -1796,6 +1796,90 @@ def check_aw_round18_regress() -> None:
     print("[X1~X4] OK  스냅샷 임시 파일 작업별·거절된 재개는 스냅샷 보존·부분 집계 뒤 트리 갱신·DB 파일 라벨")
 
 
+def check_ax_round18_data() -> None:
+    """Y1 du 실행의 부분 집계/스냅샷이 하드링크를 두 번 세어 '하한값'이 실제보다 큼 Y2 하위·검색·오류 목록이
+    200/1000 개에서 말없이 잘림 Y3 --json 표준출력에 머리말·진행 표시가 섞임 Y4 죽은 스캔에 CLI partial 거절."""
+    import contextlib
+    import io
+    import json as _json
+    import subprocess as _sp
+    from isilon_usage import server as SV, manager as M, db as dbmod, cli as C
+    from isilon_usage.scanner import partial_aggregate
+    d = tempfile.mkdtemp(prefix="iu_ax_")
+    try:
+        H = 1000000                                    # 하드링크 파일: 탐색은 루트 own_bytes 에서 한 번만 셈
+        pdb = os.path.join(d, "du.db")
+        dbmod.init_db(pdb)
+        c = dbmod.connect(pdb)
+        rid = dbmod.create_run(c, "/r", backend="du", size_mode="disk", scanner_pid=0)
+        c.execute("INSERT INTO directories (run_id, path, name, depth, status, own_bytes, total_bytes, file_count, total_files) "
+                  "VALUES (?,?,?,?,?,?,?,?,?)", (rid, "/r", "r", 0, "discovered", 4096 + H, 0, 1, 0))
+        root_id = c.execute("SELECT id FROM directories WHERE path='/r'").fetchone()[0]
+        c.execute("INSERT INTO directories (run_id, parent_id, path, name, depth, status, own_bytes, total_bytes, file_count, total_files) "
+                  "VALUES (?,?,?,?,?,?,?,?,?,?)", (rid, root_id, "/r/x", "x", 1, "done", 4096, 4096 + H, 0, 1))  # du: 링크 포함
+        c.execute("UPDATE scan_runs SET status='paused' WHERE id=?", (rid,))
+        c.commit()
+        c.close()
+        assert partial_aggregate(pdb)["ok"]
+        c = dbmod.connect(pdb)
+        tb, tf = c.execute("SELECT total_bytes, total_files FROM directories WHERE path='/r'").fetchone()
+        c.close()
+        assert tb <= 8192 + H and tb == 8192 + H, tb                                               # Y1 (예전 8192+2H)
+        assert tf == 2, tf
+        pdb2 = os.path.join(d, "many.db")                                                          # Y2
+        dbmod.init_db(pdb2)
+        c = dbmod.connect(pdb2)
+        rid2 = dbmod.create_run(c, "/m", backend="native", size_mode="disk", scanner_pid=0)
+        c.execute("INSERT INTO directories (run_id, path, name, depth, status, own_bytes, total_bytes) VALUES (?,?,?,?,?,?,?)",
+                  (rid2, "/m", "m", 0, "done", 0, 300 * 100))
+        pid_ = c.execute("SELECT id FROM directories WHERE path='/m'").fetchone()[0]
+        for i in range(300):
+            c.execute("INSERT INTO directories (run_id, parent_id, path, name, depth, status, own_bytes, total_bytes, error) "
+                      "VALUES (?,?,?,?,?,?,?,?,?)", (rid2, pid_, "/m/c%03d" % i, "c%03d" % i, 1, "done", 100, 100,
+                                                      "EACCES" if i < 250 else None))
+        c.commit()
+        r = SV.list_children(c, rid2, pid_)
+        assert len(r["children"]) == 200 and r["truncated"] and r["total_count"] == 300 and r["rest_bytes"] == 100 * 100, r.keys()
+        assert "truncated" not in SV.list_children(c, rid2, None)
+        sr = SV.search_dirs(c, rid2, "c")
+        assert len(sr["results"]) == 200 and sr["truncated"] is True
+        er = SV.list_errors(c, rid2, limit=100)
+        assert len(er["errors"]) == 100 and er["truncated"] and er["total_count"] == 250, er.get("total_count")
+        c.close()
+        dh = _read("dashboard.html")
+        assert "meta.truncated" in dh and "j.truncated ?" in dh
+        tree = os.path.join(d, "t", "a", "b")                                                       # Y3
+        os.makedirs(tree)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+            assert C.main(["analyze", os.path.join(d, "t"), "--json"]) == 0
+        assert _json.loads(buf.getvalue())["total_dirs"] == 3, buf.getvalue()[:200]
+        data = os.path.join(d, "data")                                                             # Y4
+        M.init_manager(data)
+        dead = _sp.Popen(["true"])
+        dead.wait()
+        pdb3 = os.path.join(d, "k.db")
+        dbmod.init_db(pdb3)
+        c = dbmod.connect(pdb3)
+        rid3 = dbmod.create_run(c, "/k", backend="native", size_mode="disk", scanner_pid=dead.pid)
+        c.execute("INSERT INTO directories (run_id, path, name, depth, status, own_bytes) VALUES (?,?,?,?,?,?)",
+                  (rid3, "/k", "k", 0, "discovered", 4096))
+        c.execute("UPDATE scan_runs SET status='discovering', phase='discovering' WHERE id=?", (rid3,))
+        c.commit()
+        c.close()
+        sid = M.register_scan(data, root_path="/k", db_path=pdb3, backend="native", size_mode="disk")
+        mc = dbmod.connect(M.manager_db_path(data))
+        mc.execute("UPDATE scans SET status='discovering', phase='discovering' WHERE id=?", (sid,))
+        mc.commit()
+        mc.close()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = C.main(["partial", str(sid), "--data-dir", data])
+        assert rc == 0, rc
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    print("[Y1~Y4] OK  du 부분 집계 하한값·잘린 목록 표시·--json 표준출력·죽은 스캔 CLI 부분 집계")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1813,7 +1897,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_ap_explore_round14, check_aq_live_snapshot,
             check_ar_crash_round15, check_as_regress_round16,
             check_at_livesnap_round16, check_au_regress_round17,
-            check_av_round17_flow, check_aw_round18_regress]
+            check_av_round17_flow, check_aw_round18_regress,
+            check_ax_round18_data]
 
 
 def main() -> int:

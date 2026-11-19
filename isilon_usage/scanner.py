@@ -1991,6 +1991,25 @@ def partial_aggregate(db_path: str, run_id: Optional[int] = None, *, stop_event=
                          SELECT SUM(c.total_files) FROM directories c
                          WHERE c.run_id=directories.run_id AND c.parent_id=directories.id), 0)
                  WHERE run_id=? AND depth=? AND id>=? AND id<? AND status!='done'"""
+        # du 백엔드: 'done' 행은 du 가 그 하위만 따로 잰 값이라, 탐색 때 다른 폴더의 own_bytes 로 한 번만 센 하드링크를
+        # 다시 포함한다 — 부모에서 둘을 더하면 같은 파일을 두 번 세어 '하한값'이 실제보다 커졌다(18회차 점검: +77,824 B).
+        # 그래서 du 실행의 미완료 행 용량은 탐색 값(하드링크 한 번만 셈)만으로 재귀 합산한다(파일 수는 하드링크와 무관).
+        du_run = (str(run["backend"] or "") == "du")
+        sql_disc = None
+        if du_run:
+            conn.execute("CREATE TEMP TABLE IF NOT EXISTS _pa_disc (id INTEGER PRIMARY KEY, b INTEGER NOT NULL)")
+            conn.execute("DELETE FROM _pa_disc")
+            sql_disc = """INSERT OR REPLACE INTO _pa_disc (id, b)
+                          SELECT d.id, d.own_bytes + COALESCE((
+                              SELECT SUM(t.b) FROM directories c JOIN _pa_disc t ON t.id=c.id
+                              WHERE c.run_id=d.run_id AND c.parent_id=d.id), 0)
+                          FROM directories d WHERE d.run_id=? AND d.depth=? AND d.id>=? AND d.id<?"""
+            sql = sql.replace("""SET total_bytes = own_bytes + COALESCE((
+                         SELECT SUM(c.total_bytes) FROM directories c
+                         WHERE c.run_id=directories.run_id AND c.parent_id=directories.id), 0),""",
+                              """SET total_bytes = COALESCE((SELECT b FROM _pa_disc WHERE _pa_disc.id=directories.id),
+                                             own_bytes),""")
+            assert "_pa_disc" in sql
         done_rows = 0
         stopped = False
 
@@ -2009,6 +2028,8 @@ def partial_aggregate(db_path: str, run_id: Optional[int] = None, *, stop_event=
                 if _stopped():
                     stopped = True
                     break
+                if sql_disc is not None:
+                    conn.execute(sql_disc, (run_id, depth, w, w + int(window)))
                 try:
                     cur = conn.execute(sql, (run_id, depth, w, w + int(window)))
                 except Exception:  # noqa: BLE001 — 인덱스 없는 비정상 DB 는 힌트 없이 폴백

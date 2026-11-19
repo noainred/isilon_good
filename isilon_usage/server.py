@@ -587,7 +587,7 @@ def list_children(conn, run_id: int, parent_id: Optional[int], *, limit: int = 2
                       own_bytes, total_bytes, total_files, status
                FROM directories WHERE run_id=? AND parent_id IS NULL
                ORDER BY total_bytes DESC LIMIT ?""",
-            (run_id, limit),
+            (run_id, limit + 1),
         ).fetchall()
     else:
         rows = conn.execute(
@@ -595,9 +595,24 @@ def list_children(conn, run_id: int, parent_id: Optional[int], *, limit: int = 2
                       own_bytes, total_bytes, total_files, status
                FROM directories WHERE run_id=? AND parent_id=?
                ORDER BY total_bytes DESC LIMIT ?""",
-            (run_id, parent_id, limit),
+            (run_id, parent_id, limit + 1),
         ).fetchall()
-    return {"ok": True, "children": [dict(r) for r in rows]}
+    rows = list(rows)
+    out = {"ok": True, "children": [dict(r) for r in rows[:limit]]}
+    if len(rows) > limit:
+        # 상위 limit 개만 보낸다 — 나머지가 있다는 것과 그 합을 함께 알려, 화면이 잘린 목록을 전체처럼(비율 합 100%)
+        # 보이지 않게 한다(18회차 점검: 하위 300개 중 200개만, 아무 표시 없이).
+        shown_b = sum(int(r["total_bytes"] or r["own_bytes"] or 0) for r in rows[:limit])
+        shown_f = sum(int(r["total_files"] or r["file_count"] or 0) for r in rows[:limit])
+        cond = "parent_id IS NULL" if parent_id is None else "parent_id=?"
+        args = (run_id,) if parent_id is None else (run_id, parent_id)
+        agg = conn.execute("SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN total_bytes>0 THEN total_bytes ELSE own_bytes END),0) AS b, "
+                           "COALESCE(SUM(CASE WHEN total_files>0 THEN total_files ELSE file_count END),0) AS f "
+                           "FROM directories WHERE run_id=? AND " + cond, args).fetchone()
+        out.update(truncated=True, total_count=int(agg["n"]),
+                   rest_count=max(0, int(agg["n"]) - limit), rest_bytes=max(0, int(agg["b"]) - shown_b),
+                   rest_files=max(0, int(agg["f"]) - shown_f))
+    return out
 
 
 # 상위 디렉터리 표의 정렬 가능한 컬럼(화이트리스트 — SQL 주입 방지)
@@ -685,18 +700,22 @@ def search_dirs(pconn, run_id: int, q: str, *, limit: int = 200) -> dict:
                   own_bytes, total_bytes, total_files, status
            FROM directories WHERE run_id=? AND path LIKE ? ESCAPE '\\'
            ORDER BY total_bytes DESC LIMIT ?""",
-        (run_id, "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%", limit),
+        (run_id, "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%", limit + 1),
     ).fetchall()
-    return {"ok": True, "results": [dict(r) for r in rows]}
+    return {"ok": True, "results": [dict(r) for r in rows[:limit]], "truncated": len(rows) > limit, "limit": limit}
 
 
 def list_errors(pconn, run_id: int, *, limit: int = 1000) -> dict:
     rows = pconn.execute(
         """SELECT path, error, depth FROM directories
            WHERE run_id=? AND error IS NOT NULL ORDER BY path LIMIT ?""",
-        (run_id, limit),
+        (run_id, limit + 1),
     ).fetchall()
-    return {"ok": True, "errors": [dict(r) for r in rows]}
+    out = {"ok": True, "errors": [dict(r) for r in rows[:limit]], "truncated": len(rows) > limit, "limit": limit}
+    if len(rows) > limit:
+        out["total_count"] = int(pconn.execute("SELECT COUNT(*) FROM directories WHERE run_id=? AND error IS NOT NULL",
+                                               (run_id,)).fetchone()[0])
+    return out
 
 
 def forecast_capacity(mconn, scan_row) -> dict:
