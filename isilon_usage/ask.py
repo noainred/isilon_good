@@ -479,35 +479,59 @@ def llm_phrase(question: str, facts: dict, cfg: dict):
 
 
 _NUM_RE = re.compile(r"(\d+(?:[.,]\d+)*)\s*(만|억|%)?")
-_DATE_RE = re.compile(r"\d{4}[-./]\d{1,2}[-./]\d{1,2}|\d{1,2}:\d{2}(?::\d{2})?")
+_TIME_RE = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\b")
+_LISTNUM_RE = re.compile(r"(?m)^\s*\d{1,2}[.)]\s")
+_RANKWORD_RE = re.compile(r"(상위|하위|top|TOP|Top)\s*\d{1,2}|\d{1,2}\s*(위|번째|등)")
 
 
 def _num_tokens(text: str) -> list:
-    """(값, 중요한가) 목록. 날짜·시각은 뺀다. 중요한 수 = 소수·100 이상·퍼센트 — 목록 번호·'상위 5개' 같은 작은
-    정수는 검사하지 않는다(22회차 점검: 거의 모든 다듬은 문장을 버리던 문제)."""
+    """(값, 원문, 접미사) 목록."""
     out = []
-    for m in _NUM_RE.finditer(_DATE_RE.sub(" ", text or "")):
+    for m in _NUM_RE.finditer(text or ""):
         raw, suf = m.group(1).replace(",", ""), m.group(2)
         try:
             v = float(raw)
         except ValueError:
             continue
-        if suf == "만":
-            v *= 1e4
-        elif suf == "억":
-            v *= 1e8
-        out.append((v, ("." in raw) or v >= 100 or suf == "%"))
+        out.append((v * (1e4 if suf == "만" else 1e8 if suf == "억" else 1), raw, suf))
     return out
 
 
+def _max_list_len(o) -> int:
+    best, stack = 0, [o]
+    while stack:
+        x = stack.pop()
+        if isinstance(x, dict):
+            stack.extend(x.values())
+        elif isinstance(x, (list, tuple)):
+            best = max(best, len(x))
+            stack.extend(x)
+    return best
+
+
 def _numbers_grounded(phrased: str, facts: dict, rule_answer: str) -> bool:
-    """LLM 문장의 '중요한' 숫자가 모두 사실(facts)·규칙 답변의 어떤 수와 반올림 오차 안에서 맞는지 — 지어낸 수(9999 TB)는
-    걸러 내고, '약 210 KB'(210.00)·'45%'(45.2)·'123만 개'(1,234,567) 같은 반올림은 허용한다."""
-    allowed = [v for v, _ in _num_tokens(json.dumps(facts, ensure_ascii=False) + " " + (rule_answer or ""))]
-    for v, important in _num_tokens(phrased):
-        if not important:
-            continue
-        if not any(abs(a - v) <= max(0.6, 0.006 * abs(a)) for a in allowed):
+    """LLM 문장의 숫자가 사실(facts)·규칙 답변과 맞는지 — 지어낸 수는 걸러 내고 반올림은 허용한다.
+
+    - 100 미만 정수(소수점·%·만/억 없음)는 사실의 어떤 정수와 '정확히' 같아야 한다 — 예전 완화(22회차)는 작은 정수를
+      검사하지 않아 '13대 중 3대 다운'(사실 1대)·'21 TB'(사실 210)를 통과시켰다(23회차 점검). 단 목록 번호(1.)·순위
+      말(상위 5개·3위)·사실 목록 길이 이하의 개수는 허용.
+    - 그 밖(소수·100 이상·%·만/억)은 자릿수에 맞는 반올림 오차(+0.6% 상대 오차) 안에서 사실의 수와 맞아야 한다.
+    - 날짜·시각 숫자는 사실에도 있으면(그대로 토큰이 됨) 허용 — 예전엔 사실 쪽에서 날짜를 지워 연도가 거부됐다."""
+    src = json.dumps(facts, ensure_ascii=False) + " " + (rule_answer or "")
+    allowed = [v for v, _r, _s in _num_tokens(src)]
+    allowed_int = {int(v) for v in allowed if float(v).is_integer()}
+    list_max = _max_list_len(facts)
+    text = _TIME_RE.sub(" ", _LISTNUM_RE.sub(" ", phrased or ""))
+    text = _RANKWORD_RE.sub(" ", text)
+    for v, raw, suf in _num_tokens(text):
+        if "." not in raw and not suf and v < 100:
+            if int(v) in allowed_int or (0 < v <= list_max):
+                continue
+            return False
+        scale = 1e4 if suf == "만" else 1e8 if suf == "억" else 1
+        dec = len(raw.split(".", 1)[1]) if "." in raw else 0
+        half = 0.5 * (10 ** -dec) * scale
+        if not any(abs(a - v) <= half + 0.006 * abs(a) for a in allowed):
             return False
     return True
 

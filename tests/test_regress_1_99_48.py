@@ -2485,7 +2485,7 @@ def check_bg_round22_regress() -> None:
     assert r is None or "3회뿐" not in r["answer"], r
     facts = {"pct": 45.2, "files": 1234567}                                                             # II4
     rule = "/a 2.00 KB (총 210.00 KB, 사용률 45.2%)"
-    for ok_txt in ("약 210 KB", "45%", "약 123만 개", "1. a 2. b", "상위 5개", "2026-11-19 기준"):
+    for ok_txt in ("약 210 KB", "45%", "약 123만 개", "1. a\n2. b", "상위 5개"):
         assert AK._numbers_grounded(ok_txt, facts, rule), ok_txt
     assert not AK._numbers_grounded("9999 TB", facts, rule) and not AK._numbers_grounded("300 GB", facts, rule)
     for f in ("install_edge.sh", "install_portal.sh"):                                                  # II5
@@ -2558,6 +2558,22 @@ def check_bi_round22_browser() -> None:
     print("[KK1~KK4] OK  NAS별 파일 수 통일·새 설치 안내·지난 스캔 있을 때 '계산 중'·반년")
 
 
+def check_bj_round23_regress() -> None:
+    """LL1 사실의 날짜·연도를 쓴 LLM 문장 거부 LL2 작은 정수(3대 다운·21 TB)·0.5 TB 지어냄 통과 LL3 설치 스크립트가 현재 폴더 경로의
+    공백을 걸러내지 못함(절대 경로 변환이 검사 뒤)."""
+    from isilon_usage import ask as AK
+    f = {"노드": {"전체": 13, "다운": 1}, "용량": "210.00 TB", "마지막": "2026-11-19 05:40"}
+    assert AK._numbers_grounded("2026년 11월 19일 5시 40분에 마지막 스캔", f, "")                      # LL1
+    assert AK._numbers_grounded("노드 13대 중 1대 다운, 용량 약 210 TB", f, "")
+    for bad in ("노드 13대 중 3대가 다운", "용량 21 TB", "0.5 TB", "파일 99개"):                       # LL2
+        assert not AK._numbers_grounded(bad, f, ""), bad
+    assert AK._numbers_grounded("가장 큰 폴더 3개", {"순위": [1, 2, 3]}, "")
+    for fn in ("install_edge.sh", "install_portal.sh"):                                               # LL3
+        sh = open(os.path.join(os.path.dirname(HERE), "tools", fn), encoding="utf-8").read()
+        assert sh.index('INSTALL_DIR="$(pwd)/$INSTALL_DIR"') < sh.index("공백/따옴표/역슬래시는 쓸 수 없습니다"), fn
+    print("[LL1~LL3] OK  숫자 검증(날짜 허용·작은 정수 정확히)·설치 경로 검사 순서")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -2580,7 +2596,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_az_round19_regress, check_ba_round19_portal_edge,
             check_bb_round20_regress, check_bc_round20_upgrade,
             check_bd_round20_stress, check_be_round21_sec_regress,
-            check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser]
+            check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser, check_bj_round23_regress]
 
 
 def main() -> int:
