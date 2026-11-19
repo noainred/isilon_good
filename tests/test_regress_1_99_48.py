@@ -3542,6 +3542,62 @@ def check_ce_round30_regress() -> None:
     print("[GGG1~GGG4] OK  비교는 잘린 스캔 깊이만·어레이 이름 가림 안 함·받는 사람 섞인 형식·읽기 오류 문구")
 
 
+def check_cf_round30_features() -> None:
+    """HHH1 '가장 오래된/작은 파일'·'가장 많은 확장자'까지 '가장 큰 파일'로 답함 HHH2 '1,000일'=0일·'1년 6개월'=1년·'한 달'·'90 days' 못 읽음
+    HHH3 예측이 크기 기준(apparent/disk)을 섞어 엉뚱한 추세 HHH4 심볼릭 링크 경로의 마운트 판정 HHH5 콜드 이동 매니페스트가 심어 둔 링크를 따라 씀
+    HHH6 테스트 데이터 폴더 수 상한 없음 HHH7 중복 찾기·콜드 후보가 읽지 못한 폴더를 숨김 HHH8 숫자 인자(음수 limit 등)·내보내기 형식·폴더 이력 root 끝 '/'·부분 집계 비교 표시·CLI 음수 깊이."""
+    from isilon_usage import ask as AK, server as SV, manager as M, systune as ST, coldtier as CT, gentest as GT, dups as DP, db as dbmod
+    data = {"scope": "edge", "overall": {"roots": []}, "detail": {
+        "top_files": [{"path": "/a", "bytes": 5}], "age": [{"key": "5년+", "bytes": 1, "files": 1}],
+        "extensions": [{"key": ".txt", "bytes": 1, "files": 1}], "sizes": [{"key": "<4KB", "bytes": 1, "files": 1}]}}
+    for q in ("가장 오래된 파일은?", "가장 작은 파일 알려줘", "가장 많은 파일 확장자는?"):               # HHH1
+        assert AK.respond(q, data, {"enabled": False}).get("intent") != "big_files", q
+    assert AK.respond("제일 큰 파일은?", data, {"enabled": False}).get("intent") == "big_files"
+    P = AK.parse_threshold_days                                                                        # HHH2
+    assert (P("1,000일"), P("1년 6개월"), P("한 달 넘게"), P("older than 90 days"), P("일주일"), P("1,5년"), P("2024년 이후")) \
+        == (1000, 545, 30, 90, 7, 548, None)
+    d = tempfile.mkdtemp(prefix="iu_cf_")
+    try:
+        data_dir = os.path.join(d, "data")                                                            # HHH3
+        M.init_manager(data_dir)
+        spec = (("apparent", 130), ("apparent", 130), ("apparent", 130), ("disk", 100), ("disk", 100))
+        sids = [M.register_scan(data_dir, root_path="/r", db_path=os.path.join(d, "x%d.db" % i), backend="native",
+                                size_mode=mode) for i, (mode, _b) in enumerate(spec)]
+        c = dbmod.connect(M.manager_db_path(data_dir))
+        for i, (sid, (_m, b)) in enumerate(zip(sids, spec)):
+            c.execute("UPDATE scans SET status='done', scanned_bytes=?, finished_at=? WHERE id=?",
+                      (b * 1024 ** 3, time.time() - (5 - i) * 86400, sid))
+        c.commit()
+        f = SV.forecast_capacity(c, M.get_scan(c, sid))
+        c.close()
+        assert f["points"] == 2 and abs(f["growth_per_day"] or 0) < 1024, f
+        real = os.path.join(d, "real")                                                                # HHH4
+        os.makedirs(real)
+        os.symlink(real, os.path.join(d, "lnk"))
+        mounts = [{"mount": "/", "fstype": "ext4", "opts": {}}, {"mount": real, "fstype": "nfs", "opts": {}}]
+        assert ST._pick_target(mounts, os.path.join(d, "lnk"))["mount"] == real
+        src = _read("coldtier.py")                                                                    # HHH5
+        assert '[ -e "$MANIFEST" ] || [ -L "$MANIFEST" ]' in src and "set -C" in src
+        ok, why, _plan = GT.validate(os.path.join(d, "gen"), 10 ** 9, 0, 0, 0)
+        assert ok is False and "디렉터리" in why, why                                                   # HHH6
+        t = os.path.join(d, "t")                                                                       # HHH7
+        os.makedirs(os.path.join(t, "deny"))
+        os.chmod(os.path.join(t, "deny"), 0)
+        r = DP.find_duplicates(t)
+        os.chmod(os.path.join(t, "deny"), 0o755)
+        assert "unreadable_dirs" in r, r
+        if os.geteuid() != 0:
+            assert r.get("unreadable_dirs", 0) >= 1, r
+        assert '"unreadable_dirs": len(unread)' in _read("dups.py") and '"unreadable_dirs": len(unread)' in src
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    sv = _read("server.py")                                                                            # HHH8
+    assert 'max(1, min(1000, self._query_int(qs, "limit") or 15))' in sv and 'format 은 csv 또는 json 입니다' in sv
+    assert 'root = root.rstrip("/") or "/"' in sv and '"partial": bool(' in sv
+    assert '("max_depth", "fold_depth")' in _read("cli.py")
+    print("[HHH1~HHH8] OK  질의 규칙·기간 해석·예측 기준·실제 경로 마운트·매니페스트 O_EXCL·폴더 상한·읽지 못한 폴더 수·숫자 인자")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3576,7 +3632,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bv_round27_security, check_bw_round26_portal_ui,
             check_bx_round28_regress, check_by_round28_install,
             check_bz_round28_dashboard, check_ca_round29_regress,
-            check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress]
+            check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress,
+            check_cf_round30_features]
 
 
 def main() -> int:

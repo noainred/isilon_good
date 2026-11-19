@@ -116,7 +116,11 @@ def atime_policy(path):
 def _pick_target(mounts, scan_root):
     if not scan_root:
         return mounts[0] if mounts else None
-    root = os.path.abspath(scan_root)
+    # 실제 경로로 — 심볼릭 링크로 준 경로가 링크가 있는 곳의 마운트(/ 등)로 판정돼 NFS·noatime 여부가 틀렸다(30회차 점검)
+    try:
+        root = os.path.realpath(scan_root)
+    except (OSError, ValueError):
+        root = os.path.abspath(scan_root)
     best, best_len = None, -1
     for m in mounts:
         mp = m["mount"]

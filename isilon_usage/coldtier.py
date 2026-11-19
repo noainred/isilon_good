@@ -80,7 +80,9 @@ mkdir -p -- "$DST"
 if [ "$DRY_RUN" = "1" ]; then
   WORK="$(mktemp "${{TMPDIR:-/tmp}}/coldmove_dry.XXXXXX")"
 else
-  [ -e "$MANIFEST" ] && {{ echo "기존 매니페스트 있음: $MANIFEST (이전 기록 보호). 지우거나 MANIFEST=... 지정 후 재실행." >&2; exit 1; }}
+  [ -e "$MANIFEST" ] || [ -L "$MANIFEST" ] && {{ echo "기존 매니페스트 있음: $MANIFEST (이전 기록 보호). 지우거나 MANIFEST=... 지정 후 재실행." >&2; exit 1; }}
+  # 새 파일로만 만든다(O_EXCL) — /var/tmp 의 예측 가능한 이름에 미리 심어 둔 심볼릭 링크를 따라 다른 파일을 덮어쓰지 않게(30회차 점검)
+  ( umask 077; set -C; : > "$MANIFEST" ) 2>/dev/null || {{ echo "매니페스트를 새로 만들 수 없음: $MANIFEST" >&2; exit 1; }}
   WORK="$MANIFEST"
 fi
 # 읽을 수 없는 하위 폴더(Permission denied)가 있어도 중단하지 않는다(set -e 로 매니페스트만 남고 재실행이 막히던 문제) —
@@ -208,7 +210,8 @@ def plan_cold_move(root: str, *, days: int = 365, field: str = "mtime",
         root_dev = os.lstat(root).st_dev
     except OSError:
         root_dev = None
-    for dp, dirs, files in os.walk(root):   # followlinks=False: 심볼릭 디렉터리 안 따라감
+    unread = []   # 읽지 못한 폴더(그 안의 파일은 후보에서 빠짐 — 30회차 점검: 조용히 건너뜀)
+    for dp, dirs, files in os.walk(root, onerror=unread.append):   # followlinks=False: 심볼릭 디렉터리 안 따라감
         if _stopped():
             break
         # 생성 스크립트의 find -xdev 와 같게 마운트 경계를 넘지 않는다 — 예전엔 미리보기만 하위 마운트까지
@@ -266,7 +269,7 @@ def plan_cold_move(root: str, *, days: int = 365, field: str = "mtime",
         "ok": True, "root": root, "target": target, "days": days, "field": field,
         "min_size": min_size, "total_cold_bytes": int(total_bytes),
         "cold_file_count": int(cold_count), "scanned_files": int(scanned),
-        "truncated": truncated, "oldest_age_days": round(oldest, 1), "top_dirs": tops,
+        "truncated": truncated, "unreadable_dirs": len(unread), "oldest_age_days": round(oldest, 1), "top_dirs": tops,
     }
     if target:
         out["script"] = build_move_script(root, target, days, field, min_size)

@@ -12,6 +12,7 @@ from typing import Optional
 
 CHUNK = 1024 * 1024          # 파일 쓰기 버퍼(1MB)
 MAX_TOTAL_FILES = 50_000_000  # 안전 상한(실수로 디스크/아이노드 소진 방지)
+MAX_TOTAL_DIRS = 5_000_000    # 폴더 수 상한 — 파일 0개면 상한이 없어 폴더 10억 개 요청도 받았다(30회차 점검)
 
 # 생성을 거부할 시스템 경로(정확히 이 경로면 거부)
 _DENY = {"/", "/bin", "/sbin", "/usr", "/lib", "/lib64", "/etc", "/boot",
@@ -53,6 +54,9 @@ def validate(base: str, n_dirs: int, n_subdirs: int, n_files: int, file_size: in
     if plan["total_files"] > MAX_TOTAL_FILES:
         return False, ("총 파일 수가 너무 많습니다(%d > 상한 %d)."
                        % (plan["total_files"], MAX_TOTAL_FILES)), plan
+    if int(plan.get("total_dirs") or 0) > MAX_TOTAL_DIRS:
+        return False, ("총 디렉터리 수가 너무 많습니다(%d > 상한 %d)."
+                       % (plan["total_dirs"], MAX_TOTAL_DIRS)), plan
     # 부모 경로 쓰기 권한
     parent = base if os.path.isdir(base) else (os.path.dirname(base) or "/")
     if not os.path.isdir(parent):

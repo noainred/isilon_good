@@ -77,18 +77,36 @@ def _fmt_when(ts) -> str:
         return "—"
 
 
+_KO_NUM = {"한": 1, "하루": 1, "두": 2, "이틀": 2, "세": 3, "사흘": 3, "네": 4, "나흘": 4, "다섯": 5, "여섯": 6,
+           "일곱": 7, "여덟": 8, "아홉": 9, "열": 10}
+_EN_UNIT_DAYS = {"day": 1, "days": 1, "week": 7, "weeks": 7, "month": 30, "months": 30, "year": 365, "years": 365}
+
+
 def parse_threshold_days(q: str):
-    """'30일', '1년', '6개월' 같은 표현을 일수로. 없으면 None."""
+    """'30일', '1년 6개월', '한 달', '일주일', '1,000일', '90 days' 같은 표현을 일수로. 없으면 None.
+
+    30회차 점검: '1,000일'을 '000일'(0일)로, '1년 6개월'을 1년으로, '한 달'·'일주일'·'90 days'는 못 읽고 1년으로 답했다."""
     if "반년" in q:   # '반년 이상 안 쓴 파일'이 기본 1년으로 바뀌었다(22회차 점검)
         return 182
-    # 소수 허용 — '1.5년'의 '5년'만 읽어 5년으로 답했다(21회차 점검)
-    m = re.search(r"(\d+(?:\.\d+)?)\s*(개월|주일|일|주|달|년|연)", q)
-    if not m:
-        return None
-    val = float(m.group(1))
-    if m.group(2) in ("년", "연") and val >= 1000:
-        return None        # '2024년 이후' 같은 연도는 기간이 아니다(예전엔 2024년 = 73만 일로 읽었다)
-    return int(round(val * _UNIT_DAYS.get(m.group(2), 1)))
+    q2 = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", q)          # 천 단위 쉼표
+    q2 = re.sub(r"(?<![가-힣])일주일", "1주", q2)
+    q2 = re.sub(r"(?<![가-힣])하루", "1일", q2)
+    for w, n in _KO_NUM.items():                               # '한 달'·'두 주'·'세 해' → 숫자
+        q2 = re.sub(r"(?<![가-힣])%s\s*(개월|달|주일|주|해|년)" % w, lambda m, n=n: "%d%s" % (n, m.group(1)), q2)
+    q2 = re.sub(r"(\d)\s*해", r"\1년", q2)
+    q2 = re.sub(r"(?<=\d),(?=\d{1,2}(?!\d))", ".", q2)      # '1,5년' = 1.5년(소수 쉼표)
+    total, found = 0.0, False
+    # 소수 허용 — '1.5년'의 '5년'만 읽어 5년으로 답했다(21회차 점검). 여러 단위는 더한다('1년 6개월').
+    for m in re.finditer(r"(\d+(?:\.\d+)?)\s*(개월|주일|일|주|달|년|연)", q2):
+        val = float(m.group(1))
+        if m.group(2) in ("년", "연") and val >= 1000:
+            continue       # '2024년 이후' 같은 연도는 기간이 아니다(예전엔 2024년 = 73만 일로 읽었다)
+        total += val * _UNIT_DAYS.get(m.group(2), 1)
+        found = True
+    for m in re.finditer(r"(\d+(?:\.\d+)?)\s*(days?|weeks?|months?|years?)\b", q2.lower()):
+        total += float(m.group(1)) * _EN_UNIT_DAYS[m.group(2)]
+        found = True
+    return int(round(total)) if found else None
 
 
 def _has(q: str, *words: str) -> bool:
@@ -277,7 +295,10 @@ def _h_top_dirs(q, data):
 
 
 def _h_big_files(q, data):
-    if not (_has(q, "파일") and _has(q, "제일", "가장", "최대", "큰", "대용량", "top", "탑")):
+    # '큰 파일'만 — '가장 오래된/작은/최근 파일', '가장 많은 파일 확장자'까지 '가장 큰 파일'로 답했다(30회차 점검)
+    if not (_has(q, "파일") and _has(q, "큰", "대용량", "최대", "용량 많", "top", "탑")):
+        return None
+    if _has(q, "작은", "오래", "최근", "확장자", "분포", "종류", "형식"):
         return None
     d = _need_detail(data)
     if not d or not d.get("top_files"):
@@ -299,6 +320,7 @@ def _h_old_data(q, data):
     if not d or not d.get("age"):
         return {"answer": _detail_unavailable(data), "facts": {}}
     thr = parse_threshold_days(q)
+    _dflt = thr is None
     if thr is None:
         thr = 365     # 기본: 1년 이상 = 아카이브 후보(명시한 '0일'은 그대로 — 예전엔 0 이 365 로 바뀜)
     b, f, labels, strad = _sum_age_over(d["age"], thr)
@@ -308,7 +330,9 @@ def _h_old_data(q, data):
              "파일수": f, "버킷": labels}
     return {"answer": f"마지막 수정(mtime) 기준 **{human_thr} 이상** 안 바뀐 데이터는 "
                       f"**{fmt_bytes(b)}** ({fmt_num(f)}개) 입니다 — 아카이브/정리 후보. "
-                      f"(버킷: {', '.join(labels) or '—'})" + _range_note(b, strad), "facts": facts}
+                      f"(버킷: {', '.join(labels) or '—'})" + _range_note(b, strad)
+                      + (" ※ 기간을 따로 말하지 않아(또는 읽지 못해) 1년 기준으로 답했습니다 — 예: '6개월', '90일'." if _dflt else ""),
+            "facts": facts}
 
 
 def _h_cold_data(q, data):
@@ -318,6 +342,7 @@ def _h_cold_data(q, data):
     if not d or not d.get("atime_age"):
         return {"answer": _detail_unavailable(data), "facts": {}}
     thr = parse_threshold_days(q)
+    _dflt = thr is None
     if thr is None:
         thr = 365
     b, f, labels, strad = _sum_age_over(d["atime_age"], thr)
@@ -325,7 +350,8 @@ def _h_cold_data(q, data):
     facts = {"기준": f"{human_thr} 이상 미접근", "용량": fmt_bytes(b), "파일수": f, "버킷": labels}
     return {"answer": f"마지막 접근(atime) 기준 **{human_thr} 이상** 안 열어본 콜드 데이터는 "
                       f"**{fmt_bytes(b)}** ({fmt_num(f)}개) 입니다. "
-                      f"(atime 정책이 noatime 이면 값이 무의미할 수 있음)" + _range_note(b, strad),
+                      f"(atime 정책이 noatime 이면 값이 무의미할 수 있음)" + _range_note(b, strad)
+                      + (" ※ 기간을 따로 말하지 않아(또는 읽지 못해) 1년 기준으로 답했습니다 — 예: '6개월', '90일'." if _dflt else ""),
             "facts": facts}
 
 

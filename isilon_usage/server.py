@@ -939,10 +939,16 @@ def list_errors(pconn, run_id: int, *, limit: int = 1000) -> dict:
 def forecast_capacity(mconn, scan_row) -> dict:
     """같은 루트의 완료 스캔 이력으로 증가 추세(선형 회귀)와 소진 예상일을 계산."""
     root = scan_row["root_path"]
+    # 같은 크기 기준(apparent/disk)의 스캔만 — 섞으면 기준 차이가 '줄어듦/늘어남'으로 보여 추세·소진일이 엉터리였다
+    # (30회차 점검: 평평한 데이터에 하루 -9 GB). 기준은 이 루트의 마지막 완료 스캔.
+    _sm = mconn.execute("SELECT size_mode FROM scans WHERE root_path=? AND status='done' ORDER BY id DESC LIMIT 1",
+                        (root,)).fetchone()
+    _sm = (_sm["size_mode"] if _sm else None) or ""
     pts = [dict(r) for r in mconn.execute(
         """SELECT id, COALESCE(finished_at, started_at) AS ts, scanned_bytes
            FROM scans WHERE root_path=? AND status='done' AND scanned_bytes>0
-           ORDER BY id""", (root,))]
+             AND COALESCE(size_mode,'')=?
+           ORDER BY id""", (root, _sm))]
     latest = mconn.execute(
         "SELECT fs_total_bytes, fs_used_bytes, fs_free_bytes FROM scans "
         "WHERE root_path=? ORDER BY id DESC LIMIT 1", (root,)).fetchone()
@@ -1063,6 +1069,8 @@ def diff_scans(data_dir: str, base_id: int, target_id: int, *,
                        "started_at": target["started_at"]},
             "total_delta": (target["scanned_bytes"] or 0) - (base["scanned_bytes"] or 0),
             "compared_depth": eff_depth,     # 두 스캔이 모두 저장한 깊이(이 깊이까지 행을 비교)
+            # 부분 집계(멈춘 스캔의 하한값)와 비교했으면 표시 — 변화량도 하한 기준이다(30회차 점검)
+            "partial": bool(dict(base).get("status") != "done" or dict(target).get("status") != "done"),
             "rows": result,
         }
     finally:
@@ -4242,7 +4250,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 from . import dups as dupsmod
                 self._send_json(dupsmod.find_duplicates(
                     p, min_size=self._query_int_or(qs, "min_size", 4096),
-                    max_files=self._query_int(qs, "max_files") or 2_000_000))
+                    max_files=max(1, self._query_int(qs, "max_files") or 2_000_000)))
                 return
 
             if path == "/api/coldplan":
@@ -4270,7 +4278,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 res = coldmod.plan_cold_move(
                     p, days=self._query_int_or(qs, "days", 365), field=field,
                     target=tgt, min_size=self._query_int_or(qs, "min_size", 0),
-                    max_files=self._query_int(qs, "max_files") or 2_000_000)
+                    max_files=max(1, self._query_int(qs, "max_files") or 2_000_000))
                 if field == "atime" and res.get("ok"):
                     # atime 은 noatime 마운트에서 무의미 — /api/atime 과 같은 신뢰도 소스를 공유(단일 소스).
                     try:
@@ -4306,7 +4314,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._send_json({"ok": True, "has_base": False,
                                      "reason": "비교할 이전 완료 스캔이 없습니다."})
                     return
-                limit = self._query_int(qs, "limit") or 15
+                limit = max(1, min(1000, self._query_int(qs, "limit") or 15))   # 음수면 끝에서 잘렸다(30회차 점검)
                 d = diff_scans(self.data_dir, int(prev["id"]), scan_id,
                                limit=400, max_depth=self._query_int(qs, "max_depth"))
                 if not d.get("ok"):
@@ -4337,7 +4345,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self._send_json({"ok": False, "reason": "base/target 필요"}, status=400)
                     return
                 self._send_json(diff_scans(self.data_dir, base, target,
-                                           max_depth=self._query_int(qs, "max_depth")))
+                                           max_depth=(None if (self._query_int(qs, "max_depth") or 0) < 0
+                                                      else self._query_int(qs, "max_depth"))))
                 return
 
             if path == "/api/folder-history":
@@ -4346,6 +4355,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 dpath = (qs.get("path", [""])[0] or "").strip()
                 if len(dpath) > 1:
                     dpath = dpath.rstrip("/") or "/"   # 끝 '/' 가 붙으면 늘 0건이었다(21회차 점검)
+                if len(root) > 1:
+                    root = root.rstrip("/") or "/"     # root 도 같은 규칙(30회차 점검: root 끝 '/' 면 0건)
                 if not root or not dpath:
                     self._send_json({"ok": False, "reason": "root/path 필요"}, status=400)
                     return
@@ -4410,7 +4421,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 if row is None or not os.path.exists(row["db_path"]):
                     self._send_json({"ok": False, "reason": "no_runs"}, status=404)
                     return
-                self._export(row, fmt=(qs.get("format", ["csv"])[0]))
+                _fmt = (qs.get("format", ["csv"])[0] or "csv").lower()
+                if _fmt not in ("csv", "json"):     # 모르는 형식을 말없이 CSV 로 주던 것(30회차 점검)
+                    self._send_json({"ok": False, "reason": "format 은 csv 또는 json 입니다."}, status=400)
+                    return
+                self._export(row, fmt=_fmt)
                 return
 
             if path == "/api/dbexport":

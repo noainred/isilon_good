@@ -3843,6 +3843,7 @@ async function runDiff() {
     if (j.root_path) diffRoot = j.root_path;
     const sign = j.total_delta >= 0 ? "+" : "−";
     $("diffSummary").innerHTML = `전체 변화: <b>${sign}${fmtBytes(Math.abs(j.total_delta))}</b> `
+      + (j.partial ? '<span style="color:var(--warn)" title="멈춘 스캔의 부분 집계(하한값)와 비교 — 변화량도 하한 기준입니다">(부분 집계 포함 · 하한 기준)</span> ' : "")
       + `<span class="sub">· 변경 많은 폴더 Top 10 (크기 변화 기준)</span>`;
     $("diffBody").innerHTML = (j.rows||[]).filter(r=>r.delta!==0 || r.files_delta!==0).slice(0,10).map(r => {
       const up = r.delta >= 0, fd = r.files_delta || 0, fu = fd >= 0;
@@ -5142,7 +5143,8 @@ function renderDups(j) {
   const head = '<div style="margin-bottom:8px;">📂 <span class="mono">' + escHtml(j.root)
     + '</span> · 회수 가능 <b style="color:#166534">' + fmtBytes(j.total_recoverable) + "</b>"
     + " · 중복 그룹 <b>" + fmtNum(j.group_count) + "</b> · 중복 파일 " + fmtNum(j.dup_file_count)
-    + (j.truncated ? ' · <span class="err">상한 도달로 잘림(스캔 ' + fmtNum(j.scanned_files) + "개)</span>" : "") + "</div>";
+    + (j.truncated ? ' · <span class="err">상한 도달로 잘림(스캔 ' + fmtNum(j.scanned_files) + "개)</span>" : "")
+    + (j.unreadable_dirs ? ' · <span class="err">읽지 못한 폴더 ' + fmtNum(j.unreadable_dirs) + "개 — 그 안은 빠짐</span>" : "") + "</div>";
   if (!gs.length) { out.innerHTML = head + '<span class="sub">중복 파일이 없습니다.</span>'; return; }
   const rows = gs.map(g => "<tr><td class=\"num\">" + fmtBytes(g.size) + "</td><td class=\"num\">" + g.count
     + '개</td><td class="num" style="color:#166534">' + fmtBytes(g.recoverable) + "</td>"
@@ -5180,7 +5182,8 @@ function renderCold(j) {
     + escHtml(j.field) + " > " + fmtNum(j.days) + "일</b>" + (j.min_size ? " · ≥" + fmtBytes(j.min_size) : "")
     + ' · 콜드 <b style="color:#0F568A">' + fmtBytes(j.total_cold_bytes) + "</b> · 파일 "
     + fmtNum(j.cold_file_count) + "개 · 가장 오래됨 " + fmtNum(j.oldest_age_days) + "일"
-    + (j.truncated ? ' · <span class="err">상한 도달로 잘림(스캔 ' + fmtNum(j.scanned_files) + "개)</span>" : "") + "</div>";
+    + (j.truncated ? ' · <span class="err">상한 도달로 잘림(스캔 ' + fmtNum(j.scanned_files) + "개)</span>" : "")
+    + (j.unreadable_dirs ? ' · <span class="err">읽지 못한 폴더 ' + fmtNum(j.unreadable_dirs) + "개 — 그 안은 빠짐</span>" : "") + "</div>";
   // atime 기준일 때 noatime 마운트 신뢰도 경고(/api/atime 과 같은 정책 — 단일 소스).
   let warn = "";
   const ai = j.atime_info || {};

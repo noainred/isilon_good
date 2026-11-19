@@ -64,7 +64,9 @@ def find_duplicates(root: str, *, min_size: int = 4096, partial_bytes: int = 409
     seen: set = set()
     scanned = 0
     truncated = False
-    for dp, dirs, files in os.walk(root):   # followlinks=False(기본): 심볼릭 디렉터리 안 따라감
+    # 읽지 못한 폴더 수 — 예전엔 조용히 건너뛰어 결과가 '전부'처럼 보였다(30회차 점검)
+    unread = []
+    for dp, dirs, files in os.walk(root, onerror=unread.append):   # followlinks=False(기본): 심볼릭 디렉터리 안 따라감
         dirs.sort()
         for nm in sorted(files):
             fp = os.path.join(dp, nm)
@@ -157,5 +159,6 @@ def find_duplicates(root: str, *, min_size: int = 4096, partial_bytes: int = 409
         "dup_file_count": sum(g["count"] for g in groups),
         "groups": groups[:top_groups],
         "truncated": truncated,
+        "unreadable_dirs": len(unread),   # 읽지 못해 건너뛴 폴더 수(그 안의 중복은 빠짐)
         "scanned_files": scanned,
     }

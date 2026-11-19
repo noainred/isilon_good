@@ -1281,6 +1281,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     _v = getattr(args, "secs", None)
     if isinstance(_v, float) and not (1.0 <= _v <= 3600.0):
         parser.error("--secs 는 1~3600 초여야 합니다(받은 값: %g)" % _v)
+    for _k in ("max_depth", "fold_depth"):     # 음수 깊이는 아무것도 세지 않고 '깊이 -1 에서 멈춤'으로 끝났다(30회차 점검)
+        _v = getattr(args, _k, None)
+        if isinstance(_v, int) and _v < 0:
+            parser.error("--%s 는 0 이상이어야 합니다(받은 값: %d)" % (_k.replace("_", "-"), _v))
     _v = getattr(args, "keep_per_root", None)
     if isinstance(_v, int) and _v < 1:
         parser.error("--keep-per-root 는 1 이상이어야 합니다(받은 값: %d)" % _v)
