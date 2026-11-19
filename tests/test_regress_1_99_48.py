@@ -2113,6 +2113,64 @@ def check_bb_round20_regress() -> None:
     print("[DD1~DD6] OK  저장된 긴 노드 수정·대문자 scheme·IPv6 원격 구성·설정 실패 보존·CLI resume 원격 검사·로그인 취소 안내")
 
 
+def check_bc_round20_upgrade() -> None:
+    """EE1 깨진 묶음이 매 점검마다 실제 코드 자리에 잠깐 들어갔다 빠지며 .bad 폴더 누적 EE2 쓰다 실패하면 반쯤 쓴 .new 폴더
+    남음 EE3 인터넷 자동 설치 실패를 매 주기 재시도 EE4 설치 스크립트가 멈춘 뒤 복사하다 실패하면 서비스가 꺼진 채
+    EE5 오류로 멈췄다 재개해 끝난 스캔의 옛 오류 문구."""
+    from isilon_usage import upgrade as U
+    d = tempfile.mkdtemp(prefix="iu_bc_")
+    try:
+        pkg_src = HERE
+        code = os.path.join(d, "code")
+        shutil.copytree(pkg_src, os.path.join(code, "isilon_usage"),
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        members = {}
+        for dp, dn, fn in os.walk(pkg_src):
+            dn[:] = [x for x in dn if x != "__pycache__"]
+            for f in fn:
+                full = os.path.join(dp, f)
+                with open(full, "rb") as fh:
+                    members[os.path.relpath(full, pkg_src)] = fh.read()
+        live = os.path.join(code, "isilon_usage", "server.py")
+        before = open(live, "rb").read()
+        bad = dict(members, **{"server.py": b"def broken(:\n"})
+        try:
+            U.apply_package(bad, code)
+            raise AssertionError("깨진 묶음이 설치됨")
+        except OSError as exc:
+            assert "설치하지 않음" in str(exc), exc
+        assert open(live, "rb").read() == before                                                   # EE1
+        left = [n for n in os.listdir(code) if n != "isilon_usage"]
+        assert not left, left
+        os.makedirs(os.path.join(code, "isilon_usage.bad.123"))                                    # 옛 버전이 남긴 것
+        os.makedirs(os.path.join(code, "isilon_usage.new.124"))
+        conflict = dict(members, **{"zz": b"x", "zz/inner": b"y"})                                 # EE2 쓰기 실패
+        try:
+            U.apply_package(conflict, code)
+            raise AssertionError("쓰기 실패가 성공으로")
+        except OSError:
+            pass
+        left = [n for n in os.listdir(code) if n != "isilon_usage"]
+        assert not left, left
+        assert open(live, "rb").read() == before
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    st = {}                                                                                        # EE3
+    k = U.net_fail_key({"latest": "1.99.49", "sha256": "ab"})
+    assert not U.net_fail_should_skip(st, k, 1000.0)
+    w1 = U.net_fail_record(st, k, 1000.0)
+    assert U.net_fail_should_skip(st, k, 1000.0 + w1 - 1) and not U.net_fail_should_skip(st, k, 1000.0 + w1 + 1)
+    w2 = U.net_fail_record(st, k, 2000.0)
+    assert w2 == 2 * w1 and not U.net_fail_should_skip(st, U.net_fail_key({"latest": "1.99.50"}), 2000.0)
+    assert "net_fail_should_skip(_nb, _nk)" in _read("server.py") and "net_fail_should_skip(_nb, _nk)" in _read("portal.py")
+    for f in ("install_edge.sh", "install_portal.sh"):                                             # EE4
+        sh = open(os.path.join(os.path.dirname(HERE), "tools", f), encoding="utf-8").read()
+        assert sh.index('cp -a "$TMP_DIR"/. "$NEW_DIR"/') < sh.index('systemctl stop "$SERVICE"'), f
+        assert sh.index('echo "→ 임시 작업: $TMP_DIR"') > sh.index('mkdir -p "$TMP_DIR"; fi'), f
+    assert 'fields["error"] = None' in _read("scanner.py")                                        # EE5
+    print("[EE1~EE5] OK  깨진 묶음은 단계 폴더에서 거부·쓰기 실패 정리·자동 설치 실패 간격·설치 스크립트 단계 복사·옛 오류 문구")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -2133,7 +2191,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_av_round17_flow, check_aw_round18_regress,
             check_ax_round18_data, check_ay_round18_portal_delete,
             check_az_round19_regress, check_ba_round19_portal_edge,
-            check_bb_round20_regress]
+            check_bb_round20_regress, check_bc_round20_upgrade]
 
 
 def main() -> int:

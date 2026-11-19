@@ -1544,7 +1544,12 @@ class PortalController:
             info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__,
                                            token=self.settings.get("upgrade_token") or None)
             self._upg_set_check(info)
+            _nb = getattr(self, "_upg_net_bad", None)
+            if _nb is None:
+                _nb = self._upg_net_bad = {}
+            _nk = upgrademod.net_fail_key(info)
             if (info.get("available") and bool(self.settings.get("upgrade_auto"))
+                    and not upgrademod.net_fail_should_skip(_nb, _nk)
                     and self._try_begin_install()):
                 self._upg_log("새 버전 %s 발견 — 자동 설치" % info.get("latest"))
                 dest = os.path.join(self.data_dir, "upgrades")
@@ -1555,7 +1560,8 @@ class PortalController:
                     if res.get("ok"):
                         self._apply_self_upgrade(res, "인터넷")   # 재시작
                         return
-                    self._upg_log("자동 설치 실패: %s" % res.get("reason"))
+                    _w = upgrademod.net_fail_record(_nb, _nk)   # 같은 묶음 반복 시도 간격 늘림(20회차 점검)
+                    self._upg_log("자동 설치 실패: %s — 같은 묶음은 %d분 뒤 다시 시도" % (res.get("reason"), int(_w // 60)))
                     self._record_upgrade(kind="인터넷", ok=False, error=res.get("reason"))
                 finally:
                     with self._lock:

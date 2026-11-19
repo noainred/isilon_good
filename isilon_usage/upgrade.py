@@ -112,6 +112,37 @@ def prune_package_backups(code_dir: str, keep: int = 3) -> None:
     baks_only = [n for n in baks if ".bak." in n]
     for n in baks_only[keep:]:
         shutil.rmtree(os.path.join(code_dir, n), ignore_errors=True)
+    # 옛 방식이 남긴 반쯤 쓴 .new·되돌린 .bad, 끊긴 단계 폴더는 쓸모가 없다 — 모두 지운다
+    for n in names:
+        if _re.match(r"^isilon_usage\.(new|bad)\.\d+$", n) or _re.match(r"^\.isilon_usage\.stage\.\d+$", n):
+            shutil.rmtree(os.path.join(code_dir, n), ignore_errors=True)
+
+
+# 인터넷 자동 설치 실패 기억 — 같은 묶음(버전+sha)이 계속 실패하면 점검 주기(기본 60초)마다 다시 받아 설치를 시도해
+# 대역폭·로그·디스크를 끝없이 썼다(20회차 점검: 깨진 묶음 하나로 엣지당 하루 2.4GB). 실패할수록 간격을 늘린다
+# (10분 → 20분 → … 최대 6시간). 묶음이 바뀌면(새 버전·새 sha) 바로 다시 시도한다.
+NET_FAIL_BASE_SECS = 600
+NET_FAIL_MAX_SECS = 6 * 3600
+
+
+def net_fail_key(info: dict) -> str:
+    return "%s|%s" % ((info or {}).get("latest") or "", (info or {}).get("sha256") or "")
+
+
+def net_fail_should_skip(state: dict, key: str, now: Optional[float] = None) -> bool:
+    ent = state.get(key)
+    return bool(ent) and (now if now is not None else time.time()) < float(ent[1])
+
+
+def net_fail_record(state: dict, key: str, now: Optional[float] = None) -> float:
+    """실패를 기록하고 다음 시도까지 기다릴 초를 돌려준다."""
+    now = now if now is not None else time.time()
+    n = int((state.get(key) or (0, 0))[0]) + 1
+    wait = min(NET_FAIL_MAX_SECS, NET_FAIL_BASE_SECS * (2 ** (n - 1)))
+    for k in [k for k in state if k != key]:   # 다른(옛) 묶음 기록은 버린다 — 커지지 않게
+        state.pop(k, None)
+    state[key] = (n, now + wait)
+    return wait
 
 
 def prune_downloads(dest_dir: str, keep: int = 3) -> None:
@@ -238,35 +269,37 @@ def apply_package(members: Dict[str, bytes], code_dir: str) -> str:
     code_dir = os.path.abspath(code_dir)
     pkg = os.path.join(code_dir, "isilon_usage")
     ts = int(time.time())
-    staging = "%s.new.%d" % (pkg, ts)
     backup = "%s.bak.%d" % (pkg, ts)
-    shutil.rmtree(staging, ignore_errors=True)
-    for rel, data in members.items():
-        dst = os.path.join(staging, rel)
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        with open(dst, "wb") as fh:
-            fh.write(data)
-    had_old = os.path.isdir(pkg)
-    if had_old:
-        os.replace(pkg, backup)            # 기존 → 백업(같은 fs, 원자적)
+    # 새 코드는 별도 폴더(<code_dir>/.isilon_usage.stage.<ts>/isilon_usage)에 다 쓴 뒤 '그 자리에서' 불러 보고,
+    # 통과해야만 바꿔 넣는다. 예전엔 바꿔 넣은 뒤 확인해, 깨진 묶음이 매 점검 주기마다 몇 초씩 실제 코드 자리에
+    # 들어갔다 빠지며 .bad 폴더(1.7MB)를 계속 남겼고, 쓰다 실패(디스크 가득)하면 반쯤 쓴 .new 폴더가 남았다(20회차 점검).
     try:
-        os.replace(staging, pkg)           # 새 → 자리
-    except OSError:
+        prune_package_backups(code_dir, keep=3)   # 옛 버전이 남긴 .new/.bad 부터 정리
+    except Exception:  # noqa: BLE001
+        pass
+    stage_parent = os.path.join(code_dir, ".isilon_usage.stage.%d" % ts)
+    staging = os.path.join(stage_parent, "isilon_usage")
+    shutil.rmtree(stage_parent, ignore_errors=True)
+    try:
+        for rel, data in members.items():
+            dst = os.path.join(staging, rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            with open(dst, "wb") as fh:
+                fh.write(data)
+        err = _smoke_test(stage_parent)
+        if err:
+            raise OSError("새 코드 확인 실패(설치하지 않음): %s" % err)
+        had_old = os.path.isdir(pkg)
         if had_old:
-            os.replace(backup, pkg)        # 롤백
-        shutil.rmtree(staging, ignore_errors=True)
-        raise
-    # 설치 후 확인: 새 코드로 핵심 모듈을 실제로 불러 본다 — 실패하면 옛 코드로 되돌린다(서비스가 못 뜨는 것 방지)
-    err = _smoke_test(code_dir)
-    if err:
-        bad = "%s.bad.%d" % (pkg, ts)
+            os.replace(pkg, backup)            # 기존 → 백업(같은 fs, 원자적)
         try:
-            os.replace(pkg, bad)
-            if had_old:
-                os.replace(backup, pkg)
+            os.replace(staging, pkg)           # 새 → 자리
         except OSError:
-            pass
-        raise OSError("새 코드 확인 실패(옛 코드로 되돌림): %s" % err)
+            if had_old:
+                os.replace(backup, pkg)        # 롤백
+            raise
+    finally:
+        shutil.rmtree(stage_parent, ignore_errors=True)
     try:
         prune_package_backups(code_dir, keep=3)
     except Exception:  # noqa: BLE001 — 정리는 베스트 에포트

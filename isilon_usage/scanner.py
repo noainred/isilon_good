@@ -736,6 +736,8 @@ class Scanner:
             fields["active_elapsed"] = self._elapsed_accum   # 남은 시간 추정용 활성 시간(일시정지 갭 제외)
             if getattr(self, "_sizing_from", None) is not None:
                 fields["sizing_from_active"], fields["sizing_from_processed"] = self._sizing_from
+            if self._status == "done":
+                fields["error"] = None           # 오류로 멈췄다 재개해 끝난 스캔에 옛 오류 문구가 남지 않게(20회차 점검)
             if finished:
                 fields["finished_at"] = time.time()
             elif self._clear_finished:

@@ -1220,7 +1220,12 @@ class ScanController:
                     info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__,
                                                    token=self.settings.get("upgrade_token") or None)
                     self._upg_set_check(info)
-                    if info.get("available") and not busy and bool(self.settings.get("upgrade_auto")):
+                    _nb = getattr(self, "_upg_net_bad", None)
+                    if _nb is None:
+                        _nb = self._upg_net_bad = {}
+                    _nk = upgrademod.net_fail_key(info)
+                    if (info.get("available") and not busy and bool(self.settings.get("upgrade_auto"))
+                            and not upgrademod.net_fail_should_skip(_nb, _nk)):
                         self._upg_log("새 버전 %s 발견 — 자동 설치" % info.get("latest"))
                         res = upgrademod.upgrade_from_remote(
                             self.settings.get("upgrade_url") or "", code_dir, __version__, dest,
@@ -1232,7 +1237,9 @@ class ScanController:
                                             detail="%s -> %s" % (res.get("from"), res["version"]))
                             self._restart_for_upgrade()
                         else:
-                            self._upg_log("자동 설치 실패: %s" % res.get("reason"))
+                            _w = upgrademod.net_fail_record(_nb, _nk)
+                            self._upg_log("자동 설치 실패: %s — 같은 묶음은 %d분 뒤 다시 시도" % (
+                                res.get("reason"), int(_w // 60)))
             except Exception:  # noqa: BLE001
                 pass
             self._rate_stop.wait(max(10, secs))

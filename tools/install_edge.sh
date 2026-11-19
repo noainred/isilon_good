@@ -181,11 +181,11 @@ if [ -n "$EXPSHA" ]; then
 fi
 
 # ----- 3) 임시 디렉터리에 압축 해제 + 검증(최상위 isilon_usage-<버전>/ 제거) -----
-echo "→ 임시 작업: $TMP_DIR"
 # 기본은 mktemp -d(예측 불가 이름·0700) — 고정 /tmp 경로를 rm 후 mkdir 하면 그 사이 다른 사용자가
 # 같은 이름을 선점해 압축 해제물(.py)을 바꿔치기할 수 있다(root 로 설치·실행됨).
 if [ -z "$TMP_DIR" ]; then TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/isilon_edge.XXXXXX")"
 else rm -rf "$TMP_DIR"; mkdir -p "$TMP_DIR"; fi
+echo "→ 임시 작업: $TMP_DIR"   # (만든 뒤에 출력 — 예전엔 빈 값으로 찍혔다)
 tar xzf "$DEST" -C "$TMP_DIR" --strip-components=1
 echo -n "→ 패키지 검증: "
 ( cd "$TMP_DIR" && python3 -m isilon_usage --version ) \
@@ -197,6 +197,19 @@ case "${DATA_DIR%/}/" in
   "${INSTALL_DIR%/}"/*) echo "✗ --data-dir($DATA_DIR)이 설치 폴더($INSTALL_DIR) 안에 있습니다 — 업그레이드 때 삭제됩니다. 다른 경로를 지정하세요."; rm -rf "$TMP_DIR"; exit 1;;
 esac
 echo "→ 설치: $INSTALL_DIR"
+# 새 파일은 설치 폴더 옆 단계 폴더에 '서비스를 멈추기 전에' 다 복사한다 — 예전엔 멈춘 뒤 설치 폴더에 바로 복사해,
+# 복사가 중간에 실패하면(디스크 가득 등) 반쯤 덮인 설치로 서비스가 꺼진 채 끝났다(20회차 점검).
+NEW_DIR="${INSTALL_DIR%/}.new.$$"; OLD_DIR="${INSTALL_DIR%/}.old.$$"
+rm -rf "$NEW_DIR"; mkdir -p "$NEW_DIR" "$DATA_DIR"
+if ! cp -a "$TMP_DIR"/. "$NEW_DIR"/; then
+  echo "✗ 새 파일 복사 실패(디스크 여유를 확인하세요) — 설치 중단(기존 설치·서비스는 그대로)."
+  rm -rf "$NEW_DIR" "$TMP_DIR"; exit 1
+fi
+chmod 755 "$NEW_DIR"                                  # mktemp 폴더(0700) 권한이 따라오지 않게
+find "$NEW_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+for f in info.MD portal_info.MD .iu_data_persist.json; do   # 설치 폴더에 앱이 쓰는 런타임 파일은 옮겨 담는다
+  if [ -e "$INSTALL_DIR/$f" ]; then cp -a "$INSTALL_DIR/$f" "$NEW_DIR/" 2>/dev/null || true; fi
+done
 # 파일 교체 전에 기존 엣지를 안전하게 중단(포트 충돌 방지):
 #  현재 서비스 + 구버전 isilon_usage 서비스(있으면 유닛까지 제거) + 잔여 serve 프로세스
 systemctl stop "$SERVICE" >/dev/null 2>&1 || true
@@ -211,15 +224,26 @@ if pgrep -f 'isilon_usage serve' >/dev/null 2>&1; then
   pkill -f 'isilon_usage serve' >/dev/null 2>&1 || true
   sleep 1
 fi
-mkdir -p "$INSTALL_DIR" "$DATA_DIR"
-if command -v rsync >/dev/null 2>&1; then
-  # --delete 는 설치 폴더(서비스 WorkingDirectory)에 앱이 쓰는 런타임 파일까지 지운다 → 보호.
-  rsync -a --delete --exclude info.MD --exclude portal_info.MD --exclude .iu_data_persist.json "$TMP_DIR"/ "$INSTALL_DIR"/
+mkdir -p "$DATA_DIR"
+if [ -d "$INSTALL_DIR" ] && ! mv "$INSTALL_DIR" "$OLD_DIR" 2>/dev/null; then
+  # 옮길 수 없는 폴더(마운트 지점 등)면 예전처럼 제자리 반영 — 단계 폴더에서 복사
+  if command -v rsync >/dev/null 2>&1; then
+    # --delete 는 설치 폴더(서비스 WorkingDirectory)에 앱이 쓰는 런타임 파일까지 지운다 → 보호.
+    rsync -a --delete --exclude info.MD --exclude portal_info.MD --exclude .iu_data_persist.json "$NEW_DIR"/ "$INSTALL_DIR"/
+  else
+    cp -a "$NEW_DIR"/. "$INSTALL_DIR"/
+    # 릴리스 파일은 수정 시각이 고정(2020-01-01)이라, cp 는 옛 __pycache__ 를 남겨 크기가 같은 모듈의 옛 바이트코드가
+    # 그대로 실행됐다(새 버전을 깔아도 옛 버전으로 보고) — 캐시를 지운다(rsync --delete 는 이미 지움).
+    find "$INSTALL_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+  fi
+  rm -rf "$NEW_DIR"
 else
-  cp -a "$TMP_DIR"/. "$INSTALL_DIR"/
-  # 릴리스 파일은 수정 시각이 고정(2020-01-01)이라, cp 는 옛 __pycache__ 를 남겨 크기가 같은 모듈의 옛 바이트코드가
-  # 그대로 실행됐다(새 버전을 깔아도 옛 버전으로 보고) — 캐시를 지운다(rsync --delete 는 이미 지움).
-  find "$INSTALL_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+  if ! mv "$NEW_DIR" "$INSTALL_DIR"; then             # 이름 바꾸기 실패 — 옛 설치를 되돌리고 서비스를 다시 띄운다
+    [ -d "$OLD_DIR" ] && mv "$OLD_DIR" "$INSTALL_DIR"
+    systemctl start "$SERVICE" >/dev/null 2>&1 || true
+    echo "✗ 새 설치로 바꾸지 못했습니다 — 옛 설치로 되돌렸습니다."; rm -rf "$NEW_DIR" "$TMP_DIR"; exit 1
+  fi
+  rm -rf "$OLD_DIR"
 fi
 rm -rf "$TMP_DIR"
 cd "$INSTALL_DIR"
