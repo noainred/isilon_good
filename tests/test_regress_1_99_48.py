@@ -3595,7 +3595,8 @@ def check_cf_round30_features() -> None:
     assert 'max(1, min(1000, self._query_int(qs, "limit") or 15))' in sv and 'format 은 csv 또는 json 입니다' in sv
     assert 'root = root.rstrip("/") or "/"' in sv and '"partial": bool(' in sv
     assert '("max_depth", "fold_depth")' in _read("cli.py")
-    print("[HHH1~HHH8] OK  질의 규칙·기간 해석·예측 기준·실제 경로 마운트·매니페스트 O_EXCL·폴더 상한·읽지 못한 폴더 수·숫자 인자")
+    assert sv.count("if len(buf) >= 2000:") == 2          # HHH9 내보내기 묶어 쓰기(40만 행 CSV 13초→1.2초, 같은 바이트)
+    print("[HHH1~HHH9] OK  질의 규칙·기간 해석·예측 기준·실제 경로 마운트·매니페스트 O_EXCL·폴더 상한·읽지 못한 폴더 수·숫자 인자")
 
 
 def _mark_many(x, code):
