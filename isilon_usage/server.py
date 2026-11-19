@@ -2959,6 +2959,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         t0 = time.time()
         self._audit_pending = None
+        self._audit_target = ""
         try:
             self._do_POST()
         finally:
@@ -2975,7 +2976,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     and payload.get("reason") == "unknown_endpoint"):
                 ok = status < 400 and not (isinstance(payload, dict) and payload.get("ok") is False)
                 why = "" if ok else str((payload or {}).get("reason") or (payload or {}).get("error") or status)
-                self._audit(pend, ok, why)
+                tgt = getattr(self, "_audit_target", "") or ""
+                if isinstance(payload, dict) and payload.get("scan_id") is not None and "scan_id=" not in tgt:
+                    tgt = (tgt + " " if tgt else "") + "scan_id=%s" % payload.get("scan_id")
+                self._audit(pend, ok, " · ".join(x for x in (tgt, why) if x))
         body = _json_bytes(payload)
         try:
             self.send_response(status)
@@ -4044,6 +4048,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # 변경 작업 기록 — 처리 '결과'(성공/실패·사유)로 남긴다. 예전엔 처리 전에 무조건 ok 로 남겨,
             # 실패한 작업·없는 경로(404)도 '성공'으로 기록됐다(2026-11 리뷰). _send_json 이 마무리한다.
             self._audit_pending = path
+            # 무엇에 대해(경로·스캔 번호) — 예전엔 시작/중지 기록에 대상이 없었다(2026-11 원격 조작 점검). 비밀값 제외.
+            self._audit_target = " ".join(
+                "%s=%s" % (k, str(body.get(k))[:200]) for k in ("path", "scan_id", "root", "target")
+                if isinstance(body, dict) and body.get(k) not in (None, "", []))
 
             if path == "/api/scan/start":
                 target = body.get("path") or ""

@@ -2004,8 +2004,11 @@ function renderPortalDash(){
         headers:{"Content-Type":"application/json"},body:JSON.stringify({id})})).json();
       if(j&&j.ok){ b.textContent="✓ 시작됨"; setTimeout(loadOverview,1500); }
       else { b.textContent="✗ 실패"; b.title=(j&&j.reason)||"실패"; b.disabled=false;
+             // 사유를 바로 보여 준다 — 예전엔 마우스를 올려야만 보였고 4초 뒤 사라졌다(2026-11 원격 조작 점검)
+             alert(id+" — 스캔을 시작하지 못했습니다:\n"+((j&&j.reason)||"실패"));
              setTimeout(()=>{ b.textContent="▶ 스캔 시작"; }, 4000); }
-    }catch(err){ b.textContent="✗ 오류"; b.disabled=false; }
+    }catch(err){ b.textContent="✗ 오류"; b.disabled=false; alert(id+" — 요청 오류: "+err);
+                 setTimeout(()=>{ b.textContent="▶ 스캔 시작"; }, 4000); }
   }));
   $("nodeTable").querySelectorAll("th[data-nsort]").forEach(th=>{
     th.textContent = th.dataset.label + (th.dataset.nsort===nodeSort ? (nodeOrder==="desc"?" ▼":" ▲") : ""); });
@@ -2184,8 +2187,10 @@ async function nodePassword(clear){
     const j=await (await fetch("/api/portal/node-password",{method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({ids, password:pass, clear:!!clear})})).json();
-    if(!j.ok && j.reason){ $("npMsg").textContent="실패: "+j.reason; return; }
-    $("npMsg").textContent=`${j.ok_count||0}/${j.total||0} 노드 ${clear?"초기화":"설정"} 완료`;
+    if(!j.ok && !(j.results||[]).length){ $("npMsg").textContent="실패: "+(j.reason||"거부됨"); return; }
+    // 전부·일부 실패를 '완료'로 보이지 않게(2026-11 원격 조작 점검)
+    $("npMsg").textContent = !j.ok ? `실패 — ${j.total||0}개 노드 모두 ${clear?"초기화":"설정"}하지 못했습니다(아래 사유)`
+      : `${j.ok_count||0}/${j.total||0} 노드 ${clear?"초기화":"설정"} 완료${j.failed?` · 실패 ${j.failed}대(아래 사유)`:""}`;
     $("npPass").value="";
     $("npResult").innerHTML=(j.results||[]).map(r=>
       `<div>${r.ok?"✅":"❌"} <span class="mono">${escAttr(r.id)}</span>${r.reason?(" — "+escAttr(r.reason)):""}</div>`).join("");

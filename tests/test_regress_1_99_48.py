@@ -1349,6 +1349,65 @@ def check_al_tools_round12() -> None:
     print("[M1·M2] OK  테스트 데이터는 허용 경로 안·시스템 트리 밖에만·권장 결과는 하나만")
 
 
+# ------------------------------------------------------------------ 13회차(포탈→엣지 원격 조작)
+def check_am_remote_round13() -> None:
+    """N1 비밀번호 푸시가 전부 실패해도 '완료' N2 포탈에서 시작한 직후 중지가 '진행 중 스캔 없음'
+    N3 엣지 거절 사유가 'HTTP 400' 으로 바뀜 N4 403(엣지 토큰 미설정)을 '토큰 불일치'로 안내 N5 감사 기록에 대상 없음."""
+    from isilon_usage import server as SV, portal as P, scanner as scanmod
+    from isilon_usage import audit as auditmod
+    d = tempfile.mkdtemp(prefix="iu_am_")
+    cwd = os.getcwd()
+    os.chdir(d)
+    orig = scanmod.Scanner._safe_stat
+    try:
+        m = os.path.join(d, "m")
+        tree = os.path.join(m, "t")
+        for i in range(40):
+            os.makedirs(os.path.join(tree, "d%02d" % i))
+            for j in range(5):
+                with open(os.path.join(tree, "d%02d" % i, "f%d" % j), "wb") as fh:
+                    fh.write(b"x" * 100)
+        edge = SV.serve(os.path.join(d, "edata"), host="127.0.0.1", port=0,
+                        initial_settings={"mount_bases": [m], "api_token": "TOK"}, enable_scan=True)
+        threading.Thread(target=edge.serve_forever, daemon=True).start()
+        ec = edge.RequestHandlerClass.controller
+        r = ec.start_scan(tree)
+        for _ in range(100):
+            if r["scan_id"] not in ec.running_ids():
+                break
+            time.sleep(0.1)
+        edge2 = SV.serve(os.path.join(d, "edata2"), host="127.0.0.1", port=0,
+                         initial_settings={"mount_bases": [m]}, enable_scan=True)          # api_token 없음
+        threading.Thread(target=edge2.serve_forever, daemon=True).start()
+        pc = P.PortalController(os.path.join(d, "hq"))
+        pc.upsert_node({"id": "e1", "url": "http://127.0.0.1:%d" % edge.server_address[1], "token": "TOK"})
+        pc.upsert_node({"id": "e2", "url": "http://127.0.0.1:%d" % edge2.server_address[1], "token": "X"})
+        r = pc.set_node_password(["e2"], "abcd1234")                                   # N1·N4
+        assert r["ok"] is False and r.get("failed") == 1 and "api_token" in r["reason"], r
+        assert "불일치" not in r["results"][0]["reason"], r["results"]
+        pc._poll_one("e1")
+        scanmod.Scanner._safe_stat = lambda self, e: (time.sleep(0.02), orig(self, e))[1]  # 스캔을 느리게
+        r = pc.node_scan("e1")
+        assert r["ok"], r
+        r2 = pc.node_scan("e1")                                                        # N3: 엣지 사유 그대로
+        assert r2["ok"] is False and "HTTP 400" not in (r2.get("reason") or ""), r2
+        st = pc.node_stop("e1")                                                        # N2: 캐시가 옛것이어도 중지
+        assert st["stopped"] >= 1, st
+        scanmod.Scanner._safe_stat = orig
+        time.sleep(0.5)
+        ev = auditmod.tail(os.path.join(d, "edata"), 50)
+        assert any("path=" in (e.get("detail") or "") for e in ev if "scan/start" in (e.get("action") or "")), ev[-5:]
+        edge.shutdown()
+        edge2.shutdown()
+    finally:
+        scanmod.Scanner._safe_stat = orig
+        os.chdir(cwd)
+        shutil.rmtree(d, ignore_errors=True)
+    ph = _read("portal.html")
+    assert "alert(id+\" — 스캔을 시작하지 못했습니다" in ph and "모두 ${clear?\"초기화\":\"설정\"}하지 못했습니다" in ph
+    print("[N1~N5] OK  비밀번호 푸시 실패 표시·시작 직후 중지·엣지 사유 전달·403 안내·감사 대상")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1361,7 +1420,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_ad_portal_round8, check_ae_regress_round8, check_af_multinode_round9,
             check_ag_edge_flow_round9, check_ah_clock_rewind_round10,
             check_ai_edge_round10, check_aj_adverse_fs_round11,
-            check_ak_round11_misc, check_al_tools_round12]
+            check_ak_round11_misc, check_al_tools_round12, check_am_remote_round13]
 
 
 def main() -> int:

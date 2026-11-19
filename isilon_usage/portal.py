@@ -2976,6 +2976,17 @@ class PortalController:
                 pass
             self._stop.wait(60)                    # 1분 주기(가장 가는 버킷)
 
+    @staticmethod
+    def _http_err_reason(e) -> str:
+        """엣지가 보낸 거절 사유(JSON reason/error)를 읽는다 — 예전엔 버리고 'HTTP 400' 만 보였다(2026-11 원격 조작 점검)."""
+        try:
+            j = json.loads(e.read(65536).decode("utf-8", "replace") or "{}")
+            if isinstance(j, dict):
+                return str(j.get("reason") or j.get("error") or "")[:500]
+        except Exception:  # noqa: BLE001
+            pass
+        return ""
+
     def _edge_post(self, node, path, payload, *, timeout=20) -> dict:
         """엣지로 POST(api_token 인증). HTTP 코드별 사유를 정리해 반환한다."""
         url = node["url"].rstrip("/") + path
@@ -2988,6 +2999,9 @@ class PortalController:
             resp = netutil.urlopen(req, timeout=timeout)
             return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
+            body_reason = self._http_err_reason(e)
+            if body_reason and e.code not in (401, 404):   # 401 은 아래 안내가 더 쓸모 있음
+                return {"ok": False, "reason": body_reason, "http": e.code}
             reason = (
                 "엣지에 로그인 비밀번호가 설정돼 포탈에서 직접 시작할 수 없습니다 — 엣지 화면에서 시작하세요."
                 if e.code == 401 else
@@ -3054,6 +3068,7 @@ class PortalController:
                 pass
         res = self._edge_post(node, endpoint, payload, timeout=30)
         if res.get("ok"):
+            self._refresh_node_soon(node_id)   # 다음 폴링(최대 수십 초)까지 '스캔 중'이 안 보이고 중지도 못 하던 문제
             return {"ok": True, "node": node_id, "path": path,
                     "scan_id": res.get("scan_id"), "autotune": bool(autotune)}
         return {"ok": False, "path": path,
@@ -3106,6 +3121,16 @@ class PortalController:
                         % (ok, len(results), one_file_system, autotune, restart_busy))
         return {"ok": True, "count": ok, "total": len(results), "results": results}
 
+    def _refresh_node_soon(self, node_id: str) -> None:
+        """원격 작업 직후 그 노드 상태를 곧바로 다시 받는다(백그라운드 — 응답을 늦추지 않게)."""
+        def _go():
+            try:
+                time.sleep(0.5)        # 엣지가 스캔 행을 만들 틈
+                self._poll_one(node_id)
+            except Exception:  # noqa: BLE001
+                pass
+        threading.Thread(target=_go, daemon=True).start()
+
     def node_stop(self, node_id: str) -> dict:
         """노드의 진행 중 스캔(탐색/집계)을 모두 중지한다(베스트에포트).
 
@@ -3119,6 +3144,16 @@ class PortalController:
             return {"ok": False, "reason": "노드를 찾을 수 없습니다."}
         roots = (cache.get("overall") or {}).get("roots") or []
         busy = [r for r in roots if r.get("status") in ("discovering", "sizing")]
+        if not busy:
+            # 캐시가 오래됐을 수 있다(방금 포탈에서 시작한 스캔) — 한 번 새로 받아 다시 본다(2026-11 원격 조작 점검)
+            try:
+                self._poll_one(node_id)
+            except Exception:  # noqa: BLE001
+                pass
+            with self._lock:
+                cache = dict(self._cache.get(node_id, {}))
+            roots = (cache.get("overall") or {}).get("roots") or []
+            busy = [r for r in roots if r.get("status") in ("discovering", "sizing")]
         if not busy:
             return {"ok": True, "stopped": 0, "reason": "진행 중 스캔 없음"}
         stopped, reasons = 0, []
@@ -3147,7 +3182,8 @@ class PortalController:
                             "stopped": int(r.get("stopped") or 0),
                             "reason": r.get("reason") or ""})
         auditmod.record(self.data_dir, action="node_stop_all", ok=True,
-                        detail="스캔 %d개 중지 (노드 %d개 대상)" % (stopped_total, len(results)))
+                        detail="스캔 %d개 중지 (노드 %d개 대상) — %s" % (stopped_total, len(results), ", ".join(
+                            "%s:%d" % (r["id"], r["stopped"]) for r in results if r["stopped"]) or "중지한 노드 없음"))
         return {"ok": True, "stopped": stopped_total, "total": len(results),
                 "results": results}
 
@@ -3183,14 +3219,23 @@ class PortalController:
                                 "reason": "" if ok else (j.get("reason") or "거부됨")})
                 ok_n += 1 if ok else 0
             except urllib.error.HTTPError as e:
-                reason = ("인증 실패(api_token 불일치)" if e.code in (401, 403)
+                body_reason = self._http_err_reason(e)
+                # 401(토큰 불일치)과 403(엣지에 api_token 미설정 등)은 고치는 방법이 다르다 — 엣지 사유를 우선
+                reason = ("인증 실패(api_token 불일치)" if e.code == 401
+                          else (body_reason or "엣지가 거부했습니다(엣지에 api_token 설정 필요 등)") if e.code == 403
                           else "엣지에 비밀번호 관리 API 없음(구버전)" if e.code == 404
-                          else "HTTP %d" % e.code)
+                          else (body_reason or "HTTP %d" % e.code))
                 results.append({"id": n["id"], "ok": False, "reason": reason})
             except Exception as e:  # noqa: BLE001
                 results.append({"id": n["id"], "ok": False, "reason": str(e)})
-        return {"ok": ok_n > 0, "total": len(targets), "ok_count": ok_n,
-                "cleared": bool(clear), "results": results}
+        failed = [r for r in results if not r.get("ok")]
+        out = {"ok": ok_n > 0, "total": len(targets), "ok_count": ok_n,
+               "cleared": bool(clear), "results": results}
+        if failed:   # 실패한 노드와 사유를 맨 위에도 — 화면·감사 로그가 '완료'로 보이지 않게(2026-11 원격 조작 점검)
+            out["failed"] = len(failed)
+            out["reason"] = "실패 %d대: %s" % (len(failed), "; ".join(
+                "%s: %s" % (r["id"], r.get("reason") or "실패") for r in failed[:10]))
+        return out
 
     # --- 원격 자동 구성 ---
     def provision_plan(self, raw: dict) -> dict:
@@ -3553,8 +3598,11 @@ class PortalHandler(BaseHTTPRequestHandler):
                 # 대상·결과 요약도 남긴다 — 예전엔 성공 행의 상세가 비어 '무엇을' 지웠는지 알 수 없었다(2026-11 리뷰)
                 tgt = getattr(self, "_audit_target", "") or ""
                 if isinstance(payload, dict):
-                    cnt = ["%s=%s" % (k, payload[k]) for k in ("added", "updated", "removed", "deleted", "total")
-                           if isinstance(payload.get(k), int)]
+                    cnt = ["%s=%s" % (k, payload[k]) for k in ("added", "updated", "removed", "deleted", "total",
+                                                               "stopped", "scan_id")
+                           if isinstance(payload.get(k), int) and not isinstance(payload.get(k), bool)]
+                    if isinstance(payload.get("path"), str) and "path=" not in tgt:
+                        cnt.append("path=%s" % payload["path"][:200])
                     if isinstance(payload.get("errors"), list) and payload["errors"]:
                         cnt.append("errors=%d" % len(payload["errors"]))
                     if cnt:
