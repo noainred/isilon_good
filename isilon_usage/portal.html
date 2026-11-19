@@ -1403,6 +1403,8 @@ function doLogout(){ if(_opTimer){ clearInterval(_opTimer); _opTimer=null; } _op
 window.fetch=async function(url,opts){
   opts=opts||{}; const m=(opts.method||"GET").toUpperCase();
   const u=(typeof url==="string")?url:"";
+  // 로그인했으면 조회(GET)에도 토큰을 붙인다 — 서버가 로그인한 사람에게만 서버 경로 등 운영 정보를 보여 준다
+  if(m!=="POST" && u.indexOf("/api/")===0 && _opToken()) opts.headers=Object.assign({},opts.headers||{},{"X-Op-Token":_opToken()});
   if(m==="POST" && u.indexOf("/api/portal/login")<0){
     opts.headers=Object.assign({},opts.headers||{},{"X-Op-Token":_opToken()});
     // 문자열 본문인데 Content-Type 이 없으면 JSON 으로 표시(서버는 JSON 이 아닌 본문을 거부 — 사이트 간 위조 방지)

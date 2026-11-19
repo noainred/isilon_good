@@ -961,6 +961,72 @@ def check_ac_round7() -> None:
     print("[C1~C6] OK  안전한 SSH 업그레이드·재구성 토큰 반영·설치 순서/캐시·릴리스 인자·심볼릭 중복·이미 최신 집계")
 
 
+# ------------------------------------------------------------------ 8회차(포탈 백업·설정)
+def check_ad_portal_round8() -> None:
+    """D1 깨진 노드 파일 → 빈 목록 → 다음 저장이 덮어 모든 노드 유실 D2 로그인 없이 설정 조회로 서버 경로 노출
+    D3 로그인 없이 외부 LLM 호출 D4 백업 다운로드 캐시 D5 세션·백업·LLM 설정의 조용한 초기화."""
+    from isilon_usage import portal as P
+    d = tempfile.mkdtemp(prefix="iu_ad_")
+    try:
+        hq = os.path.join(d, "hq")
+        pc = P.PortalController(hq)
+        for i in range(3):
+            pc.upsert_node({"id": "n%d" % i, "url": "http://10.0.0.%d:8765" % (i + 1), "token": "t%d" % i})
+        pc.upsert_node({"id": "n0", "url": "http://10.0.0.1:8765", "token": "", "region": "서울"})   # .bak 생성
+        np = P.nodes_path(hq)
+        raw = open(np, "rb").read()
+        with open(np, "wb") as fh:
+            fh.write(raw[: len(raw) // 2])                                             # D1: 잘림
+        pc2 = P.PortalController(hq)
+        assert sorted(n["id"] for n in pc2.nodes) == ["n0", "n1", "n2"], pc2.nodes
+        assert os.path.exists(np + ".broken")
+        pc2.upsert_node({"id": "new", "url": "http://10.0.0.9:8765", "token": "x"})
+        assert len(P.load_nodes(hq)) == 4
+        assert (os.stat(np).st_mode & 0o777) == 0o600
+        r = pc2.set_session_prefs({"op_ttl_minutes": 120})                           # D5
+        r = pc2.set_session_prefs({"op_ttl_minutes": "abc"})
+        assert r["ok"] is False and pc2.settings["op_ttl_minutes"] == 120, r
+        pc2.set_backup_config(os.path.join(d, "bk"), 2, 3)
+        pc2.set_backup_config(None, 5, None)
+        assert pc2.settings["backup_dir"] == os.path.join(d, "bk") and pc2.settings["backup_every_hours"] == 5
+        assert pc2.set_backup_config("rel/bk", 1, 1)["ok"] is False
+        pc2.set_ask_llm({"ask_llm_key": "K"})
+        pc2.set_ask_llm({"ask_llm_key": None})
+        assert pc2.settings["ask_llm_key"] == "K"
+        # D2·D3·D4: HTTP
+        httpd = P.serve_portal(hq, host="127.0.0.1", port=0)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        c = httpd.RequestHandlerClass.controller
+        c.set_password("test1234", False)
+        c.set_backup_config(os.path.join(d, "secretbk"), 1, 3)
+        calls = []
+        orig = P.askmod.respond
+        P.askmod.respond = lambda q, data, cfg: (calls.append(cfg["enabled"]) or {"ok": True, "answer": "x"})
+        base = "http://127.0.0.1:%d" % httpd.server_address[1]
+        try:
+            c.set_ask_llm({"ask_llm_enabled": True, "ask_llm_endpoint": "http://127.0.0.1:1/v1", "ask_llm_key": "K"})
+            anon = json.loads(urllib.request.urlopen(base + "/api/portal/settings").read().decode())
+            assert anon.get("redacted") and "backup_dir" not in anon and "ask_llm_endpoint" not in anon, anon
+            urllib.request.urlopen(base + "/api/portal/ask?q=" + urllib.request.quote("용량"))
+            tok = c._auth.issue_token()
+            rq = urllib.request.Request(base + "/api/portal/settings", headers={"X-Op-Token": tok})
+            full = json.loads(urllib.request.urlopen(rq).read().decode())
+            assert full.get("backup_dir") == os.path.join(d, "secretbk"), full.get("backup_dir")
+            rq = urllib.request.Request(base + "/api/portal/ask?q=x", headers={"X-Op-Token": tok})
+            urllib.request.urlopen(rq)
+            assert calls == [False, True], calls                                     # 익명은 LLM 안 씀
+            rq = urllib.request.Request(base + "/api/portal/backup/download", data=b"{}", method="POST",
+                                        headers={"Content-Type": "application/json", "X-Op-Token": tok})
+            resp = urllib.request.urlopen(rq)
+            assert resp.headers.get("Cache-Control") == "no-store"                     # D4
+        finally:
+            P.askmod.respond = orig
+            httpd.shutdown()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    print("[D1~D5] OK  노드 파일 손상 복구·익명 설정 감춤·익명 LLM 차단·백업 no-store·설정 조용한 초기화 없음")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -969,7 +1035,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_t1_t5_portal_round3, check_u1_u3_ui_round3,
             check_v1_v6_edge_round3, check_w1_w2_round4, check_x1_x8_settings_round4,
             check_y1_y6_integrations_round5, check_z1_z8_portal_ui_round5,
-            check_aa_round6, check_ab_edge_views_round6, check_ac_round7]
+            check_aa_round6, check_ab_edge_views_round6, check_ac_round7,
+            check_ad_portal_round8]
 
 
 def main() -> int:

@@ -795,7 +795,9 @@ def main() -> int:
         assert pc.auth_status()["op_ttl_minutes"] == 120 and pc.auth_status()["show_update_popup"] is True
         assert pc.set_session_prefs({"op_ttl_minutes": 0})["op_ttl_minutes"] == 1        # 하한 클램프
         assert pc.set_session_prefs({"op_ttl_minutes": 99999})["op_ttl_minutes"] == 10080  # 상한 클램프
-        assert pc.set_session_prefs({"op_ttl_minutes": "x"})["op_ttl_minutes"] == 30        # 잘못된 값 → 기본
+        _before = pc.settings.get("op_ttl_minutes")
+        assert pc.set_session_prefs({"op_ttl_minutes": "x"})["ok"] is False              # 잘못된 값 → 거부(1.99.48)
+        assert pc.settings.get("op_ttl_minutes") == _before                                # 저장값 유지
         # 세션 prefs 저장이 다른 설정(감시 폴더)을 건드리지 않음
         pc.set_upgrade_watch("/tmp/iso_watch")
         pc.set_session_prefs({"show_update_popup": False})

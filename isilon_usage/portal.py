@@ -200,10 +200,24 @@ def sanitize_node(raw: dict) -> Optional[dict]:
 
 
 def load_nodes(data_dir: str) -> list:
-    try:
-        with open(nodes_path(data_dir), "r", encoding="utf-8") as fh:
-            raw = json.load(fh)
-    except (OSError, ValueError):
+    """노드 목록을 읽는다. 본 파일이 깨졌으면(잘림·디스크 가득) 직전 정상본(.bak)으로 — 예전엔 빈 목록이 되고
+    다음 저장이 그 빈 목록으로 덮어써 모든 노드·토큰이 사라졌다(2026-11 리뷰). 깨진 본은 .broken 으로 보관."""
+    path = nodes_path(data_dir)
+    raw = None
+    for cand in (path, path + ".bak"):
+        try:
+            with open(cand, "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            break
+        except (OSError, ValueError):
+            if cand == path and os.path.exists(path):
+                try:
+                    shutil.copyfile(path, path + ".broken")
+                    os.chmod(path + ".broken", 0o600)
+                except OSError:
+                    pass
+            continue
+    if raw is None:
         return []
     out = []
     for it in (raw.get("nodes") if isinstance(raw, dict) else raw) or []:
@@ -214,30 +228,9 @@ def load_nodes(data_dir: str) -> list:
 
 
 def save_nodes(data_dir: str, nodes: list) -> None:
-    """노드 레지스트리를 원자적으로 저장한다.
-
-    병렬 복제 스레드가 동시에 저장해도 충돌하지 않도록 스레드마다 '고유 임시파일'을 쓰고
-    (os.replace 로 원자 교체), 노드 스냅샷을 떠 직렬화 중 변경 영향을 피한다.
-    """
-    os.makedirs(data_dir, exist_ok=True)
-    path = nodes_path(data_dir)
-    payload = json.dumps({"nodes": [dict(n) for n in nodes]},
-                         ensure_ascii=False, indent=2)
-    fd, tmp = tempfile.mkstemp(prefix=".portal_nodes-", suffix=".tmp", dir=data_dir)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(payload)
-        os.replace(tmp, path)
-        try:
-            os.chmod(path, 0o600)   # 노드 api_token 이 평문 저장되므로 소유자만 읽도록 제한
-        except OSError:
-            pass
-    except BaseException:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        raise
+    """노드 레지스트리를 원자적으로 저장한다 — 설정과 같은 공용 저장(고유 임시 파일·fsync·직전 정상본 .bak·0600).
+    노드 스냅샷을 떠 직렬화 중 변경 영향을 피한다(api_token 이 평문이라 소유자만 읽게)."""
+    setmod.write_json_atomic(nodes_path(data_dir), {"nodes": [dict(n) for n in nodes]}, mode=0o600)
 
 
 _OV_NUM_KEYS = ("total_capacity_bytes", "total_scanned_bytes", "root_count", "active_scans")
@@ -1137,8 +1130,14 @@ class PortalController:
                 "backup_next": (last + every * 3600) if (bdir and last) else 0}
 
     def set_backup_config(self, dest_dir, every_hours, keep) -> dict:
-        """자동 백업 폴더·주기(시간)·최대 보관 수를 저장(폴더 비우면 자동 백업 끔)."""
-        self.settings["backup_dir"] = str(dest_dir or "").strip()
+        """자동 백업 폴더·주기(시간)·최대 보관 수를 저장(폴더 비우면 자동 백업 끔).
+        보내지 않은 값(None)은 그대로 둔다 — 예전엔 주기만 바꿔도 폴더가 비워져 자동 백업이 꺼졌다(2026-11 리뷰).
+        폴더는 절대 경로만(상대 경로는 서버 실행 위치에 따라 달라진다 — 복제 폴더와 같은 규칙)."""
+        if dest_dir is not None:
+            d = str(dest_dir).strip()
+            if d and not os.path.isabs(d):
+                return {"ok": False, "reason": "백업 폴더는 절대 경로(/ 로 시작)여야 합니다."}
+            self.settings["backup_dir"] = d
         try:
             # 상한(1년) — 1e999(=Infinity)가 저장되면 응답 JSON 이 깨지고 자동 백업이 영영 안 돌았다(2026-11 리뷰)
             self.settings["backup_every_hours"] = min(8760.0, max(0.1, float(every_hours)))
@@ -1222,12 +1221,12 @@ class PortalController:
     def set_ask_llm(self, body) -> dict:
         """자연어 질의응답용 로컬 LLM 설정을 저장한다(보낸 키만 반영)."""
         if "ask_llm_enabled" in body:
-            self.settings["ask_llm_enabled"] = bool(body.get("ask_llm_enabled"))
+            self.settings["ask_llm_enabled"] = _truthy(body.get("ask_llm_enabled"))
         if "ask_llm_endpoint" in body:
             self.settings["ask_llm_endpoint"] = str(body.get("ask_llm_endpoint") or "").strip()
         if "ask_llm_model" in body:
             self.settings["ask_llm_model"] = str(body.get("ask_llm_model") or "").strip()
-        if "ask_llm_key" in body:
+        if body.get("ask_llm_key") is not None:   # null 은 '보내지 않음'(예전엔 저장된 키가 지워졌다)
             self.settings["ask_llm_key"] = str(body.get("ask_llm_key") or "")
         if "ask_llm_timeout" in body:
             try:
@@ -1237,8 +1236,9 @@ class PortalController:
         self._save_settings()
         return {"ok": True, "ask_llm_enabled": bool(self.settings.get("ask_llm_enabled"))}
 
-    def ask(self, question: str) -> dict:
-        """자연어 질의응답(규칙 기반 + 선택적 로컬 LLM). 노드 롤업을 공통 형태로 정규화."""
+    def ask(self, question: str, *, allow_llm: bool = True) -> dict:
+        """자연어 질의응답(규칙 기반 + 선택적 로컬 LLM). 노드 롤업을 공통 형태로 정규화.
+        allow_llm=False 면 외부 LLM 을 부르지 않는다(로그인 없는 요청 — 저장된 키로 남이 호출량을 쓰지 못하게)."""
         ov = self.overview()
         roots = []
         for n in ov.get("nodes") or []:
@@ -1263,7 +1263,7 @@ class PortalController:
             "active_scans": int(totals.get("active_scans") or 0),
             "roots": roots,
         }
-        cfg = {"enabled": bool(self.settings.get("ask_llm_enabled")),
+        cfg = {"enabled": bool(self.settings.get("ask_llm_enabled")) and allow_llm,
                "endpoint": self.settings.get("ask_llm_endpoint") or "",
                "model": self.settings.get("ask_llm_model") or "",
                "key": self.settings.get("ask_llm_key") or "",
@@ -2613,9 +2613,10 @@ class PortalController:
             try:
                 self.settings["op_ttl_minutes"] = max(1, min(10080, int(body.get("op_ttl_minutes"))))
             except (TypeError, ValueError, OverflowError):
-                self.settings["op_ttl_minutes"] = 30
+                # 잘못된 값이면 저장하지 않는다 — 예전엔 120 이던 값이 조용히 30 으로 바뀌고 ok 를 돌려줬다
+                return {"ok": False, "reason": "세션 유지 시간(분)은 1~10080 사이 숫자여야 합니다."}
         if "show_update_popup" in body:
-            self.settings["show_update_popup"] = bool(body.get("show_update_popup"))
+            self.settings["show_update_popup"] = _truthy(body.get("show_update_popup"))
         if "log_popup_pos" in body:
             # 로그 팝업(업그레이드 진행/전 노드 푸시/기록 세부) 앵커: 중앙 또는 네 코너
             v = str(body.get("log_popup_pos") or "center").strip().lower()
@@ -3537,7 +3538,13 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "version": __version__, "changelog": text})
                 return
             if path == "/api/portal/settings":
-                self._send_json(c.upgrade_config())
+                cfg = c.upgrade_config()
+                if c.auth_required() and not c.token_valid(self.headers.get("X-Op-Token")):
+                    # 로그인 전에는 서버 경로(백업·복제·릴리스 폴더)·LLM 주소 같은 운영 정보를 감춘다(2026-11 리뷰)
+                    keep = ("ok", "portal_title", "portal_subtitle", "hq_version", "bundle_version", "bundle_stale",
+                            "ask_llm_enabled", "export_token_set")
+                    cfg = dict({k: cfg[k] for k in keep if k in cfg}, redacted=True)
+                self._send_json(cfg)
                 return
             if path == "/api/portal/upgrade/status":
                 self._send_json(c.upgrade_status())
@@ -3573,7 +3580,9 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/portal/ask":      # 자연어 질의응답(읽기 전용)
                 q = (parse_qs(urlparse(self.path).query).get("q", [""])[0] or "").strip()
-                self._send_json(c.ask(q))
+                # 규칙 기반 답은 누구나, 외부 LLM 호출(저장된 키 사용)은 로그인한 사람만(비밀번호를 쓰는 포탈일 때)
+                llm_ok = not c.auth_required() or c.token_valid(self.headers.get("X-Op-Token"))
+                self._send_json(c.ask(q, allow_llm=llm_ok))
                 return
             if path == "/api/portal/throughput":   # 법인별 시간당 처리량 + 윈도우별(영구 DB)
                 self._send_json(c.throughput_windows())
@@ -3723,6 +3732,7 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "application/gzip")
                 self.send_header("Content-Disposition", 'attachment; filename="%s"' % fname)
                 self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store")   # 토큰·비밀번호 해시가 든 파일 — 캐시에 남기지 않음
                 self.end_headers()
                 self.wfile.write(data)
                 return
