@@ -1936,6 +1936,8 @@ let lastDetailScan = null;
 const statusKo = {discovering:"탐색중", sizing:"집계중", done:"완료", paused:"일시정지", error:"오류"};
 
 // ---- 설정 보기/수정 ----
+let _setBase = null;   // 마지막으로 불러온 설정의 폼 값 — 저장할 때 바뀐 칸만 보낸다
+
 async function loadSettings() {
   try {
     const j = await (await fetch("/api/settings", {cache:"no-store"})).json();
@@ -2061,6 +2063,7 @@ async function loadSettings() {
       ` · 설정 ${j.locked ? "잠김" : "편집가능"}` +
       ` <span class="sub">(host·port·data-dir 는 실행 시 고정이라 읽기 전용)</span>`;
     settingsLoaded = true;
+    try { _setBase = _collectSettingsPayload(); } catch (e) { _setBase = null; }
   } catch (e) { /* 무시 */ }
 }
 
@@ -2705,14 +2708,9 @@ function settingsNumberProblem() {
   }
   return null;
 }
-async function saveSettings() {
-  const bad = settingsNumberProblem();
-  if (bad) {
-    $("settingsMsg").innerHTML = '<span class="err">✗ 저장 안 함 — ' + escHtml(bad.msg) + '</span>';
-    try { bad.el.focus(); } catch (e) { /* 숨은 탭 */ }
-    return;
-  }
-  const payload = {
+// 설정 폼의 현재 값(저장 페이로드) — 저장할 때와 '불러온 직후 기준값'에 같은 함수를 쓴다(단일 소스)
+function _collectSettingsPayload() {
+  return {
     default_backend: $("setBackend").value,
     default_size_mode: $("setSize").value,
     default_one_file_system: $("setOFS").value === "true",
@@ -2765,6 +2763,21 @@ async function saveSettings() {
     ask_llm_model: $("setAskLlmModel") ? $("setAskLlmModel").value.trim() : "",
     ask_llm_timeout: $("setAskLlmTimeout") ? (parseInt($("setAskLlmTimeout").value) || 20) : 20,
   };
+}
+async function saveSettings() {
+  const bad = settingsNumberProblem();
+  if (bad) {
+    $("settingsMsg").innerHTML = '<span class="err">✗ 저장 안 함 — ' + escHtml(bad.msg) + '</span>';
+    try { bad.el.focus(); } catch (e) { /* 숨은 탭 */ }
+    return;
+  }
+  // 바뀐 칸만 보낸다 — 예전엔 폼 전체(40여 칸·예약·장비 목록)를 보내, 다른 탭에서 먼저 저장한 값을 오래된 탭이
+  // 조용히 되돌렸다(2026-11 자유 탐색 점검). 불러온 기준값이 없으면(드묾) 전체를 보낸다.
+  const _full = _collectSettingsPayload();
+  const payload = {};
+  Object.keys(_full).forEach(k => {
+    if (!_setBase || JSON.stringify(_full[k]) !== JSON.stringify(_setBase[k])) payload[k] = _full[k];
+  });
   // 비밀번호는 입력했을 때만 전송(빈값이면 기존 유지)
   const _pw = $("setSmtpPass").value;
   if (_pw) payload.smtp_password = _pw;

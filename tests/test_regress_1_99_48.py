@@ -1481,6 +1481,17 @@ def check_ao_regress_round14() -> None:
     print("[P1·P2] OK  테스트 데이터 경로 과잉 차단 해소·저장된 노드는 id 규칙 완화로 보존")
 
 
+def check_ap_explore_round14() -> None:
+    """Q1 다른 탭에서 먼저 저장한 설정을 오래된 탭이 폼 전체로 조용히 되돌림 Q2 방금 등록한 노드가 1초쯤 '끊김'·오류로 보임."""
+    dh, ph = _read("dashboard.html"), _read("portal.html")
+    assert "function _collectSettingsPayload() {" in dh and "_setBase = _collectSettingsPayload();" in dh   # Q1
+    assert "JSON.stringify(_full[k]) !== JSON.stringify(_setBase[k])" in dh
+    assert dh.index("let _setBase = null;") < dh.index("async function loadSettings()")               # 선언이 먼저
+    assert 'if(!n.online && !n.last_poll && !n.last_error) return {t:"확인 중"' in ph                    # Q2
+    assert "if(n.enabled && !st.pending && (!n.online || n.error)){" in ph
+    print("[Q1·Q2] OK  설정은 바뀐 칸만 저장(브라우저 두 탭 확인)·새 노드는 '확인 중'")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1494,7 +1505,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_ag_edge_flow_round9, check_ah_clock_rewind_round10,
             check_ai_edge_round10, check_aj_adverse_fs_round11,
             check_ak_round11_misc, check_al_tools_round12, check_am_remote_round13,
-            check_an_fuzz_round13, check_ao_regress_round14]
+            check_an_fuzz_round13, check_ao_regress_round14,
+            check_ap_explore_round14]
 
 
 def main() -> int:

@@ -2023,6 +2023,8 @@ let _nodeRows = [];        // 마지막으로 받은 노드 목록(/api/portal/n
 let _selNode = undefined;  // 선택한 노드 id(null = 새 노드 입력 중, undefined = 아직 고르지 않음)
 function _nodeState(n){
   if(!n.enabled) return {t:"사용 안 함", fg:"var(--muted)", dot:"#8A93A0", bg:"var(--panel2)"};
+  // 아직 한 번도 확인하지 않은(방금 등록한) 노드는 '끊김'이 아니다 — 예전엔 첫 폴링 전 1초쯤 끊김·오류로 보였다
+  if(!n.online && !n.last_poll && !n.last_error) return {t:"확인 중", fg:"var(--muted)", dot:"#8A93A0", bg:"var(--panel2)", pending:true};
   if(!n.online) return {t:"끊김", fg:"var(--danger)", dot:"#B42318", bg:"var(--danger-weak)"};
   if(n.active_scans>0) return {t:"스캔 중", fg:"var(--accent-ink)", dot:"#1D4ED8", bg:"var(--accent-weak)"};
   return {t:"연결됨", fg:"var(--ok)", dot:"#166534", bg:"var(--ok-weak)"};
@@ -2062,7 +2064,7 @@ function renderNodeHeader(){
   const bd=$("ndBadge"); bd.style.display=""; bd.textContent=st.t; bd.style.background=st.bg; bd.style.color=st.fg;
   $("ndMeta").textContent=[n.region||"지역 없음", n.version?("v"+n.version):"", n.last_ok?("마지막 응답 "+ago(n.last_ok)):"아직 응답 없음",
     n.last_sync?("결과 복제 "+ago(n.last_sync)):""].filter(Boolean).join(" · ");
-  if(n.enabled && (!n.online || n.error)){
+  if(n.enabled && !st.pending && (!n.online || n.error)){   // 첫 확인 전엔 경고를 띄우지 않는다
     const adv=_nodeAdvice(n.error); $("ndAlert").style.display="flex";
     $("ndAlertT").textContent=adv[0]; $("ndAlertD").textContent=(adv[1]?adv[1]+" ":"")+(n.error?("(받은 오류: "+n.error+")"):"");
   } else $("ndAlert").style.display="none";
