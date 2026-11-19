@@ -1230,7 +1230,9 @@ function _fillIdle(el, v){
   if(isCb) el.checked=!!v; else el.value=v;
 }
 async function loadAuth(){
-  try{ const j=await (await _origFetch("/api/portal/auth",{cache:"no-store"})).json();
+  try{ const _ac=(typeof AbortController!=="undefined")?new AbortController():null; const _t=_ac?setTimeout(()=>_ac.abort(),8000):null;
+    let _r; try{ _r=await _origFetch("/api/portal/auth",Object.assign({cache:"no-store"},_ac?{signal:_ac.signal}:{})); } finally{ if(_t) clearTimeout(_t); }
+    const j=await _r.json();
     _opRequired=!!j.op_required;
     _opTemp=!!j.op_temp; _opInfoPath=j.op_info_path||"";
     if(_opTemp) showTempPasswordNotice();
@@ -1393,9 +1395,12 @@ async function doLogin(){
       try{ sessionStorage.setItem("pOpExpiry",String(_opExpiry)); }catch(e){}
       _opStartTimer();
       updateLoginUI(); return true; }
-  }catch(e){}
-  window.alert("비밀번호가 올바르지 않습니다."); return false;
+    // 잠김·서버 사유를 그대로 — 예전엔 어떤 실패든 '비밀번호가 올바르지 않습니다'라 잠긴 동안 맞는 비밀번호도 틀렸다고 했다(26회차 점검)
+    window.alert(j.reason || "비밀번호가 올바르지 않습니다."); return false;
+  }catch(e){ window.alert("포탈 서버에 연결할 수 없습니다 — 잠시 후 다시 로그인하세요. ("+e+")"); return false; }
 }
+let _loginP=null;
+function _loginOnce(){ if(!_loginP) _loginP=doLogin().finally(()=>{ _loginP=null; }); return _loginP; }
 // 비밀번호를 바꾸면 서버가 옛 세션을 모두 만료하고 바꾼 본인에게만 새 토큰을 준다 — 그 토큰으로 갈아끼운다.
 function _opAdopt(j){
   if(!j || !j.token) return false;
@@ -1433,7 +1438,8 @@ window.fetch=async function(url,opts){
     let res=await _origFetch(url,opts);
     if(res.status===401){
       let j401={}; try{ j401=await res.clone().json(); }catch(e){}
-      const ok=j401.need_setup ? await promptSetup() : (_opRequired=true, updateLoginUI(), await doLogin());
+      // 동시에 여러 요청이 401 이면 로그인 창이 겹겹이 떴다(26회차 점검) — 진행 중인 로그인 하나를 함께 기다린다
+      const ok=j401.need_setup ? await promptSetup() : (_opRequired=true, updateLoginUI(), await _loginOnce());
       if(ok){ opts.headers["X-Op-Token"]=_opToken(); res=await _origFetch(url,opts); }
       else if(j401.reason==="locked"){
         // 로그인을 취소하면 화면들이 서버 코드 'locked' 를 그대로 '실패: locked' 로 보였다(19회차 점검) — 사람 말로
@@ -1735,8 +1741,12 @@ function openPhModal(node){
   m.style.display="flex";
   $("phmTitle").textContent=node.id;
   $("phmInfo").textContent="불러오는 중…";
+  // 늦게 온 이전 노드의 응답이 지금 연 노드 차트를 덮지 않게(26회차 점검: 제목은 B, 차트는 A)
+  const seq=(window._phSeq=(window._phSeq||0)+1);
+  _phMV=null; const _cv=$("phmCanvas"); if(_cv){ const g=_cv.getContext("2d"); if(g) g.clearRect(0,0,_cv.width,_cv.height); }
   // 1년치를 받아 그 노드만 큰 차트로(드래그로 과거까지 탐색)
   fetch("/api/portal/ping-history?range=31536000",{cache:"no-store"}).then(r=>r.json()).then(j=>{
+    if(seq!==window._phSeq || m.style.display!=="flex") return;
     const nn=((j&&j.nodes)||[]).find(x=>x.id===node.id) || node;
     const series=(nn.series||[]).filter(p=>p.ms!=null).slice().sort((a,b)=>a.t-b.t);
     _phMV={ series, med:nn.median, id:node.id };
@@ -1744,7 +1754,7 @@ function openPhModal(node){
       _phMV.range=span; _phMV.t0=series[0].t; }
     else { _phMV.range=86400; _phMV.t0=Math.floor(_nowSec())-86400; }
     drawPhModal();
-  }).catch(()=>{ const inf=$("phmInfo"); if(inf) inf.textContent="불러오기 실패"; });
+  }).catch(()=>{ if(seq!==window._phSeq) return; const inf=$("phmInfo"); if(inf) inf.textContent="불러오기 실패"; });
 }
 function _closePhModal(){ const m=$("phModal"); if(m) m.style.display="none"; _hidePhTip(); }
 function drawPhModal(){
@@ -1784,11 +1794,26 @@ function _bindPhModalCanvas(){
 
 let pOverview=null, regionFilter="", nodeSort="used_bytes", nodeOrder="desc";
 let pingResults={};
+// 조회 시간 제한(멈춘 포탈에 요청이 끝없이 걸려 있지 않게)
+async function _fetchT(url, ms, opts){
+  const ac=(typeof AbortController!=="undefined")?new AbortController():null;
+  const t=ac?setTimeout(()=>ac.abort(), ms||8000):null;
+  try{ return await fetch(url, Object.assign({cache:"no-store"}, opts||{}, ac?{signal:ac.signal}:{})); }
+  finally{ if(t) clearTimeout(t); }
+}
+let _ovOkAt=0, _ovFails=0;   // 마지막 성공 시각·연속 실패 수 — 끊긴 동안 '방금 갱신'으로 옛 값을 보여 주지 않게(26회차 점검)
 async function loadOverview(){
   try {
-    const j = await (await fetch("/api/portal/overview",{cache:"no-store"})).json();
-    if(!j.ok) return; pOverview=j; _ovFetch=Date.now(); renderPortalDash();
-  } catch(e){ /* 무시 */ }
+    const j = await (await _fetchT("/api/portal/overview", 8000)).json();
+    if(!j.ok) return; pOverview=j; _ovFetch=Date.now(); _ovOkAt=Date.now(); _ovFails=0; renderPortalDash();
+  } catch(e){ _ovFails++; _updAtText(); }
+}
+function _updAtText(){
+  const el=$("updAt"); if(!el) return;
+  const f=(typeof regionFilter!=="undefined" && regionFilter)?` · ‘${regionFilter}’ 필터`:"";
+  if(_ovFails>=2 && _ovOkAt){ const s=Math.round((Date.now()-_ovOkAt)/1000);
+    el.textContent="⚠ 포탈 연결 끊김 — 마지막 갱신 "+s+"초 전"+f; el.style.color="var(--bad)"; return; }
+  el.textContent="마지막 갱신: 방금"+f; el.style.color="";
 }
 async function loadPing(){
   const btn=$("pingBtn"); if(btn){ btn.disabled=true; btn.textContent="📡 핑 측정 중…"; }
@@ -1876,6 +1901,7 @@ function _verCmp(a,b){   // "1.99.10" 형식 버전 비교: 음수=a<b
   return 0;
 }
 const _openNodeRows = new Set();   // 현황 표에서 펼친 노드(id) — 다시 그려도 유지
+const _scanPending=new Set();   // 개별 '▶ 스캔 시작' 요청 중인 노드 id
 function renderPortalDash(){
   const j=pOverview; if(!j) return;
   // 고른 지역이 사라졌으면(그 지역 마지막 노드 삭제·지역명 변경) 필터를 푼다 — 다시 누를 카드가 없어 빈 표에 갇혔다
@@ -1946,7 +1972,9 @@ function renderPortalDash(){
     const scanBtn = !canScan ? ""
       : scanLocked
         ? ` <button class="ssbtn" disabled title="로그인 후 스캔을 시작할 수 있습니다">🔒 스캔 시작</button>`
-        : ` <button class="ssbtn" data-id="${escAttr(n.id)}" title="마지막 스캔과 동일한 경로로 새 스캔 시작">▶ 스캔 시작</button>`;
+        : (_scanPending.has(n.id)   // 요청 중엔 5초 다시 그리기에도 '시작 중…'을 유지(26회차 점검: 되살아난 버튼으로 두 번 시작)
+          ? ` <button class="ssbtn" data-id="${escAttr(n.id)}" disabled>시작 중…</button>`
+          : ` <button class="ssbtn" data-id="${escAttr(n.id)}" title="마지막 스캔과 동일한 경로로 새 스캔 시작">▶ 스캔 시작</button>`);
     // 새창(엣지 대시보드)을 열 때 포탈의 노드명(예: WA)을 넘겨, 새창 제목이 호스트네임 대신 노드명으로 뜨게 한다
     const _ou = /^https?:\/\//i.test(n.url||"") ? (n.url||"") : "#";   // http/https 만 링크(javascript: 등 차단)
     const open = `<a class="link" href="${escAttr(_ou)}${_ou.includes("?")?"&":"?"}node=${encodeURIComponent(n.id)}" target="_blank" rel="noopener">열기 ↗</a>`;
@@ -2011,9 +2039,9 @@ function renderPortalDash(){
   }));
   $("nodeRows").querySelectorAll(".ssbtn").forEach(b=>b.addEventListener("click",async e=>{
     e.stopPropagation();
-    const id=b.dataset.id; if(!id) return;
+    const id=b.dataset.id; if(!id || _scanPending.has(id)) return;
     if(!confirm(id+" — 마지막 스캔과 동일한 경로로 새 스캔을 시작할까요?")) return;
-    b.disabled=true; b.textContent="시작 중…";
+    b.disabled=true; b.textContent="시작 중…"; _scanPending.add(id);
     try{
       const j=await (await fetch("/api/portal/node-scan",{method:"POST",
         headers:{"Content-Type":"application/json"},body:JSON.stringify({id})})).json();
@@ -2024,10 +2052,11 @@ function renderPortalDash(){
              setTimeout(()=>{ b.textContent="▶ 스캔 시작"; }, 4000); }
     }catch(err){ b.textContent="✗ 오류"; b.disabled=false; alert(id+" — 요청 오류: "+err);
                  setTimeout(()=>{ b.textContent="▶ 스캔 시작"; }, 4000); }
+    finally{ _scanPending.delete(id); }
   }));
   $("nodeTable").querySelectorAll("th[data-nsort]").forEach(th=>{
     th.textContent = th.dataset.label + (th.dataset.nsort===nodeSort ? (nodeOrder==="desc"?" ▼":" ▲") : ""); });
-  $("updAt").textContent = "마지막 갱신: 방금" + (regionFilter?` · ‘${regionFilter}’ 필터`:"");
+  _updAtText();
   $("dashNote").textContent = regionFilter
     ? `‘${regionFilter}’ 지역만 표시 중 — 지역 카드를 다시 클릭하면 해제됩니다.`
     : "노드 행 클릭=스토리지 펼침 · 지역 카드=필터 · 머리글=정렬. 깊은 경로 비교는 ‘경로 비교’ 탭에서.";
@@ -2117,7 +2146,7 @@ function renderEnrollCmd(tokenSet){
 }
 async function loadNodes(){
   try {
-    const j = await (await fetch("/api/portal/nodes",{cache:"no-store"})).json();
+    const j = await (await _fetchT("/api/portal/nodes", 8000)).json();
     const rows=(j.nodes||[]);
     _nodeRows = rows;
     renderNodeList();
@@ -2138,7 +2167,11 @@ async function loadNodes(){
 
 
 // 전체 노드 일괄 스캔 시작(옵션: -x · 오토튜닝 · 진행 중 노드 멈추고 재시작) — 시작 전 확인받음
+// 전체 시작·전체 중단은 한 번에 하나 — 응답 전 여러 번 누르면 같은 요청이 여러 번 갔다(26회차 점검: 3번 클릭 → POST 3개)
+let _allBusy=false;
+function _setAllBusy(v){ _allBusy=v; ["scanAllBtn","stopAllBtn"].forEach(k=>{ if($(k)) $(k).disabled=v; }); }
 async function scanAllNodes(){
+  if(_allBusy) return;
   const ofs=$("scanAllOFS").checked;
   const engine=($("scanAllEngine")&&$("scanAllEngine").value)||"auto";
   const auto=engine==="auto";
@@ -2159,6 +2192,7 @@ async function scanAllNodes(){
     + "\n시작할까요?";
   if(!confirm(summary)) return;
   msg.textContent="시작 요청 중… (노드 수에 따라 수 초 걸릴 수 있습니다)";
+  _setAllBusy(true);
   try{
     const j=await (await fetch("/api/portal/node-scan-all",{method:"POST",
       headers:{"Content-Type":"application/json"},
@@ -2169,17 +2203,20 @@ async function scanAllNodes(){
       + rs.map(r=>`${r.ok?"✅":"⏭️"} ${escAttr(r.id)}${(!r.ok&&r.reason)?(' <span class="sub">('+escAttr(r.reason)+')</span>'):""}`).join(" · ");
     setTimeout(()=>{ loadNodes(); if(typeof loadOverview==="function") loadOverview(); }, 1800);
   }catch(e){ msg.textContent="요청 오류: "+e; }
+  finally{ _setAllBusy(false); }
 }
 if($("scanAllBtn")) $("scanAllBtn").addEventListener("click", scanAllNodes);
 
 // 전체 노드 진행 중 스캔 일괄 중단 — threads 는 'paused'로 남아 이어하기 가능, pscan 은 중지 불가
 async function stopAllNodes(){
+  if(_allBusy) return;
   if(!confirm("전체 노드의 진행 중 스캔을 모두 중단할까요?\n\n"
     +"• threads 엔진: 중단 후 각 노드에서 '이어하기(재개)' 가능\n"
     +"• pscan 엔진: 중간 중지가 불가해 건너뜁니다\n"
     +"• 진행 중이 아닌 노드는 대상에서 제외됩니다")) return;
   const msg=$("scanAllMsg");
   msg.textContent="중단 요청 중…";
+  _setAllBusy(true);
   try{
     const j=await (await fetch("/api/portal/node-stop-all",{method:"POST",
       headers:{"Content-Type":"application/json"}, body:"{}"})).json();
@@ -2191,6 +2228,7 @@ async function stopAllNodes(){
         +((r.reason&&r.reason!=="진행 중 스캔 없음")?(' <span class="sub">('+escAttr(r.reason)+')</span>'):"")).join(" · ")):" (진행 중 스캔 없음)");
     setTimeout(()=>{ loadNodes(); if(typeof loadOverview==="function") loadOverview(); }, 1800);
   }catch(e){ msg.textContent="요청 오류: "+e; }
+  finally{ _setAllBusy(false); }
 }
 if($("stopAllBtn")) $("stopAllBtn").addEventListener("click", stopAllNodes);
 
@@ -2282,21 +2320,25 @@ function mdLite(s){
   const esc=String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
   return esc.replace(/\*\*(.+?)\*\*/g,"<b>$1</b>").replace(/\n/g,"<br>");
 }
+// 질문 순번 — 늦게 온 옛 답이 새 답을 덮거나, 바깥을 눌러 닫은 패널을 다시 여는 것을 막는다(26회차 점검)
+let _askSeq=0;
 async function doAsk(){
   const q=($("askInput").value||"").trim(); const out=$("askOut");
+  const seq=++_askSeq;
   if(!q){ out.textContent=""; return; }
   out.innerHTML='<span class="sub">분석 중…</span>';
   try{
     const j=await (await fetch("/api/portal/ask?q="+encodeURIComponent(q),{cache:"no-store"})).json();
+    if(seq!==_askSeq) return;
     if(!j||!j.ok){ out.textContent="답을 만들지 못했습니다."; return; }
     const llm=(j.source==="rules+llm")?' <span class="sub">· 🧠 LLM 다듬음</span>':"";
     out.innerHTML=mdLite(j.answer)+llm;
-  }catch(e){ out.textContent="오류: "+e; }
+  }catch(e){ if(seq===_askSeq) out.textContent="오류: "+e; }
 }
 if($("askBtn")) $("askBtn").addEventListener("click",doAsk);
-if($("askInput")) $("askInput").addEventListener("keydown",(e)=>{ if(e.key==="Enter") doAsk(); if(e.key==="Escape") $("askOut").innerHTML=""; });
+if($("askInput")) $("askInput").addEventListener("keydown",(e)=>{ if(e.key==="Enter") doAsk(); if(e.key==="Escape"){ _askSeq++; $("askOut").innerHTML=""; } });
 // 물어보기 답 패널: 바깥을 누르면 닫는다(엣지와 같은 동작)
-document.addEventListener("click",(e)=>{ const box=$("askBox"); if(box && !box.contains(e.target) && $("askOut")) $("askOut").innerHTML=""; });
+document.addEventListener("click",(e)=>{ const box=$("askBox"); if(box && !box.contains(e.target) && $("askOut")){ if($("askOut").innerHTML) _askSeq++; $("askOut").innerHTML=""; } });
 
 // 로컬 LLM 설정 로드/저장(설정은 /api/portal/settings)
 function loadAskLlm(){
@@ -2375,9 +2417,14 @@ $("addBtn").addEventListener("click", async ()=>{
   const pl=nodePayload();
   // 새 노드(또는 이름을 바꾼 경우)는 같은 이름의 기존 노드를 말없이 덮어쓰지 않게 — 서버가 거부한다(19회차 점검)
   if(_selNode==null || pl.id!==_selNode) pl.create_only=true;
-  const j = await (await fetch("/api/portal/nodes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(pl)})).json();
-  $("nodeMsg").textContent = j.ok ? "✓ 저장됨" : ("실패: "+(j.reason||""));
-  if(j.ok){ _selNode=pl.id; loadNodes(); loadOverview(); }
+  // 포탈에 닿지 않으면 아무 표시 없이 멈췄다(26회차 점검) — 실패를 알리고, 저장 중 두 번 누르지 않게 잠근다
+  const b=$("addBtn"); if(b.disabled) return; b.disabled=true; $("nodeMsg").textContent="저장 중…";
+  try{
+    const j = await (await fetch("/api/portal/nodes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(pl)})).json();
+    $("nodeMsg").textContent = j.ok ? "✓ 저장됨" : ("실패: "+(j.reason||""));
+    if(j.ok){ _selNode=pl.id; loadNodes(); loadOverview(); }
+  }catch(e){ $("nodeMsg").textContent="실패: 포탈에 연결할 수 없습니다 ("+e+")"; }
+  finally{ b.disabled=false; }
 });
 $("ndNewBtn").addEventListener("click", ()=>{ newNodeForm(); $("nId").focus(); });
 $("addManualBtn").addEventListener("click", ()=>{ newNodeForm(); $("nodeDetail").scrollIntoView({behavior:"smooth"}); setTimeout(()=>$("nId").focus(), 300); });
@@ -2390,18 +2437,24 @@ $("enrollCopy").addEventListener("click", async ()=>{
 });
 $("ndDelBtn").addEventListener("click", async ()=>{
   const id=_selNode; if(!id || !confirm("노드 "+id+" 를 삭제할까요?\n포탈에 받아 둔 이 노드의 복제 결과도 목록에서 빠집니다(엣지 원본은 그대로).")) return;
-  const j=await (await fetch("/api/portal/nodes/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})})).json();
+  let j;
+  try{ j=await (await fetch("/api/portal/nodes/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})})).json(); }
+  catch(e){ $("nodeMsg").textContent="실패: 포탈에 연결할 수 없습니다 ("+e+")"; return; }
   $("nodeMsg").textContent = (j && j.ok===false) ? ("실패: "+(j.reason||"")) : "";
+  if(j && j.ok===false) return;
   _selNode=undefined; loadNodes(); loadOverview();
 });
 $("ndSyncBtn").addEventListener("click", async ()=>{
-  const id=_selNode; if(!id) return; $("ndSyncBtn").textContent="가져오는 중…";
-  await fetch("/api/portal/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
-  setTimeout(()=>{ $("ndSyncBtn").textContent="지금 가져오기"; loadNodes(); loadOverview(); },1500);
+  const id=_selNode; const b=$("ndSyncBtn"); if(!id || b.disabled) return; b.disabled=true; b.textContent="가져오는 중…";
+  try{ await fetch("/api/portal/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})}); }
+  catch(e){ $("nodeMsg").textContent="실패: 포탈에 연결할 수 없습니다 ("+e+")"; }
+  setTimeout(()=>{ b.disabled=false; b.textContent="지금 가져오기"; loadNodes(); loadOverview(); },1500);
 });
 $("testBtn").addEventListener("click", async ()=>{
   $("nodeMsg").textContent="테스트 중…";
-  const j = await (await fetch("/api/portal/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(nodePayload())})).json();
+  let j;
+  try{ j = await (await fetch("/api/portal/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(nodePayload())})).json(); }
+  catch(e){ $("nodeMsg").textContent="✗ 포탈에 연결할 수 없습니다 ("+e+")"; return; }
   $("nodeMsg").textContent = j.ok ? `✓ 연결 OK · v${j.version||"?"} · ${fmtNum(j.storages)} 스토리지 · ${fmtBytes(j.used_bytes)}` : ("✗ "+(j.reason||"실패"));
 });
 // ---- CSV 일괄 가져오기/내보내기 ----
@@ -2482,13 +2535,17 @@ async function loadCompare(path){
   const p = (cmpCur || $("cmpPath").value.trim());
   if(!p) return;
   cmpCur = p;
+  // 요청 순번 — 느린 옛 경로(/slow)의 응답이 나중에 연 경로(/fast)의 표를 덮었다(26회차 점검). 비교·매트릭스는 함께 받는다.
+  const seq=(window._cmpSeq=(window._cmpSeq||0)+1);
   try {
-    const j = await (await fetch("/api/portal/compare?path="+encodeURIComponent(p),{cache:"no-store"})).json();
+    const [j, m] = await Promise.all([
+      fetch("/api/portal/compare?path="+encodeURIComponent(p),{cache:"no-store"}).then(r=>r.json()),
+      fetch("/api/portal/matrix?path="+encodeURIComponent(p),{cache:"no-store"}).then(r=>r.json())]);
+    if(seq!==window._cmpSeq) return;
     renderCompare(j);
-    const m = await (await fetch("/api/portal/matrix?path="+encodeURIComponent(p),{cache:"no-store"})).json();
     renderMatrix(m);
     $("cmpCrumb").textContent = p;
-  } catch(e){ $("cmpNote").textContent = "오류: "+e; }
+  } catch(e){ if(seq===window._cmpSeq) $("cmpNote").textContent = "오류: "+e; }
 }
 function renderCompare(j){
   const all=(j.rows||[]); const found=all.filter(r=>r.found);
@@ -2828,6 +2885,7 @@ async function runUpgradeModal(){
       }
       $("upgModalStat").innerHTML=j.installing?'<span style="color:var(--warn)">⏳ 진행 중…</span>':(sawRestart?'<span style="color:var(--warn)">🔄 복귀 대기…</span>':'<span style="color:var(--warn)">⏳ 진행 중…</span>');
     }
+    if(m.style.display==="none") return;    // 닫은 뒤 늦게 온 조회가 타이머를 다시 걸지 않게(26회차 점검)
     if(Date.now()-t0<90000){ _upgTimer=setTimeout(poll,700); }
     else { $("upgModalStat").innerHTML+=' <span class="sub">— 오래 걸립니다. ‘노드 관리’에서 확인하세요.</span>'; }
   };
@@ -2866,10 +2924,10 @@ async function loadRelease(){
       if(!j.release_available){
         $("relFile").innerHTML=`<span style="color:var(--warn)">(없음)</span> <span class="sub">${rs||"폴더에 isilon_usage-*.tar.gz 를 두세요"}</span>`;
       } else if(j.release_version_mismatch){
-        $("relFile").innerHTML=`${fn} <span style="color:var(--danger);font-weight:700">⚠ 엣지가 받을 실제 버전 v${j.release_content_version||"?"} · 파일명은 v${j.release_version||"?"}</span>`
+        $("relFile").innerHTML=`${fn} <span style="color:var(--danger);font-weight:700">⚠ 엣지가 받을 실제 버전 v${_he(j.release_content_version||"?")} · 파일명은 v${_he(j.release_version||"?")}</span>`
           +`<div class="sub" style="color:var(--danger)">${rs}</div>`;
       } else {
-        const cv=j.release_content_version||j.release_version||"?";
+        const cv=_he(j.release_content_version||j.release_version||"?");
         $("relFile").innerHTML=`${fn} <span style="color:var(--ok)">→ 엣지가 받을 버전 <b>v${cv}</b></span>`
           +(rs?` <span class="sub">${rs}</span>`:"");
       }
@@ -2990,11 +3048,15 @@ function renderPush(p){
       +`<td class="${n.state==="fail"?"":"sub"}" style="padding:5px 18px; ${n.state==="fail"?"color:var(--danger)":""}">${esc(detail)}</td></tr>`;
   }).join("");
 }
+let _pushErr=0;
 async function pollPush(){
   let j=null;
   try{ j=await (await fetch("/api/portal/upgrade/status",{cache:"no-store"})).json(); }catch(e){}
   if(j&&j.push) renderPush(j.push);
-  _pushTimer = (j&&j.push&&j.push.active) ? setTimeout(pollPush, 1000) : null;
+  // 한 번 조회가 실패하면 영영 멈췄다(26회차 점검: 진행 창이 '⏳ 시작'에 고정) — 실패는 30번(약 1분)까지 다시 시도
+  _pushErr = j ? 0 : _pushErr+1;
+  const m=$("pushModal"), open=!!(m && m.style.display!=="none");
+  _pushTimer = ((j&&j.push&&j.push.active) || (!j && _pushErr<=30 && open)) ? setTimeout(pollPush, j?1000:2000) : null;
 }
 function openPushModal(){
   const m=$("pushModal"); if(!m) return;
@@ -3102,7 +3164,7 @@ let _thruData=null; const _thruOpen={};
 const _THRU_LABEL={"60":"최근 1분","600":"최근 10분","1800":"최근 30분","3600":"최근 1시간","36000":"최근 10시간","86400":"최근 1일"};
 function _bph(v){ return (v==null)?"—":(fmtBytes(v)+"/h"); }
 async function loadThroughput(){
-  try{ const j=await (await fetch("/api/portal/throughput",{cache:"no-store"})).json();
+  try{ const j=await (await _fetchT("/api/portal/throughput", 15000)).json();
     if(j&&j.ok){ _thruData=j; renderThroughput(); } }catch(e){}
 }
 function renderThroughput(){
@@ -3138,8 +3200,12 @@ function renderThroughput(){
 
 loadAuth();
 loadOverview(); loadNodes(); loadThroughput();
-setInterval(()=>{ loadAuth(); loadOverview(); loadNodes(); }, 5000);
-setInterval(loadThroughput, 20000);
+// 주기 조회는 한 번에 하나씩(single-flight) — 포탈이 멈추면 5초마다 요청이 쌓여(35초 정지에 22개) 브라우저 연결 6개를
+// 다 차지해, 사용자가 누른 버튼 요청이 그 뒤에 줄을 섰다(26회차 점검). 진행 중이면 이번 차례는 건너뛴다.
+const _pollBusy={};
+async function _poll1(k, fn){ if(_pollBusy[k]) return; _pollBusy[k]=true; try{ await fn(); } finally{ _pollBusy[k]=false; } }
+setInterval(()=>{ _poll1("auth",loadAuth); _poll1("ov",loadOverview); _poll1("nodes",loadNodes); }, 5000);
+setInterval(()=>_poll1("thru",loadThroughput), 20000);
 </script>
 </body>
 </html>

@@ -3219,6 +3219,25 @@ def check_bv_round27_security() -> None:
     print("[XX1~XX7] OK  본문 검사·복제 meta 상한·복제본 밖 DB 차단·URL 비밀값 가림·로그인 없는 LLM 차단·보안 헤더·enroll 잠금")
 
 
+def check_bw_round26_portal_ui() -> None:
+    """YY1 포탈 5초 조회가 멈춘 포탈에 쌓임 YY2 연결 끊김에도 '방금 갱신' YY3 버튼(테스트·가져오기·저장·삭제)이 연결 실패에 멈춤
+    YY4 늦은 응답이 새 비교·핑 차트·질의 답을 덮음 YY5 잠김·연결 실패도 '비밀번호가 올바르지 않습니다' YY6 동시 401 에 로그인 창 여러 개
+    YY7 개별 스캔 버튼이 다시 그리기로 되살아남·전체 시작/중단 중복 YY8 푸시 진행 조회가 한 번 실패로 멈춤 YY9 릴리스 버전 미이스케이프.
+    (브라우저 재현·확인은 Playwright 로 — 고친 뒤 동시 요청 최대 4, 각 항목 정상)"""
+    ph = _read("portal.html")
+    assert 'setInterval(()=>{ _poll1("auth",loadAuth); _poll1("ov",loadOverview); _poll1("nodes",loadNodes); }, 5000);' in ph  # YY1
+    assert '_fetchT("/api/portal/overview", 8000)' in ph and '_fetchT("/api/portal/nodes", 8000)' in ph
+    assert "포탈 연결 끊김" in ph and '"마지막 갱신: 방금" + (regionFilter' not in ph                       # YY2
+    assert ph.count("포탈에 연결할 수 없습니다 (") >= 4                                                    # YY3
+    assert "seq!==window._cmpSeq" in ph and "seq!==window._phSeq" in ph and "seq!==_askSeq" in ph          # YY4
+    assert "window.alert(j.reason || " in ph and "포탈 서버에 연결할 수 없습니다" in ph                       # YY5
+    assert "await _loginOnce()" in ph                                                                     # YY6
+    assert "_scanPending.has(n.id)" in ph and "if(_allBusy) return;" in ph                                 # YY7
+    assert "_pushErr<=30" in ph and 'if(m.style.display==="none") return;' in ph                          # YY8
+    assert 'v${_he(j.release_content_version||"?")}' in ph                                                # YY9
+    print("[YY1~YY9] OK  포탈 화면 조회 단일화·끊김 표시·버튼 실패 처리·응답 순서·로그인 사유·중복 방지·푸시 재시도")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3250,7 +3269,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser, check_bj_round23_regress, check_bk_round23_portal, check_bl_round23_engine, check_bm_round24_regress,
             check_bn_round24_consistency, check_bo_round24_perf, check_bp_round25_regress, check_bq_round25_schedule, check_br_round25_client,
             check_bs_round26_regress, check_bt_round26_cli, check_bu_round27_regress,
-            check_bv_round27_security]
+            check_bv_round27_security, check_bw_round26_portal_ui]
 
 
 def main() -> int:
