@@ -42,7 +42,7 @@ ADVERTISE_HOST=""                        # 포탈이 이 엣지를 찾아올 IP/
 SET_PORT=""; SET_DATA_DIR=""; SET_INSTALL_DIR=""; SET_MOUNT_BASE=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --port)        PORT="$2"; SET_PORT=1;        shift 2;;
+    --port)        PORT="${2:-}"; SET_PORT=1;    shift; [ $# -gt 0 ] && shift;;
     --mount-base)  MOUNT_BASE="$2"; SET_MOUNT_BASE=1;  shift 2;;
     --branch)      BRANCH="$2";      shift 2;;
     --data-dir)    DATA_DIR="$2"; SET_DATA_DIR=1;    shift 2;;
@@ -93,13 +93,17 @@ if [ -z "$SET_MOUNT_BASE" ] && [ -n "${PREV_MOUNT_BASE:-}" ]; then MOUNT_BASE="$
 # 상대 경로는 절대 경로로(검사 '전'에 — 현재 폴더 경로의 공백도 걸러지게, 23회차 점검) — 아래에서 cd / 뒤 폴더를 바꾸므로 상대 경로면 교체가 실패했다(22회차 점검)
 case "$INSTALL_DIR" in /*) ;; *) INSTALL_DIR="$(pwd)/$INSTALL_DIR";; esac
 case "$DATA_DIR" in /*) ;; *) DATA_DIR="$(pwd)/$DATA_DIR";; esac
+# 경로를 실제 경로로 정규화(모든 단계의 심볼릭 링크·'..' 풀기) — 마지막 단계만 풀어, 링크나 '..'로 데이터 폴더가 설치 폴더
+# 안을 가리키면 아래 검사를 지나쳐 업그레이드가 데이터를 지웠고, 'a/../a' 설치 경로는 폴더 바꾸기·되돌리기가 실패했다(28회차 점검)
+_canon() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1" 2>/dev/null || readlink -m "$1" 2>/dev/null || printf '%s\n' "$1"; }
+INSTALL_DIR="$(_canon "$INSTALL_DIR")"; DATA_DIR="$(_canon "$DATA_DIR")"
 # 설치 경로가 심볼릭 링크면 실제 경로로 — 폴더 바꾸기(mv)가 링크 자체를 실제 폴더로 바꿔 링크 대상엔 옛 코드가 남았다(21회차 점검)
-if [ -L "$INSTALL_DIR" ]; then INSTALL_DIR="$(readlink -f "$INSTALL_DIR")"; fi
 # systemd 유닛에 그대로 쓰므로 공백·따옴표·역슬래시가 든 경로는 받지 않는다(유닛 파싱이 깨짐).
 for _v in "$INSTALL_DIR" "$DATA_DIR" "$MOUNT_BASE"; do
   case "$_v" in *[[:space:]]*|*\"*|*\\*) echo "✗ 경로에 공백/따옴표/역슬래시는 쓸 수 없습니다: $_v" >&2; exit 1;; esac
 done
 case "$PORT" in ''|*[!0-9]*) echo "✗ --port 는 숫자여야 합니다: $PORT" >&2; exit 1;; esac
+if [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then echo "✗ --port 는 1~65535 입니다: $PORT" >&2; exit 1; fi
 SD_INSTALL_DIR="${INSTALL_DIR//%/%%}"; SD_DATA_DIR="${DATA_DIR//%/%%}"
 SD_DATA_DIR_X="${SD_DATA_DIR//\$/\$\$}"
 
@@ -190,6 +194,8 @@ fi
 # 같은 이름을 선점해 압축 해제물(.py)을 바꿔치기할 수 있다(root 로 설치·실행됨).
 if [ -z "$TMP_DIR" ]; then TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/isilon_edge.XXXXXX")"
 else rm -rf "$TMP_DIR"; mkdir -p "$TMP_DIR"; fi
+# 중간에 끝나면(설치 폴더 상위를 만들 수 없음 등) 임시·단계 폴더를 남기지 않는다(28회차 점검) — 성공 시엔 이미 지워짐/옮겨짐
+trap 'rm -rf "${TMP_DIR:-}" "${NEW_DIR:-}" 2>/dev/null || true' EXIT
 echo "→ 임시 작업: $TMP_DIR"   # (만든 뒤에 출력 — 예전엔 빈 값으로 찍혔다)
 tar xzf "$DEST" -C "$TMP_DIR" --strip-components=1
 echo -n "→ 패키지 검증: "
@@ -200,6 +206,9 @@ echo -n "→ 패키지 검증: "
 # (서비스를 멈추기 '전'에 검사 — 예전엔 멈춘 뒤 거부해 서비스가 꺼진 채 끝났다) 데이터 폴더가 설치 폴더 안이면 rsync --delete 가 DB·설정을 통째로 지운다 → 거부.
 case "${DATA_DIR%/}/" in
   "${INSTALL_DIR%/}"/*) echo "✗ --data-dir($DATA_DIR)이 설치 폴더($INSTALL_DIR) 안에 있습니다 — 업그레이드 때 삭제됩니다. 다른 경로를 지정하세요."; rm -rf "$TMP_DIR"; exit 1;;
+esac
+case "${INSTALL_DIR%/}/" in                           # 반대(설치 폴더가 데이터 폴더 안·같은 폴더)도 거부
+  "${DATA_DIR%/}"/*) echo "✗ 설치 폴더($INSTALL_DIR)가 데이터 폴더($DATA_DIR) 안이거나 같습니다 — 다른 경로를 지정하세요."; rm -rf "$TMP_DIR"; exit 1;;
 esac
 echo "→ 설치: $INSTALL_DIR"
 # 새 파일은 설치 폴더 옆 단계 폴더에 '서비스를 멈추기 전에' 다 복사한다 — 예전엔 멈춘 뒤 설치 폴더에 바로 복사해,
@@ -245,7 +254,10 @@ if [ -d "$INSTALL_DIR" ] && ! mv "$INSTALL_DIR" "$OLD_DIR" 2>/dev/null; then
   rm -rf "$NEW_DIR"
 else
   if ! mv "$NEW_DIR" "$INSTALL_DIR"; then             # 이름 바꾸기 실패 — 옛 설치를 되돌리고 서비스를 다시 띄운다
-    [ -d "$OLD_DIR" ] && mv "$OLD_DIR" "$INSTALL_DIR"
+    if [ -d "$OLD_DIR" ] && ! mv "$OLD_DIR" "$INSTALL_DIR"; then   # 되돌리기도 실패하면 사실대로(28회차 점검)
+      echo "✗ 새 설치로 바꾸지 못했고 옛 설치도 되돌리지 못했습니다 — 옛 설치는 $OLD_DIR, 새 파일은 $NEW_DIR 에 있습니다. 수동으로 $INSTALL_DIR 로 옮기세요."
+      trap - EXIT; exit 1
+    fi
     systemctl start "$SERVICE" >/dev/null 2>&1 || true
     echo "✗ 새 설치로 바꾸지 못했습니다 — 옛 설치로 되돌렸습니다."; rm -rf "$NEW_DIR" "$TMP_DIR"; exit 1
   fi
@@ -321,9 +333,14 @@ EOF
 
 # ----- 6) 재시작 -----
 echo "→ 서비스 재시작"
-systemctl daemon-reload
-systemctl enable "$SERVICE" >/dev/null 2>&1 || true
-systemctl restart "$SERVICE"
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload
+  systemctl enable "$SERVICE" >/dev/null 2>&1 || true
+  systemctl restart "$SERVICE"
+else
+  # systemd 가 없는 환경(컨테이너 등): 예전엔 여기서 오류로 끝나 요약·토큰·포탈 등록이 빠졌다(28회차 점검)
+  echo "   ⚠ systemd 가 없어 서비스 등록·재시작을 건너뜁니다 — 유닛 파일($UNIT)의 ExecStart 를 직접 실행하세요."
+fi
 sleep 1
 systemctl --no-pager -l status "$SERVICE" 2>/dev/null | head -6 || true
 
@@ -367,8 +384,10 @@ echo "   로그 : journalctl -u $SERVICE -f"
 echo "   상태 : systemctl status $SERVICE"
 if [ -n "$TOKEN" ]; then
   echo "   API 토큰 : $TOKEN"
-  if [ -n "$HQ" ]; then
+  if [ -n "$HQ" ] && [ "${OK:-0}" = "1" ]; then
     echo "      ↳ 위 토큰으로 포탈에 자기등록했습니다(폴링이 바로 인증됨)."
+  elif [ -n "$HQ" ]; then
+    echo "      ↳ 포탈 자기등록은 실패했습니다(위 ⚠ 참고) — 포탈 '노드 설정'에서 위 토큰으로 직접 등록하세요."
   else
     echo "      ↳ 포탈에 자동 등록하려면 다시 실행에 --hq http://<HQ-IP>:8800 을 추가하세요."
     echo "        (수동이라면 포탈 '노드 설정'에서 위 토큰을 입력)"

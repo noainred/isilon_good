@@ -2342,7 +2342,7 @@ def check_be_round21_sec_regress() -> None:
     assert calls == [1 << 20, 1 << 20, 1 << 20, 5] and buf.getbuffer().nbytes == 3 * (1 << 20) + 5
     for f in ("install_edge.sh", "install_portal.sh"):                                                      # GG7
         sh = open(os.path.join(os.path.dirname(HERE), "tools", f), encoding="utf-8").read()
-        assert 'readlink -f "$INSTALL_DIR"' in sh and "\ncd /" in sh, f
+        assert 'INSTALL_DIR="$(_canon "$INSTALL_DIR")"' in sh and "\ncd /" in sh, f   # 28회차: 모든 단계 정규화
     assert "safe_cwd()" in sv and 'os.path.join(os.getcwd(), "CHANGELOG.md")' not in _read("portal.py")
     print("[GG1~GG7] OK  CSRF 미디어 타입·Origin·밖 스캔 로그인·이스케이프·로그 토큰·감사 0600·동시 설치·큰 응답 조각·끝난 스캔 오류·설치 경로")
 
@@ -3226,7 +3226,7 @@ def check_bw_round26_portal_ui() -> None:
     (브라우저 재현·확인은 Playwright 로 — 고친 뒤 동시 요청 최대 4, 각 항목 정상)"""
     ph = _read("portal.html")
     assert 'setInterval(()=>{ _poll1("auth",loadAuth); _poll1("ov",loadOverview); _poll1("nodes",loadNodes); }, 5000);' in ph  # YY1
-    assert '_fetchT("/api/portal/overview", 8000)' in ph and '_fetchT("/api/portal/nodes", 8000)' in ph
+    assert '_fetchJT("/api/portal/overview", 8000)' in ph and '_fetchJT("/api/portal/nodes", 8000)' in ph   # 28회차: 본문까지 시간 제한
     assert "포탈 연결 끊김" in ph and '"마지막 갱신: 방금" + (regionFilter' not in ph                       # YY2
     assert ph.count("포탈에 연결할 수 없습니다 (") >= 4                                                    # YY3
     assert "seq!==window._cmpSeq" in ph and "seq!==window._phSeq" in ph and "seq!==_askSeq" in ph          # YY4
@@ -3280,6 +3280,40 @@ def check_bx_round28_regress() -> None:
     print("[ZZ1~ZZ5] OK  상태 응답 URL 비밀값 가림·포탈 조회 본문 시간 제한·가린 주소 일부 수정 거부·어레이 비밀 승계 차단")
 
 
+def check_by_round28_install() -> None:
+    """AAA1 링크·'..'로 데이터 폴더가 설치 폴더 안을 가리키면 검사를 지나쳐 업그레이드가 데이터 삭제
+    AAA2 설치 폴더가 데이터 폴더 안 AAA3 되돌리기 실패도 '되돌렸습니다' AAA4 등록 실패에도 '자기등록했습니다'
+    AAA5 중간 실패 시 임시 폴더 남음 AAA6 systemd 없으면 요약·등록 전에 오류 종료 AAA7 --port 값 없음/0."""
+    root = os.path.dirname(HERE)
+    for fn in ("install_edge.sh", "install_portal.sh"):
+        path = os.path.join(root, "tools", fn)
+        sh = open(path, encoding="utf-8").read()
+        assert 'if [ -L "$INSTALL_DIR" ]' not in sh                                                  # AAA1
+        assert '"${DATA_DIR%/}"/*) echo "✗ 설치 폴더' in sh                                             # AAA2
+        assert "옛 설치도 되돌리지 못했습니다" in sh                                                     # AAA3
+        assert "trap 'rm -rf \"${TMP_DIR:-}\" \"${NEW_DIR:-}\"" in sh                                # AAA5
+        assert "if [ -d /run/systemd/system ]; then" in sh                                             # AAA6
+        assert '--port)        PORT="${2:-}"' in sh and '"$PORT" -gt 65535' in sh                       # AAA7
+        # 실제 정규화 동작: 스크립트 앞부분(경로 처리)만 떼어 실행 — 링크·'..'가 실제 경로로 풀린다
+        start = sh.index('case "$INSTALL_DIR" in /*)')
+        end = sh.index("for _v in", start)
+        d = tempfile.mkdtemp(prefix="iu_by_")
+        try:
+            os.makedirs(os.path.join(d, "e3", "inner"))
+            os.symlink(os.path.join(d, "e3", "inner"), os.path.join(d, "dlink"))
+            os.symlink(d, os.path.join(d, "par"))
+            snippet = ('INSTALL_DIR="%s/par/e3/../e3"; DATA_DIR="%s/dlink"\n' % (d, d)) + sh[start:end] + \
+                'printf "%s|%s" "$INSTALL_DIR" "$DATA_DIR"\n'
+            out = subprocess.run(["bash", "-c", snippet], capture_output=True, text=True, timeout=20).stdout
+            real = os.path.realpath(d)
+            assert out == "%s/e3|%s/e3/inner" % (real, real), (fn, out)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+    edge = open(os.path.join(root, "tools", "install_edge.sh"), encoding="utf-8").read()
+    assert 'if [ -n "$HQ" ] && [ "${OK:-0}" = "1" ]; then' in edge                                    # AAA4
+    print("[AAA1~AAA7] OK  설치 경로 정규화(링크·..)·데이터/설치 폴더 포함 거부·되돌리기 실패 안내·등록 실패 안내·임시 폴더 정리·systemd 없음·포트 검사")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3312,7 +3346,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bn_round24_consistency, check_bo_round24_perf, check_bp_round25_regress, check_bq_round25_schedule, check_br_round25_client,
             check_bs_round26_regress, check_bt_round26_cli, check_bu_round27_regress,
             check_bv_round27_security, check_bw_round26_portal_ui,
-            check_bx_round28_regress]
+            check_bx_round28_regress, check_by_round28_install]
 
 
 def main() -> int:
