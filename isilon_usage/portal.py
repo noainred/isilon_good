@@ -2182,6 +2182,7 @@ class PortalController:
         try:
             newest = self._replicate(n)
         except Exception as e:  # noqa: BLE001
+            self._clock_rewound.pop(nid, None)   # 실패한 시도의 표시가 다음 성공에 잘못 남지 않게
             with self._lock:
                 self._rep_fail[nid] = int(self._rep_fail.get(nid, 0)) + 1
                 self._rep_err[nid] = "replicate: " + str(e)
@@ -2225,7 +2226,10 @@ class PortalController:
             s = dict(s)
             # 포탈이 처음 받은 시각(포탈 시계) — '최신' 판단에 엣지 완료 시각보다 우선한다. 엣지 시계가 되돌아가면
             # 옛 스캔의 완료 시각이 새 스캔보다 미래라, 보관 정리·비교가 새 스캔을 버리고 옛 것을 남겼다(2026-11 연동 점검).
-            s["received_at"] = (merged.get(k) or {}).get("received_at") or now
+            # 이미 있던 스캔은 받은 시각을 새로 찍지 않는다 — 이 기능 전 복제본(received_at 없음)이 다시 오면
+            # '지금'으로 찍혀 더 새 스캔을 앞지르던 회귀(12회차 점검). 처음 보는 스캔만 지금 시각.
+            prev = merged.get(k)
+            s["received_at"] = ((prev or {}).get("received_at") or 0) if prev is not None else now
             merged[k] = s
         return list(merged.values())
 

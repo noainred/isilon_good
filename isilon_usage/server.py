@@ -2509,11 +2509,11 @@ class ScanController:
     def resume_scan(self, scan_id: int) -> dict:
         # 시작과 같은 임계 구역 — 재개도 같은 루트 중복 실행을 만들 수 있다(업그레이드 후 자동 재개가
         # 같은 루트의 두 스캔을 둘 다 살려 쌍이 영구화되던 문제). 먼저 재개된 쪽만 계속된다.
+        self._wait_stopping(scan_id)   # 멈추는 중이면 끝날 때까지 — 잠금 밖에서(곧바로 '재개'를 눌러도 거절되지 않게)
         with self._start_lock:
             return self._resume_scan_locked(scan_id)
 
     def _resume_scan_locked(self, scan_id: int) -> dict:
-        self._wait_stopping(scan_id)        # 멈추는 중이면 끝날 때까지(곧바로 '재개'를 눌러도 '이미 실행 중'으로 거절되지 않게)
         if scan_id in self.running_ids():
             return {"ok": False, "reason": "이미 실행 중입니다."}
         if scan_id in self.partial_running_ids():
@@ -2592,6 +2592,8 @@ class ScanController:
         행 status 는 바꾸지 않아 재개하면 완전 집계가 다시 계산한다. 진행 중엔 재개/삭제/자동 업그레이드를
         막는다(같은 DB 를 쓰는 중). 비용은 행 수에 비례(레벨별 일괄 UPDATE).
         """
+        # 멈추는 중이면 끝날 때까지 — 잠금 '밖'에서(스캔 종료 경로의 자동 재시작이 같은 잠금을 쓴다, 12회차 점검)
+        self._wait_stopping(scan_id)
         # 재개와 같은 임계 구역 — 검사·등록·스레드 시작을 원자적으로(동시 요청 중복 실행·재개와의 경합 방지)
         with self._start_lock:
             return self._partial_aggregate_locked(scan_id)
@@ -2608,7 +2610,6 @@ class ScanController:
                 pass
 
     def _partial_aggregate_locked(self, scan_id: int) -> dict:
-        self._wait_stopping(scan_id)
         if scan_id in self.running_ids():
             return {"ok": False, "reason": "실행 중인 스캔입니다(먼저 중지하세요)."}
         if scan_id in self.partial_running_ids():

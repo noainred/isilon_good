@@ -1304,6 +1304,14 @@ def check_ak_round11_misc() -> None:
         assert pc.settings["upgrade_watch_dir"] == "/w1" and pc.settings["upgrade_check_secs"] == 120
     finally:
         shutil.rmtree(d, ignore_errors=True)
+    # L1(12회차): 이 기능 전 복제본이 다시 와도 '지금'으로 찍혀 더 새 스캔을 앞지르지 않음
+    old = [{"db_filename": "X.db", "root_path": "/d", "finished_at": 100, "status": "done"},
+           {"db_filename": "Y.db", "root_path": "/d", "finished_at": 200, "status": "done"}]
+    merged = P.PortalController._merge_scan_lists(old, [dict(old[0])])
+    order = [x["db_filename"] for x in sorted(merged, key=P.PortalController._scan_recency, reverse=True)]
+    assert order == ["Y.db", "X.db"], order
+    sv = _read("server.py")                                                             # L2: 잠금 밖에서 대기
+    assert sv.index("self._wait_stopping(scan_id)   # 멈추는 중이면") < sv.index("return self._resume_scan_locked(scan_id)")
     src, ph = _read("portal.py"), _read("portal.html")
     assert "ok=(len(nodes) > 0 and okn + curn == len(nodes))" in src                   # K3
     assert "모든 노드가 이미 v%s 입니다" in src
