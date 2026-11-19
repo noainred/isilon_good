@@ -2945,7 +2945,7 @@ def check_br_round25_client() -> None:
         assert dh.count(g) >= 3, g
     assert 'fetchJsonTimeout("/api/storage", 20000)' in dh and 'fetchJsonTimeout("/api/autotune/status", 8000)' in dh
     assert "const shut = () => { ov.remove(); document.removeEventListener(\"keydown\", esc); };" in dh   # TT3
-    assert dh.count("if (my !== _treeSeq) return;") == 2                                              # TT4
+    assert dh.count("if (my !== _treeSeq) return;") >= 2                                              # TT4(28회차: 트리 오류 처리에도 씀)
     assert "서버에 연결할 수 없습니다" in dh                                                            # TT5
     assert "if (window._unlockPending) return window._unlockPending;" in dh                            # TT6
     print("[TT1~TT6] OK  사라진 작업 감지·요청 쌓임 방지·팝업 처리기 정리·트리 응답 순서·연결 끊김 안내·로그인 창 하나")
@@ -3314,6 +3314,30 @@ def check_by_round28_install() -> None:
     print("[AAA1~AAA7] OK  설치 경로 정규화(링크·..)·데이터/설치 폴더 포함 거부·되돌리기 실패 안내·등록 실패 안내·임시 폴더 정리·systemd 없음·포트 검사")
 
 
+def check_bz_round28_dashboard() -> None:
+    """BBB1 시작 요청 중 갱신이 버튼을 다시 켜 같은 경로 스캔 두 개 BBB2 행 동작(중지·재개·삭제) 중복·거짓 실패 알림
+    BBB3 설정 저장 두 번 BBB4 중복 찾기·테스트 데이터 생성 중복 BBB5 진행 조회가 멈춘 서버에 쌓임 BBB6 늦은 응답이 새 화면 덮음
+    BBB7 트리 오류가 서버 복구 뒤에도 남음 BBB8 로그인 실패 사유 BBB9 개요만 실패하면 표시 없음·끊김 안내가 홈에만
+    BBB10 홈 '지금 스캔' 결과 안 보임 BBB11 스냅샷 확인이 한 번 실패로 멈춤 BBB12 누르는 중 표가 바뀌어 클릭 사라짐.
+    (Playwright 로 재현·확인: 시작 POST 1회·재개 POST 1회·저장 중 버튼 꺼짐·끊김 배너·진행 조회 동시 1개)"""
+    dh = _read("dashboard.html")
+    assert "btn.disabled = !canScan || _startBusy;" in dh and "async function _startScanImpl()" in dh       # BBB1
+    assert "const _rowBusy = new Set();" in dh and "_rowGuard(id, () => _scanActionReq(action, id))" in dh  # BBB2
+    assert '(id === "saveSettingsBtn" && window._saveBusy === true)' in dh                                 # BBB3
+    assert "if (_dupsBusy) return;" in dh and dh.count('$("gtStart").disabled = true;') >= 2               # BBB4
+    for flag in ("_gtInFlight", "_depInFlight", "_benchInFlight"):                                         # BBB5
+        assert "if (window.%s) return;" % flag in dh, flag
+    for k in ("err", "fh", "diff", "tp", "ask", "browse"):                                                 # BBB6
+        assert '_seqIs("%s", sq)' % k in dh, k
+    assert "window._treeErr = {parentId: parentId, crumb: crumb};" in dh                                   # BBB7
+    assert 'window.alert(j.reason || "비밀번호가 올바르지 않습니다.");' in dh                                  # BBB8
+    assert "function _updNetBanner()" in dh and "서버 응답 없음" in dh                                      # BBB9
+    assert "m.offsetParent === null && m.textContent" in dh                                                # BBB10
+    assert "if (++fails >= 10) throw e2;" in dh                                                            # BBB11
+    assert "if (body._ovHtml !== _ovHtml) {" in dh                                                         # BBB12
+    print("[BBB1~BBB12] OK  엣지 화면 중복 요청 방지·진행 조회 단일화·응답 순서·트리 복구·로그인 사유·공통 끊김 배너·스냅샷 재시도")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3346,7 +3370,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bn_round24_consistency, check_bo_round24_perf, check_bp_round25_regress, check_bq_round25_schedule, check_br_round25_client,
             check_bs_round26_regress, check_bt_round26_cli, check_bu_round27_regress,
             check_bv_round27_security, check_bw_round26_portal_ui,
-            check_bx_round28_regress, check_by_round28_install]
+            check_bx_round28_regress, check_by_round28_install,
+            check_bz_round28_dashboard]
 
 
 def main() -> int:
