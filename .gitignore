@@ -27,3 +27,5 @@ portal_info.MD
 
 # 런타임 영속화 표식(테스트/실행이 코드 폴더에 남길 수 있음)
 .iu_data_persist.json
+.iu_data_persist.json.lock
+.iu_data_persist.json.*.tmp
