@@ -593,7 +593,7 @@ def write_run_db(db_path: str, root: str, result: dict, *,
                 "updated_at,finished_at,total_dirs,processed_dirs,discovered_dirs,scanned_bytes,"
                 "total_files,workers,hostname,app_version,error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (root, status, status, "pscan", size_mode, started, now, now, total_dirs,
-                 len(per_top), total_dirs, total_bytes, total_files,
+                 total_dirs, total_dirs, total_bytes, total_files,
                  int(result.get("processes", 0)), socket.gethostname(), __version__, err_text))
             run_id = conn.execute("SELECT id FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()[0]
         else:                       # 미리 만든 run(sizing) 을 갱신
@@ -601,10 +601,17 @@ def write_run_db(db_path: str, root: str, result: dict, *,
                 "UPDATE scan_runs SET status=?,phase=?,backend='pscan',size_mode=?,"
                 "updated_at=?,finished_at=?,total_dirs=?,processed_dirs=?,discovered_dirs=?,"
                 "scanned_bytes=?,total_files=?,workers=?,hostname=?,app_version=?,error=? WHERE id=?",
-                (status, status, size_mode, now, now, total_dirs, len(per_top), total_dirs, total_bytes,
+                (status, status, size_mode, now, now, total_dirs, total_dirs, total_dirs, total_bytes,
                  total_files, int(result.get("processes", 0)), socket.gethostname(),
                  __version__, err_text, run_id))
             conn.execute("DELETE FROM directories WHERE run_id=?", (run_id,))
+            # 진행 중에만 의미 있는 칸(워커별 현재 폴더)을 비운다 — 예전엔 끝난 스캔이 '9개 워커가 탐색 중'으로
+            # 보였고, 처리 수가 작업 단위 수(150)라 '150/3,151 · 4.8%' 로 보였다(2026-11 사용 흐름 점검).
+            try:
+                conn.execute("UPDATE scan_runs SET worker_dirs=NULL, current_dir=NULL, active_workers=0 WHERE id=?",
+                             (run_id,))
+            except Exception:  # noqa: BLE001 — 옛 DB 에 칸이 없으면 무시
+                pass
         conn.execute(
             "INSERT INTO directories (%s) VALUES (%s)" % (_dcols, _ph),
             (run_id, None, root, os.path.basename(root.rstrip("/")) or root, 0, "done",

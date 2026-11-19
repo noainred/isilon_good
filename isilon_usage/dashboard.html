@@ -453,10 +453,10 @@ details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px;
     </div>
   </div>
   <div style="display:flex; flex-wrap:wrap; gap:16px; margin-bottom:16px;">
-    <section class="card" style="flex:3 1 460px; min-width:0;">
+    <section class="card" id="runsCard" style="flex:3 1 460px; min-width:0;">
       <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
         <h2 style="margin:0;">진행 중인 스캔</h2>
-        <button type="button" class="linkbtn" data-goview="scanrun">스캔 화면으로</button>
+        <button type="button" class="linkbtn" id="runsGoScan" data-goview="scanrun">스캔 화면으로</button>
       </div>
       <div id="homeRuns" style="margin-top:8px;"></div>
     </section>
@@ -2983,7 +2983,7 @@ async function startScan() {
       }
       if (j.ok) {
         $("startMsg").innerHTML = '<span style="color:var(--accent2)">🔬 오토튜닝 측정을 시작했습니다 — 아래 진행을 확인하세요.</span>';
-        _autotuneTracked = null;
+        _autotuneTracked = null; _autotuneSawRunning = true;   // 지금 시작한 측정 — 끝나면 그 스캔을 따라간다
         await pollAutotune();
       } else {
         $("startMsg").innerHTML = '<span class="err">오토튜닝 시작 실패: ' + escHtml(j.error || j.reason || "") + '</span>';
@@ -3018,6 +3018,7 @@ async function startScan() {
 
 // ---- 오토튜닝: 첫 화면 실시간 진행 카드 ----
 let _autotuneTracked = null;
+let _autotuneSawRunning = false;   // 이 화면이 측정 진행을 직접 봤는지(옛 결과로 선택을 빼앗지 않게)
 async function pollAutotune() {
   try {
     const j = await (await fetch("/api/autotune/status", {cache: "no-store"})).json();
@@ -3056,11 +3057,14 @@ function renderAutotune(j) {
       + (j.scan_id ? `이 설정으로 <b>스캔 #${j.scan_id}</b>을 자동 시작했습니다.`
         : '본 스캔을 시작합니다.')
       + (j.note ? `<br><span class="sub">참고: ${j.note}</span>` : "");
-    if (j.scan_id && _autotuneTracked !== j.scan_id) {   // 시작된 스캔으로 자동 추적
+    // 이 화면에서 측정이 '진행되는 걸 본' 오토튜닝만 그 스캔으로 따라간다 — 예전엔 끝난 지 오래된 결과가
+    // 새로고침할 때마다 선택을 그 스캔으로 되돌려, 더 새 스캔이 있어도 옛 스캔이 열렸다(2026-11 사용 흐름 점검).
+    if (j.scan_id && _autotuneSawRunning && _autotuneTracked !== j.scan_id) {
       _autotuneTracked = j.scan_id;
       selectedScan = j.scan_id; userPicked = true;
     }
   } else if (j.running) {
+    _autotuneSawRunning = true;
     res.innerHTML = '<span style="color:var(--accent2)">최적 방법을 찾는 중입니다 — '
       + '끝나면 자동으로 스캔이 시작됩니다.</span>';
   }
@@ -5098,6 +5102,24 @@ function mountScanControls(viewName) {
   if (h2) h2.after(notice, card);
   else host.prepend(notice, card);
 }
+// '진행 중인 스캔' 카드(중지·이어서 하기 버튼 포함)는 하나만 두고, 새 스캔·진행 화면에서는 그리로 옮겨 보여 준다 —
+// 예전엔 스캔 화면에 중지 버튼이 없어 홈으로 가야 했다(2026-11 사용 흐름 점검). 복제하지 않는다(단일 소스).
+let _runsHome = null;
+function mountRunsCard(viewName) {
+  const card = $("runsCard");
+  if (!card) return;
+  if (!_runsHome) { _runsHome = document.createComment("runsCard-home"); card.parentNode.insertBefore(_runsHome, card); }
+  if (viewName === "scanrun") {
+    const host = $("view-scanrun"), start = $("startCard");
+    if (host && card.parentNode !== host) { if (start) start.before(card); else host.appendChild(card); }
+    card.style.marginBottom = "14px";
+    if ($("runsGoScan")) $("runsGoScan").style.display = "none";
+  } else if (viewName === "summary" && card.previousSibling !== _runsHome) {
+    _runsHome.after(card);
+    card.style.marginBottom = "";
+    if ($("runsGoScan")) $("runsGoScan").style.display = "";
+  }
+}
 function showView(name) {
   if (VIEWS.indexOf(name) < 0) name = "summary";
   VIEWS.forEach(v => {
@@ -5129,6 +5151,7 @@ function showView(name) {
   }
   applyReadOnlyUI();
   if (name === "analysis" || name === "report") mountScanControls(name);
+  if (name === "scanrun" || name === "summary") mountRunsCard(name);
   if (name === "report") loadReport(true);
   if (name === "trouble") { if (typeof tsRun === "function") tsRun(); if (typeof tsHistLoad === "function") tsHistLoad(); }
   if (name === "tune") { if (typeof tuneRun === "function" && $("tuneResult") && $("tuneResult").style.display === "none") tuneRun(); }

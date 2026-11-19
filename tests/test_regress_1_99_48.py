@@ -1097,6 +1097,40 @@ def check_af_multinode_round9() -> None:
     print("[F1·F2] OK  다시 스캔해 지운 폴더는 '없음'(옛 스캔 안 봄)·비활성 노드는 온라인/진행에서 제외")
 
 
+def check_ag_edge_flow_round9() -> None:
+    """G1 끝난 오토튜닝 결과가 새로고침마다 스캔 선택을 빼앗음 G2 끝난 pscan 이 '워커 9개 탐색 중·150/3151·사용 0 B'
+    G3 스캔 화면에 중지 버튼 없음."""
+    from isilon_usage import pscan
+    d = tempfile.mkdtemp(prefix="iu_ag_")
+    try:
+        root = os.path.join(d, "t")
+        for i in range(5):
+            os.makedirs(os.path.join(root, "d%d" % i, "s"))
+            with open(os.path.join(root, "d%d" % i, "s", "f"), "wb") as fh:
+                fh.write(b"x" * 100)
+        res = pscan.parallel_scan(root, processes=2, threads_per_proc=1)
+        dbp = os.path.join(d, "r.db")
+        from isilon_usage import db as dbmod
+        dbmod.init_db(dbp)
+        c = dbmod.connect(dbp)
+        rid = dbmod.create_run(c, root, backend="pscan", size_mode="disk", scanner_pid=0)
+        dbmod.update_run(c, rid, worker_dirs=json.dumps(["/x/a", "/x/b"]), current_dir="/x/a", active_workers=2)
+        c.commit()
+        c.close()
+        pscan.write_run_db(dbp, root, res, run_id=rid)
+        c = dbmod.connect(dbp)
+        r = dict(c.execute("SELECT * FROM scan_runs WHERE id=?", (rid,)).fetchone())
+        c.close()
+        assert r["processed_dirs"] == r["total_dirs"] and not r["worker_dirs"] and not r["current_dir"], r   # G2
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert "processed_dirs=int(res[\"total_dirs\"]),   # 끝났으면 전부 처리" in _read("server.py")
+    dh = _read("dashboard.html")
+    assert "if (j.scan_id && _autotuneSawRunning && _autotuneTracked !== j.scan_id)" in dh            # G1
+    assert 'if (name === "scanrun" || name === "summary") mountRunsCard(name);' in dh                  # G3
+    print("[G1~G3] OK  옛 오토튜닝이 선택 안 빼앗음·끝난 pscan 진행 기록 정리·스캔 화면에 진행 카드(중지)")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1106,7 +1140,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_v1_v6_edge_round3, check_w1_w2_round4, check_x1_x8_settings_round4,
             check_y1_y6_integrations_round5, check_z1_z8_portal_ui_round5,
             check_aa_round6, check_ab_edge_views_round6, check_ac_round7,
-            check_ad_portal_round8, check_ae_regress_round8, check_af_multinode_round9]
+            check_ad_portal_round8, check_ae_regress_round8, check_af_multinode_round9,
+            check_ag_edge_flow_round9]
 
 
 def main() -> int:

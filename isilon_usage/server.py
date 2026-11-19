@@ -2340,12 +2340,20 @@ class ScanController:
                                    scanned_bytes=int(res["total_bytes"]),
                                    total_files=int(res["total_files"]),
                                    total_dirs=int(res["total_dirs"]),
-                                   processed_dirs=int(res["units"]),
+                                   processed_dirs=int(res["total_dirs"]),   # 끝났으면 전부 처리(작업 단위 수 아님)
+                                   current_dir=None,
                                    discovered_dirs=int(res["total_dirs"]),
                                    error_dirs=int(res.get("error_count", 0)),
                                    fs_total_bytes=fs_total, fs_used_bytes=fs_used,
                                    fs_free_bytes=fs_free, finished_at=time.time())
                 c.commit(); c.close()
+                try:   # 진행 화면은 per-run 기록을 읽는다 — 디스크 사용량도 같은 값으로(예전엔 '사용 0 B')
+                    pc = dbmod.connect(db_path)
+                    dbmod.update_run(pc, run_id, fs_total_bytes=fs_total, fs_used_bytes=fs_used,
+                                     fs_free_bytes=fs_free)
+                    pc.commit(); pc.close()
+                except Exception:  # noqa: BLE001
+                    pass
                 self._log("pscan #%d done: %s (%d procs, %.0f files/s)" % (
                     scan_id, path, res.get("processes", 0), res.get("files_per_sec", 0)))
             except Exception as exc:  # noqa: BLE001
