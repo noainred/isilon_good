@@ -3441,6 +3441,17 @@ function renderTopDirs(j) {
 
 // ---- 디렉터리 드릴다운 트리 ----
 let treeStack = [];   // [{id, name}] 브레드크럼 (id=null 은 루트 레벨)
+// 같은 스캔의 값이 바뀌었을 때(완료·새 스냅샷) 폴더 트리·오류 목록을 '보던 위치 그대로' 다시 불러온다 —
+// 예전엔 전체 초기화 경로를 타 드릴다운 위치·검색어가 맨 위로 돌아갔다(17회차 점검). 상위 폴더 표·파이는 매 주기 갱신.
+function refreshTreeInPlace() {
+  const q = $("treeSearch") ? $("treeSearch").value.trim() : "";
+  if (q) { treeSearch(q); }
+  else {
+    const cur = treeStack.length ? treeStack[treeStack.length - 1] : null;
+    loadTree(cur ? cur.id : null, treeStack.slice());
+  }
+  if (typeof loadErrors === "function") loadErrors();
+}
 async function loadTree(parentId, crumb) {
   if (selectedScan == null) return;
   treeStack = crumb || [];
@@ -4456,7 +4467,7 @@ document.addEventListener("click", async (e) => {
     }
   } catch (err) { alert("요청 오류: " + err); }
   if (typeof loadScans === "function") await loadScans();
-  lastDetailScan = null; poll();
+  refreshTreeInPlace(); poll();
 });
 
 function render(d) {
@@ -4484,7 +4495,7 @@ function render(d) {
   {
     const _sidNow = _sel ? _sel.id : d.scan_id, _stNow = _sel ? _sel.status : r.status;
     const _runNow = (_stNow === "discovering" || _stNow === "sizing");
-    if (window._selRunPrev && window._selRunPrev.id === _sidNow && window._selRunPrev.running && !_runNow) lastDetailScan = null;
+    if (window._selRunPrev && window._selRunPrev.id === _sidNow && window._selRunPrev.running && !_runNow) refreshTreeInPlace();
     window._selRunPrev = {id: _sidNow, running: _runNow};
   }
   const _an = $("analysisNotice");
@@ -4500,7 +4511,7 @@ function render(d) {
       const _ls = ((allScans || []).find(x => x.id === _sid) || {}).live_snap || null;   // 선택=실행 중이면 _sel 은 비어 있다
       // 스냅샷이 새로 만들어지면 분석 패널을 다시 불러온다(같은 스캔이라도 값이 바뀜)
       const _lsAt = _ls && _ls.at ? _ls.at : null;
-      if (_lsAt && window._liveSnapSeen !== _sid + ":" + _lsAt) { window._liveSnapSeen = _sid + ":" + _lsAt; lastDetailScan = null; }
+      if (_lsAt && window._liveSnapSeen !== _sid + ":" + _lsAt) { window._liveSnapSeen = _sid + ":" + _lsAt; refreshTreeInPlace(); }
       _an.innerHTML = window._anRunningHtml + liveSnapHtml(_ls, _sid);
     }
     else if (_pa && _pa.running) {

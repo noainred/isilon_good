@@ -1662,10 +1662,47 @@ def check_at_livesnap_round16() -> None:
     finally:
         shutil.rmtree(d, ignore_errors=True)
     sv = _read("server.py")
-    assert "still_running=lambda: int(scan_id) in self.running_ids()" in sv
+    assert "self._live_snaps.get(int(scan_id)) is job" in sv and "and self._scan_is_live(scan_id)))" in sv
     assert "livesnap.remove(self.live_snapshot_path(scan_id))\n            with self._lock:\n                self._live_snaps.pop(int(scan_id), None)" in sv
-    assert "window._selRunPrev.running && !_runNow) lastDetailScan = null;" in _read("dashboard.html")   # U1(브라우저 확인)
+    assert "window._selRunPrev.running && !_runNow) refreshTreeInPlace();" in _read("dashboard.html")   # U1(17회차: 위치 유지)
     print("[U1·U2] OK  완료 후 트리 갱신·멈춘 스캔엔 스냅샷을 놓지 않음·재개 때 옛 스냅샷 삭제")
+
+
+# ------------------------------------------------------------------ 17회차(15~16회차·새 기능 회귀)
+def check_au_regress_round17() -> None:
+    """V1 다른 프로세스(CLI)가 돌리는 스캔의 스냅샷이 매번 끝까지 만든 뒤 버려짐 V2 완료·새 스냅샷 때 트리 위치가 맨 위로
+    V3 기동 정리가 다른 서버의 진행 중 스냅샷까지 지움 V4 재개 전 시작된 스냅샷 작업이 재개 뒤 놓임."""
+    from isilon_usage import server as SV, manager as M, db as dbmod
+    d = tempfile.mkdtemp(prefix="iu_au_")
+    try:
+        data = os.path.join(d, "data")
+        M.init_manager(data)
+        ctl = SV.ScanController(data)          # 서버가 먼저 떠 있고(기동 정리는 이때), 그 뒤 다른 프로세스가 스캔
+        sid = M.register_scan(data, root_path="/x", db_path=os.path.join(d, "x.db"), backend="native", size_mode="disk")
+        c = dbmod.connect(M.manager_db_path(data))
+        M.update_scan(c, sid, status="sizing", phase="sizing", updated_at=time.time())   # 다른 프로세스가 진행 중(하트비트 살아 있음)
+        c.commit()
+        sid2 = M.register_scan(data, root_path="/y", db_path=os.path.join(d, "y.db"), backend="native", size_mode="disk")
+        c.execute("UPDATE scans SET status='sizing', phase='sizing', updated_at=? WHERE id=?",
+                  (time.time() - 99999, sid2))                                     # 소식 끊김(하트비트 오래됨)
+        c.commit()
+        c.close()
+        assert ctl._scan_is_live(sid) is True and ctl._scan_is_live(sid2) is False                # V1
+        r = ctl.live_snapshot_start(sid2)
+        assert r["ok"] is False and "진행 중이 아닙니다" in r["reason"], r
+        snaps = os.path.join(data, "snapshots")                                                   # V3
+        os.makedirs(snaps, exist_ok=True)
+        for i in (sid, sid2):
+            with open(os.path.join(snaps, "scan_%d_live.db" % i), "w") as fh:
+                fh.write("x")
+        ctl._clean_snapshots()
+        assert sorted(os.listdir(snaps)) == ["scan_%d_live.db" % sid], os.listdir(snaps)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    dh = _read("dashboard.html")                                                                  # V2
+    assert "function refreshTreeInPlace()" in dh and "lastDetailScan = null;" not in dh.replace("let lastDetailScan = null;", "")
+    assert "self._live_snaps.get(int(scan_id)) is job" in _read("server.py")                     # V4
+    print("[V1~V4] OK  다른 프로세스 스캔 스냅샷·위치 유지 갱신·진행 중 스냅샷 보존·재개 뒤 옛 작업 무시")
 
 
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
@@ -1684,7 +1721,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_an_fuzz_round13, check_ao_regress_round14,
             check_ap_explore_round14, check_aq_live_snapshot,
             check_ar_crash_round15, check_as_regress_round16,
-            check_at_livesnap_round16]
+            check_at_livesnap_round16, check_au_regress_round17]
 
 
 def main() -> int:

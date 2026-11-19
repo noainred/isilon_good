@@ -876,7 +876,7 @@ class ScanController:
         self._scans: Dict[int, dict] = {}   # manager scan_id -> {stop, thread}
         self._partial_jobs: Dict[int, dict] = {}   # scan_id -> 멈춘 자료 집계(부분 집계) 작업
         self._live_snaps: Dict[int, dict] = {}     # scan_id -> 진행 중 스캔 스냅샷 작업(멈추지 않고 결과 보기)
-        shutil.rmtree(os.path.join(self.data_dir, "snapshots"), ignore_errors=True)   # 지난 실행의 스냅샷(언제든 다시 만듦)
+        # (지난 실행의 스냅샷 정리는 관리 DB 를 볼 수 있는 아래쪽에서 — _clean_snapshots)
         setmod.clean_stale_tmp(self.data_dir)   # 저장 도중 강제 종료로 남은 settings.json.*.tmp
         self._lock = threading.Lock()
         # '중복 검사 → 등록 → 실행' 임계 구역(start_scan·resume_scan). 동시 요청(더블클릭·포탈 중복 등록 노드·
@@ -2701,6 +2701,42 @@ class ScanController:
         return {"ok": True, "scan_id": scan_id}
 
     # ----- 진행 중 스캔의 '지금까지 결과' 스냅샷(스캔을 멈추지 않고 폴더별 하한값 보기) -----
+    def _scan_is_live(self, scan_id) -> bool:
+        """지금 실제로 진행 중인가 — 이 서버가 돌리는 스캔이거나, 다른 프로세스(CLI 등)가 돌리며 하트비트가 살아 있는 스캔.
+        예전엔 이 서버의 목록만 봐서 CLI 스캔의 스냅샷은 매번 끝까지 만든 뒤 버려졌다(17회차 점검)."""
+        try:
+            sid = int(scan_id)
+        except (TypeError, ValueError):
+            return False
+        if sid in self.running_ids():
+            return True
+        try:
+            mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+            try:
+                row = mgrmod.get_scan(mc, sid)
+            finally:
+                mc.close()
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(row is not None and row["status"] in ("discovering", "sizing")
+                    and time.time() - float(row["updated_at"] or 0) < self._DUP_STALE_SECS)
+
+    def _clean_snapshots(self) -> None:
+        """기동 때: 진행 중이 아닌 스캔의 스냅샷만 지운다 — 같은 데이터 폴더를 쓰는 다른 서버가 만드는 중인 것은 둔다."""
+        d = os.path.join(self.data_dir, "snapshots")
+        try:
+            names = os.listdir(d)
+        except OSError:
+            return
+        for nm in names:
+            m = re.match(r"scan_(\d+)_live\.db", nm)
+            if m and self._scan_is_live(int(m.group(1))):
+                continue
+            try:
+                os.remove(os.path.join(d, nm))
+            except OSError:
+                pass
+
     def live_snapshot_path(self, scan_id: int) -> str:
         return os.path.join(self.data_dir, "snapshots", "scan_%d_live.db" % int(scan_id))
 
@@ -2727,6 +2763,8 @@ class ScanController:
         row = dict(row)
         if row["status"] not in ("discovering", "sizing"):
             return {"ok": False, "reason": "진행 중인 스캔만 스냅샷을 만듭니다(멈춘 스캔은 '멈춘 자료 집계'를 쓰세요)."}
+        if not self._scan_is_live(scan_id):
+            return {"ok": False, "reason": "지금 진행 중이 아닙니다(멈췄거나 소식이 끊긴 스캔) — '멈춘 자료 집계'를 쓰거나 재개하세요."}
         with self._lock:
             rec = dict(self._scans.get(int(scan_id)) or {})
         if rec.get("engine") == "pscan":
@@ -2756,8 +2794,10 @@ class ScanController:
         def _run():
             from . import livesnap
             try:
+                # 놓기 직전 확인: 아직 진행 중이고, 그 사이 재개 등으로 이 작업이 교체되지 않았을 때만(17회차 점검)
                 res = livesnap.build(src, dst, on_progress=_prog,
-                                     still_running=lambda: int(scan_id) in self.running_ids())
+                                     still_running=lambda: (self._live_snaps.get(int(scan_id)) is job
+                                                            and self._scan_is_live(scan_id)))
                 if res.get("ok"):
                     job.update(at=res["at"], rows=res["rows"], error=None)
                     self._log("스냅샷 scan #%s: 폴더 %d개 · %.1f초" % (scan_id, res["rows"], res["elapsed"]))
@@ -4438,6 +4478,7 @@ def serve(data_dir: str, host: str = "0.0.0.0", port: int = 8765, *,
                   if enable_scan else None)
     op_temp_made = None
     if controller is not None:
+        controller._clean_snapshots()  # 지난 실행이 남긴(진행 중이 아닌 스캔의) 스냅샷 정리
         controller.start_scheduler()   # 예약 스캔 스케줄러 시작
         if auto_op_password:           # 경고보다 먼저 — 임시 비밀번호가 생기면 '비밀번호 없음' 경고는 불필요
             op_temp_made = controller.ensure_op_password()
