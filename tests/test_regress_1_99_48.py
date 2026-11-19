@@ -1208,6 +1208,72 @@ def check_ai_edge_round10() -> None:
     print("[I1~I4] OK  여러 경로 예약 표시·건너뜀 표시·안내 모달 키보드·영어 모드 날짜")
 
 
+# ------------------------------------------------------------------ 11회차(악조건 파일시스템)
+def check_aj_adverse_fs_round11() -> None:
+    """J1 du 백엔드: UTF-8 아닌 폴더 이름 하나로 스캔 전체 error J2 pscan: 오류 수만 있고 오류 목록이 빔·같은 폴더 이중 계산
+    J3 native: lstat 실패 파일이 오류 없이 빠짐 J4 pscan: 심볼릭 링크 루트 크기가 스레드 엔진과 다름."""
+    from isilon_usage import db as dbmod, pscan, scanner
+    from isilon_usage.scanner import run_scan
+    d = tempfile.mkdtemp(prefix="iu_aj_")
+    try:
+        root = os.path.join(d, "t")
+        os.makedirs(root)
+        bad = os.fsencode(root) + b"/b\xff"
+        os.makedirs(bad)
+        with open(bad + b"/f", "wb") as fh:
+            fh.write(b"x" * 5000)
+        if shutil.which("du"):                                                        # J1
+            dbp = os.path.join(d, "du.db")
+            run_scan(dbp, root, backend="du", size_mode="disk", workers=1)
+            c = dbmod.connect(dbp)
+            st = c.execute("SELECT status, scanned_bytes FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()
+            c.close()
+            assert st["status"] == "done" and st["scanned_bytes"] >= 5000, dict(st)
+        # J2: 한 폴더의 stat·scandir 이 둘 다 실패해도 오류 1개, 오류 목록에 1단계 폴더 이름
+        sub = os.path.join(root, "u")
+        os.makedirs(os.path.join(sub, "deny"))
+        deny = os.path.join(sub, "deny")
+        o_stat, o_scandir = pscan.os.stat, pscan.os.scandir
+
+        def f_stat(p, *a, **k):
+            if os.fsdecode(p) == deny:
+                raise PermissionError(13, "denied", p)
+            return o_stat(p, *a, **k)
+
+        def f_scandir(p="."):
+            if os.fsdecode(p) == deny:
+                raise PermissionError(13, "denied", p)
+            return o_scandir(p)
+        pscan.os.stat, pscan.os.scandir = f_stat, f_scandir
+        try:
+            r = pscan.scan_subtree(sub, "disk")
+        finally:
+            pscan.os.stat, pscan.os.scandir = o_stat, o_scandir
+        assert r[4] == 1, r                                                            # 이중 계산 없음
+        res = {"per_top": [{"path": sub, "bytes": 10, "files": 1, "dirs": 2, "failed_units": 0, "errors": 1}],
+               "total_bytes": 10, "total_files": 1, "total_dirs": 3, "error_count": 1}
+        dbp = os.path.join(d, "p.db")
+        pscan.write_run_db(dbp, root, res)
+        c = dbmod.connect(dbp)
+        errs = [dict(x) for x in c.execute("SELECT path, error FROM directories WHERE error IS NOT NULL")]
+        c.close()
+        assert len(errs) == 1 and errs[0]["path"] == sub and "읽기 오류 1개" in errs[0]["error"], errs
+        # J4: 링크 루트
+        real = os.path.join(d, "real")
+        os.makedirs(os.path.join(real, "a"))
+        with open(os.path.join(real, "a", "f"), "wb") as fh:
+            fh.write(b"y" * 3000)
+        link = os.path.join(d, "rootlink")
+        os.symlink(real, link)
+        assert pscan.scan_subtree(link, "apparent")[1] == pscan.scan_subtree(real, "apparent")[1]
+        assert pscan._scan_shallow(link, "apparent")[1] == pscan._scan_shallow(real, "apparent")[1]
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    src = _read("scanner.py")                                                          # J3
+    assert "n_stat_err += 1" in src and "acc.errors += n_stat_err" in src
+    print("[J1~J4] OK  du 비 UTF-8 이름·pscan 오류 목록/이중 계산·stat 실패 오류 집계·링크 루트 크기")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -1219,7 +1285,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_aa_round6, check_ab_edge_views_round6, check_ac_round7,
             check_ad_portal_round8, check_ae_regress_round8, check_af_multinode_round9,
             check_ag_edge_flow_round9, check_ah_clock_rewind_round10,
-            check_ai_edge_round10]
+            check_ai_edge_round10, check_aj_adverse_fs_round11]
 
 
 def main() -> int:

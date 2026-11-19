@@ -33,6 +33,7 @@
 
 from typing import List, Optional, Tuple
 
+import errno
 import heapq
 import json
 import os
@@ -1434,7 +1435,7 @@ class Scanner:
             n_err = acc.errors + (1 if err else 0)
             self._error_dirs += n_err
             if acc.errors and not err:
-                err = "하위(fold) 폴더 읽기 오류 %d개" % acc.errors
+                err = "하위 항목 읽기 오류 %d개(접힌 폴더·파일 정보)" % acc.errors
             self._scanned_bytes += dir_bytes + fold_dir_bytes
             if children:
                 self._disc_conn.executemany(
@@ -1624,7 +1625,15 @@ class Scanner:
         (락 축소는 GIL 을 없애지 않는다 — 효과는 워커가 I/O 대기에 있을 때 나타난다.)
         """
         t0 = time.monotonic()
-        stats = [self._safe_stat(e) for e in entries]   # I/O — 락 밖
+        stats = []
+        n_stat_err = 0                                  # 사라진 파일(ENOENT)이 아닌 stat 실패 = 읽기 오류
+        for e in entries:                               # I/O — 락 밖
+            try:
+                stats.append(e.stat(follow_symlinks=False))
+            except OSError as exc:
+                stats.append(None)
+                if getattr(exc, "errno", None) != errno.ENOENT:
+                    n_stat_err += 1   # 예: x 권한 없는 폴더(r--) 안의 파일 — 예전엔 조용히 빠지고 오류도 0(2026-11 점검)
         if None in stats:                               # 파일이 사라짐: 보통 churn, 대상 전체 소실이면 일시정지
             self._pause_if_root_lost()
         if entries:   # 파일당 stat 소요(EMA) — 청크 나눔을 I/O 대기형에서만 켜기 위한 측정
@@ -1654,6 +1663,7 @@ class Scanner:
         with self._dlock:                       # 락 안 — 짧게 병합
             if acc.abandoned:                   # 그 사이 디렉터리가 버려짐(중단) — 카운터·하드링크에 남기지 않는다
                 return 0, 0
+            acc.errors += n_stat_err            # 완료 때 그 폴더의 오류 수·오류 목록에 남는다
             for p, name, eb, st in deferred:    # 하드링크 dedup(드묾)
                 key = (st.st_dev, st.st_ino)
                 if key in self._seen_inodes:
@@ -1912,9 +1922,9 @@ class Scanner:
             args.append("-x")
         args.extend(["--", path])   # '--': '-' 로 시작하는 경로를 du 옵션으로 오인하지 않도록
         try:
-            proc = subprocess.Popen(
-                args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True
-            )
+            # 출력은 바이트로 받는다 — du 는 경로를 그대로 찍어, 이름 하나가 UTF-8 이 아니면 문자열 해독에서
+            # UnicodeDecodeError 로 스캔 전체가 'error' 로 끝났다(2026-11 악조건 점검). 숫자만 쓰므로 바이트로 충분.
+            proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         except OSError:
             return -1
         if self.monitor is not None:
@@ -1931,7 +1941,7 @@ class Scanner:
         if proc.returncode not in (0, 1):  # du 는 일부 접근불가 시 1 반환
             return -1
         try:
-            return int(out.split("\t", 1)[0].split()[0])
+            return int((out or b"").split(b"\t", 1)[0].split()[0])
         except (ValueError, IndexError):
             return -1
 

@@ -142,11 +142,14 @@ def scan_subtree(path: str, size_mode: str = "disk", per_file_work: int = 0,
         dirs += 1
         if (dirs & 255) == 0:
             _maybe_report(path, files, total_bytes, d)
-        try:                                   # 디렉터리 자기 inode 분(du 와 동일)
-            dst = os.stat(d, follow_symlinks=False)
+        stat_failed = False
+        try:                                   # 디렉터리 자기 inode 분(du 와 동일). 단위 루트가 심볼릭 링크(스캔 루트를
+            # 링크로 준 경우)면 가리키는 디렉터리를 센다 — 스레드 엔진과 같은 값(예전엔 링크 자체 95B)
+            dst = os.stat(d, follow_symlinks=(d == path))
             total_bytes += _entry_bytes(dst, size_mode)
         except OSError:
             errors += 1
+            stat_failed = True
         try:
             with os.scandir(d) as it:
                 for e in it:
@@ -171,7 +174,8 @@ def scan_subtree(path: str, size_mode: str = "disk", per_file_work: int = 0,
                     except OSError:
                         errors += 1
         except OSError:
-            errors += 1
+            if not stat_failed:                # 같은 폴더를 두 번 세지 않는다(경로가 너무 긴 폴더 등 — 2026-11 점검)
+                errors += 1
     _maybe_report(path, files, total_bytes, path, force=True)
     return (path, total_bytes, files, dirs, errors, hl.open())
 
@@ -214,11 +218,13 @@ def _scan_subtree_threaded(path: str, size_mode: str, threads: int,
             lb = lf = le = 0
             subs = []
             links = []                          # (st, eb) — 하드링크는 공유 집합이라 락 안에서 판정
-            try:                                # 디렉터리 자기 inode 분
-                dst = os.stat(d, follow_symlinks=False)
+            stat_failed = False
+            try:                                # 디렉터리 자기 inode 분(단위 루트가 링크면 가리키는 디렉터리)
+                dst = os.stat(d, follow_symlinks=(d == path))
                 lb += _entry_bytes(dst, size_mode)
             except OSError:
                 le += 1
+                stat_failed = True
             try:
                 with os.scandir(d) as it:       # I/O — 락 밖
                     for e in it:
@@ -242,7 +248,8 @@ def _scan_subtree_threaded(path: str, size_mode: str, threads: int,
                         except OSError:
                             le += 1
             except OSError:
-                le += 1
+                if not stat_failed:             # 같은 폴더를 두 번 세지 않는다
+                    le += 1
             with lock:                          # 카운터/큐/하드링크만 — 짧게
                 for st, eb in links:
                     lb += hl.bytes_for(st, eb)
@@ -283,11 +290,13 @@ def _scan_shallow(path: str, size_mode: str, deadline: float = 0.0,
     dedup = _opt(opts, "hardlink_dedup", True)
     hl = _HardLinks()
     total_bytes = files = errors = 0
+    stat_failed = False
     try:
-        dst = os.stat(path, follow_symlinks=False)
+        dst = os.stat(path, follow_symlinks=True)   # 단위 루트(링크로 준 스캔 루트면 가리키는 디렉터리)
         total_bytes += _entry_bytes(dst, size_mode)
     except OSError:
         errors += 1
+        stat_failed = True
     try:
         with os.scandir(path) as it:
             for e in it:
@@ -306,7 +315,8 @@ def _scan_shallow(path: str, size_mode: str, deadline: float = 0.0,
                 except OSError:
                     errors += 1
     except OSError:
-        errors += 1
+        if not stat_failed:                    # 같은 폴더를 두 번 세지 않는다
+            errors += 1
     return (path, total_bytes, files, 1, errors, hl.open())
 
 
@@ -474,7 +484,7 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
                     except Exception as exc:    # noqa: BLE001 — 한 단위 실패가 전체를 막지 않되, 성공으로 위장하지 않는다
                         failed_units.append({"path": sp, "top": top,
                                              "error": "%s: %s" % (type(exc).__name__, exc)})
-                        a = top_acc.setdefault(top, [0, 0, 0, 0])
+                        a = top_acc.setdefault(top, [0, 0, 0, 0, 0])
                         a[3] += 1
                         done_n += 1
                         continue
@@ -488,10 +498,11 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
                     total_files += f
                     total_dirs += d
                     errors += e
-                    a = top_acc.setdefault(top, [0, 0, 0, 0])
+                    a = top_acc.setdefault(top, [0, 0, 0, 0, 0])
                     a[0] += b
                     a[1] += f
                     a[2] += d
+                    a[4] += e                  # 이 1단계 폴더 아래 읽기 오류 수(오류 목록에 이름이 보이게)
                     done_n += 1
                 now = time.time()
                 if on_progress and (done or (now - last_prog) >= 1.0):
@@ -514,7 +525,7 @@ def parallel_scan(root: str, *, processes: int = 4, size_mode: str = "disk",
                     pass
         for top, v in top_acc.items():
             per_top.append({"path": top, "bytes": v[0], "files": v[1], "dirs": v[2],
-                            "failed_units": v[3]})
+                            "failed_units": v[3], "errors": v[4] if len(v) > 4 else 0})
     else:
         procs = 1
 
@@ -619,15 +630,29 @@ def write_run_db(db_path: str, root: str, result: dict, *,
         root_id = conn.execute(
             "SELECT id FROM directories WHERE run_id=? AND parent_id IS NULL", (run_id,)
         ).fetchone()[0]
+        # 읽기 오류는 1단계 폴더 단위로 이름을 남긴다 — 예전엔 오류 수(error_dirs)만 있고 오류 목록이 비어
+        # 어디서 났는지 알 수 없었다(2026-11 점검). 정확한 하위 경로는 일반(스레드) 스캔으로 확인.
+        unit_err = 0
         for c in per_top:
             cp = c.get("path", "")
             nfail = int(c.get("failed_units", 0) or 0)
+            nerr = int(c.get("errors", 0) or 0)
+            unit_err += nerr
+            msg = []
+            if nfail:
+                msg.append("워커 실패 %d개 — 부분 집계(이 아래 일부 미포함)" % nfail)
+            if nerr:
+                msg.append("이 아래 읽기 오류 %d개(빠른 스캔은 폴더별 경로를 남기지 않음 — 일반 스캔으로 확인)" % nerr)
             conn.execute(
                 "INSERT INTO directories (%s,error) VALUES (%s,?)" % (_dcols, _ph),
                 (run_id, root_id, cp, os.path.basename(cp.rstrip("/")) or cp, 1, "done",
                  int(c.get("files", 0)), max(0, int(c.get("dirs", 0)) - 1),
                  int(c.get("bytes", 0)), int(c.get("bytes", 0)), int(c.get("files", 0)), now,
-                 ("워커 실패 %d개 — 부분 집계(이 아래 일부 미포함)" % nfail) if nfail else None))
+                 " · ".join(msg) or None))
+        root_err = int(result.get("error_count", 0) or 0) - unit_err
+        if root_err > 0:                       # 루트 자신(직속 파일·1단계 폴더 목록) 읽기 오류
+            conn.execute("UPDATE directories SET error=? WHERE id=?",
+                         ("이 폴더(직속 항목) 읽기 오류 %d개" % root_err, root_id))
         conn.commit()
         return run_id
     finally:
