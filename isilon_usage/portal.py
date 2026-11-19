@@ -134,6 +134,59 @@ NODE_REGION_MAX = 80
 _HOST_RE = re.compile(r"^[A-Za-z0-9._:\[\]-]+$")
 
 
+def token_error(tok: str) -> Optional[str]:
+    """토큰은 HTTP 헤더로 보내므로 눈에 보이는 ASCII(공백 없음)만 — 한글 토큰은 저장은 됐지만 보낼 때 latin-1 오류·받을 때
+    401 로 늘 실패했다(23회차 점검)."""
+    if any(not (33 <= ord(c) <= 126) for c in str(tok)):
+        return "토큰은 영문·숫자·기호(공백·한글 없이)만 쓸 수 있습니다."
+    return None
+
+
+def _alias_norm(v) -> str:
+    """별칭 경로 정리 — 끝 '/' 는 떼되 '/' 자체는 남긴다(예전엔 '/' 가 빈 값이 돼 경로 매핑이 꺼졌다, 23회차 점검)."""
+    t = str(v or "").strip()
+    return (t.rstrip("/") or "/") if t else ""
+
+
+def _keep_alias(existing, rec: dict) -> None:
+    """재등록(enroll)·원격 구성이 운영자가 정한 공통 논리 경로(alias_logical)를 지우지 않게 — 예전엔 두 칸 모두 설치 경로로
+    덮어써 '/ifs/data → /data' 매핑이 사라지고 비교·매트릭스에서 그 노드가 빠졌다(23회차 점검). 로컬 경로는 새 값으로."""
+    if existing and str(existing.get("alias_logical") or "").strip():
+        rec.pop("alias_logical", None)
+
+
+def sqlite_snapshot(src: str, dst: str) -> None:
+    """SQLite 파일을 한 시점의 일관된 사본으로 dst 에 만든다(쓰는 중이어도). 백업 API 가 있으면 그것으로,
+    없으면(옛 파이썬) 한 읽기 트랜잭션 안에서 스키마·행을 복사한다."""
+    import sqlite3
+    s_conn = sqlite3.connect("file:%s?mode=ro" % src, uri=True, timeout=30)
+    try:
+        d_conn = sqlite3.connect(dst)
+        try:
+            if hasattr(s_conn, "backup"):
+                s_conn.backup(d_conn)
+            else:
+                s_conn.execute("BEGIN")
+                objs = s_conn.execute("SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL "
+                                      "AND name NOT LIKE 'sqlite_%' ORDER BY type='table' DESC").fetchall()
+                for typ, nm, sql in objs:
+                    if typ == "table":
+                        d_conn.execute(sql)
+                        rows = s_conn.execute('SELECT * FROM "%s"' % nm.replace('"', '""')).fetchall()
+                        if rows:
+                            d_conn.executemany('INSERT INTO "%s" VALUES (%s)' % (nm.replace('"', '""'),
+                                                                                ",".join("?" * len(rows[0]))), rows)
+                for typ, nm, sql in objs:
+                    if typ != "table":
+                        d_conn.execute(sql)
+                s_conn.execute("COMMIT")
+            d_conn.commit()
+        finally:
+            d_conn.close()
+    finally:
+        s_conn.close()
+
+
 def node_url_error(url: str) -> Optional[str]:
     """노드 주소가 http(s)://호스트[:포트] 꼴인지 — 아니면 사유. 예전엔 'javascript:alert(1)'·'ftp://x'·
     포트 99999 가 앞에 http:// 만 붙어 저장되고 홈에 파이썬 예외 문구가 떴다(19회차 점검)."""
@@ -175,6 +228,9 @@ def node_input_error(raw: dict, existing: Optional[dict] = None) -> Optional[str
     region = str(raw.get("region") or "").strip()
     if len(region) > NODE_REGION_MAX and (existing is None or region != str(existing.get("region") or "").strip()):
         return "지역 이름은 %d자까지입니다." % NODE_REGION_MAX
+    _tk = str(raw.get("token") or "").strip()
+    if _tk and token_error(_tk):
+        return token_error(_tk)
     return node_url_error(raw.get("url"))
 
 
@@ -235,8 +291,8 @@ def sanitize_node(raw: dict, *, strict: bool = True) -> Optional[dict]:
         "token": str(raw.get("token") or ""),
         # 경로 별칭: 이 노드의 로컬 마운트 접두어 ↔ 공통 논리 접두어
         # 예) alias_local=/mnt/isilon/data, alias_logical=/data
-        "alias_local": str(raw.get("alias_local") or "").strip().rstrip("/"),
-        "alias_logical": str(raw.get("alias_logical") or "").strip().rstrip("/"),
+        "alias_local": _alias_norm(raw.get("alias_local")),
+        "alias_logical": _alias_norm(raw.get("alias_logical")),
         "interval_minutes": interval,
         "unit": unit,
         "every": every,
@@ -504,7 +560,10 @@ def _staged_install_sh(target_var: str) -> str:
         'BK=""\n'
         'if [ -d "${TG}/isilon_usage" ]; then BK="${TG}/isilon_usage.bak.$(date +%s)"; '
         'sudo mv "${TG}/isilon_usage" "$BK"; fi\n'
+        '_TGM=$(stat -c %a "${TG}" 2>/dev/null || echo 755); _TGO=$(stat -c %u:%g "${TG}" 2>/dev/null || true)\n'
         'sudo cp -a "$STAGE/." "${TG}/"\n'
+        # cp -a 'STAGE/.' 은 임시 폴더(mktemp, 0700·실행 사용자)의 권한·소유자를 설치 폴더에 덮었다 — 원래대로(23회차 점검)
+        'sudo chmod "$_TGM" "${TG}" 2>/dev/null || true; [ -n "$_TGO" ] && sudo chown "$_TGO" "${TG}" 2>/dev/null || true\n'
         "# 낡은 바이트코드 캐시 제거 — 안 그러면 새 코드를 깔아도 옛 버전이 보고/실행될 수 있음\n"
         'sudo find "${TG}" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true\n'
         'if ! (cd "${TG}" && python3 -c "import isilon_usage.cli, isilon_usage.server, isilon_usage.scanner"); then\n'
@@ -1111,19 +1170,33 @@ class PortalController:
         import socket
         buf = io.BytesIO()
         included = []
-        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
-            for name in self._BACKUP_FILES:
-                p = os.path.join(self.data_dir, name)
-                if os.path.isfile(p):
-                    tf.add(p, arcname="portal_backup/" + name)
+        snap_dir = tempfile.mkdtemp(prefix="portal_bk_", dir=self.data_dir)
+        try:
+            with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+                for name in self._BACKUP_FILES:
+                    p = os.path.join(self.data_dir, name)
+                    if not os.path.isfile(p):
+                        continue
+                    src = p
+                    if name.endswith(".db"):
+                        # 쓰는 중인 SQLite(WAL)를 바이트째 복사하면 깨진 백업이 나왔다(23회차 점검: 동시 기록 중 15/17 손상)
+                        # — 한 시점의 일관된 사본을 만든 뒤 묶는다
+                        src = os.path.join(snap_dir, name)
+                        try:
+                            sqlite_snapshot(p, src)
+                        except Exception:  # noqa: BLE001 — 사본을 못 만들면 그 파일은 빼고(깨진 사본보다 낫다)
+                            continue
+                    tf.add(src, arcname="portal_backup/" + name)
                     included.append(name)
-            manifest = {"kind": "isilon_portal_backup", "version": __version__,
-                        "created_at": time.time(), "hostname": socket.gethostname(),
-                        "node_count": len(self.nodes), "files": included}
-            md = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
-            ti = tarfile.TarInfo("portal_backup/backup_manifest.json")
-            ti.size = len(md)
-            tf.addfile(ti, io.BytesIO(md))
+                manifest = {"kind": "isilon_portal_backup", "version": __version__,
+                            "created_at": time.time(), "hostname": socket.gethostname(),
+                            "node_count": len(self.nodes), "files": included}
+                md = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
+                ti = tarfile.TarInfo("portal_backup/backup_manifest.json")
+                ti.size = len(md)
+                tf.addfile(ti, io.BytesIO(md))
+        finally:
+            shutil.rmtree(snap_dir, ignore_errors=True)
         fname = "isilon_portal_backup-%s.tar.gz" % time.strftime("%Y%m%d-%H%M%S")
         return buf.getvalue(), fname
 
@@ -1864,6 +1937,8 @@ class PortalController:
         token = str(token or "").strip()
         if not token:
             return {"ok": False, "reason": "토큰이 비어 있습니다(빈 토큰은 인증을 끄므로 거부)."}
+        if token_error(token):
+            return {"ok": False, "reason": token_error(token)}
         if ids and not isinstance(ids, (list, tuple, str)):   # 숫자·참거짓 → 500 이던 것(2026-11 퍼징)
             return {"ok": False, "reason": "ids 는 노드 id 목록이어야 합니다."}
         want = {str(i) for i in ([ids] if isinstance(ids, str) else (ids or []))}
@@ -1912,6 +1987,7 @@ class PortalController:
                "alias_local": path, "alias_logical": path}
         if self._get(nid) is None:         # 새 노드만 기본 주기·모드(재등록은 운영자가 바꾼 값 유지)
             rec.update({"unit": "minute", "every": 30, "mode": "both", "enabled": True})
+        _keep_alias(self._get(nid), rec)
         res = self.upsert_node(rec, keep_token_on_url_change=False, partial=True)
         if res.get("ok"):
             res["enrolled"] = nid
@@ -2017,6 +2093,18 @@ class PortalController:
                 conn.close()
         except Exception:  # noqa: BLE001
             pass
+        # 처리량 이력도 — 지운 노드의 행이 남고, 같은 이름으로 다시 추가하면 옛 마지막 값 때문에 첫 표본이 빠졌다(23회차 점검)
+        if before != len(self.nodes):
+            self._thru_last.pop(nid, None)
+            try:
+                conn = dbmod.connect(throughput_history_path(self.data_dir))
+                try:
+                    conn.execute("DELETE FROM throughput_samples WHERE node_id=?", (nid,))
+                    conn.commit()
+                finally:
+                    conn.close()
+            except Exception:  # noqa: BLE001
+                pass
         return {"ok": before != len(self.nodes)}
 
     def test_node(self, raw: dict) -> dict:
@@ -2789,7 +2877,10 @@ class PortalController:
 
     def set_export_token(self, token: str) -> dict:
         """외부 사용량 API(/api/portal/usage) 보호 토큰을 설정/해제한다(빈 값=공개)."""
-        self.settings["export_token"] = str(token or "").strip()
+        _t = str(token or "").strip()
+        if _t and token_error(_t):
+            return {"ok": False, "reason": token_error(_t)}
+        self.settings["export_token"] = _t
         self._save_settings()
         return {"ok": True, "export_token_set": bool(self.settings["export_token"])}
 
@@ -3442,6 +3533,7 @@ class PortalController:
                "alias_local": path, "alias_logical": path}
         if self._get(name) is None:        # 새 노드만 기본 주기·모드(덮어쓰기는 운영자가 바꾼 주기 유지)
             rec.update({"unit": "minute", "every": 30, "mode": "both", "enabled": True})
+        _keep_alias(self._get(name), rec)
         node_res = self.upsert_node(rec, partial=True)
         if not node_res.get("ok"):   # 등록 실패를 '성공(노드 이름 없음)'으로 보였다(20회차 점검) — 사유와 함께 실패로
             return {"ok": False, "reason": "노드 등록 실패: %s" % (node_res.get("reason") or "알 수 없음")}
@@ -3547,11 +3639,17 @@ class PortalController:
 
         alias_logical 접두어를 alias_local 로 바꾼다. 별칭이 없으면 그대로(절대경로 일치).
         """
-        al = (node.get("alias_local") or "").rstrip("/")
-        lo = (node.get("alias_logical") or "").rstrip("/")
-        if al and lo and (logical == lo or logical.startswith(lo + "/")):
-            return al + logical[len(lo):]
-        return logical
+        al = _alias_norm(node.get("alias_local"))
+        lo = _alias_norm(node.get("alias_logical"))
+        if not (al and lo):
+            return logical
+        if lo == "/":                          # 논리 루트 전체를 이 노드의 접두어 아래로(23회차 점검: '/' 가 무시됐다)
+            rest = logical if logical.startswith("/") else "/" + logical
+        elif logical == lo or logical.startswith(lo + "/"):
+            rest = logical[len(lo):]
+        else:
+            return logical
+        return (al.rstrip("/") + rest) or "/"
 
     def _replica_db_for(self, node_id: str, path: str):
         """노드 복제본에서 path 를 포함하는(root 가 prefix) 최신 완료 스캔 DB 경로(첫 후보)."""

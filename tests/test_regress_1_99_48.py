@@ -2574,6 +2574,79 @@ def check_bj_round23_regress() -> None:
     print("[LL1~LL3] OK  숫자 검증(날짜 허용·작은 정수 정확히)·설치 경로 검사 순서")
 
 
+def check_bk_round23_portal() -> None:
+    """MM1 쓰는 중인 핑/처리량 DB 를 바이트째 묶어 깨진 백업 MM2 재등록·원격 구성이 운영자의 논리 경로(alias_logical) 덮어씀
+    MM3 별칭 '/' 무시 MM4 설치 폴더 권한 0700 MM5 지운 노드의 처리량 이력 남음 MM6 한글 토큰."""
+    import io
+    import sqlite3
+    import tarfile as _tar
+    from isilon_usage import portal as P
+    d = tempfile.mkdtemp(prefix="iu_bk_")
+    try:
+        hq = os.path.join(d, "hq")
+        pc = P.PortalController(hq)
+        db = P.ping_history_path(hq)                                                                 # MM1
+        c = sqlite3.connect(db)
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("CREATE TABLE IF NOT EXISTS ping_samples (ts INTEGER, node_id TEXT, ok INTEGER, ms REAL)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_ping_ts2 ON ping_samples(ts)")
+        c.executemany("INSERT INTO ping_samples VALUES (?,?,?,?)", ((i, "n%d" % (i % 13), 1, 1.0) for i in range(200000)))
+        c.commit()
+        c.close()
+        stop = threading.Event()
+
+        def writer():
+            w = sqlite3.connect(db, timeout=30)
+            i = 10 ** 6
+            while not stop.is_set():
+                w.executemany("INSERT INTO ping_samples VALUES (?,?,?,?)", ((i + k, "w", 1, 1.0) for k in range(50)))
+                w.commit()
+                i += 50
+                time.sleep(0.02)
+            w.close()
+        t = threading.Thread(target=writer)
+        t.start()
+        bad = 0
+        try:
+            for _ in range(5):
+                data, _fn = pc.make_backup_bytes()
+                with _tar.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+                    raw = tf.extractfile("portal_backup/ping_history.db").read()
+                chk = os.path.join(d, "chk.db")
+                with open(chk, "wb") as fh:
+                    fh.write(raw)
+                cc = sqlite3.connect(chk)
+                if cc.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                    bad += 1
+                cc.close()
+                os.remove(chk)
+        finally:
+            stop.set()
+            t.join()
+        assert bad == 0, bad
+        assert not [n for n in os.listdir(hq) if n.startswith("portal_bk_")]
+        pc.upsert_node({"id": "B", "url": "http://10.0.0.2:8765", "token": "tk", "alias_local": "/ifs/data",   # MM2
+                        "alias_logical": "/data"})
+        pc.enroll_node({"id": "B", "url": "http://10.0.0.2:8765", "path": "/ifs/data", "token": "tk"})
+        assert pc._get("B")["alias_logical"] == "/data", pc._get("B")
+        pc.upsert_node({"id": "R", "url": "http://10.0.0.3:8765", "alias_local": "/mnt/isilon", "alias_logical": "/"})  # MM3
+        assert pc._get("R")["alias_logical"] == "/"
+        assert P.PortalController._to_local(pc._get("R"), "/data") == "/mnt/isilon/data"
+        sh = P._staged_install_sh("EDGE")                                                            # MM4
+        assert '_TGM=$(stat -c %a' in sh and 'chmod "$_TGM"' in sh
+        pc._record_throughput("B", {"total_scanned_bytes": 5, "roots": []})                          # MM5
+        pc.delete_node("B")
+        c = sqlite3.connect(P.throughput_history_path(hq))
+        n = c.execute("SELECT COUNT(*) FROM throughput_samples WHERE node_id='B'").fetchone()[0]
+        c.close()
+        assert n == 0 and "B" not in pc._thru_last, n
+        assert pc.upsert_node({"id": "K", "url": "http://10.0.0.4:8765", "token": "비밀토큰"})["ok"] is False   # MM6
+        assert pc.set_node_token([], "한글")["ok"] is False and pc.set_export_token("한글")["ok"] is False
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    print("[MM1~MM6] OK  백업 SQLite 일관 사본·재등록 논리 경로 유지·별칭 '/'·설치 폴더 권한·지운 노드 처리량·토큰 ASCII")
+
+
 SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partial_exit, check_e4_eta_active_time,
             check_p1_p2_p4_portal, check_p3_p6_p7_d1_d5_static, check_d2_ko_count, check_p5_d3_d4_http,
             check_f1_discovery_eta, check_r1_to_r5_edge,
@@ -2596,7 +2669,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_az_round19_regress, check_ba_round19_portal_edge,
             check_bb_round20_regress, check_bc_round20_upgrade,
             check_bd_round20_stress, check_be_round21_sec_regress,
-            check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser, check_bj_round23_regress]
+            check_bf_round21_modules, check_bg_round22_regress, check_bh_round22_fuzz, check_bi_round22_browser, check_bj_round23_regress, check_bk_round23_portal]
 
 
 def main() -> int:
