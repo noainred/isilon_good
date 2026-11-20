@@ -1553,7 +1553,7 @@ function applyNavHidden(hidden){
 }
 // 첫 화면: 주소의 #화면 이름(새로고침·즐겨찾기) — 없으면 현황
 (function(){ const h=(location.hash||"").slice(1);
-  if(["dash","compare","netmon"].includes(h)) setTimeout(()=>{ try{ show(h); }catch(e){} }, 0); })();
+  if(["dash","compare","netmon","nodes"].includes(h)) setTimeout(()=>{ try{ show(h); }catch(e){} }, 0); })();   // nodes 는 로그인 확인 뒤(33회차)
 function renderNavMenu(hidden){
   const box=$("navMenuBox"); if(!box) return;
   const hset=new Set(hidden||[]);

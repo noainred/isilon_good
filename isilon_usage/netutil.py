@@ -6,6 +6,7 @@
 다른 origin(스킴·호스트·포트)으로 넘어갈 때 인증 헤더를 떼어 낸다. 같은 origin 이면 그대로 둔다.
 """
 
+import re
 import urllib.parse
 import json
 import urllib.request
@@ -77,27 +78,41 @@ _MASK = "***"
 MASK = _MASK
 
 
+def _split_userinfo(s: str):
+    """'scheme://[userinfo@]rest' 를 (scheme, userinfo 또는 None, rest) 로 — 계정은 '://' 뒤 '마지막 @' 까지로 본다.
+
+    urlsplit 은 넷로크를 첫 '/'·'?'·'#' 에서 끊어, 비밀번호에 그 글자가 든 주소(https://admin:PW/xx@host)의 계정을 못 알아봤다
+    (33회차 보안 점검: 로그인 없이 비밀번호 노출). 경로 안의 '@' 까지 계정으로 볼 수 있지만, 가리는 쪽으로 틀리는 것이 안전하다."""
+    k = s.find("://")
+    if k <= 0:
+        return None, None, s
+    scheme, rest = s[:k], s[k + 3:]
+    if "@" in rest:
+        ui, _, rest = rest.rpartition("@")
+        return scheme, ui, rest
+    return scheme, None, rest
+
+
 def mask_url_secret(u, hide_path: bool = False) -> str:
     """URL 의 사용자 정보·쿼리(·hide_path 면 경로)를 '***' 로 가린다. 가릴 게 없으면 그대로."""
     s = str(u or "").strip()
     if not s:
         return s
-    try:
-        from urllib.parse import urlsplit
-        p = urlsplit(s)
-    except ValueError:
-        return _MASK
-    if not p.scheme or not p.netloc:
+    scheme, ui, rest = _split_userinfo(s)
+    if scheme is None or not rest:
         # 주소 모양이 아니면(오타 등) 통째로 가린다 — 무엇이 비밀인지 모른다
         return _MASK if (hide_path or "@" in s or "?" in s) else s
-    host = p.netloc.rsplit("@", 1)[-1]
-    out = p.scheme + "://" + (_MASK + "@" if "@" in p.netloc else "") + host
-    path = p.path or ""
+    m = re.match(r"([^/?#]*)(/[^?#]*)?", rest)
+    host = m.group(1) if m else ""
+    if not host or re.search(r"\s", host):
+        return _MASK                        # 호스트를 못 읽으면(공백 등) 통째로
+    path = (m.group(2) or "") if m else ""
+    out = scheme + "://" + (_MASK + "@" if ui is not None else "") + host
     if hide_path and path.strip("/"):
         out += "/" + _MASK
     else:
         out += path
-    if p.query or p.fragment:
+    if len(rest) > len(host) + len(path):   # 쿼리·조각(#…)
         out += "?" + _MASK
     return out
 
@@ -132,20 +147,23 @@ def secret_values(*urls_or_tokens) -> list:
         if not s:
             continue
         if "://" not in s:
-            if len(s) >= 4:
-                out.append(s)          # 토큰 그대로
+            if len(s) >= 8:
+                out.append(s)          # 토큰 그대로(짧은 값은 흔한 글자와 겹쳐 가리지 않음)
             continue
         try:
             p = urlsplit(s)
         except ValueError:
             continue
-        if "@" in p.netloc:
-            ui = p.netloc.rpartition("@")[0]
-            out.append(ui)
-            if ":" in ui and len(ui.partition(":")[2]) >= 3:
-                out.append(ui.partition(":")[2])
+        # 비밀번호가 있는 계정만(사용자 이름만 있는 'x@host' 는 비밀이 아니다), 쿼리는 비밀 이름의 값만 — 너무 넓게 가려
+        # 'main'·'true'·'admin' 같은 낱말이 로그에서 지워졌다(33회차 점검)
+        ui = _split_userinfo(s)[1]          # 비밀번호에 '/'·'#' 가 있어도(33회차)
+        if ui:
+            pw = ui.partition(":")[2] if ":" in ui else ""
+            if len(pw) >= 4:
+                out.append(ui)
+                out.append(pw)
         for _k, val in parse_qsl(p.query, keep_blank_values=False):
-            if len(val) >= 4:
+            if len(val) >= 4 and re.search(r"(token|key|pass|secret|sig|auth|cred|session|code)", _k, re.I):
                 out.append(val)
     return sorted(set(out), key=len, reverse=True)
 

@@ -1226,7 +1226,11 @@ class ScanController:
 
     def storage_status(self, force: bool = False) -> list:
         """저장소 상태(응답용) — base·오류 문구 속 URL 비밀값을 가린다(인증 없는 조회, 28회차 점검)."""
-        return netutil.redact_urls(self._storage_status_raw(force))
+        s = self.settings or {}
+        secrets = netutil.secret_values(s.get("isilon_url"), s.get("powerstore_url"),
+                                        *[a.get("url") for a in (s.get("storage_arrays") or []) if isinstance(a, dict)])
+        # 주소 모양이 아닌 오류 문구 속 조각(예: "nonnumeric port: 'PW'")까지 저장된 비밀로 찾아 가린다(33회차 보안 점검)
+        return netutil.redact_values(netutil.redact_urls(self._storage_status_raw(force)), secrets)
 
     def _storage_status_raw(self, force: bool = False) -> list:
         """설정된 스토리지 어레이 상태 목록을 캐시(60초)와 함께 반환.

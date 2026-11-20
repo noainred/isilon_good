@@ -294,7 +294,8 @@ def _need_detail(data):
 
 def _top_n(q, default=10, cap=30) -> int:
     """'3개만'·'상위 5'·'top 3'·'5개 디렉터리' 같은 개수 — 없으면 default(32회차 점검: 개수를 무시하고 10개를 답함)."""
-    m = (re.search(r"(?:상위|top|탑|Top|TOP)\s*(\d{1,3})", q) or re.search(r"(\d{1,3})\s*(?:개|건|위)", q))
+    # '6개월'·'5개년'의 '개'는 기간(33회차 점검: '6개월 넘은 큰 파일'이 6개만 답함)
+    m = (re.search(r"(?:상위|top|탑|Top|TOP)\s*(\d{1,3})", q) or re.search(r"(\d{1,3})\s*(?:개(?!월|년)|건|위)", q))
     if not m:
         return default
     try:

@@ -3745,6 +3745,31 @@ def check_ck_round32_tools() -> None:
     print("[MMM1~MMM8] OK  처리량 스캔별 적분·시범 탐색 중복·예약 입력줄 제외·중지 표시·문구·질의 N개·0 값·어레이 검사")
 
 
+def check_cl_round33_regress() -> None:
+    """NNN1 '6개월'·'5개년'의 '개'를 개수로 읽어 목록이 잘림 NNN2 비밀 조각 가리기가 너무 넓어(사용자 이름만·일반 쿼리 값·짧은 토큰)
+    'main'·'true'·'admin'·숫자까지 로그에서 지움 NNN3 시범 탐색 확인이 계속 실패하면 버튼이 영영 꺼짐."""
+    from isilon_usage import ask as AK, netutil as NU
+    for q, n in (("6개월 넘은 큰 파일", 10), ("3개월 이상 안 쓴 큰 파일", 10), ("5개년 큰 폴더", 10), ("큰 폴더 3개", 3)):   # NNN1
+        assert AK._top_n(q) == n, (q, AK._top_n(q))
+    assert NU.secret_values("https://x@host/a") == [] and NU.secret_values("12345") == []                       # NNN2
+    sv = NU.secret_values("https://user:s3cr3t@m.example/r?token=abc123&ref=main&a=true")
+    out = NU.redact_values("error at main true admin s3cr3t abc123", sv)
+    assert out == "error at main true admin *** ***", out
+    assert "if (tries > 180) { clearInterval(_benchTimer);" in _read("dashboard.html")                           # NNN3
+    # NNN4 비밀번호에 '/'·'#'·공백 든 주소가 가려지지 않고 로그인 없이 노출(33회차 보안 점검)
+    for u in ("https://admin:SECRET_PW/xx@10.0.0.20:8080", "https://admin:SECRET_PW#x@host:8080",
+              "https://u:SECRET_PW@bad host/?t=Q", "https://10.0.0.20:80 80/?token=SECRET_PW"):
+        assert "SECRET_PW" not in NU.mask_url_secret(u), u
+        assert NU.keep_masked(NU.mask_url_secret(u), u) == u
+    assert "SECRET_PW" not in str(NU.redact_values("nonnumeric port: 'SECRET_PW/xx'",
+                                                     NU.secret_values("https://admin:SECRET_PW/xx@h:1")))
+    from isilon_usage import server as SV
+    pub = SV._public_settings({"isilon_url": "https://admin:SECRET_PW/xx@10.0.0.20:8080"})
+    assert "SECRET_PW" not in str(pub), pub
+    assert '"isilon": netutil.redact_urls(c.get("isilon")' in _read("portal.py")
+    print("[NNN1~NNN4] OK  기간의 '개' 제외·비밀 조각 범위·시범 탐색 버튼 복구·특수문자 비밀번호 주소 가림")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3780,7 +3805,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bx_round28_regress, check_by_round28_install,
             check_bz_round28_dashboard, check_ca_round29_regress,
             check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress,
-            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools]
+            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress]
 
 
 def main() -> int:

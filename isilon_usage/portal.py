@@ -2928,8 +2928,9 @@ class PortalController:
                     "running": self._running_scan(roots_l) if is_on else None,
                     "auto_restart": any(rt.get("auto_restart") for rt in roots_l),  # 반복 스캔 중
                     "roots": roots_l,
-                    "isilon": c.get("isilon") or {"configured": False},
-                    "storage": c.get("storage") or [],
+                    # 구버전 엣지가 가리지 않고 보낸 장비 주소·오류 문구도 포탈에서 한 번 더 가린다(33회차 보안 점검)
+                    "isilon": netutil.redact_urls(c.get("isilon") or {"configured": False}),
+                    "storage": netutil.redact_urls(c.get("storage") or []),
                 })
             except Exception as exc:  # noqa: BLE001 — 노드 하나의 이상 값이 전체 화면을 멈추지 않게
                 out_nodes.append({"id": n.get("id"), "region": n.get("region"), "url": n.get("url"),

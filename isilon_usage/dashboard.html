@@ -2224,7 +2224,10 @@ async function tuneBenchmark() {
         if ($("benchBtn")) $("benchBtn").disabled = false;
         if (lost || (!j.done && tries > 180)) out.innerHTML = '<span style="color:var(--warn)">측정이 끝나지 않았습니다(서버 재시작·시간 초과) — 다시 실측하세요.</span>';
       }
-    } catch (e) { /* 일시 오류 무시, 계속 폴링 */ }
+    } catch (e) {   // 일시 오류는 계속 폴링 — 단 시간 상한을 넘기면 멈추고 버튼을 되살린다(33회차 점검: 네트워크가 계속 죽으면 버튼이 영영 꺼짐)
+      if (tries > 180) { clearInterval(_benchTimer); _benchTimer = null; if ($("benchBtn")) $("benchBtn").disabled = false;
+        out.innerHTML = '<span style="color:var(--warn)">서버에 연결할 수 없어 측정 확인을 멈췄습니다 — 다시 실측하세요.</span>'; }
+    }
     finally { window._benchInFlight = false; }
   }, 1000);
 }
