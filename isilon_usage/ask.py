@@ -292,13 +292,24 @@ def _need_detail(data):
     return d if isinstance(d, dict) else None
 
 
+def _top_n(q, default=10, cap=30) -> int:
+    """'3개만'·'상위 5'·'top 3'·'5개 디렉터리' 같은 개수 — 없으면 default(32회차 점검: 개수를 무시하고 10개를 답함)."""
+    m = (re.search(r"(?:상위|top|탑|Top|TOP)\s*(\d{1,3})", q) or re.search(r"(\d{1,3})\s*(?:개|건|위)", q))
+    if not m:
+        return default
+    try:
+        return max(1, min(cap, int(m.group(1))))
+    except ValueError:
+        return default
+
+
 def _h_top_dirs(q, data):
-    if not (_has(q, "디렉", "폴더") and _has(q, "제일", "가장", "최대", "큰", "top", "탑", "순위")):
+    if not (_has(q, "디렉", "폴더") and _has(q, "제일", "가장", "최대", "큰", "top", "탑", "순위", "상위")):
         return None
     d = _need_detail(data)
     if not d or not d.get("topdirs"):
         return {"answer": _detail_unavailable(data), "facts": {}}
-    rows = d["topdirs"][:10]
+    rows = d["topdirs"][:_top_n(q)]
     lines = [f"{i + 1}. {r.get('path')} — **{fmt_bytes(r.get('bytes'))}** "
              f"({fmt_num(r.get('files'))}개)" for i, r in enumerate(rows)]
     facts = {"큰_디렉터리": [{"경로": r.get("path"), "용량": fmt_bytes(r.get("bytes")),
@@ -308,14 +319,14 @@ def _h_top_dirs(q, data):
 
 def _h_big_files(q, data):
     # '큰 파일'만 — '가장 오래된/작은/최근 파일', '가장 많은 파일 확장자'까지 '가장 큰 파일'로 답했다(30회차 점검)
-    if not (_has(q, "파일") and _has(q, "큰", "대용량", "최대", "용량 많", "top", "탑")):
+    if not (_has(q, "파일") and _has(q, "큰", "대용량", "최대", "용량 많", "top", "탑", "상위")):
         return None
     if _has(q, "작은", "오래", "확장자", "분포", "종류", "형식"):   # '최근 가장 큰 파일'은 큰 파일 질문(31회차 점검)
         return None
     d = _need_detail(data)
     if not d or not d.get("top_files"):
         return {"answer": _detail_unavailable(data), "facts": {}}
-    rows = d["top_files"][:10]
+    rows = d["top_files"][:_top_n(q)]
     lines = [f"{i + 1}. {r.get('path')} — **{fmt_bytes(r.get('bytes'))}**"
              + (f" ({r.get('owner')})" if r.get("owner") else "")
              for i, r in enumerate(rows)]

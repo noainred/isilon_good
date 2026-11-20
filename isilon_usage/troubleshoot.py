@@ -780,16 +780,21 @@ def throughput_buckets(data_dir, bucket_sec, max_buckets=60):
         conn = _metrics_conn(data_dir)
         try:
             rows = conn.execute(
-                "SELECT ts, rd, rf, rb FROM rate_samples WHERE ts >= ? ORDER BY ts",
+                "SELECT ts, rd, rf, rb, scan_id FROM rate_samples WHERE ts >= ? ORDER BY ts",
                 (cut,)).fetchall()
         finally:
             conn.close()
     except Exception:
         return []
     buckets = {}
-    prev_ts = None
+    # 직전 표본은 '같은 스캔'의 것으로만 — 예전엔 다른 스캔의 표본과의 시간차를 곱해, 연달아 돈 짧은 스캔이 실제의 2.5배로
+    # 집계됐다(32회차 점검: 40만 파일 스캔이 101만). 동시에 도는 스캔도 각자 구간으로 적분한다.
+    prev_by_scan: dict = {}
     for r in rows:
         ts = r["ts"]
+        sk = r["scan_id"]
+        prev_ts = prev_by_scan.get(sk)
+        prev_by_scan[sk] = ts
         if prev_ts is not None:
             dt = ts - prev_ts
             if 0 < dt <= 60:                # 60초 넘는 공백(폴링/스캔 중단)은 적분 제외
@@ -798,7 +803,6 @@ def throughput_buckets(data_dir, bucket_sec, max_buckets=60):
                 acc[0] += (r["rb"] or 0) * dt
                 acc[1] += (r["rf"] or 0) * dt
                 acc[2] += (r["rd"] or 0) * dt
-        prev_ts = ts
     out = [{"t": bk, "bytes": v[0], "files": v[1], "dirs": v[2]}
            for bk, v in sorted(buckets.items())]
     return out[-max_buckets:]

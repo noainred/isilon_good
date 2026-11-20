@@ -2196,15 +2196,19 @@ async function tuneBenchmark() {
   if ($("setTuneResult")) $("setTuneResult").innerHTML = "";   // 사양 기반 권장은 지운다(실측이 더 정확 — 하나만 보이게)
   const path = ($("scanPath") && $("scanPath").value.trim()) || "";
   out.innerHTML = '<span style="color:var(--warn)">시범 탐색 시작 중… (스레드를 메모리 2배 한도까지 단계적으로 올립니다)</span>';
-  if (_benchTimer) { clearInterval(_benchTimer); _benchTimer = null; }
+  if (_benchTimer) return;     // 이미 진행을 따라가는 중(두 번 누름)
   // 1) 백그라운드 시작
   try {
     const st = await (await fetch("/api/benchmark-workers/start", {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify(path ? {path: path} : {}),
     })).json();
-    if (!st.ok) { out.innerHTML = '<span style="color:var(--danger)">실측 시작 실패: ' + (st.error || "") + '</span>'; return; }
+    // 이미 측정 중이면(두 번 누름·다른 탭) 실패로 끝내지 않고 그 측정의 진행을 따라간다 — 예전엔 진행 표시를 잃고
+    // '실측 시작 실패'에 멈췄다(32회차 점검)
+    if (!st.ok && !/이미/.test(st.error || st.reason || "")) {
+      out.innerHTML = '<span style="color:var(--danger)">실측 시작 실패: ' + escHtml(st.error || st.reason || "") + '</span>'; return; }
   } catch (e) { out.innerHTML = '<span style="color:var(--danger)">실측 시작 오류: ' + escHtml(String(e)) + '</span>'; return; }
+  if ($("benchBtn")) $("benchBtn").disabled = true;
   // 2) 단계별 폴링 — 각 후보 측정이 끝날 때마다 행이 추가된다
   let tries = 0;
   _benchTimer = setInterval(async () => {
@@ -2217,6 +2221,7 @@ async function tuneBenchmark() {
       if (!lost) _benchRender(j);
       if (j.done || tries > 180 || lost) {
         clearInterval(_benchTimer); _benchTimer = null;
+        if ($("benchBtn")) $("benchBtn").disabled = false;
         if (lost || (!j.done && tries > 180)) out.innerHTML = '<span style="color:var(--warn)">측정이 끝나지 않았습니다(서버 재시작·시간 초과) — 다시 실측하세요.</span>';
       }
     } catch (e) { /* 일시 오류 무시, 계속 폴링 */ }
@@ -2386,7 +2391,7 @@ function depRender(r) {
   });
   $("depRows").innerHTML = rows;
   let warn = "";
-  if (r.truncated) warn += '<span style="color:var(--warn)">⚠ 시간 초과로 중단 — 하한 추정치(실제는 더 큼)</span> &nbsp; ';
+  if (r.truncated) warn += '<span style="color:var(--warn)">⚠ ' + (r.stopped ? "사용자가 중지함" : "시간 초과로 중단") + ' — 하한 추정치(실제는 더 큼)</span> &nbsp; ';
   if (r.capped) warn += '<span style="color:var(--warn)">⚠ 최대깊이에서 멈춤(더 깊을 수 있음)</span>';
   $("depSummary").innerHTML = '최대 깊이 <b>' + r.max_depth + '</b> · 측정 디렉터리 <b>' + fmtNum(r.total_dirs)
     + '</b>개 · 파일 ' + fmtNum(r.total_files) + '개 · ' + (r.elapsed || 0).toFixed(1) + 's<br>' + warn;
@@ -2785,6 +2790,8 @@ const _SET_REQUIRED_NUM = ["setBatch", "setSample", "setTopN", "setRefresh", "se
 function settingsNumberProblem() {
   for (const el of document.querySelectorAll('#settingsCard input[type="number"]')) {
     if (!el.id || el.disabled || el.offsetParent === null && !_SET_REQUIRED_NUM.includes(el.id)) continue;
+    // 예약·어레이 '추가' 입력줄은 저장 대상이 아니다 — 거기 남은 값이 설정 저장 전체를 막았다(32회차 점검: 'schEvery: 범위…')
+    if (/^(sch|arr)/.test(el.id)) continue;
     const v = el.validity || {};
     const empty = el.value.trim() === "";
     if (v.badInput || v.rangeUnderflow || v.rangeOverflow || (empty && _SET_REQUIRED_NUM.includes(el.id))) {
@@ -2955,7 +2962,9 @@ async function doBrowse(path, _confirmed) {
         $("browseErr").textContent = "지정 경로 밖이라 탐색을 취소했습니다.";
         return;
       }
-      $("browseErr").textContent = "탐색 실패: " + (j.reason || j.error || ""); return;
+      // 서버 코드(not_a_directory 등)를 사람 말로(32회차 점검)
+      const _bx = {not_a_directory: "폴더가 아니거나 없는 경로입니다", permission_denied: "읽을 권한이 없습니다", not_found: "없는 경로입니다"};
+      $("browseErr").textContent = "탐색 실패: " + (_bx[j.reason] || j.reason || j.error || ""); return;
     }
     $("browsePath").value = j.path;
     $("browseUp").dataset.parent = j.parent || "/";
@@ -3210,7 +3219,7 @@ function renderAutotune(j) {
   if (j.done && best) {
     res.innerHTML = `✅ <b>${best.label}</b>가 가장 빠릅니다`
       + `(${fmtNum(Math.round(best.files_per_sec))} files/s). `
-      + (j.scan_id ? `이 설정으로 <b>스캔 #${j.scan_id}</b>을 자동 시작했습니다.`
+      + (j.scan_id ? `이 설정으로 <b>스캔 #${j.scan_id}</b>을(를) 자동 시작했습니다.`
         : '본 스캔을 시작합니다.')
       + (j.note ? `<br><span class="sub">참고: ${escHtml(j.note)}</span>` : "");
     // 이 화면에서 측정이 '진행되는 걸 본' 오토튜닝만 그 스캔으로 따라간다 — 예전엔 끝난 지 오래된 결과가
@@ -5145,7 +5154,8 @@ async function doDups() {
 }
 async function _doDupsReq(p, out) {
   out.innerHTML = '<span class="sub">중복 찾는 중… (내용 해시 — 큰 폴더는 시간이 걸립니다)</span>';
-  const min = parseInt($("dpMin").value) || 4096;
+  const _mv = $("dpMin").value.trim();   // 비우면 기본 4096, 0 은 그대로(32회차 점검: 0·음수가 말없이 바뀜)
+  const min = _mv === "" ? 4096 : Math.max(0, parseInt(_mv) || 0);
   try {
     const j = await (await fetch("/api/dups?path=" + encodeURIComponent(p) + "&min_size=" + min, {cache: "no-store"})).json();
     renderDups(j);
@@ -5179,7 +5189,8 @@ async function doCold() {
   if (!p) { out.innerHTML = '<span class="sub">원본 루트 경로를 입력하세요.</span>'; return; }
   out.innerHTML = '<span class="sub">콜드 용량 측정 중… (큰 폴더는 시간이 걸립니다)</span>';
   const tgt = ($("ctTarget").value || "").trim();
-  const days = parseInt($("ctDays").value) || 365;
+  const _dv = $("ctDays").value.trim();  // 비우면 365, 0(=모든 파일)은 그대로 — 예전엔 0 이 말없이 365 로 바뀌었다(32회차 점검)
+  const days = _dv === "" ? 365 : Math.max(0, parseInt(_dv) || 0);
   const field = $("ctField").value || "mtime";
   const min = parseInt($("ctMin").value) || 0;
   const u = "/api/coldplan?path=" + encodeURIComponent(p) + "&days=" + days + "&field=" + field
@@ -5418,7 +5429,10 @@ $("fhPath").addEventListener("keydown", (e) => { if (e.key === "Enter") loadFold
 $("arrAdd").addEventListener("click", () => {
   const url = $("arrUrl").value.trim();
   if (!url) { alert("어레이 주소를 입력하세요."); return; }
+  // 주소 형식·이름 중복 확인(32회차 점검: 'not a url'·같은 이름 두 개가 저장됐다 — 이름이 id 라 중복이면 비밀번호가 섞일 수 있음)
+  if (!/^https?:\/\/[^\s\/]+/i.test(url)) { alert("어레이 주소는 http:// 또는 https:// 로 시작해야 합니다(예: https://10.0.0.5:8080)."); return; }
   const name = $("arrName").value.trim();
+  if (name && storageArrays.some(a => (a.name || "") === name)) { alert("같은 이름의 어레이가 이미 있습니다: " + name); return; }
   storageArrays.push({type: $("arrType").value, name: name, url: url,
     user: $("arrUser").value.trim(), password: $("arrPass").value,
     verify_ssl: $("arrVerify").checked, id: (name || ("arr-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)))});   // 주소를 id 로 쓰지 않는다(29회차 점검: 주소 속 토큰이 id 로 노출)

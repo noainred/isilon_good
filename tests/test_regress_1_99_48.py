@@ -3705,6 +3705,46 @@ def check_cj_round32_portal() -> None:
     print("[LLL1~LLL8] OK  저장 실패 표시·업그레이드 주소 비밀 가림/Basic 인증·비밀번호 4자·세션 끊김·화면 기억·빈 비교·이미 최신·키 삭제 안내")
 
 
+def check_ck_round32_tools() -> None:
+    """MMM1 처리량이 다른 스캔 표본과의 시간차로 적분돼 부풀음 MMM2 시범 탐색 두 번 누르면 진행 표시를 잃음 MMM3 예약 추가 입력줄 값이
+    설정 저장 전체를 막음 MMM4 대상 분석 사용자 중지를 '시간 초과'로 MMM5 조사·탐색 오류 코드 MMM6 질의 'N개' 무시 MMM7 콜드 0일·중복 최소 0이
+    말없이 기본값 MMM8 어레이 주소 형식·이름 중복."""
+    import sqlite3
+    from isilon_usage import troubleshoot as TS, analyzer as AN, ask as AK
+    d = tempfile.mkdtemp(prefix="iu_ck_")
+    try:
+        dbp = TS.metrics_db_path(d)                                                                    # MMM1
+        c = TS._metrics_conn(d)
+        c.execute("DELETE FROM rate_samples")
+        now = time.time()
+        for ts, sid in ((now - 50, 2), (now - 10, 3)):          # 서로 다른 스캔의 첫 표본만 — 적분할 구간이 없다
+            c.execute("INSERT INTO rate_samples(ts, rd, rf, rb, scan_id) VALUES(?,?,?,?,?)", (ts, 1.0, 25000.0, 1e8, sid))
+        c.execute("INSERT INTO rate_samples(ts, rd, rf, rb, scan_id) VALUES(?,?,?,?,?)", (now - 5, 1.0, 1000.0, 1e6, 3))
+        c.commit()
+        c.close()
+        b = TS.throughput_buckets(d, 3600)
+        files = sum(x["files"] for x in b)
+        assert abs(files - 5000) < 1, (files, b)                  # 같은 스캔 3 의 5초 × 1000/s 만
+        assert os.path.exists(dbp)
+        stop = threading.Event()                                                                       # MMM4
+        stop.set()
+        r = AN.analyze_depth(d, stop_event=stop)
+        assert r.get("stopped") is True, r
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    dh = _read("dashboard.html")
+    assert "if (_benchTimer) return;" in dh and "!/이미/.test(st.error" in dh                              # MMM2
+    assert "if (/^(sch|arr)/.test(el.id)) continue;" in dh                                              # MMM3
+    assert '(r.stopped ? "사용자가 중지함" : "시간 초과로 중단")' in dh                                    # MMM4
+    assert "을(를) 자동 시작했습니다" in dh and "폴더가 아니거나 없는 경로입니다" in dh                          # MMM5
+    data = {"scope": "edge", "overall": {"roots": []},
+            "detail": {"top_files": [{"path": "/f%d" % i, "bytes": 100 - i} for i in range(20)]}}
+    assert AK.respond("가장 큰 파일 상위 3개", data, {"enabled": False})["answer"].count("\n") == 3        # MMM6
+    assert 'const days = _dv === "" ? 365' in dh and 'const min = _mv === "" ? 4096' in dh               # MMM7
+    assert "어레이 주소는 http:// 또는 https:// 로 시작해야 합니다" in dh                                    # MMM8
+    print("[MMM1~MMM8] OK  처리량 스캔별 적분·시범 탐색 중복·예약 입력줄 제외·중지 표시·문구·질의 N개·0 값·어레이 검사")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3740,7 +3780,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bx_round28_regress, check_by_round28_install,
             check_bz_round28_dashboard, check_ca_round29_regress,
             check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress,
-            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal]
+            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools]
 
 
 def main() -> int:

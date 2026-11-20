@@ -186,6 +186,7 @@ def analyze_depth(path: str, *, max_depth: int = 0, dir_limit: int = 0,
         "total_files": st["files"],
         "error_dirs": st["errors"],
         "truncated": bool(st["truncated"]),
+        "stopped": bool(stop_event.is_set()),   # 사용자가 중지(시간 초과와 구분 — 32회차 점검)
         "capped": bool(st["capped"]),
         "elapsed": time.time() - t0,
         "suggested_fold_depth": _suggest_fold_depth(depth_counts, st["max_depth"]),
