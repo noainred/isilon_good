@@ -3670,6 +3670,41 @@ def check_ci_round32_regress() -> None:
     print("[KKK1~KKK2] OK  붙여 쓴 기간 표현·단위 뒤 낱말 차단·포탈 탭 전환 시 입력 보존")
 
 
+def check_cj_round32_portal() -> None:
+    """LLL1 업그레이드 설정 저장이 거부돼도 '저장됨' LLL2 업그레이드 주소의 계정 비밀번호가 상태 응답(로그인 없이)에 오류 문구로 노출·
+    계정 든 주소는 아예 동작 안 함 LLL3 노드 비밀번호 푸시 3자 허용 LLL4 다른 곳에서 세션이 끊겨도 '로그아웃(29분)' 유지 LLL5 새로고침하면
+    늘 현황·숨긴 현황이 열림 LLL6 빈 비교 경로가 이전 경로 재조회 LLL7 이미 최신 엣지를 '실패'로 LLL8 LLM 키 삭제 안내 없음."""
+    import json as _json
+    from isilon_usage import netutil as NU, upgrade as U, portal as P, server as SV
+    ph = _read("portal.html")
+    assert 'if(!j || j.ok===false){ $("nuMsg").textContent="✗ "' in ph                                   # LLL1
+    sv = NU.secret_values("https://user:s3cr3t@mirror.example.com/rel?token=abc123", "tokXYZ")             # LLL2
+    red = NU.redact_values({"e": "nonnumeric port: 's3cr3t@mirror.example.com'", "l": ["abc123 tokXYZ"]}, sv)
+    assert "s3cr3t" not in _json.dumps(red) and "abc123" not in _json.dumps(red), red
+    r = U._auth_request("https://user:s3cr3t@m.example/v.json", None)
+    assert r.full_url == "https://m.example/v.json" and r.headers.get("Authorization", "").startswith("Basic ")
+    d = tempfile.mkdtemp(prefix="iu_cj_")
+    try:
+        pc = P.PortalController(os.path.join(d, "hq"))
+        pc.settings["upgrade_url"] = "https://user:s3cr3t@mirror.example.com/rel"
+        pc._upg_state["check_error"] = "버전 정보 조회 실패: nonnumeric port: 's3cr3t@mirror.example.com'"
+        assert "s3cr3t" not in _json.dumps(pc.upgrade_status())
+        assert pc.upsert_node({"id": "n1", "url": "http://e1:8765", "token": "t"})["ok"]                  # LLL3
+        r = pc.set_node_password(["n1"], "abc")
+        assert r.get("ok") is False and "4자" in r.get("reason", ""), r
+        ctl = SV.ScanController(os.path.join(d, "edge"))
+        assert ctl.set_op_password("abc").get("ok") is False
+        pc.set_ask_llm({"ask_llm_endpoint": "http://l1:1/v1", "ask_llm_key": "K"})                         # LLL8
+        assert pc.set_ask_llm({"ask_llm_endpoint": "http://l2:1/v1"}).get("ask_llm_key_dropped") is True
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert 'if(_opToken() && !j401.need_setup){ _opExpiry=0;' in ph                                       # LLL4
+    assert 'history.replaceState(null,"","#"+v)' in ph and "if(cur && cur!==\"nodes\" && hset.has(cur))" in ph   # LLL5
+    assert '"비교할 경로를 입력하세요."' in ph                                                                # LLL6
+    assert 'if(s==="same")' in ph and '"same"' in _read("portal.py")                                      # LLL7
+    print("[LLL1~LLL8] OK  저장 실패 표시·업그레이드 주소 비밀 가림/Basic 인증·비밀번호 4자·세션 끊김·화면 기억·빈 비교·이미 최신·키 삭제 안내")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3705,7 +3740,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bx_round28_regress, check_by_round28_install,
             check_bz_round28_dashboard, check_ca_round29_regress,
             check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress,
-            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress]
+            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal]
 
 
 def main() -> int:

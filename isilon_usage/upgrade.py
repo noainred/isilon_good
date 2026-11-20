@@ -462,7 +462,22 @@ def _join_url(base: str, name: str) -> str:
 def _auth_request(url: str, token: Optional[str]):
     """urllib Request 생성(토큰 있으면 Authorization; GitHub API 면 raw Accept)."""
     import urllib.request
+    import urllib.parse
+    import base64
     headers = {}
+    # 주소에 든 계정(https://user:pw@host)은 urllib 가 처리하지 못해 '포트가 숫자가 아님' 오류 문구에 비밀번호가 실렸다
+    # (32회차 점검) — 계정을 떼어 Basic 인증 머리글로 보낸다(토큰이 있으면 토큰 우선).
+    try:
+        sp = urllib.parse.urlsplit(url)
+    except ValueError:
+        sp = None
+    if sp is not None and "@" in (sp.netloc or ""):
+        userinfo, _, hostport = sp.netloc.rpartition("@")
+        url = urllib.parse.urlunsplit((sp.scheme, hostport, sp.path, sp.query, sp.fragment))
+        if not token and userinfo:
+            u, _, pw = userinfo.partition(":")
+            raw = (urllib.parse.unquote(u) + ":" + urllib.parse.unquote(pw)).encode("utf-8")
+            headers["Authorization"] = "Basic " + base64.b64encode(raw).decode("ascii")
     if token:
         headers["Authorization"] = "Bearer " + token
         if "api.github.com" in url:

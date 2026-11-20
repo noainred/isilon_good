@@ -1423,6 +1423,7 @@ class PortalController:
                     str(netutil.keep_masked(str(body.get("ask_llm_endpoint") or ""), self.settings.get("ask_llm_endpoint")) or ""),
                     self.settings.get("ask_llm_endpoint") or "")):
             self.settings["ask_llm_key"] = ""    # 호스트가 바뀌면 옛 키를 새 호스트로 보내지 않는다(29회차 점검)
+            _key_dropped = True
         if "ask_llm_endpoint" in body:
             self.settings["ask_llm_endpoint"] = str(netutil.keep_masked(
                 str(body.get("ask_llm_endpoint") or ""), self.settings.get("ask_llm_endpoint")) or "").strip()
@@ -1436,7 +1437,10 @@ class PortalController:
             except (TypeError, ValueError, OverflowError):
                 pass
         self._save_settings()
-        return {"ok": True, "ask_llm_enabled": bool(self.settings.get("ask_llm_enabled"))}
+        out = {"ok": True, "ask_llm_enabled": bool(self.settings.get("ask_llm_enabled"))}
+        if locals().get("_key_dropped"):   # 말없이 지우면 '저장됨'만 보고 키가 사라진 걸 몰랐다(32회차 점검)
+            out["ask_llm_key_dropped"] = True
+        return out
 
     def ask(self, question: str, *, allow_llm: bool = True) -> dict:
         """자연어 질의응답(규칙 기반 + 선택적 로컬 LLM). 노드 롤업을 공통 형태로 정규화.
@@ -1516,9 +1520,10 @@ class PortalController:
                 return
             p["nodes"][idx].update(kw)
             states = [x["state"] for x in p["nodes"]]
-            p["done"] = sum(1 for s in states if s in ("ok", "fail"))
+            p["done"] = sum(1 for s in states if s in ("ok", "fail", "same"))
             p["ok"] = states.count("ok")
             p["fail"] = states.count("fail")
+            p["same"] = states.count("same")     # 이미 같은(더 새) 버전 — 실패가 아니다(32회차 점검: 빨간 '실패 3대')
 
     def _push_loop(self, data: bytes, bver: str, nodes: list, *, record: bool = False) -> list:
         """각 엣지에 번들을 POST 하고 노드별 진행 상태를 갱신한다(동기). 결과 리스트 반환.
@@ -1542,10 +1547,11 @@ class PortalController:
                 resp = netutil.urlopen(req, timeout=120)
                 j = json.loads(resp.read().decode("utf-8"))
                 ok = bool(j.get("ok"))
-                results.append({"id": n["id"], "ok": ok,
+                same = (not ok) and str(j.get("reason") or "").startswith("더 새 버전 아님")
+                results.append({"id": n["id"], "ok": ok, "same": same,
                                 "version": j.get("version"), "reason": j.get("reason")})
-                self._push_set(idx, state=("ok" if ok else "fail"),
-                               version=j.get("version"), reason=j.get("reason") or "")
+                self._push_set(idx, state=("ok" if ok else ("same" if same else "fail")),
+                               version=j.get("version"), reason=("이미 최신(같거나 더 새 버전)" if same else (j.get("reason") or "")))
             except urllib.error.HTTPError as e:  # type: ignore[attr-defined]
                 detail = ""
                 try:
@@ -1837,7 +1843,10 @@ class PortalController:
             installing=bool(st.get("installing")),
             watch_dir=self.settings.get("upgrade_watch_dir", ""))
         # source·download_url·오류·로그에 설정 URL 의 비밀값(쿼리 토큰·사용자 정보)이 그대로 있었다(28회차 점검)
-        return netutil.redact_urls({"ok": True, **st})
+        # 주소 모양이 아닌 오류·로그 문구 속 비밀(user:pw@host 조각·토큰)까지 저장된 값으로 찾아 가린다(32회차 점검)
+        return netutil.redact_values(netutil.redact_urls({"ok": True, **st}),
+                                     netutil.secret_values(self.settings.get("upgrade_url"),
+                                                           self.settings.get("upgrade_token")))
 
     def upgrade_check(self) -> dict:
         info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__,
@@ -3566,6 +3575,8 @@ class PortalController:
         targets = allnodes if not idset else [n for n in allnodes if n["id"] in idset]
         if not targets:
             return {"ok": False, "reason": "대상 노드가 없습니다."}
+        if not clear and len(str(password or "").strip()) < 4:   # 구버전 엣지는 짧은 비밀번호도 받으므로 포탈에서 먼저(32회차)
+            return {"ok": False, "reason": "비밀번호는 4자 이상이어야 합니다."}
         payload = json.dumps({"password": "" if clear else str(password or ""),
                               "clear": bool(clear)}).encode("utf-8")
         results, ok_n = [], 0

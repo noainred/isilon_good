@@ -1441,6 +1441,9 @@ window.fetch=async function(url,opts){
     let res=await _origFetch(url,opts);
     if(res.status===401){
       let j401={}; try{ j401=await res.clone().json(); }catch(e){}
+      // 서버가 토큰을 거부했다(다른 탭에서 비밀번호 변경·서버 재시작 등) — 상단이 '로그아웃(29분)'으로 남아 누르면 로그인 대신
+      // 로그아웃이 됐다(32회차 점검). 로그인 상태를 먼저 비운다.
+      if(_opToken() && !j401.need_setup){ _opExpiry=0; try{ sessionStorage.removeItem("pOpToken"); sessionStorage.removeItem("pOpExpiry"); }catch(e){} }
       // 동시에 여러 요청이 401 이면 로그인 창이 겹겹이 떴다(26회차 점검) — 진행 중인 로그인 하나를 함께 기다린다
       const ok=j401.need_setup ? await promptSetup() : (_opRequired=true, updateLoginUI(), await _loginOnce());
       if(ok){ opts.headers["X-Op-Token"]=_opToken(); res=await _origFetch(url,opts); }
@@ -1506,6 +1509,7 @@ function show(v){
     return;
   }
   ["dash","compare","nodes","netmon"].forEach(n=>$("view-"+n).classList.toggle("active", n===v));
+  try{ if(location.hash!=="#"+v) history.replaceState(null,"","#"+v); }catch(e){}   // 새로고침해도 같은 화면(32회차)
   if(v==="compare") loadCompare();
   if(v==="netmon") netmonStart(); else netmonStop();
   document.querySelectorAll(".navbtn").forEach(b=>b.classList.toggle("active", b.dataset.view===v));
@@ -1540,7 +1544,16 @@ function applyNavHidden(hidden){
   document.querySelectorAll(".navbtn").forEach(b=>{
     const v=b.dataset.view; b.style.display=(v!=="nodes" && hset.has(v))?"none":"";
   });
+  // 지금 화면이 숨긴 메뉴면 보이는 첫 메뉴로 — 현황을 숨겨도 숨긴 현황이 열린 채 아무 메뉴도 선택되지 않았다(32회차 점검)
+  const cur=["dash","compare","nodes","netmon"].find(n=>$("view-"+n) && $("view-"+n).classList.contains("active"));
+  if(cur && cur!=="nodes" && hset.has(cur)){
+    const first=[...document.querySelectorAll(".navbtn")].find(b=>b.style.display!=="none" && b.dataset.view!=="nodes");
+    if(first) show(first.dataset.view);
+  }
 }
+// 첫 화면: 주소의 #화면 이름(새로고침·즐겨찾기) — 없으면 현황
+(function(){ const h=(location.hash||"").slice(1);
+  if(["dash","compare","netmon"].includes(h)) setTimeout(()=>{ try{ show(h); }catch(e){} }, 0); })();
 function renderNavMenu(hidden){
   const box=$("navMenuBox"); if(!box) return;
   const hset=new Set(hidden||[]);
@@ -2368,7 +2381,8 @@ if($("setAskLlmBtn")) $("setAskLlmBtn").addEventListener("click",async()=>{
   try{
     const j=await (await fetch("/api/portal/settings",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify(body)})).json();
-    if(j.ok){ msg.textContent=" ✓ 저장됨"+(j.ask_llm_enabled?" (LLM 켜짐)":" (규칙 기반)"); $("setAskLlmKey").value=""; loadAskLlm(); }
+    if(j.ok){ msg.textContent=" ✓ 저장됨"+(j.ask_llm_enabled?" (LLM 켜짐)":" (규칙 기반)")
+        +(j.ask_llm_key_dropped?" — ⚠ 주소의 호스트가 바뀌어 저장된 키를 지웠습니다(새 키를 입력하세요)":""); $("setAskLlmKey").value=""; loadAskLlm(); }
     else msg.textContent=" 실패: "+(j.reason||"로그인이 필요할 수 있습니다");
   }catch(e){ msg.textContent=" 오류: "+e; }
 });
@@ -2443,7 +2457,7 @@ $("enrollCopy").addEventListener("click", async ()=>{
   setTimeout(()=>{ $("enrollCopy").textContent="명령 복사"; }, 2000);
 });
 $("ndDelBtn").addEventListener("click", async ()=>{
-  const id=_selNode; if(!id || !confirm("노드 "+id+" 를 삭제할까요?\n포탈에 받아 둔 이 노드의 복제 결과도 목록에서 빠집니다(엣지 원본은 그대로).")) return;
+  const id=_selNode; if(!id || !confirm("노드 ‘"+id+"’을(를) 삭제할까요?\n포탈에 받아 둔 이 노드의 복제 결과도 목록에서 빠집니다(엣지 원본은 그대로).")) return;
   let j;
   try{ j=await (await fetch("/api/portal/nodes/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})})).json(); }
   catch(e){ $("nodeMsg").textContent="실패: 포탈에 연결할 수 없습니다 ("+e+")"; return; }
@@ -2538,6 +2552,8 @@ $("csvImportBtn").addEventListener("click", async ()=>{
 // ---- 경로 비교(Cross-DC) ----
 let cmpCur = "";
 async function loadCompare(path){
+  if(path==="" ){   // 칸을 비우고 '비교'를 누르면 말없이 이전 경로를 다시 조회했다(32회차 점검)
+    $("cmpNote").textContent="비교할 경로를 입력하세요."; return; }
   if(path!==undefined && path!==null && path!=="") { cmpCur = path; $("cmpPath").value = path; }
   const p = (cmpCur || $("cmpPath").value.trim());
   if(!p) return;
@@ -2818,7 +2834,7 @@ function renderNetUpg(j){
             : `<br><span class="sub">엣지에 보낼 배포 코드 <b>v${j.bundle_version}</b> (실행 버전과 일치)</span>`)
         : "")
     +(j.check_error?`<br><span style="color:var(--danger)">확인 오류: ${_he(j.check_error)}</span>`:"")
-    +`<br><span class="sub">소스: ${_he(j.url||"—")}</span>`
+    +`<br><span class="sub" style="word-break:break-all;">소스: ${_he(j.url||"—")}</span>`   /* 좁은 화면에서 잘림(32회차) */
     +(j.auto_reason?`<br><span style="color:${j.auto_blocked?"var(--warn)":"var(--ok)"};font-weight:600">`
         +`${j.auto_blocked?"⚠":"✓"} 자동설치: </span><span class="sub">${_he(j.auto_reason)}</span>`:"");
   if(document.activeElement!==$("nuSource")) $("nuSource").value=j.source_mode||"off";
@@ -2839,8 +2855,10 @@ if($("nuSaveBtn")) $("nuSaveBtn").addEventListener("click", async()=>{
   const tok=$("nuToken")?$("nuToken").value:"";
   if($("nuTokenClear")&&$("nuTokenClear").checked) body.upgrade_token="";   // 명시적 비움
   else if(tok!=="") body.upgrade_token=tok;        // 빈칸이면 미전송 → 기존 토큰 유지
-  try{ await (await fetch("/api/portal/upgrade/net",{method:"POST",headers:{"Content-Type":"application/json"},
+  try{ const j=await (await fetch("/api/portal/upgrade/net",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify(body)})).json();
+    // 서버가 거부해도 '저장됨'이라 했다(32회차 점검: 가린 주소 일부 수정·잘못된 토큰·주기) — 사유를 그대로, 성공일 때만 토큰 칸 비움
+    if(!j || j.ok===false){ $("nuMsg").textContent="✗ "+((j&&j.reason)||"저장 실패(로그인이 필요할 수 있습니다)"); return; }
     if($("nuToken")) $("nuToken").value=""; if($("nuTokenClear")) $("nuTokenClear").checked=false;
     $("nuMsg").textContent="✓ 저장됨"; loadNetUpg(); }
   catch(e){ $("nuMsg").textContent="✗ "+e; }
@@ -3033,21 +3051,23 @@ function closePushModal(){ if(_pushTimer){clearTimeout(_pushTimer);_pushTimer=nu
 function _pushBadge(s){
   if(s==="ok")      return '<span style="color:var(--ok);font-weight:700">✓ 성공</span>';
   if(s==="fail")    return '<span style="color:var(--danger);font-weight:700">✗ 실패</span>';
+  if(s==="same")    return '<span class="sub">= 이미 최신</span>';
   if(s==="sending") return '<span style="color:var(--warn)">⏳ 전송 중…</span>';
   return '<span class="sub">· 대기</span>';
 }
 function renderPush(p){
   if(!p) return;
-  const tot=p.total||0, done=p.done||0, ok=p.ok||0, fail=p.fail||0;
+  const tot=p.total||0, done=p.done||0, ok=p.ok||0, fail=p.fail||0, same=p.same||0;
   const pct=tot?Math.round(done/tot*100):0;
   if($("pushBar")){ $("pushBar").style.width=pct+"%";
     $("pushBar").style.background = (!p.active && fail) ? "var(--danger)" : (!p.active ? "var(--ok)" : "var(--warn)"); }
   if($("pushBarTxt")) $("pushBarTxt").textContent = done+" / "+tot;
   if($("pushModalHead")) $("pushModalHead").innerHTML =
-    `보내는 코드 <b>v${p.bundle_version||"?"}</b> · 성공 <b style="color:var(--ok)">${ok}</b> · 실패 <b style="color:var(--danger)">${fail}</b> / 전체 ${tot}대`;
+    `보내는 코드 <b>v${p.bundle_version||"?"}</b> · 성공 <b style="color:var(--ok)">${ok}</b>`+(same?` · 이미 최신 <b>${same}</b>`:"")+` · 실패 <b style="color:var(--danger)">${fail}</b> / 전체 ${tot}대`;
   if($("pushModalStat")) $("pushModalStat").innerHTML = p.active
     ? '<span style="color:var(--warn)">⏳ 진행 중…</span>'
-    : (fail? `<span style="color:var(--danger)">완료 — 실패 ${fail}대 (사유는 아래 표)</span>` : '<span style="color:var(--ok)">✅ 모두 성공</span>');
+    : (fail? `<span style="color:var(--danger)">완료 — 실패 ${fail}대 (사유는 아래 표)</span>`
+       : (same && !ok ? '<span class="sub">완료 — 모든 노드가 이미 최신입니다</span>' : '<span style="color:var(--ok)">✅ 모두 성공</span>'+(same?' <span class="sub">(이미 최신 '+same+'대)</span>':"")));
   if($("pushTbody")) $("pushTbody").innerHTML=(p.nodes||[]).map(n=>{
     const detail = n.state==="ok" ? ("→ v"+(n.version||"?")) : (n.reason||"");
     return `<tr style="border-top:1px solid #E1E5F0">`

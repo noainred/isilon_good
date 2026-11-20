@@ -123,6 +123,49 @@ def keep_masked(posted, stored, hide_path: bool = False):
 _URL_RE = None
 
 
+def secret_values(*urls_or_tokens) -> list:
+    """설정의 주소·토큰에서 응답에 나가면 안 되는 비밀 조각(계정 비밀번호·user:pw·쿼리 값·토큰)을 모은다."""
+    out = []
+    from urllib.parse import urlsplit, parse_qsl
+    for v in urls_or_tokens:
+        s = str(v or "").strip()
+        if not s:
+            continue
+        if "://" not in s:
+            if len(s) >= 4:
+                out.append(s)          # 토큰 그대로
+            continue
+        try:
+            p = urlsplit(s)
+        except ValueError:
+            continue
+        if "@" in p.netloc:
+            ui = p.netloc.rpartition("@")[0]
+            out.append(ui)
+            if ":" in ui and len(ui.partition(":")[2]) >= 3:
+                out.append(ui.partition(":")[2])
+        for _k, val in parse_qsl(p.query, keep_blank_values=False):
+            if len(val) >= 4:
+                out.append(val)
+    return sorted(set(out), key=len, reverse=True)
+
+
+def redact_values(obj, secrets):
+    """응답 안의 모든 문자열에서 주어진 비밀 조각을 '***' 로(주소 모양이 아닌 오류 문구 속 조각까지, 32회차 점검)."""
+    if not secrets:
+        return obj
+    if isinstance(obj, str):
+        for sv in secrets:
+            if sv and sv in obj:
+                obj = obj.replace(sv, _MASK)
+        return obj
+    if isinstance(obj, dict):
+        return {k: redact_values(v, secrets) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [redact_values(v, secrets) for v in obj]
+    return obj
+
+
 def redact_urls(obj):
     """응답 안의 모든 문자열에서 URL 의 비밀값(사용자 정보·쿼리)을 가린다(재귀, 새 객체 반환).
 

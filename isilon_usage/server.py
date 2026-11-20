@@ -1587,7 +1587,10 @@ class ScanController:
             available=bool(st.get("available")), busy=busy,
             installing=bool(st.get("installing")), watch_dir=st["watch_dir"])
         # source·download_url·오류·로그에 설정 URL 의 비밀값(쿼리 토큰·사용자 정보)이 그대로 있었다(28회차 점검)
-        return netutil.redact_urls({"ok": True, **st})
+        # 주소 모양이 아닌 오류·로그 문구 속 비밀(user:pw@host 조각·토큰)까지 저장된 값으로 찾아 가린다(32회차 점검)
+        return netutil.redact_values(netutil.redact_urls({"ok": True, **st}),
+                                     netutil.secret_values(self.settings.get("upgrade_url"),
+                                                           self.settings.get("upgrade_token")))
 
     def upgrade_check(self) -> dict:
         info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__,
@@ -1869,6 +1872,8 @@ class ScanController:
         pw = "" if clear else str(password or "")
         if not clear and not pw.strip():
             return {"ok": False, "reason": "빈 비밀번호는 설정할 수 없습니다."}
+        if not clear and len(pw.strip()) < 4:   # 화면 설정·최초 설정과 같은 규칙(32회차 점검: 포탈 푸시는 3자도 받았다)
+            return {"ok": False, "reason": "비밀번호는 4자 이상이어야 합니다."}
         self._sync_op_from_disk()
         merged = dict(self.settings)
         self._apply_user_password(merged, pw)
