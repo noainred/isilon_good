@@ -3805,6 +3805,23 @@ def check_cm_round33_engine() -> None:
     print("[OOO1~OOO6] OK  중첩 루트는 완전한 바깥 스캔만·깊이 다른 비교/예측 거부·공유 DB 보존·CLI 출력·pscan 경로/오류 수")
 
 
+def check_cn_round34_regress() -> None:
+    """PPP1 경로·쿼리의 '@'(a@b.com·/@scope)를 계정으로 읽어 정상 주소의 호스트가 사라짐(옛 탭의 가린 값 저장도 거부)
+    PPP2 비 UTF-8 표준 출력에서 --json 이 \\x.. 로 깨진 JSON."""
+    from isilon_usage import netutil as NU
+    ok = {"https://api.example.com/v1/chat?user=a@b.com": "https://api.example.com/v1/chat?***",
+          "https://host/user@x/api": "https://host/user@x/api",
+          "https://api.example.com/@scope/v1": "https://api.example.com/@scope/v1",
+          "https://user:pw@host/p@q": "https://***@host/p@q",
+          "https://admin:SECRET_PW/xx@10.0.0.20:8080": "https://***@10.0.0.20:8080"}
+    for u, want in ok.items():
+        assert NU.mask_url_secret(u) == want, (u, NU.mask_url_secret(u))
+        assert NU.keep_masked(NU.mask_url_secret(u), u) == u
+    assert NU.secret_values("https://host:8080/@me") == []
+    assert 'ensure_ascii=(enc != "utf8")' in _read("cli.py")                                             # PPP2
+    print("[PPP1~PPP2] OK  경로·쿼리의 '@' 는 계정 아님(호스트 구간 우선)·비 UTF-8 출력의 --json")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3840,7 +3857,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bx_round28_regress, check_by_round28_install,
             check_bz_round28_dashboard, check_ca_round29_regress,
             check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress,
-            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine]
+            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine, check_cn_round34_regress]
 
 
 def main() -> int:

@@ -78,6 +78,9 @@ _MASK = "***"
 MASK = _MASK
 
 
+_HOST_RE = re.compile(r"^(\[[0-9A-Za-z:.%]+\]|[A-Za-z0-9._~%-]+)(:\d{0,5})?$")
+
+
 def _split_userinfo(s: str):
     """'scheme://[userinfo@]rest' 를 (scheme, userinfo 또는 None, rest) 로 — 계정은 '://' 뒤 '마지막 @' 까지로 본다.
 
@@ -87,9 +90,16 @@ def _split_userinfo(s: str):
     if k <= 0:
         return None, None, s
     scheme, rest = s[:k], s[k + 3:]
-    if "@" in rest:
-        ui, _, rest = rest.rpartition("@")
-        return scheme, ui, rest
+    m = re.match(r"[^/?#]*", rest)
+    auth = m.group(0) if m else ""
+    if "@" in auth:                         # 보통: 계정은 호스트 구간(첫 '/'·'?'·'#' 앞) 안에만
+        ui, _, host = auth.rpartition("@")
+        return scheme, ui, host + rest[len(auth):]
+    # 호스트 구간이 올바른 호스트[:포트]면 뒤의 '@'(경로·쿼리의 a@b.com)는 계정이 아니다(34회차 점검: 정상 주소의 호스트가 사라짐).
+    # 호스트로 읽히지 않을 때만(예: 비밀번호에 '/' 가 든 admin:PW/xx@host) 마지막 '@' 까지를 계정으로 본다.
+    if "@" in rest and not _HOST_RE.match(auth):
+        ui, _, rest2 = rest.rpartition("@")
+        return scheme, ui, rest2
     return scheme, None, rest
 
 

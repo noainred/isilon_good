@@ -1265,7 +1265,9 @@ _JSON_STDOUT = None   # --json 일 때 진짜 표준출력(나머지 안내·진
 def _emit_json(obj) -> None:
     import json
     out = _JSON_STDOUT or sys.stdout
-    out.write(json.dumps(obj, ensure_ascii=False, indent=2) + "\n")
+    # 표준 출력이 UTF-8 이 아니면 \uXXXX 로(유효한 JSON) — backslashreplace 의 \xe9 는 JSON 이스케이프가 아니라 깨졌다(34회차 점검)
+    enc = str(getattr(out, "encoding", "") or "").lower().replace("-", "").replace("_", "")
+    out.write(json.dumps(obj, ensure_ascii=(enc != "utf8"), indent=2) + "\n")
     out.flush()
 
 
