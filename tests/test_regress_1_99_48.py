@@ -3599,6 +3599,30 @@ def check_cf_round30_features() -> None:
     print("[HHH1~HHH9] OK  질의 규칙·기간 해석·예측 기준·실제 경로 마운트·매니페스트 O_EXCL·폴더 상한·읽지 못한 폴더 수·숫자 인자")
 
 
+def check_cg_round31_regress() -> None:
+    """III1 강제 종료된 스캔의 잔여 '진행' 상태로 '지금 스캔'이 영영 막힘 III2 '해외'·'주소'·'해당' 같은 낱말을 기간으로 읽음·
+    '90일(90 days)' 두 번 더함 III3 '최근 가장 큰 파일'이 큰 파일 규칙에서 빠짐 III4 옵션 기록 전 스캔은 깊이 제한 없이 비교
+    III5 스킴 없는 주소형 어레이 id 노출 III6 받는 사람 따옴표 이름·괄호·중복 III7 growers 음수 깊이."""
+    from isilon_usage import ask as AK, server as SV, notify as NT
+    dh = _read("dashboard.html")
+    assert "const fresh = r.updated_at && (_srvNow() - r.updated_at) < 900;" in dh                         # III1
+    P = AK.parse_threshold_days                                                                          # III2
+    for q in ("오래된 데이터 상위 5 해외 폴더", "세 주소 폴더", "10 해당 경로 오래된 데이터", "한 주요 폴더", "두 해결 안 된 파일"):
+        assert P(q) is None, q
+    assert (P("콜드 데이터 90일(90 days)"), P("30일간"), P("1년이상"), P("6개월전"), P("한달넘게")) == (90, 30, 365, 180, 30)
+    data = {"scope": "edge", "overall": {"roots": []}, "detail": {"top_files": [{"path": "/a", "bytes": 5}]}}
+    assert AK.respond("최근 가장 큰 파일", data, {"enabled": False}).get("intent") == "big_files"          # III3
+    assert "opt_max_depth\") is None and sc.get(\"opt_fold_depth\") is None" in _read("server.py")      # III4
+    pub = SV._public_settings({"storage_arrays": [{"id": "10.0.0.5/api?token=SECRET", "type": "unity",     # III5
+                                                    "url": "10.0.0.5/api?token=SECRET", "password": "p"}]})
+    assert "SECRET" not in str(pub), pub
+    assert NT.parse_recipients('"a@b.com" <c@d.com>') == ["c@d.com"]                                    # III6
+    assert NT.parse_recipients("a@x.com <a@x.com>") == ["a@x.com"]
+    assert NT.parse_recipients("Kim <a@x.com> (cc: b@y.com)") == ["a@x.com"]
+    assert "max_depth=(None if (_md or 0) < 0 else _md)" in _read("server.py")                          # III7
+    print("[III1~III7] OK  잔여 진행 상태·기간 낱말 경계·최근 큰 파일·옛 스캔 비교 깊이·주소형 id·받는 사람·growers 깊이")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3634,7 +3658,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bx_round28_regress, check_by_round28_install,
             check_bz_round28_dashboard, check_ca_round29_regress,
             check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress,
-            check_cf_round30_features]
+            check_cf_round30_features, check_cg_round31_regress]
 
 
 def main() -> int:

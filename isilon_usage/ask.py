@@ -79,6 +79,8 @@ def _fmt_when(ts) -> str:
 
 _KO_NUM = {"한": 1, "하루": 1, "두": 2, "이틀": 2, "세": 3, "사흘": 3, "네": 4, "나흘": 4, "다섯": 5, "여섯": 6,
            "일곱": 7, "여덟": 8, "아홉": 9, "열": 10}
+# 기간 단위 뒤에 올 수 있는 것: 끝·한글 아닌 글자·조사/접미사(간·이·을·의·에·째·치·전·후·동안·넘게·내·쯤·가·도·만·씩·까지·부터·보다·과·와·정도)
+_UNIT_END = r"(?=$|[^가-힣]|[간이을를은는의에째치전후동넘내쯤가도만씩까부보과와정])"
 _EN_UNIT_DAYS = {"day": 1, "days": 1, "week": 7, "weeks": 7, "month": 30, "months": 30, "year": 365, "years": 365}
 
 
@@ -91,21 +93,25 @@ def parse_threshold_days(q: str):
     q2 = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", q)          # 천 단위 쉼표
     q2 = re.sub(r"(?<![가-힣])일주일", "1주", q2)
     q2 = re.sub(r"(?<![가-힣])하루", "1일", q2)
+    # 단위 뒤가 다른 낱말이면(해외·주소·해당·주요·해결·주변…) 기간이 아니다 — 조사·접미사(간·이상·넘게·전·째…)만 허용
+    # (31회차 점검: '상위 5 해외 폴더'를 5년, '세 주소'를 21일로 읽어 엉뚱한 기준으로 답했다)
     for w, n in _KO_NUM.items():                               # '한 달'·'두 주'·'세 해' → 숫자
-        q2 = re.sub(r"(?<![가-힣])%s\s*(개월|달|주일|주|해|년)" % w, lambda m, n=n: "%d%s" % (n, m.group(1)), q2)
-    q2 = re.sub(r"(\d)\s*해", r"\1년", q2)
+        q2 = re.sub(r"(?<![가-힣])%s\s*(개월|달|주일|주|해|년)%s" % (w, _UNIT_END),
+                    lambda m, n=n: "%d%s" % (n, m.group(1)), q2)
+    q2 = re.sub(r"(\d)\s*해" + _UNIT_END, r"\1년", q2)
     q2 = re.sub(r"(?<=\d),(?=\d{1,2}(?!\d))", ".", q2)      # '1,5년' = 1.5년(소수 쉼표)
     total, found = 0.0, False
     # 소수 허용 — '1.5년'의 '5년'만 읽어 5년으로 답했다(21회차 점검). 여러 단위는 더한다('1년 6개월').
-    for m in re.finditer(r"(\d+(?:\.\d+)?)\s*(개월|주일|일|주|달|년|연)", q2):
+    for m in re.finditer(r"(\d+(?:\.\d+)?)\s*(개월|주일|일|주|달|년|연)" + _UNIT_END, q2):
         val = float(m.group(1))
         if m.group(2) in ("년", "연") and val >= 1000:
             continue       # '2024년 이후' 같은 연도는 기간이 아니다(예전엔 2024년 = 73만 일로 읽었다)
         total += val * _UNIT_DAYS.get(m.group(2), 1)
         found = True
-    for m in re.finditer(r"(\d+(?:\.\d+)?)\s*(days?|weeks?|months?|years?)\b", q2.lower()):
-        total += float(m.group(1)) * _EN_UNIT_DAYS[m.group(2)]
-        found = True
+    if not found:     # 한국어 기간이 있으면 영어 표기는 같은 기간의 다른 표현으로 보고 더하지 않는다('90일(90 days)' → 180 이던 문제)
+        for m in re.finditer(r"(\d+(?:\.\d+)?)\s*(days?|weeks?|months?|years?)\b", q2.lower()):
+            total += float(m.group(1)) * _EN_UNIT_DAYS[m.group(2)]
+            found = True
     return int(round(total)) if found else None
 
 
@@ -298,7 +304,7 @@ def _h_big_files(q, data):
     # '큰 파일'만 — '가장 오래된/작은/최근 파일', '가장 많은 파일 확장자'까지 '가장 큰 파일'로 답했다(30회차 점검)
     if not (_has(q, "파일") and _has(q, "큰", "대용량", "최대", "용량 많", "top", "탑")):
         return None
-    if _has(q, "작은", "오래", "최근", "확장자", "분포", "종류", "형식"):
+    if _has(q, "작은", "오래", "확장자", "분포", "종류", "형식"):   # '최근 가장 큰 파일'은 큰 파일 질문(31회차 점검)
         return None
     d = _need_detail(data)
     if not d or not d.get("top_files"):

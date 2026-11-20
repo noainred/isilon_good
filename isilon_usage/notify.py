@@ -51,8 +51,15 @@ def parse_recipients(raw: str) -> list:
             continue
         # '<주소>' 와 같은 조각에 맨 주소가 섞여 있어도(예: 'Kim <a@x> b@y') 둘 다(30회차 점검)
         cands = re.findall(r"<([^<>\s]+@[^<>\s]+)>", part)
-        cands += re.sub(r"<[^<>]*>", " ", part).split()
-        out += [a for a in cands if "@" in a and not re.search(r"[\s<>]", a)]
+        if not cands:
+            cands = part.split()
+        else:   # '<주소>' 밖은 표시 이름 — 따옴표 이름("a@b.com")·괄호 메모는 버리고 맨 주소만(31회차 점검)
+            rest = re.sub(r'"[^"]*"|\([^)]*\)|<[^<>]*>', " ", part)
+            cands += rest.split()
+        cands = [c.strip("\"'(),;") for c in cands]
+        for a in cands:     # 같은 주소는 한 번만
+            if "@" in a and not re.search(r"[\s<>\"'()]", a) and a not in out:
+                out.append(a)
     return out
 
 

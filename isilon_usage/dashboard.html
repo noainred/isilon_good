@@ -1946,7 +1946,11 @@ function _scanRunningOn(path) {
   const p = norm(path);
   const r = (_ovRootsLatest || []).find(x => norm(x.root_path) === p);
   if (!r) return null;
-  return (runningSet.has(r.scan_id) || r.status === "discovering" || r.status === "sizing") ? r.scan_id : null;
+  if (runningSet.has(r.scan_id)) return r.scan_id;
+  // 다른 프로세스(CLI 등)의 스캔은 진행 상태 + 최근 갱신(서버와 같은 15분 기준)일 때만 — 강제 종료된 스캔의 잔여 상태로
+  // 버튼이 영영 막혔다(31회차 점검: 서버는 시작을 받는데 화면만 '스캔 중'). 서버 _active_scan_on 의 _DUP_STALE_SECS 와 같은 값.
+  const fresh = r.updated_at && (_srvNow() - r.updated_at) < 900;
+  return ((r.status === "discovering" || r.status === "sizing") && fresh) ? r.scan_id : null;
 }
 let autoRestartSet = new Set();   // 완료 후 자동 재시작(반복)이 켜진 스캔 id
 let canScan = false;

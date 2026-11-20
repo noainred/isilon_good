@@ -511,8 +511,9 @@ def _public_settings(s: dict) -> dict:
         b["url"] = netutil.mask_url_secret(a.get("url"))
         # 옛 설정은 주소를 id 로 썼다 — id 로 토큰이 새지 않게(29회차). 주소 모양('://')일 때만 가린다 — 'prod@dc1' 같은
         # 이름까지 '***' 가 돼, 저장하면 두 어레이가 한 id 로 합쳐지고 비밀번호가 바뀌었다(30회차 점검)
-        if "://" in str(a.get("id") or ""):
-            b["id"] = netutil.mask_url_secret(a.get("id"))
+        _aid = str(a.get("id") or "")
+        if "://" in _aid or (_aid and _aid == str(a.get("url") or "")):   # 주소를 그대로 id 로 쓴 옛 항목(스킴 없어도, 31회차)
+            b["id"] = netutil.mask_url_secret(_aid)
         sa.append(b)
     out["storage_arrays"] = sa
     # URL 속 비밀값(웹훅 경로·사용자 정보·쿼리 토큰)도 가린다 — 이 응답은 인증 없이 읽힌다(27회차 보안 점검).
@@ -578,7 +579,8 @@ def _unmask_settings(new: dict, cur: dict):
             _mu = a["url"].strip()
             _cand = ([o for o in olds if a.get("id") and o.get("id") == a.get("id")]
                      or [o for o in olds if a.get("id") and netutil.MASK in str(a.get("id"))
-                         and netutil.mask_url_secret(o.get("id")) == a.get("id")]
+                         and netutil.mask_url_secret(o.get("id")) == a.get("id")
+                         and netutil.mask_url_secret(o.get("url")) == a["url"].strip()]
                      or [o for o in olds if a.get("name") and o.get("name") == a.get("name")])
             old = next((o for o in _cand if netutil.mask_url_secret(o.get("url")) == _mu), None) or (_cand[0] if _cand else None)
             if old is not None and a.get("id") and netutil.MASK in str(a.get("id")):
@@ -1030,14 +1032,23 @@ def diff_scans(data_dir: str, base_id: int, target_id: int, *,
         # 폴더가 모두 '삭제됨/신규'로 보였다(29회차 점검). 사용자가 준 max_depth 와 둘 중 얕은 쪽.
         # 단, '잘린' 스캔(pscan=1단계·최대 깊이·접기)의 깊이로만 자른다 — 저장된 최대 깊이로 자르면, 폴더가 실제로 지워져
         # 얕아진 정상 스캔과 비교할 때 지운 깊은 폴더가 '삭제'에 안 나왔다(30회차 점검).
-        def _stored_limit(sc):
+        def _stored_limit(sc, alias, run):
             sc = dict(sc)
             if str(sc.get("backend") or "") == "pscan":
                 return 1
+            if sc.get("opt_max_depth") is None and sc.get("opt_fold_depth") is None:
+                # 옵션 기록 전(옛) 스캔은 접기 여부를 모른다 — 가장 깊은 행에 하위 폴더가 있는데 그 아래 행이 없으면(접힘) 그 깊이로
+                # (31회차 점검: 옛 기본 접기 스캔의 깊은 폴더가 '신규'로). 접힌 흔적이 없으면 제한 없음(30회차: 지운 깊은 폴더 '삭제').
+                _d = conn.execute("SELECT MAX(depth) AS d FROM %s.directories WHERE run_id=?" % alias, (run,)).fetchone()["d"]
+                if _d is None:
+                    return None
+                _folded = conn.execute("SELECT 1 FROM %s.directories WHERE run_id=? AND depth=? AND subdir_count>0 LIMIT 1"
+                                       % alias, (run, _d)).fetchone()
+                return int(_d) if _folded else None
             lims = [int(sc.get(k) or 0) for k in ("opt_max_depth", "opt_fold_depth")]
             lims = [x for x in lims if x > 0]
             return min(lims) if lims else None
-        _lim = [int(x) for x in (max_depth, _stored_limit(base), _stored_limit(target)) if x is not None]
+        _lim = [int(x) for x in (max_depth, _stored_limit(base, "a", a_run), _stored_limit(target, "b", b_run)) if x is not None]
         eff_depth = min(_lim) if _lim else None
         depth_a = f"AND depth<={int(eff_depth)}" if eff_depth is not None else ""
         depth_b = depth_a
@@ -4315,8 +4326,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                                      "reason": "비교할 이전 완료 스캔이 없습니다."})
                     return
                 limit = max(1, min(1000, self._query_int(qs, "limit") or 15))   # 음수면 끝에서 잘렸다(30회차 점검)
+                _md = self._query_int(qs, "max_depth")
                 d = diff_scans(self.data_dir, int(prev["id"]), scan_id,
-                               limit=400, max_depth=self._query_int(qs, "max_depth"))
+                               limit=400, max_depth=(None if (_md or 0) < 0 else _md))   # 음수 깊이(31회차)
                 if not d.get("ok"):
                     if d.get("not_done"):      # 대상이 진행 중·일시정지 — 변화 리포트를 만들지 않는다(오류 아님)
                         self._send_json({"ok": True, "has_base": False, "reason": d.get("reason")})

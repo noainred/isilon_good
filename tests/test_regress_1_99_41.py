@@ -346,8 +346,9 @@ def check_resume_stale_active() -> None:
         c = ScanController(data)
         sid = c.start_scan(root, engine="threads")["scan_id"]
         t0 = time.time()
-        while c.running_ids() and time.time() - t0 < 20:
+        while c.running_ids() and time.time() - t0 < 60:
             time.sleep(0.05)
+        time.sleep(1.0)       # 스캔 스레드의 마지막 상태 기록이 아래 '오래된 갱신' 값을 덮지 않게(부하 시 간헐 실패)
         mc = dbmod.connect(mgrmod.manager_db_path(data))
         mgrmod.update_scan(mc, sid, status="sizing", phase="sizing")
         mc.commit()
