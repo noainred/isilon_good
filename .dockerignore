@@ -1,0 +1,5 @@
+# 빌드 컨텍스트를 isilon_usage/ 만으로 최소화(거대한 download/ 릴리스·git 제외).
+*
+!isilon_usage
+**/__pycache__
+**/*.pyc

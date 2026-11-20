@@ -11,25 +11,53 @@
   GET /api/runs          스캔 실행 목록
 """
 
-from __future__ import annotations
+from typing import Dict, Optional
 
+import gzip
+import hmac
+import io
 import json
 import os
+import re
+import secrets
+import shutil
 import socket
+import sqlite3
+import sys
+import tarfile
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
-from . import __version__
+try:  # ThreadingHTTPServer 는 Python 3.7+ 에만 있음 — 3.6 폴백
+    from http.server import ThreadingHTTPServer  # novermin
+except ImportError:  # pragma: no cover
+    import socketserver
+
+    class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
+        daemon_threads = True
+
+from . import __version__, SCHEMA_VERSION
 from . import db as dbmod
 from . import monitor as monmod
+from . import netutil
 from . import manager as mgrmod
-from .scanner import run_scan
+from . import settings as setmod
+from . import isilon_api as isilonmod
+from . import powerstore_api as powerstoremod
+from . import storage_status as storagemod
+from . import auth as authmod
+from . import audit as auditmod
+from . import upgrade as upgrademod
+from . import ask as askmod
+from . import atimes as atimemod
+from .scanner import run_scan, partial_aggregate
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DASHBOARD_HTML = os.path.join(HERE, "dashboard.html")
+OP_TOKEN_TTL = 1800   # 로그인 세션 유효시간(초) — 기본 30분(이후 자동 로그아웃).
 
 
 def _safe_pct(num: float, den: float) -> float:
@@ -38,12 +66,563 @@ def _safe_pct(num: float, den: float) -> float:
     return round(num / den * 100.0, 2)
 
 
-def build_status(conn, run_id: int | None, *, samples: int = 150, top: int = 20) -> dict:
+def _human_bytes(n) -> str:
+    n = float(n or 0)
+    for u in ["B", "KB", "MB", "GB", "TB", "PB"]:
+        if n < 1024 or u == "PB":
+            return f"{int(n)} B" if u == "B" else f"{n:.1f} {u}"
+        n /= 1024
+    return f"{n:.1f} PB"
+
+
+def _path_readonly(path: str) -> bool:
+    """경로가 속한 마운트가 읽기 전용(ro)인지 확인한다(statvfs ST_RDONLY)."""
+    try:
+        return bool(os.statvfs(path).f_flag & getattr(os, "ST_RDONLY", 1))
+    except OSError:
+        return False
+
+
+def _scans_with_partial(scans, ctrl, key="id"):
+    """/api/scans 행에 '부분 집계 진행 중' 표시를 붙인다(부분 집계 시각은 관리 DB 컬럼에 있음).
+    scans 목록은 key="id", overall.roots(이력 표가 쓰는 행)는 key="scan_id"."""
+    prun = ctrl.partial_running_ids() if ctrl is not None else set()
+    for s_ in scans:
+        s_["partial_agg_running"] = s_.get(key) in prun
+        if ctrl is not None and s_.get("status") in ("discovering", "sizing"):
+            s_["live_snap"] = ctrl.live_snapshot_info(s_.get(key))   # 진행 중 스캔의 '지금까지 결과' 스냅샷
+    return scans
+
+
+def _parse_worker_dirs(s):
+    """scan_runs.worker_dirs(JSON 문자열) → 리스트(안전 파싱)."""
+    try:
+        v = json.loads(s) if s else []
+        return v if isinstance(v, list) else []
+    except (ValueError, TypeError):
+        return []
+
+
+def _db_disk_usage(db_path: str) -> dict:
+    """per-run DB 의 디스크 사용량(.db + -wal + -shm)을 바이트로 반환.
+
+    이 값이 폴링마다 커지면 스캐너가 실제로 DB 에 쓰는 중(=살아있음)이라는
+    구체적 지표가 된다. db_max_gb 한도와 함께 보면 DB 폭증도 감지할 수 있다.
+    """
+    def _sz(p):
+        try:
+            return os.path.getsize(p)
+        except OSError:
+            return 0
+    db = _sz(db_path)
+    wal = _sz(db_path + "-wal")
+    shm = _sz(db_path + "-shm")
+    return {"db_bytes": db, "wal_bytes": wal, "shm_bytes": shm,
+            "total_bytes": db + wal + shm}
+
+
+_UID_NAME_CACHE: dict = {}
+
+
+def _uid_name(uid) -> Optional[str]:
+    """uid → 사용자 이름(있으면). NFS uid 가 로컬에 없으면 None."""
+    try:
+        u = int(uid)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if u in _UID_NAME_CACHE:
+        return _UID_NAME_CACHE[u]
+    name = None
+    try:
+        import pwd
+        name = pwd.getpwuid(u).pw_name
+    except (KeyError, ImportError, OSError):
+        name = None
+    _UID_NAME_CACHE[u] = name
+    return name
+
+
+_AGE_ORDER = ["30일 이내", "30~90일", "90일~1년", "1~2년", "2~5년", "5년+"]
+
+
+def _dir_disk_free(path: str) -> Optional[dict]:
+    """경로가 속한 (로컬) 파일시스템의 총/여유/사용률을 반환. 실패 시 None."""
+    try:
+        # 파일 경로면 그 디렉터리, 없으면 가장 가까운 상위 존재 경로로 statvfs
+        p = path
+        for _ in range(8):
+            if p and os.path.exists(p):
+                break
+            p = os.path.dirname(p) or "/"
+        v = os.statvfs(p or "/")
+        total = v.f_blocks * v.f_frsize
+        free = v.f_bavail * v.f_frsize
+        # 사용량은 다른 화면(스캔 FS·홈)과 같은 식(전체−빈 블록) — 예전엔 전체−여유(예약 블록까지 '사용')라 같은 디스크가
+        # 스캔 화면 96.8%·홈 12% 로 달랐다(31회차 점검)
+        used = max(0, total - v.f_bfree * v.f_frsize)
+        return {"path": path, "total_bytes": total, "free_bytes": free,
+                "used_bytes": used,
+                "used_pct": round(used / total * 100, 1) if total else 0.0}
+    except OSError:
+        return None
+
+
+# 인증이 필요한 POST — '설정'(설정 저장·예약 시차 배치·감사 로그 조회)과 되돌릴 수 없는 작업
+# (완료데이터 삭제·보존 정리·업그레이드 설치·진단 이력 삭제·테스트 데이터 생성). 그 외 작업은 인증 없이 허용.
+OP_PROTECTED_POSTS = frozenset({
+    "/api/settings", "/api/schedules/stagger", "/api/audit",
+    "/api/scan/delete", "/api/prune", "/api/upgrade/install",
+    "/api/troubleshoot/history/clear", "/api/gentest/start",
+})
+
+
+# 서버가 관리하는 작업 비밀번호 상태 키(외부 — 서버 명령 reset-password — 변경을 실행 중 서버가 받아들인다)
+OP_RUNTIME_KEYS = ("op_password", "op_password_temp", "op_info_path")
+
+
+def write_info_md(info_dir: str, data_dir: str, password: str, *, temp: bool = False,
+                  name: str = "info.MD", portal: bool = False) -> Optional[str]:
+    """비밀번호를 info_dir/<name> 에 기록(권한 600). 반환: 쓴 경로, 실패하면 None.
+    portal=True 면 포탈용 안내(파일 이름 portal_info.MD — 엣지와 같은 폴더에서 돌아도 겹치지 않게)."""
+    path = os.path.join(info_dir, name)
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    kind = ("임시 비밀번호(서버가 자동 생성)" if temp else "작업 비밀번호")
+    body = (
+        "# isilon_usage %s 운영 정보\n\n"
+        "이 파일은 관리자 비밀번호를 기록합니다. **민감 정보이므로 공유하지 마세요.**\n\n"
+        "| 항목 | 값 |\n|---|---|\n"
+        "| 버전 | %s |\n| 데이터 폴더 | %s |\n| 기록 폴더 | %s |\n"
+        "| %s | `%s` |\n| 갱신 시각 | %s |\n\n"
+        "> 보기·스캔 작업은 비밀번호 없이 되고, **설정**과 되돌릴 수 없는 작업(삭제·정리·업그레이드 설치)에\n"
+        "> 위 비밀번호가 필요합니다.%s\n"
+        "> 잊었다면 서버에서: `python3 -m isilon_usage reset-password %s--data-dir %s`\n"
+        "> (새 임시 비밀번호를 만들어 이 파일에 다시 기록합니다.)\n"
+    ) % ("포탈" if portal else "엣지",
+         __version__, os.path.abspath(data_dir), os.path.abspath(info_dir), kind, password, ts,
+         (("\n> 임시 비밀번호입니다 — 로그인 후 **설정 → 보안·감사 → 접속 보안**에서 새 비밀번호로 바꾸세요."
+           if portal else "\n> 임시 비밀번호입니다 — 로그인 후 **설정 → 작업 보호**에서 새 비밀번호로 바꾸세요.")
+          if temp else ""),
+         "--portal " if portal else "", os.path.abspath(data_dir))
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # 처음부터 600(잠깐도 남에게 안 보이게)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        os.chmod(path, 0o600)
+    except OSError:
+        return None
+    return os.path.abspath(path)
+
+
+def _keep_owner(path: str, owner) -> None:
+    """root 로 실행한 서버 명령이 서비스 계정 파일의 소유자를 root 로 바꾸지 않게 되돌린다."""
+    if owner is None or not hasattr(os, "chown"):
+        return
+    try:
+        st = os.stat(path)
+        if (st.st_uid, st.st_gid) != owner:
+            os.chown(path, owner[0], owner[1])
+    except OSError:
+        pass
+
+
+def reset_op_password_file(settings_file: str, data_dir: str, info_dir: Optional[str] = None, *,
+                           portal: bool = False) -> Optional[dict]:
+    """새 임시 비밀번호를 만들어 info 파일에 쓰고 설정 JSON(엣지 settings.json · 포탈 portal_settings.json)에
+    op_password·op_password_temp·op_info_path 만 바꿔 저장한다 — 엣지·포탈·서버 명령 공용(단일 소스).
+
+    info 파일을 먼저 쓴다 — 못 쓰면(권한 등) 비밀번호를 바꾸지 않는다(아무도 모르는 비밀번호가 생기지 않게).
+    info_dir 에 못 쓰면 data_dir 에 쓴다. root 로 실행해도 파일 소유자는 원래(서비스 계정)대로 둔다.
+    반환: {password, info_path} 또는 None.
+    """
+    cur = setmod.read_json_with_backup(settings_file) or {}   # 깨졌으면 .bak — 나머지 설정을 날리지 않게
+    try:
+        st = os.stat(settings_file)
+        owner = (st.st_uid, st.st_gid)
+    except OSError:
+        owner = None
+    pw = secrets.token_urlsafe(9)                   # 12자(영문 대소문자·숫자·-_)
+    name = "portal_info.MD" if portal else "info.MD"
+    path = None
+    for d in (info_dir, data_dir):
+        if d and os.path.isdir(d):
+            path = write_info_md(d, data_dir, pw, temp=True, name=name, portal=portal)
+            if path:
+                break
+    if not path:
+        return None
+    cur["op_password"] = authmod.store_password(pw, encrypt=bool(cur.get("op_password_encrypted")))
+    cur["op_password_temp"] = True
+    cur["op_info_path"] = path
+    setmod.write_json_atomic(settings_file, cur)
+    _keep_owner(settings_file, owner)
+    _keep_owner(settings_file + ".bak", owner)
+    _keep_owner(path, owner)
+    return {"password": pw, "info_path": path}
+
+
+def _json_bytes(payload) -> bytes:
+    """응답 JSON 바이트. 비 UTF-8 파일 이름(서로게이트 문자)이 섞이면 UTF-8 인코딩이 실패해 500 이 났다
+    (/api/atime·/api/dups·/api/analyze/status) — 그때는 \\uXXXX 이스케이프로 내보낸다(브라우저가 그대로 복원)."""
+    try:
+        return json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+    except UnicodeEncodeError:
+        return json.dumps(payload, ensure_ascii=True, default=str).encode("ascii")
+
+
+def _any_str(obj, pred) -> bool:
+    """중첩 dict/list 안의 모든 문자열(키 포함)에 pred 가 참인 것이 있으면 참 — 반복(스택)으로 돈다.
+    재귀로 돌면 수백 단계 중첩 본문에서 RecursionError 로 응답 없이 연결이 끊겼다(22회차 점검)."""
+    stack = [obj]
+    while stack:
+        o = stack.pop()
+        if isinstance(o, str):
+            if pred(o):
+                return True
+        elif isinstance(o, dict):
+            for k, v in o.items():
+                stack.append(k)
+                stack.append(v)
+        elif isinstance(o, (list, tuple)):
+            stack.extend(o)
+    return False
+
+
+def parse_scan_id(v):
+    """요청 본문의 scan_id — 정수(참거짓 제외) 또는 숫자만 든 문자열만. 아니면 None."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str) and re.fullmatch(r"[0-9]{1,19}", v):
+        return int(v)
+    return None
+
+
+MAX_JSON_DEPTH = 64
+
+
+def _json_depth(obj) -> int:
+    """중첩 깊이(반복 계산)."""
+    best, stack = 0, [(obj, 1)]
+    while stack:
+        o, d = stack.pop()
+        if isinstance(o, dict):
+            best = max(best, d)
+            stack.extend((v, d + 1) for v in o.values())
+        elif isinstance(o, (list, tuple)):
+            best = max(best, d)
+            stack.extend((v, d + 1) for v in o)
+    return best
+
+
+def _has_nul(obj) -> bool:
+    """쿼리/본문 어디든 NUL 문자가 있으면 참(경로로 쓰이면 os 호출이 ValueError)."""
+    return _any_str(obj, lambda t: "\x00" in t)
+
+
+_BAD_SURROGATE = re.compile("[\ud800-\udc7f\udd00-\udfff]")
+
+
+def _has_bad_surrogate(obj) -> bool:
+    """짝 없는 UTF-16 서로게이트(JSON 의 "\\ud800" 등)가 있으면 참. 파일·감사 로그(UTF-8)에 쓸 때 예외가 나
+    500·연결 끊김·노드 목록 저장 불능이 됐다(2026-11 퍼징). 단 U+DC80~U+DCFF 는 UTF-8 이 아닌 실제 파일 이름을
+    나타내는 값(surrogateescape)이라 허용한다 — 화면이 그 경로로 스캔·탐색을 요청할 수 있어야 한다."""
+    return _any_str(obj, lambda t: bool(_BAD_SURROGATE.search(t)))
+
+
+MAX_JSON_BODY = 4 * 1024 * 1024         # JSON 본문 상한(메모리·CPU 폭주 방지 — 16MB 본문 하나가 인증 전에 7초를 잡았다, 27회차)
+MAX_BUNDLE_BODY = 512 * 1024 * 1024     # 업그레이드 번들 상한
+
+
+def _truthy(v) -> bool:
+    """JSON 불리언 옵션 해석 — 문자열 "false"/"no"/"0"/"off"/"" 는 거짓(예전엔 bool("false")=참이라
+    API 로 auto_restart:"false" 를 보내면 반복 스캔이 켜졌다 — 2026-11 리뷰)."""
+    if isinstance(v, str):
+        return v.strip().lower() not in ("", "0", "false", "no", "off", "n", "f")
+    return bool(v)
+
+class _ChunkedWriter:
+    """응답 쓰기를 1MB 조각으로 — 소켓 시간 제한(timeout)은 sendall '한 번' 전체에 걸려, 큰 본문(백업·릴리스·에이전트
+    묶음 다운로드, 큰 JSON)을 한 번에 쓰면 꾸준히 받는 느린 클라이언트도 120초 뒤 잘렸다(21회차 점검)."""
+    CHUNK = 1 << 20
+
+    def __init__(self, w):
+        self._w = w
+
+    def write(self, b):
+        n = len(b)
+        if n <= self.CHUNK:
+            return self._w.write(b)
+        mv = memoryview(b)
+        for i in range(0, n, self.CHUNK):
+            self._w.write(mv[i:i + self.CHUNK])
+        return n
+
+    def __getattr__(self, name):
+        return getattr(self._w, name)
+
+
+def safe_cwd() -> str:
+    """작업 폴더(지워졌으면 '/') — 설치 스크립트가 설치 폴더를 바꾸면 옛 작업 폴더가 사라져 os.getcwd() 가 예외였다."""
+    try:
+        return os.getcwd()
+    except OSError:
+        return "/"
+
+
+def cross_site_post(handler) -> bool:
+    """다른 사이트(출처)에서 온 브라우저 POST 인지. 브라우저는 교차 출처 POST 에 Origin 을 반드시 붙인다 —
+    Origin 의 호스트가 이 서버(Host) 와 다르면(또는 'null' — 샌드박스 iframe 등) 거부한다. Content-Type 검사만으로는
+    본문 없는 POST(전체 중단 등)를 막지 못했다(21회차 점검). 스크립트·포탈(Origin 없음)은 영향 없음."""
+    origin = (handler.headers.get("Origin") or "").strip()
+    if not origin:
+        return False
+    # 화면(대시보드·포탈)이 모든 POST 에 붙이는 표시 헤더 — 다른 사이트는 사전 확인 없이 붙일 수 없고 이 서버는
+    # 사전 확인(OPTIONS)을 승인하지 않으므로, 있으면 같은 화면이다. Host 를 바꾸는 프록시 뒤에서도 동작(22회차 점검).
+    if (handler.headers.get("X-Requested-With") or "").strip():
+        return False
+    if origin.lower() == "null":
+        return True
+    try:
+        o_host = (urlparse(origin).netloc or "").lower()
+    except ValueError:
+        return True
+    hosts = {(handler.headers.get("Host") or "").strip().lower()}
+    for xf in (handler.headers.get("X-Forwarded-Host") or "").split(","):   # 프록시 체인: 'a, b'
+        hosts.add(xf.strip().lower())
+    hosts.discard("")
+    return o_host not in hosts
+
+
+def is_json_ctype(ctype) -> bool:
+    """Content-Type 의 미디어 타입이 application/json 인지(매개변수 charset 등은 허용)."""
+    return str(ctype or "").split(";", 1)[0].strip().lower() == "application/json"
+
+
+def read_json_body(handler):
+    """요청 본문을 JSON 객체로 읽는다(엣지·포탈 공용). 반환: (dict, None) 또는 ({}, (HTTP 상태, 사유)).
+
+    예전엔 너무 크거나·잘렸거나·JSON 이 아니거나·객체가 아닌(예: 배열) 본문을 조용히 {} 로 바꾸거나
+    (배열이면) 처리 중 500 을 냈다 — 빈 본문으로 작업이 진행될 수 있었다(2026-11 리뷰)."""
+    if "chunked" in (handler.headers.get("Transfer-Encoding") or "").lower():
+        return {}, (411, "chunked 본문은 지원하지 않습니다 — Content-Length 를 보내세요")
+    raw_len = handler.headers.get("Content-Length")
+    if raw_len in (None, ""):
+        return {}, None
+    try:
+        length = int(raw_len)
+    except (TypeError, ValueError, OverflowError):
+        return {}, (400, "Content-Length 가 올바르지 않습니다")
+    if length < 0:
+        return {}, (400, "Content-Length 가 올바르지 않습니다")
+    if length == 0:
+        return {}, None
+    if length > MAX_JSON_BODY:
+        return {}, (413, "본문이 너무 큽니다(최대 %dMB)" % (MAX_JSON_BODY // (1024 * 1024)))
+    # 본문이 있으면 JSON 요청만 받는다 — 다른 사이트의 <form enctype=text/plain> 은 application/json 을 보낼 수
+    # 없으므로, 로그인이 필요 없는 POST(스캔 시작·전체 중단 등)도 사이트 간 위조(CSRF)로 실행되지 않는다.
+    # 미디어 타입이 정확히 application/json 이어야 한다 — 예전엔 '포함'만 봐서 'text/plain; x=application/json'
+    # (브라우저가 사전 확인 없이 다른 사이트에서 보낼 수 있는 값)과 Content-Type 없음(타입 없는 Blob)이 통과했다(21회차 점검).
+    if not is_json_ctype(handler.headers.get("Content-Type")):
+        return {}, (415, "JSON 요청만 받습니다(Content-Type: application/json)")
+    try:
+        raw = handler.rfile.read(length)
+    except (OSError, ValueError):
+        return {}, (400, "본문을 읽지 못했습니다")
+    if len(raw) < length:
+        return {}, (400, "본문이 잘렸습니다(%d/%d 바이트)" % (len(raw), length))
+    try:
+        val = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, RecursionError):   # 아주 깊은 중첩 → RecursionError(연결이 끊겼다)
+        return {}, (400, "JSON 형식이 아닙니다")
+    if not isinstance(val, dict):
+        return {}, (400, "JSON 객체({...})만 받습니다")
+    # 깊이·NUL·짝 없는 서로게이트를 한 번에 훑는다 — 예전엔 세 번 따로 돌아 큰 본문에서 CPU 를 세 배 썼다(27회차 점검)
+    depth, nul, bad = _scan_body(val)
+    if depth > MAX_JSON_DEPTH:   # 수백 단계 중첩은 뒤(저장·감사)에서 재귀 한도에 걸린다 — 받지 않는다
+        return {}, (400, "JSON 중첩이 너무 깊습니다(최대 %d 단계)" % MAX_JSON_DEPTH)
+    if nul:
+        return {}, (400, "요청에 NUL 문자가 있습니다")
+    if bad:
+        return {}, (400, "요청에 잘못된 문자(짝 없는 서로게이트)가 있습니다")
+    return val, None
+
+
+def _scan_body(obj):
+    """(최대 깊이, NUL 있음, 짝 없는 서로게이트 있음) — 반복 한 번으로. 깊이가 한도를 넘으면 거기서 멈춘다."""
+    best, nul, bad = 0, False, False
+    stack = [(obj, 1)]
+    srch = _BAD_SURROGATE.search
+    while stack:
+        o, d = stack.pop()
+        if isinstance(o, str):
+            if not nul and "\x00" in o:
+                nul = True
+            if not bad and srch(o):
+                bad = True
+        elif isinstance(o, dict):
+            if d > best:
+                best = d
+                if best > MAX_JSON_DEPTH:
+                    break
+            for k, v in o.items():
+                stack.append((k, d + 1))
+                stack.append((v, d + 1))
+        elif isinstance(o, (list, tuple)):
+            if d > best:
+                best = d
+                if best > MAX_JSON_DEPTH:
+                    break
+            stack.extend((v, d + 1) for v in o)
+    return best, nul, bad
+
+
+def reset_op_password(data_dir: str, info_dir: Optional[str] = None) -> Optional[dict]:
+    """엣지용: settings.json 의 작업 비밀번호를 새 임시 비밀번호로(info.MD). 반환: {password, info_path, settings}."""
+    res = reset_op_password_file(setmod.settings_path(data_dir), data_dir, info_dir)
+    if res is None:
+        return None
+    res["settings"] = setmod.load(data_dir)
+    return res
+
+
+def _public_settings(s: dict) -> dict:
+    """화면/응답용 설정 — 비밀번호는 노출하지 않고 설정 여부만 알린다."""
+    out = dict(s)
+    out["smtp_password"] = ""
+    out["smtp_password_set"] = bool((s or {}).get("smtp_password"))
+    out["api_token"] = ""
+    out["api_token_set"] = bool((s or {}).get("api_token"))
+    out["op_password"] = ""
+    out["op_password_set"] = bool((s or {}).get("op_password"))
+    out["isilon_password"] = ""
+    out["isilon_password_set"] = bool((s or {}).get("isilon_password"))
+    out["powerstore_password"] = ""
+    out["powerstore_password_set"] = bool((s or {}).get("powerstore_password"))
+    out["ask_llm_key"] = ""
+    out["ask_llm_key_set"] = bool((s or {}).get("ask_llm_key"))
+    out["upgrade_token"] = ""
+    out["upgrade_token_set"] = bool((s or {}).get("upgrade_token"))
+    sa = []
+    for a in ((s or {}).get("storage_arrays") or []):
+        if not isinstance(a, dict):
+            continue
+        b = dict(a)
+        b["password"] = ""
+        b["password_set"] = bool(a.get("password"))
+        b["url"] = netutil.mask_url_secret(a.get("url"))
+        # 옛 설정은 주소를 id 로 썼다 — id 로 토큰이 새지 않게(29회차). 주소 모양('://')일 때만 가린다 — 'prod@dc1' 같은
+        # 이름까지 '***' 가 돼, 저장하면 두 어레이가 한 id 로 합쳐지고 비밀번호가 바뀌었다(30회차 점검)
+        _aid = str(a.get("id") or "")
+        if "://" in _aid or (_aid and _aid == str(a.get("url") or "")):   # 주소를 그대로 id 로 쓴 옛 항목(스킴 없어도, 31회차)
+            b["id"] = netutil.mask_url_secret(_aid)
+        sa.append(b)
+    out["storage_arrays"] = sa
+    # URL 속 비밀값(웹훅 경로·사용자 정보·쿼리 토큰)도 가린다 — 이 응답은 인증 없이 읽힌다(27회차 보안 점검).
+    # 가린 값이 그대로 저장 요청에 돌아오면 update_settings 가 원래 값을 유지한다(_unmask_settings).
+    for _k, _hp in _URL_SECRET_KEYS:
+        if _k in out:
+            out[_k] = netutil.mask_url_secret(out.get(_k), _hp)
+    return out
+
+
+# (설정 키, 경로까지 가릴지) — 웹훅은 경로 자체가 비밀(예: Slack services/T…/B…/토큰)
+_URL_SECRET_KEYS = (("notify_webhook", True), ("ask_llm_endpoint", False), ("upgrade_url", False),
+                    ("isilon_url", False), ("powerstore_url", False))
+
+
+def _list_conflict(base: dict, cur: dict, new: dict):
+    """목록 설정(예약·어레이·마운트)을 화면이 불러온 뒤 다른 곳에서 바꿨는가 — 바꿨으면 그 이름, 아니면 None.
+
+    목록은 통째로 바꾸므로, 다른 탭·다른 사람이 그 사이 추가한 항목이 늦게 저장한 쪽에 의해 말없이 지워졌다(29회차 점검).
+    비교는 항목의 정체(예약=경로+주기 단위, 어레이=id, 마운트=경로)만 — 런타임 값(마지막 실행 등)·서식 차이는 무시."""
+    def _sched(xs):
+        out = []
+        for sc in xs or []:
+            if isinstance(sc, dict):
+                ps = sc.get("paths") if isinstance(sc.get("paths"), list) else [sc.get("path")]
+                out.append(repr((tuple(os.path.abspath(str(p)) for p in ps if str(p or "").strip()), str(sc.get("unit") or ""))))
+        return sorted(out)
+
+    def _arr(xs):
+        return sorted(netutil.mask_url_secret(str(a.get("id") or "")) for a in (xs or []) if isinstance(a, dict))
+
+    def _mnt(xs):
+        return sorted(str(x).strip().rstrip("/") or "/" for x in (xs or []) if str(x or "").strip())
+    for k, fn, label in (("schedules", _sched, "예약 목록"), ("storage_arrays", _arr, "스토리지 어레이 목록"),
+                         ("mount_bases", _mnt, "허용 경로 목록")):
+        if k in base and k in new and isinstance(base.get(k), list):
+            try:
+                if fn(base.get(k)) != fn((cur or {}).get(k)):
+                    return label
+            except Exception:   # noqa: BLE001 — 비교 실패는 충돌로 보지 않는다(저장을 막지 않게)
+                continue
+    return None
+
+
+def _unmask_settings(new: dict, cur: dict):
+    """화면이 받은 '가린 값'을 그대로 돌려보내면 저장된 원래 값으로 되돌린다(제자리 수정).
+
+    가린 주소의 일부만 고쳐 보내면(예: 호스트만 바꿈) '***' 가 그대로 저장돼 주소가 깨졌다(28회차 점검) —
+    그때는 오류 문구를 돌려준다(주소 전체를 다시 입력하라는 안내). 문제없으면 None."""
+    for _k, _hp in _URL_SECRET_KEYS:
+        if _k in new:
+            new[_k] = netutil.keep_masked(new.get(_k), (cur or {}).get(_k), _hp)
+            if netutil.is_masked_leftover(new.get(_k), (cur or {}).get(_k)):
+                return "%s: 가려진(***) 주소의 일부만 바꿀 수 없습니다 — 주소 전체를 다시 입력하세요." % _k
+    if isinstance(new.get("storage_arrays"), list):
+        olds = [a for a in ((cur or {}).get("storage_arrays") or []) if isinstance(a, dict)]
+        for a in new["storage_arrays"]:
+            if not isinstance(a, dict) or not isinstance(a.get("url"), str):
+                continue
+            # id·이름으로만 찾는다 — 가린 주소로 찾으면, 그 주소를 손으로 입력한 새 어레이가 옛 어레이의 비밀 주소·
+            # 비밀번호를 물려받았다(28회차 점검)
+            # 같은 id·이름이 여럿이면(이름 중복 허용) 가린 주소가 일치하는 쪽을 먼저(29회차 점검)
+            _mu = a["url"].strip()
+            _cand = ([o for o in olds if a.get("id") and o.get("id") == a.get("id")]
+                     or [o for o in olds if a.get("id") and netutil.MASK in str(a.get("id"))
+                         and netutil.mask_url_secret(o.get("id")) == a.get("id")
+                         and netutil.mask_url_secret(o.get("url")) == a["url"].strip()]
+                     or [o for o in olds if a.get("name") and o.get("name") == a.get("name")])
+            old = next((o for o in _cand if netutil.mask_url_secret(o.get("url")) == _mu), None) or (_cand[0] if _cand else None)
+            if old is not None and a.get("id") and netutil.MASK in str(a.get("id")):
+                a["id"] = old.get("id")                  # 가린 id 는 원래 id 로
+            if old is not None:
+                a["url"] = netutil.keep_masked(a["url"], old.get("url"))
+            if netutil.is_masked_leftover(a.get("url"), (old or {}).get("url")):
+                return "스토리지 어레이 주소: 가려진(***) 주소의 일부만 바꿀 수 없습니다 — 주소 전체를 다시 입력하세요."
+    return None
+
+
+def _idle_resources() -> dict:
+    """스캔이 없을 때(유휴) 대시보드에 보여줄 라이브 시스템 자원(메모리·CPU·디스크)."""
+    out: dict = {}
+    try:
+        samp = monmod.collect(os.getpid(), None).as_dict()
+        out["resources"] = {"latest": samp, "series": [samp], "peak_scanner_rss": 0,
+                            "peak_du_rss": 0, "peak_mem_percent": samp.get("mem_percent", 0)}
+        ft = fu = ff = 0
+        try:
+            v = os.statvfs("/")
+            ft = v.f_blocks * v.f_frsize
+            ff = v.f_bavail * v.f_frsize
+            fu = ft - (v.f_bfree * v.f_frsize)
+        except OSError:
+            pass
+        out["idle_fs"] = {"fs_total_bytes": ft, "fs_used_bytes": fu, "fs_free_bytes": ff}
+    except Exception:  # noqa: BLE001 — 자원 수집 실패가 상태 응답을 막지 않음
+        pass
+    return out
+
+
+def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 20,
+                 prev_total_dirs: Optional[int] = None, prev_total_files: Optional[int] = None) -> dict:
     """대시보드가 한 번의 폴링으로 쓸 수 있는 통합 상태 객체를 만든다."""
     if run_id is None:
         run_id = dbmod.latest_run_id(conn)
     if run_id is None:
-        return {"ok": False, "reason": "no_runs", "have_psutil": monmod.have_psutil()}
+        return dict({"ok": False, "reason": "no_runs",
+                     "have_psutil": monmod.have_psutil()}, **_idle_resources())
 
     run = dbmod.get_run(conn, run_id)
     if run is None:
@@ -57,6 +636,11 @@ def build_status(conn, run_id: int | None, *, samples: int = 150, top: int = 20)
 
     total_dirs = r.get("total_dirs") or 0
     discovered = r.get("discovered_dirs") or 0
+    if r.get("phase") == "discovering" and not finished:
+        # 1단계엔 전체 수를 아직 모른다 — 관리 DB 처럼 '지금까지 찾은 수'로 맞춘다. 재개한 스캔은 멈출 때 기록된
+        # 옛 값(예: 200)이 그대로 남아 찾은 313개와 어긋나 보였다(17회차 점검).
+        total_dirs = discovered
+        r["total_dirs"] = discovered
     processed = r.get("processed_dirs") or 0
     scanned_bytes = r.get("scanned_bytes") or 0
     fs_total = r.get("fs_total_bytes") or 0
@@ -70,20 +654,31 @@ def build_status(conn, run_id: int | None, *, samples: int = 150, top: int = 20)
         dir_progress = _safe_pct(processed, total_dirs or discovered)
 
     # 처리 속도 / ETA (집계 단계 기준)
-    eta = None
-    if r["phase"] == "sizing" and processed > 0 and elapsed > 0:
-        rate = processed / elapsed
-        remaining = max((total_dirs or discovered) - processed, 0)
-        if rate > 0:
-            eta = remaining / rate
+    # 활성 시간(일시정지 갭 제외) 기준 — 재개한 스캔의 남은 시간이 쉬던 시간만큼 부풀지 않게(홈·포탈과 같은 계산)
+    _act = float(r.get("elapsed_accum") or 0)
+    if _act > 0 and not finished and r.get("status") in ("discovering", "sizing"):
+        _act += max(0.0, now - float(r.get("updated_at") or now))
+    _p, _e = mgrmod.sizing_window(r, _act if _act > 0 else elapsed)
+    eta = mgrmod.estimate_eta_seconds(r["phase"], _p, total_dirs, discovered, _e, prev_total_dirs,
+                                      already=int(r.get("sizing_from_processed") or 0)
+                                      if (r["phase"] == "sizing" and r.get("sizing_from_active") is not None) else 0,
+                                      prev_total_files=prev_total_files, files_done=r.get("total_files"))
 
-    # 최신 자원 샘플 + 시계열(스파크라인용)
-    sample_rows = conn.execute(
-        """SELECT ts, mem_percent, mem_used, mem_total, swap_used, cpu_percent,
-                  load1, scanner_rss, du_rss, du_pid
-           FROM resource_samples WHERE run_id=? ORDER BY id DESC LIMIT ?""",
-        (run_id, samples),
-    ).fetchall()
+    # 최신 자원 샘플 + 시계열(스파크라인용). 구버전 DB(scanner_cpu/du_cpu 없음) 호환.
+    _cols = ("ts, mem_percent, mem_used, mem_total, swap_used, cpu_percent, "
+             "load1, scanner_rss, du_rss, du_pid, scanner_cpu, du_cpu")
+    try:
+        sample_rows = conn.execute(
+            f"SELECT {_cols} FROM resource_samples WHERE run_id=? ORDER BY id DESC LIMIT ?",
+            (run_id, samples),
+        ).fetchall()
+    except Exception:
+        sample_rows = conn.execute(
+            """SELECT ts, mem_percent, mem_used, mem_total, swap_used, cpu_percent,
+                      load1, scanner_rss, du_rss, du_pid
+               FROM resource_samples WHERE run_id=? ORDER BY id DESC LIMIT ?""",
+            (run_id, samples),
+        ).fetchall()
     series = [dict(s) for s in reversed(sample_rows)]
     recorded_latest = series[-1] if series else None
     latest = recorded_latest
@@ -102,6 +697,9 @@ def build_status(conn, run_id: int | None, *, samples: int = 150, top: int = 20)
             if recorded_latest:
                 live["du_rss"] = recorded_latest.get("du_rss", 0)
                 live["du_pid"] = recorded_latest.get("du_pid")
+                # 프로세스별 CPU% 는 델타 기반이라 즉석 수집이 어려워 최근 기록값 사용
+                live["scanner_cpu"] = recorded_latest.get("scanner_cpu", 0)
+                live["du_cpu"] = recorded_latest.get("du_cpu", 0)
             latest = live
             if recorded_latest is not None:
                 series = series + [live]  # 차트의 마지막 점도 실시간으로
@@ -116,15 +714,20 @@ def build_status(conn, run_id: int | None, *, samples: int = 150, top: int = 20)
     ).fetchone()
 
     # 상위 디렉터리(용량순). 집계 전이면 own_bytes 기준으로 대체 표시.
-    top_rows = conn.execute(
-        """SELECT id, path, name, depth, file_count, subdir_count,
-                  own_bytes, total_bytes, total_files, status
-           FROM directories WHERE run_id=?
-           ORDER BY (CASE WHEN total_bytes>0 THEN total_bytes ELSE own_bytes END) DESC
-           LIMIT ?""",
-        (run_id, top),
-    ).fetchall()
-    top_dirs = [dict(t) for t in top_rows]
+    # top<=0 이면 건너뛴다(대시보드는 /api/topdirs 를 따로 쓰므로, 거대 DB 에서
+    # 매 폴링마다 전체 정렬하는 이 쿼리를 생략해 /api/status 를 빠르게 유지).
+    if top and int(top) > 0:
+        top_rows = conn.execute(
+            """SELECT id, path, name, depth, file_count, subdir_count,
+                      own_bytes, total_bytes, total_files, status
+               FROM directories WHERE run_id=?
+               ORDER BY (CASE WHEN total_bytes>0 THEN total_bytes ELSE own_bytes END) DESC
+               LIMIT ?""",
+            (run_id, int(top)),
+        ).fetchall()
+        top_dirs = [dict(t) for t in top_rows]
+    else:
+        top_dirs = []
 
     return {
         "ok": True,
@@ -140,6 +743,9 @@ def build_status(conn, run_id: int | None, *, samples: int = 150, top: int = 20)
             "size_mode": r["size_mode"],
             "started_at": started,
             "finished_at": finished,
+            "updated_at": r.get("updated_at"),   # 마지막 진행 갱신(하트비트)
+            "session_started_at": r.get("session_started_at"),  # 이번(재시작) 세션 시작
+            "elapsed_accum": r.get("elapsed_accum") or 0,       # 모든 세션 누적 활성시간
             "elapsed": elapsed,
             "discovered_dirs": discovered,
             "total_dirs": total_dirs,
@@ -148,19 +754,30 @@ def build_status(conn, run_id: int | None, *, samples: int = 150, top: int = 20)
             "scanned_bytes": scanned_bytes,
             "total_files": r.get("total_files") or 0,
             "current_dir": r.get("current_dir"),
+            "worker_dirs": _parse_worker_dirs(r.get("worker_dirs")),
             "current_depth": r.get("current_depth") or 0,
             "max_depth": r.get("max_depth") or 0,
+            "workers": r.get("workers") or 0,             # 설정된 동시 스캔 스레드 수
+            "active_workers": r.get("active_workers") or 0,  # 현재 병렬 처리 중인 워커 수
+            # 마운트 읽기전용: -1=확인 안 함(설정 끔), 0=쓰기가능, 1=읽기전용
+            "mount_readonly": (r.get("mount_readonly") is not None
+                               and int(r.get("mount_readonly")) == 1),
+            "readonly_checked": (r.get("mount_readonly") is not None
+                                 and int(r.get("mount_readonly")) >= 0),
             "fs_total_bytes": fs_total,
             "fs_used_bytes": fs_used,
             "fs_free_bytes": r.get("fs_free_bytes") or 0,
             "scanner_pid": r.get("scanner_pid"),
             "error": r.get("error"),
+            # 멈춘 자료 집계(부분 집계) 시각 — 있으면 total_bytes 는 재개 전 하한값(완전 집계가 끝나면 지워짐)
+            "partial_agg_at": r.get("partial_agg_at"),
         },
         "progress": {
             "dir_progress_pct": dir_progress,
             "disk_verified_pct_of_used": _safe_pct(scanned_bytes, fs_used),
             "disk_verified_pct_of_total": _safe_pct(scanned_bytes, fs_total),
             "eta_seconds": eta,
+            "eta_basis": (("prev_scan" if r["phase"] == "discovering" else "rate") if eta is not None else None),
         },
         "resources": {
             "latest": latest,
@@ -173,24 +790,312 @@ def build_status(conn, run_id: int | None, *, samples: int = 150, top: int = 20)
     }
 
 
-def list_children(conn, run_id: int, parent_id: int | None, *, limit: int = 200) -> dict:
+def list_children(conn, run_id: int, parent_id: Optional[int], *, limit: int = 200) -> dict:
+    # 정렬은 화면에 보이는 크기(집계 전이면 own_bytes)로 — total_bytes 만 보면 집계 전 큰 폴더가 '나머지'로 숨었다
+    _sz = "(CASE WHEN total_bytes>0 THEN total_bytes ELSE own_bytes END)"
+    _cols = ("SELECT id, path, name, depth, file_count, subdir_count, own_bytes, total_bytes, total_files, status "
+             "FROM directories WHERE run_id=? AND ")
     if parent_id is None:
-        rows = conn.execute(
-            """SELECT id, path, name, depth, file_count, subdir_count,
-                      own_bytes, total_bytes, total_files, status
-               FROM directories WHERE run_id=? AND parent_id IS NULL
-               ORDER BY total_bytes DESC LIMIT ?""",
-            (run_id, limit),
-        ).fetchall()
+        rows = conn.execute(_cols + "parent_id IS NULL ORDER BY " + _sz + " DESC LIMIT ?", (run_id, limit + 1)).fetchall()
     else:
+        rows = conn.execute(_cols + "parent_id=? ORDER BY " + _sz + " DESC LIMIT ?",
+                            (run_id, parent_id, limit + 1)).fetchall()
+    rows = list(rows)
+    out = {"ok": True, "children": [dict(r) for r in rows[:limit]]}
+    if len(rows) > limit:
+        # 상위 limit 개만 보낸다 — 나머지가 있다는 것과 그 합을 함께 알려, 화면이 잘린 목록을 전체처럼(비율 합 100%)
+        # 보이지 않게 한다(18회차 점검: 하위 300개 중 200개만, 아무 표시 없이).
+        shown_b = sum(int(r["total_bytes"] or r["own_bytes"] or 0) for r in rows[:limit])
+        shown_f = sum(int(r["total_files"] or r["file_count"] or 0) for r in rows[:limit])
+        par = None
+        if parent_id is not None:
+            par = conn.execute("SELECT status, own_bytes, total_bytes, file_count, total_files, subdir_count "
+                               "FROM directories WHERE run_id=? AND id=?", (run_id, parent_id)).fetchone()
+        if par is not None and par["status"] == "done" and int(par["total_bytes"] or 0) > 0 and int(par["subdir_count"] or 0) > limit:
+            # 집계가 끝난 부모면 그 합에서 바로 — 자식이 수백만인 폴더에서 매 요청 전체 합산(0.36초)을 피한다(19회차 점검)
+            n = int(par["subdir_count"])
+            ch_b = int(par["total_bytes"]) - int(par["own_bytes"] or 0)
+            ch_f = int(par["total_files"] or 0) - int(par["file_count"] or 0)
+        else:
+            cond = "parent_id IS NULL" if parent_id is None else "parent_id=?"
+            args = (run_id,) if parent_id is None else (run_id, parent_id)
+            agg = conn.execute("SELECT COUNT(*) AS n, COALESCE(SUM(" + _sz + "),0) AS b, "
+                               "COALESCE(SUM(CASE WHEN total_files>0 THEN total_files ELSE file_count END),0) AS f "
+                               "FROM directories WHERE run_id=? AND " + cond, args).fetchone()
+            n, ch_b, ch_f = int(agg["n"]), int(agg["b"]), int(agg["f"])
+        out.update(truncated=True, total_count=n, rest_count=max(0, n - limit),
+                   rest_bytes=max(0, ch_b - shown_b), rest_files=max(0, ch_f - shown_f))
+    return out
+
+
+# 상위 디렉터리 표의 정렬 가능한 컬럼(화이트리스트 — SQL 주입 방지)
+_TOP_SORT_COLS = {
+    "size": "(CASE WHEN total_bytes>0 THEN total_bytes ELSE own_bytes END)",
+    "own": "own_bytes",
+    "files": "(CASE WHEN total_files>0 THEN total_files ELSE file_count END)",
+    "subdirs": "subdir_count",
+    "depth": "depth",
+    "path": "path",
+}
+
+
+def list_top_dirs(conn, run_id, *, under_id=None, rel_depth=None,
+                  sort="size", order="desc", limit=50) -> dict:
+    """용량 상위 디렉터리를 조건에 맞춰 돌려준다.
+
+    - under_id: 이 디렉터리 하위로만 한정(없으면 스캔 루트 전체).
+    - rel_depth: 기준(루트 또는 under) 대비 상대 깊이. 1=직속 자식, 2=손자… .
+                 0/None 이면 깊이 제한 없이 하위 전체.
+    - sort/order: 정렬 컬럼(_TOP_SORT_COLS)과 방향(asc/desc).
+    """
+    sort_expr = _TOP_SORT_COLS.get(str(sort), _TOP_SORT_COLS["size"])
+    order_sql = "ASC" if str(order).lower() == "asc" else "DESC"
+    _cols = ("id, path, name, depth, file_count, subdir_count, "
+             "own_bytes, total_bytes, total_files, status")
+
+    where = ["run_id=?"]
+    params = [run_id]
+    under_depth = 0
+    under_path = None
+    parent = None   # 자식들을 나열하는 기준 디렉터리(파이/요약에서 개수·자기파일 용량 사용)
+    if under_id is not None:
+        urow = conn.execute(
+            "SELECT " + _cols + " FROM directories WHERE run_id=? AND id=?",
+            (run_id, under_id),
+        ).fetchone()
+        if urow is not None:
+            parent = dict(urow)
+            under_depth = int(urow["depth"])
+            under_path = urow["path"]
+    else:
+        rrow = conn.execute(
+            "SELECT " + _cols + " FROM directories WHERE run_id=? AND parent_id IS NULL "
+            "ORDER BY depth ASC, id ASC LIMIT 1", (run_id,),
+        ).fetchone()
+        if rrow is not None:
+            parent = dict(rrow)
+    try:
+        rel = int(rel_depth or 0)
+    except (TypeError, ValueError, OverflowError):
+        rel = 0
+    if rel == 1 and parent is not None:
+        # 직속 자식: parent_id 인덱스(idx_dir_run_parent)로 바로 찾는다. 예전엔 path LIKE + depth 로
+        # 그 깊이의 '전체 행'을 훑었다(측정: 30만 행 합성 DB 에서 직속 1,000개 조회 44ms → 0.6ms).
+        where.append("parent_id=?")
+        params.append(int(parent["id"]))
+    else:
+        if under_path is not None:
+            # 하위 전체/손자 이하: 경로 범위 조건 — UNIQUE(run_id, path) 인덱스로 하위 구간만 읽는다.
+            # (LIKE ... ESCAPE 는 인덱스를 못 써 run 의 전체 행을 훑었다.) '/'(0x2F) 다음 문자가 '0'(0x30)
+            # 이므로 base+'/' 로 시작하는 모든 경로는 base+'/' 와 base+'0' 사이에 있다.
+            base = under_path.rstrip("/")
+            where.append("path > ? AND path < ?")
+            params.extend([base + "/", base + "0"])
+        if rel:
+            where.append("depth=?")
+            params.append(under_depth + rel)
+
+    params.append(int(limit))
+    rows = conn.execute(
+        "SELECT " + _cols + " FROM directories "
+        "WHERE " + " AND ".join(where) +
+        " ORDER BY " + sort_expr + " " + order_sql + ", id ASC LIMIT ?",
+        params,
+    ).fetchall()
+    return {"ok": True, "rows": [dict(r) for r in rows], "parent": parent,
+            "under_id": under_id, "under_path": under_path,
+            "under_depth": under_depth, "sort": sort, "order": order_sql.lower()}
+
+
+def search_dirs(pconn, run_id: int, q: str, *, limit: int = 200) -> dict:
+    # 완료된 스캔은 total_bytes 가 다 채워져 있어 그 인덱스 순서로 훑다가 limit 개에서 멈출 수 있다 — 화면 크기 식(CASE)
+    # 정렬은 인덱스를 못 써 일치하는 모든 행을 정렬해 흔한 검색어가 1ms → 100ms 로 느려졌다(24회차 성능 점검).
+    # 집계 전(진행·멈춤)만 화면 크기 식으로 정렬한다.
+    try:
+        _st = pconn.execute("SELECT status FROM scan_runs WHERE id=?", (run_id,)).fetchone()
+        _done = bool(_st) and _st[0] == "done"
+    except Exception:  # noqa: BLE001
+        _done = False
+    _order = "total_bytes" if _done else "(CASE WHEN total_bytes>0 THEN total_bytes ELSE own_bytes END)"
+    rows = pconn.execute(
+        """SELECT id, path, name, depth, file_count, subdir_count,
+                  own_bytes, total_bytes, total_files, status
+           FROM directories WHERE run_id=? AND path LIKE ? ESCAPE '\\'
+           ORDER BY """ + _order + """ DESC LIMIT ?""",
+        (run_id, "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%", limit + 1),
+    ).fetchall()
+    return {"ok": True, "results": [dict(r) for r in rows[:limit]], "truncated": len(rows) > limit, "limit": limit}
+
+
+def list_errors(pconn, run_id: int, *, limit: int = 1000) -> dict:
+    rows = pconn.execute(
+        """SELECT path, error, depth FROM directories
+           WHERE run_id=? AND error IS NOT NULL ORDER BY path LIMIT ?""",
+        (run_id, limit + 1),
+    ).fetchall()
+    out = {"ok": True, "errors": [dict(r) for r in rows[:limit]], "truncated": len(rows) > limit, "limit": limit}
+    if len(rows) > limit:
+        out["total_count"] = int(pconn.execute("SELECT COUNT(*) FROM directories WHERE run_id=? AND error IS NOT NULL",
+                                               (run_id,)).fetchone()[0])
+    return out
+
+
+def forecast_capacity(mconn, scan_row) -> dict:
+    """같은 루트의 완료 스캔 이력으로 증가 추세(선형 회귀)와 소진 예상일을 계산."""
+    root = scan_row["root_path"]
+    # 같은 크기 기준(apparent/disk)의 스캔만 — 섞으면 기준 차이가 '줄어듦/늘어남'으로 보여 추세·소진일이 엉터리였다
+    # (30회차 점검: 평평한 데이터에 하루 -9 GB). 기준은 이 루트의 마지막 완료 스캔.
+    _last = mconn.execute("SELECT size_mode, opt_max_depth FROM scans WHERE root_path=? AND status='done' "
+                          "ORDER BY id DESC LIMIT 1", (root,)).fetchone()
+    _sm = (_last["size_mode"] if _last else None) or ""
+    _md = int((_last["opt_max_depth"] if _last else 0) or 0)   # 최대 깊이도 같은 스캔만(33회차 점검: 깊이 제한을 켜면 -1.6 TB/일)
+    pts = [dict(r) for r in mconn.execute(
+        """SELECT id, COALESCE(finished_at, started_at) AS ts, scanned_bytes
+           FROM scans WHERE root_path=? AND status='done' AND scanned_bytes>0
+             AND COALESCE(size_mode,'')=? AND COALESCE(opt_max_depth,0)=?
+           ORDER BY id""", (root, _sm, _md))]
+    latest = mconn.execute(
+        "SELECT fs_total_bytes, fs_used_bytes, fs_free_bytes FROM scans "
+        "WHERE root_path=? ORDER BY id DESC LIMIT 1", (root,)).fetchone()
+    fs_total = int(latest["fs_total_bytes"] or 0) if latest else 0
+    fs_used = int(latest["fs_used_bytes"] or 0) if latest else 0
+    fs_free = int(latest["fs_free_bytes"] or 0) if latest else 0
+    out = {"ok": True, "root_path": root, "points": len(pts),
+           "history": [{"ts": p["ts"], "bytes": p["scanned_bytes"]} for p in pts[-50:]],
+           "fs_total_bytes": fs_total, "fs_used_bytes": fs_used,
+           "fs_free_bytes": fs_free,
+           "enough": len(pts) >= 2, "growth_per_day": None,
+           "days_to_90pct": None, "days_to_full": None}
+    if len(pts) < 2:
+        return out
+    # 최소제곱 기울기(bytes/sec). 시각 범위가 0 이면 추세 없음.
+    n = len(pts)
+    xs = [float(p["ts"]) for p in pts]
+    ys = [float(p["scanned_bytes"]) for p in pts]
+    if max(xs) - min(xs) < 86400:
+        # 몇 분 간격 스캔들로 '하루 +63GB · 0일 뒤 가득' 같은 추세를 냈다(21회차 점검) — 하루 이상 걸친 이력만
+        out["enough"] = False
+        out["reason"] = "완료 스캔들이 하루 이상 걸쳐 있어야 추세를 낼 수 있습니다."
+        return out
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    denom = sum((x - mx) ** 2 for x in xs)
+    if denom <= 0:
+        return out
+    slope = sum((xs[i] - mx) * (ys[i] - my) for i in range(n)) / denom  # bytes/sec
+    per_day = slope * 86400.0
+    out["growth_per_day"] = int(per_day)
+    if per_day > 0 and fs_total > 0:
+        to90 = (fs_total * 0.9 - fs_used) / per_day
+        out["days_to_90pct"] = round(max(0.0, to90), 1)
+        if fs_free > 0:
+            out["days_to_full"] = round(max(0.0, fs_free / per_day), 1)
+    return out
+
+
+def diff_scans(data_dir: str, base_id: int, target_id: int, *,
+               limit: int = 100, max_depth: Optional[int] = None) -> dict:
+    """두 스캔(같은/다른 per-run DB)의 디렉터리별 재귀 용량 변화를 비교한다."""
+    mconn = dbmod.connect(mgrmod.manager_db_path(data_dir))
+    try:
+        base = mgrmod.get_scan(mconn, base_id)
+        target = mgrmod.get_scan(mconn, target_id)
+    finally:
+        mconn.close()
+    if not base or not target:
+        return {"ok": False, "reason": "scan 을 찾을 수 없습니다."}
+    # 완료된 스캔끼리만 — 진행 중·일시정지·오류 스캔은 재귀 합계가 아직 없어(0) 모든 폴더가 '삭제됨'으로 보였다
+    # (2026-11 리뷰). 멈춘 자료 부분 집계(partial_agg_at)를 한 스캔은 하한값이라 비교 가능하다고 표시만 한다.
+    for _nm, _s in (("기준", dict(base)), ("대상", dict(target))):
+        if _s.get("status") != "done" and not _s.get("partial_agg_at"):
+            return {"ok": False, "not_done": True,
+                    "reason": "%s 스캔 #%s 가 완료되지 않아(%s) 비교할 수 없습니다 — 완료된 스캔을 고르거나 "
+                              "'멈춘 자료 집계'를 먼저 하세요." % (_nm, _s.get("id"), _s.get("status"))}
+    if (base["root_path"] or "") != (target["root_path"] or ""):
+        # 다른 경로끼리 비교하면 기준 쪽 전체가 '삭제됨'으로, 총 변화량이 행과 어긋났다(21회차 점검) — 같은 경로만
+        return {"ok": False, "root_mismatch": True,
+                "reason": "같은 경로의 스캔끼리만 비교할 수 있습니다(기준 %s · 대상 %s)."
+                          % (dbmod.fs_text(base["root_path"]), dbmod.fs_text(target["root_path"]))}
+    # 크기 기준(apparent/disk)이 다르면 변화가 아니라 기준 차이가 '증가'로 보였다(29회차 점검: +48 MB) — 비교하지 않는다
+    _sm_a, _sm_b = (base["size_mode"] or ""), (target["size_mode"] or "")
+    if _sm_a and _sm_b and _sm_a != _sm_b:
+        return {"ok": False, "size_mode_mismatch": True,
+                "reason": "크기 기준이 다른 스캔끼리는 비교할 수 없습니다(기준 #%s=%s · 대상 #%s=%s) — 같은 기준의 스캔을 고르세요."
+                          % (base_id, _sm_a, target_id, _sm_b)}
+    # 최대 깊이(잘린 합계)가 다른 스캔끼리도 비교하지 않는다 — 깊이 제한 스캔은 위쪽 폴더 합계부터 적어, 바뀌지 않은 트리가
+    # '줄어듦'으로 보였다(33회차 점검)
+    _md_a, _md_b = int(dict(base).get("opt_max_depth") or 0), int(dict(target).get("opt_max_depth") or 0)
+    if _md_a != _md_b:
+        return {"ok": False, "depth_mismatch": True,
+                "reason": "최대 깊이 설정이 다른 스캔끼리는 비교할 수 없습니다(기준 #%s=%s · 대상 #%s=%s) — 같은 설정의 스캔을 고르세요."
+                          % (base_id, _md_a or "제한 없음", target_id, _md_b or "제한 없음")}
+    if not (os.path.exists(base["db_path"]) and os.path.exists(target["db_path"])):
+        return {"ok": False, "reason": "per-run DB 가 없습니다."}
+
+    conn = dbmod.connect(":memory:")
+    try:
+        conn.execute("ATTACH DATABASE ? AS a", (base["db_path"],))
+        conn.execute("ATTACH DATABASE ? AS b", (target["db_path"],))
+        a_run = conn.execute("SELECT MAX(id) AS i FROM a.scan_runs").fetchone()["i"]
+        b_run = conn.execute("SELECT MAX(id) AS i FROM b.scan_runs").fetchone()["i"]
+        # 두 스캔이 모두 저장한 깊이까지만 — pscan·접기(fold)·깊이 제한 스캔은 얕은 깊이까지만 행이 있어, 다른 스캔의 더 깊은
+        # 폴더가 모두 '삭제됨/신규'로 보였다(29회차 점검). 사용자가 준 max_depth 와 둘 중 얕은 쪽.
+        # 단, '잘린' 스캔(pscan=1단계·최대 깊이·접기)의 깊이로만 자른다 — 저장된 최대 깊이로 자르면, 폴더가 실제로 지워져
+        # 얕아진 정상 스캔과 비교할 때 지운 깊은 폴더가 '삭제'에 안 나왔다(30회차 점검).
+        def _stored_limit(sc, alias, run):
+            sc = dict(sc)
+            if str(sc.get("backend") or "") == "pscan":
+                return 1
+            if sc.get("opt_max_depth") is None and sc.get("opt_fold_depth") is None:
+                # 옵션 기록 전(옛) 스캔은 접기 여부를 모른다 — 가장 깊은 행에 하위 폴더가 있는데 그 아래 행이 없으면(접힘) 그 깊이로
+                # (31회차 점검: 옛 기본 접기 스캔의 깊은 폴더가 '신규'로). 접힌 흔적이 없으면 제한 없음(30회차: 지운 깊은 폴더 '삭제').
+                _d = conn.execute("SELECT MAX(depth) AS d FROM %s.directories WHERE run_id=?" % alias, (run,)).fetchone()["d"]
+                if _d is None:
+                    return None
+                _folded = conn.execute("SELECT 1 FROM %s.directories WHERE run_id=? AND depth=? AND subdir_count>0 LIMIT 1"
+                                       % alias, (run, _d)).fetchone()
+                return int(_d) if _folded else None
+            lims = [int(sc.get(k) or 0) for k in ("opt_max_depth", "opt_fold_depth")]
+            lims = [x for x in lims if x > 0]
+            return min(lims) if lims else None
+        _lim = [int(x) for x in (max_depth, _stored_limit(base, "a", a_run), _stored_limit(target, "b", b_run)) if x is not None]
+        eff_depth = min(_lim) if _lim else None
+        depth_a = f"AND depth<={int(eff_depth)}" if eff_depth is not None else ""
+        depth_b = depth_a
         rows = conn.execute(
-            """SELECT id, path, name, depth, file_count, subdir_count,
-                      own_bytes, total_bytes, total_files, status
-               FROM directories WHERE run_id=? AND parent_id=?
-               ORDER BY total_bytes DESC LIMIT ?""",
-            (run_id, parent_id, limit),
+            f"""
+            SELECT path, SUM(ab) AS ab, SUM(bb) AS bb,
+                         SUM(af) AS af, SUM(bf) AS bf FROM (
+                SELECT path, total_bytes AS ab, 0 AS bb, total_files AS af, 0 AS bf
+                  FROM a.directories WHERE run_id=? {depth_a}
+                UNION ALL
+                SELECT path, 0 AS ab, total_bytes AS bb, 0 AS af, total_files AS bf
+                  FROM b.directories WHERE run_id=? {depth_b}
+            ) GROUP BY path
+            ORDER BY ABS(SUM(bb)-SUM(ab)) DESC LIMIT ?
+            """,
+            (a_run, b_run, limit),
         ).fetchall()
-    return {"ok": True, "children": [dict(r) for r in rows]}
+        result = [{"path": r["path"], "base_bytes": int(r["ab"]),
+                   "target_bytes": int(r["bb"]),
+                   "delta": int(r["bb"]) - int(r["ab"]),
+                   "base_files": int(r["af"]), "target_files": int(r["bf"]),
+                   "files_delta": int(r["bf"]) - int(r["af"])} for r in rows]
+        return {
+            "ok": True,
+            "root_path": target["root_path"],
+            "base": {"scan_id": base_id, "scanned_bytes": base["scanned_bytes"],
+                     "started_at": base["started_at"]},
+            "target": {"scan_id": target_id, "scanned_bytes": target["scanned_bytes"],
+                       "started_at": target["started_at"]},
+            "total_delta": (target["scanned_bytes"] or 0) - (base["scanned_bytes"] or 0),
+            "compared_depth": eff_depth,     # 두 스캔이 모두 저장한 깊이(이 깊이까지 행을 비교)
+            # 부분 집계(멈춘 스캔의 하한값)와 비교했으면 표시 — 변화량도 하한 기준이다(30회차 점검)
+            "partial": bool(dict(base).get("status") != "done" or dict(target).get("status") != "done"),
+            "rows": result,
+        }
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +1136,7 @@ def list_mounts() -> list:
     return out
 
 
-def browse_dir(path: str | None) -> dict:
+def browse_dir(path: Optional[str]) -> dict:
     """주어진 경로의 바로 아래 하위 디렉터리 목록을 돌려준다(폴더 선택용).
 
     파일 내용은 읽지 않고 디렉터리 이름만 나열한다. 경로가 없으면 루트(/)부터.
@@ -261,54 +1166,1427 @@ def browse_dir(path: str | None) -> dict:
 class ScanController:
     """웹에서 시작/중지하는 스캔을 관리한다(서버 프로세스 안에서 스레드로 실행).
 
-    mount_bases 가 지정되면, 그 경로(들) 아래의 디렉터리만 웹에서 스캔할 수 있다.
-    지정하지 않으면(빈 목록) 어떤 디렉터리든 허용한다.
+    설정(mount_bases, 기본 백엔드, 배치 크기, 샘플링 주기 등)은 settings.py 가
+    `<data-dir>/settings.json` 에 보관하며 대시보드에서 수정한다.
+    mount_bases 가 비어 있으면 어떤 디렉터리든 스캔 허용.
     """
 
-    def __init__(self, data_dir: str, *, mount_bases=None, sample_interval: float = 2.0,
-                 batch_size: int = 500):
+    def __init__(self, data_dir: str, *, lock_settings: bool = False):
         self.data_dir = data_dir
-        self.mount_bases = [os.path.abspath(b) for b in (mount_bases or [])]
-        self.sample_interval = sample_interval
-        self.batch_size = batch_size
-        self._scans: dict[int, dict] = {}   # manager scan_id -> {stop, thread}
+        self.lock_settings = lock_settings
+        self.settings = setmod.load(data_dir)
+        self._scans: Dict[int, dict] = {}   # manager scan_id -> {stop, thread}
+        self._partial_jobs: Dict[int, dict] = {}   # scan_id -> 멈춘 자료 집계(부분 집계) 작업
+        self._live_snaps: Dict[int, dict] = {}     # scan_id -> 진행 중 스캔 스냅샷 작업(멈추지 않고 결과 보기)
+        # (지난 실행의 스냅샷 정리는 관리 DB 를 볼 수 있는 아래쪽에서 — _clean_snapshots)
+        setmod.clean_stale_tmp(self.data_dir)   # 저장 도중 강제 종료로 남은 settings.json.*.tmp
         self._lock = threading.Lock()
+        # '중복 검사 → 등록 → 실행' 임계 구역(start_scan·resume_scan). 동시 요청(더블클릭·포탈 중복 등록 노드·
+        # 예약 동시 발화)이 같은 루트를 두 번 등록하지 못하게 한다. _lock 과 별개(내부에서 _lock 을 잡음).
+        self._start_lock = threading.RLock()
+        self._op_setup_lock = threading.Lock()
+        self._pause_watch: Dict[int, dict] = {}   # 중단 후 N분 미재시작 감시: scan_id -> {due, root}
+        self._auto_restart: Dict[int, dict] = {}  # 완료 후 자동 재시작(반복): scan_id -> {경로·설정}
+        self._storage_cache = None          # 스토리지 어레이(아이실론/PowerStore) 상태 캐시
+        self._storage_ts = 0.0
+        self._bench = None                  # 실측 보정(시범 스캔) 진행 상태(단계별 표시용)
+        self._bench_lock = threading.Lock()
+        self._gen = None                    # 테스트 데이터 생성 진행 상태
+        self._gen_lock = threading.Lock()
+        self._gen_stop = None
+        self._analyze = None                # 대상 분석(깊이 구조 측정) 진행 상태
+        self._analyze_lock = threading.Lock()
+        self._analyze_stop = None
+        self._autotune = None               # 오토튜닝(최적 procs×threads 측정) 진행 상태
+        self._autotune_lock = threading.Lock()
+        self._autotune_stop = None
+        self._upg_state = {"log": [], "installing": False, "available": False,
+                           "latest": None, "last_check": None}   # 인터넷 자동 업그레이드 상태
+        self._ts_hist_lock = threading.Lock()  # 트러블슈팅 진단 이력 파일 보호
+        self._rate_lock = threading.Lock()     # 처리량 표본 DB 보호
+        self._rate_prev = None                 # (scan_id, ts, discovered, files)
+        self._rate_stop = threading.Event()
+        self._rate_thread = threading.Thread(
+            target=self._rate_sampler_loop, name="rate-sampler", daemon=True)
+        self._rate_thread.start()
+        self._upgrade_thread = threading.Thread(
+            target=self._upgrade_watch_loop, name="upgrade-watch", daemon=True)
+        self._upgrade_thread.start()
+        self._op_sync_lock = threading.Lock()
+        self._op_auto = False               # 서버 기동(ensure_op_password) 후엔 '비밀번호 없음'을 두지 않는다
+        try:
+            self._settings_mtime = os.stat(setmod.settings_path(self.data_dir)).st_mtime_ns
+        except OSError:
+            self._settings_mtime = None
+        self._auth = authmod.AuthGuard(
+            self._op_password_now,          # 서버 명령(reset-password)이 바꾼 비밀번호도 바로 반영
+            ttl=lambda: float(self.settings.get("op_ttl_minutes", 30) or 30) * 60)
+        self._launch_cwd = os.getcwd()      # info.MD 를 저장할 '실행한 디렉터리'
+        self._reconcile_orphans()           # 이전 프로세스가 남긴 고아 스캔 정리
+        self._load_auto_restart()           # 저장된 반복(자동 재시작) 설정 복원 — 재개될 스캔이 끝나면 이어서 반복
+        self._resume_after_upgrade()        # 업그레이드 재시작 직전 돌던 스캔을 자동 재개
+
+    def _storage_cfg_key(self) -> str:
+        s = self.settings
+        keys = ("isilon_url", "isilon_user", "isilon_password", "isilon_verify_ssl", "powerstore_url",
+                "powerstore_user", "powerstore_password", "powerstore_verify_ssl")
+        return json.dumps([s.get(k) for k in keys] + [s.get("storage_arrays") or []], sort_keys=True, default=str)
+
+    def storage_status(self, force: bool = False) -> list:
+        """저장소 상태(응답용) — base·오류 문구 속 URL 비밀값을 가린다(인증 없는 조회, 28회차 점검)."""
+        s = self.settings or {}
+        secrets = netutil.secret_values(s.get("isilon_url"), s.get("powerstore_url"),
+                                        *[a.get("url") for a in (s.get("storage_arrays") or []) if isinstance(a, dict)])
+        # 주소 모양이 아닌 오류 문구 속 조각(예: "nonnumeric port: 'PW'")까지 저장된 비밀로 찾아 가린다(33회차 보안 점검)
+        return netutil.redact_values(netutil.redact_urls(self._storage_status_raw(force)), secrets)
+
+    def _storage_status_raw(self, force: bool = False) -> list:
+        """설정된 스토리지 어레이 상태 목록을 캐시(60초)와 함께 반환.
+
+        - 한 번에 하나만 조회(single-flight): 느린 어레이에 화면 새로고침마다 새 30초 조회가 겹쳐 쌓였다(21회차 점검).
+          조회 중이면 기다리지 않고 직전 결과를 돌려준다(처음이면 그 조회를 기다림).
+        - 어레이는 병렬로 조회(하나가 느려도 전체가 그 합만큼 늦지 않게).
+        - 연결 설정이 바뀌면 캐시를 버린다(예전엔 지운 어레이가 최대 60초 계속 보였다)."""
+        now = time.time()
+        key = self._storage_cfg_key()
+        cache_ok = (self._storage_cache is not None and getattr(self, "_storage_key", None) == key)
+        if (not force) and cache_ok and (now - self._storage_ts) < 60:
+            return self._storage_cache
+        lk = getattr(self, "_storage_lock", None)
+        if lk is None:
+            lk = self._storage_lock = threading.Lock()
+        if not lk.acquire(blocking=not cache_ok):
+            return self._storage_cache            # 다른 요청이 조회 중 — 직전 결과
+        try:
+            if (not force) and self._storage_cache is not None and getattr(self, "_storage_key", None) == key \
+                    and (time.time() - self._storage_ts) < 60:
+                return self._storage_cache        # 기다리는 사이 다른 요청이 새로 받아 둠
+            s = self.settings
+            jobs = []
+            if (s.get("isilon_url") or "").strip():
+                jobs.append(lambda: isilonmod.cluster_status(
+                    s.get("isilon_url", ""), s.get("isilon_user", ""), s.get("isilon_password", ""),
+                    verify_ssl=bool(s.get("isilon_verify_ssl", False)), timeout=10.0))
+            if (s.get("powerstore_url") or "").strip():
+                jobs.append(lambda: powerstoremod.cluster_status(
+                    s.get("powerstore_url", ""), s.get("powerstore_user", ""),
+                    s.get("powerstore_password", ""),
+                    verify_ssl=bool(s.get("powerstore_verify_ssl", False)), timeout=10.0))
+            for arr in (s.get("storage_arrays") or []):   # Unity/PowerMax/VMAX/XtremIO/VPLEX 등
+                jobs.append(lambda arr=arr: storagemod.query(arr))
+            arrays = []
+            if jobs:
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as ex:
+                    futs = [ex.submit(j) for j in jobs]
+                    for f in futs:
+                        try:
+                            arrays.append(f.result())
+                        except Exception as exc:  # noqa: BLE001
+                            arrays.append({"ok": False, "configured": True, "health": "unknown", "error": str(exc)})
+            self._storage_cache = arrays
+            self._storage_key = key
+            self._storage_ts = time.time()
+            return arrays
+        finally:
+            lk.release()
+
+    def isilon_status(self, force: bool = False) -> dict:
+        """back-compat: 아이실론 항목만 반환(/api/isilon)."""
+        for a in self.storage_status(force=force):
+            if a.get("type") == "isilon":
+                return a
+        return {"ok": False, "configured": False, "type": "isilon", "error": "미설정"}
+
+    def _reconcile_orphans(self) -> None:
+        """서버 시작 시: 실제로 실행 중이 아닌데 상태가 '진행 중'(discovering/sizing)
+        으로 남은 스캔을 '일시정지'로 정리한다.
+
+        대시보드 서버를 재시작하면 이전 프로세스에서 돌던 스캔 스레드가 죽지만 DB
+        상태는 '탐색중'으로 남아, 개요에는 탐색중인데 실제로는 아무것도 안 도는
+        모순이 생긴다. 시작 시 한 번 정리해 일관성을 맞추고 '재개'로 이어갈 수 있게 한다.
+        """
+        try:
+            mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+        except Exception:
+            return
+        try:
+            for s in mgrmod.list_scans(mconn):
+                if s.get("status") not in ("discovering", "sizing"):
+                    continue
+                sid = int(s["id"])
+                if sid in self._scans:   # 이 컨트롤러가 실제로 돌리는 중이면 건드리지 않음
+                    continue
+                # 'orphan' 표시 — 예약 스캔은 이 표시가 있을 때만 이어서 자동 재개한다(사용자·가드 정지와 구분)
+                mgrmod.update_scan(mconn, sid, status="paused", phase="paused", paused_by="orphan")
+                dbp = s.get("db_path")
+                if dbp and os.path.exists(dbp):
+                    try:
+                        pc = dbmod.connect(dbp)
+                        rid = dbmod.latest_run_id(pc)
+                        if rid is not None:
+                            dbmod.update_run(pc, rid, status="paused", phase="paused")
+                            pc.commit()
+                        pc.close()
+                    except Exception:
+                        pass
+            mconn.commit()
+        except Exception:
+            pass
+        finally:
+            mconn.close()
+
+    # ----- 업그레이드 재시작 ↔ 진행 중 스캔 자동 재개 -----
+    _RESUME_MARK = "resume_after_upgrade.json"
+
+    def _mark_running_scans_for_resume(self) -> None:
+        """재시작 직전, 지금 돌고 있는 스캔 id 를 마커 파일(data-dir)에 적어둔다.
+
+        호출 시점: ① 앱 내부 업그레이드(_restart_for_upgrade→os.execv) ② 외부 종료(SIGTERM —
+        systemctl restart·재부팅·설치 스크립트 업그레이드, cli handle_sigint 가 호출). 새 프로세스가
+        시작할 때 이 마커를 읽어 자동 재개한다(돌던 스캔이 없으면 남은 마커를 지운다). data-dir 은
+        코드 교체·재부팅과 무관하게 보존되므로 마커가 살아남아 작업이 유실되지 않는다.
+        """
+        ids = self.running_ids()
+        path = os.path.join(self.data_dir, self._RESUME_MARK)
+        if not ids:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            return
+        try:
+            os.makedirs(self.data_dir, exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({"scan_ids": ids, "ts": time.time()}, fh)
+            os.replace(tmp, path)
+            self._log("[upgrade] 재시작 후 자동 재개할 스캔 표시: %s" % ids)
+        except OSError:
+            pass
+
+    def _restart_for_upgrade(self) -> None:
+        """진행 중 스캔을 자동 재개 대상으로 표시한 뒤 프로세스를 재시작한다(돌아오지 않음)."""
+        try:
+            self._mark_running_scans_for_resume()
+        except Exception:   # noqa: BLE001 — 표시 실패해도 업그레이드 재시작은 그대로 진행
+            pass
+        upgrademod.restart_process()
+
+    def _resume_after_upgrade(self) -> None:
+        """재시작 직전에 표시해 둔(마커) 스캔을 자동 재개한다(시작 시 1회). 마커는 시도 후 삭제.
+
+        _reconcile_orphans() 가 먼저 그 스캔을 'paused' 로 정리한 뒤 호출되므로, 여기서 곧바로
+        이어서 재개한다. 업그레이드(os.execv)뿐 아니라 SIGTERM 종료(systemctl restart·재부팅·설치
+        스크립트)도 마커를 남기므로, 그런 재시작에서도 돌던 스캔을 이어서 진행한다. 마커가 없는
+        재시작(돌던 스캔이 없었음)에서는 아무 일도 하지 않는다. 재개 결과는 업그레이드 패널 로그·
+        last_resume 에 남겨 화면에서 성공/실패를 확인할 수 있다.
+        """
+        path = os.path.join(self.data_dir, self._RESUME_MARK)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return
+        results = []
+        for sid in (data.get("scan_ids") or []):
+            try:
+                res = self.resume_scan(int(sid))
+                ok = bool(res.get("ok"))
+                results.append({"scan_id": int(sid), "ok": ok, "reason": res.get("reason")})
+                # 업그레이드 패널 로그에도 남겨, 재개 성공/실패를 화면에서 바로 확인할 수 있게 한다.
+                self._upg_log("업그레이드 후 자동 재개 scan #%s: %s"
+                              % (sid, "재개됨" if ok else ("실패 — %s" % res.get("reason"))))
+            except Exception as exc:   # noqa: BLE001
+                results.append({"scan_id": int(sid), "ok": False, "reason": str(exc)})
+                self._upg_log("업그레이드 후 자동 재개 실패 scan #%s: %s" % (sid, exc))
+        with self._lock:
+            self._upg_state["last_resume"] = {"ts": time.time(), "results": results}
+        try:
+            os.remove(path)   # 재개 시도를 모두 마친 뒤 삭제(도중에 죽으면 다음 부팅에 한 번 더 시도)
+        except OSError:
+            pass
+
+    # ----- 반복(완료 후 자동 재시작) 상태 영속화 -----
+    _AUTO_RESTART_MARK = "auto_restart.json"
+
+    def _save_auto_restart(self) -> None:
+        """반복(자동 재시작) 설정을 data-dir 에 저장한다.
+
+        _auto_restart 는 메모리 dict 라 프로세스가 죽으면(재시작·업그레이드) 사라진다.
+        그러면 돌던 스캔이 한 번 끝난 뒤 반복이 끊긴다. 그래서 디스크에도 남겨, 시작 시
+        복원해 반복을 이어간다(data-dir 은 코드 교체와 무관하게 보존된다).
+        """
+        path = os.path.join(self.data_dir, self._AUTO_RESTART_MARK)
+        with self._lock:                       # 스냅샷만 락 안에서(호출부는 락을 풀고 부른다)
+            data = {str(k): v for k, v in self._auto_restart.items()}
+        try:
+            if not data:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                return
+            os.makedirs(self.data_dir, exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+            os.replace(tmp, path)
+        except OSError:
+            pass
+
+    def _load_auto_restart(self) -> None:
+        """저장해 둔 반복 설정을 복원한다(시작 시 1회). 이미 끝난(done/error) 스캔은 버린다."""
+        path = os.path.join(self.data_dir, self._AUTO_RESTART_MARK)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return
+        if not isinstance(data, dict) or not data:
+            return
+        restored: Dict[int, dict] = {}
+        try:
+            mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+            try:
+                for k, cfg in data.items():
+                    try:
+                        sid = int(k)
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                    row = mgrmod.get_scan(mconn, sid)
+                    if row is None or row["status"] in ("done", "error"):
+                        continue          # 이미 끝난 반복은 복원하지 않음(재개 대상만)
+                    restored[sid] = cfg
+            finally:
+                mconn.close()
+        except Exception:                  # noqa: BLE001 — DB 를 못 읽으면 보수적으로 전부 복원
+            for k, cfg in data.items():
+                try:
+                    restored[int(k)] = cfg
+                except (TypeError, ValueError, OverflowError):
+                    pass
+        if restored:
+            with self._lock:
+                self._auto_restart.update(restored)
+            self._log("[loop] 반복(자동 재시작) 복원: %s" % sorted(restored.keys()))
+        self._save_auto_restart()          # 정리(prune)된 상태를 디스크에 반영
+
+    # 설정에서 파생되는 값들(편집되면 즉시 반영)
+    @property
+    def mount_bases(self):
+        return self.settings.get("mount_bases", [])
+
+    @property
+    def sample_interval(self) -> float:
+        return float(self.settings.get("sample_interval", 2.0))
+
+    @property
+    def batch_size(self) -> int:
+        return int(self.settings.get("batch_size", 500))
+
+    # ----- 작업 보호(비밀번호) -----
+    def op_required(self) -> bool:
+        """작업(POST)에 로그인이 필요한가(= op_password 가 설정됨)."""
+        return self._auth.required()
+
+    def unlock(self, password: str, client=None) -> dict:
+        """비밀번호를 확인하고 맞으면 로그인 토큰을 발급한다(무차별 대입 시 접속 IP별 일시 잠금)."""
+        return self._auth.login(password, client)
+
+    def op_token_valid(self, token) -> bool:
+        self._sync_op_from_disk()          # 서버 명령으로 초기화됐으면 옛 세션을 먼저 폐기
+        return self._auth.token_valid(token)
+
+    def _upgrade_watch_loop(self) -> None:
+        """새 버전을 자동 적용한다 — ① 로컬 감시 폴더 ② 인터넷(GitHub) 소스.
+
+        옵트인(설정 비우면 끔). 더 새 버전만 적용하고 기존 코드는 백업·롤백 가능. 진행 중
+        스캔이 있으면 미룬다. 인터넷 소스는 주기적으로 확인해 상태를 기록하고(상세 표시용),
+        upgrade_auto 가 켜져 있으면 자동 설치 후 재시작한다.
+        """
+        code_dir = upgrademod.code_dir_of(__file__)
+        dest = os.path.join(self.data_dir, "upgrades")
+        while not self._rate_stop.is_set():
+            secs = 60
+            try:
+                secs = int(self.settings.get("upgrade_check_secs", 60) or 60)
+                with self._lock:
+                    busy = bool(self._scans) or bool(self._partial_running_nolock())   # 스캔 중이면 업그레이드 보류
+                # ① 로컬 감시 폴더
+                wd = (self.settings.get("upgrade_watch_dir") or "").strip()
+                if wd and not busy:
+                    bad = getattr(self, "_upg_bad", None)
+                    if bad is None:
+                        bad = self._upg_bad = set()
+                    found = upgrademod.find_newer_archive(wd, __version__, skip=bad)
+                    if found:
+                        res = upgrademod.upgrade_from_archive(found[0], code_dir, __version__)
+                        if not res.get("ok"):   # 실패한 파일은 바뀌기 전까지 다시 시도하지 않는다(로그 1회)
+                            bad.add(upgrademod.archive_sig(found[0]))
+                            self._upg_log("감시 폴더 업그레이드 실패(%s): %s — 파일이 바뀌면 다시 시도" % (
+                                os.path.basename(found[0]), res.get("reason")))
+                        if res.get("ok"):
+                            self._upg_log("감시 폴더 자동 업그레이드 %s → %s" % (
+                                res.get("from"), res["version"]))
+                            auditmod.record(self.data_dir, action="self_upgrade", ok=True,
+                                            detail="%s -> %s" % (res.get("from"), res["version"]))
+                            self._restart_for_upgrade()   # 돌던 스캔 표시 후 재시작(돌아오지 않음)
+                # ② 인터넷(GitHub) 소스
+                if (self.settings.get("upgrade_source") or "off").strip() == "github":
+                    info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__,
+                                                   token=self.settings.get("upgrade_token") or None)
+                    self._upg_set_check(info)
+                    _nb = getattr(self, "_upg_net_bad", None)
+                    if _nb is None:
+                        _nb = self._upg_net_bad = {}
+                    _nk = upgrademod.net_fail_key(info)
+                    if (info.get("available") and not busy and bool(self.settings.get("upgrade_auto"))
+                            and not upgrademod.net_fail_should_skip(_nb, _nk)):
+                        self._upg_log("새 버전 %s 발견 — 자동 설치" % info.get("latest"))
+                        res = upgrademod.upgrade_from_remote(
+                            self.settings.get("upgrade_url") or "", code_dir, __version__, dest,
+                            token=self.settings.get("upgrade_token") or None)
+                        if res.get("ok"):
+                            self._upg_log("자동 업그레이드 %s → %s 완료, 재시작" % (
+                                res.get("from"), res["version"]))
+                            auditmod.record(self.data_dir, action="self_upgrade_net", ok=True,
+                                            detail="%s -> %s" % (res.get("from"), res["version"]))
+                            self._restart_for_upgrade()
+                        else:
+                            _w = upgrademod.net_fail_record(_nb, _nk)
+                            self._upg_log("자동 설치 실패: %s — 같은 묶음은 %d분 뒤 다시 시도" % (
+                                res.get("reason"), int(_w // 60)))
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                self._rate_stop.wait(max(10, min(float(secs), 7 * 86400.0)))
+            except (TypeError, ValueError, OverflowError):   # 이상한 주기 값이 이 스레드를 죽이지 않게
+                self._rate_stop.wait(60)
+
+    # ----- 자동 업그레이드 상태/조작(인터넷 소스, 상세 표시용) -----
+    def _upg_log(self, msg: str) -> None:
+        with self._lock:
+            self._upg_state.setdefault("log", []).append({"t": time.time(), "msg": msg})
+            self._upg_state["log"] = self._upg_state["log"][-60:]
+        self._log("[upgrade] " + msg)
+
+    def _upg_set_check(self, info: dict) -> None:
+        with self._lock:
+            self._upg_state.update({
+                "last_check": info.get("checked_at"), "latest": info.get("latest"),
+                "available": bool(info.get("available")), "source": info.get("source"),
+                "size_bytes": info.get("size_bytes"), "download_url": info.get("download_url"),
+                "check_error": info.get("error"),
+            })
+
+    def upgrade_status(self) -> dict:
+        with self._lock:
+            st = dict(self._upg_state)
+            busy = bool(self._scans) or bool(self._partial_running_nolock())   # 스캔 중이면 자동 업그레이드는 보류됨
+        st["current"] = __version__
+        st["source_mode"] = self.settings.get("upgrade_source", "off")
+        st["auto"] = bool(self.settings.get("upgrade_auto"))
+        st["url"] = netutil.mask_url_secret(self.settings.get("upgrade_url") or upgrademod.DEFAULT_UPGRADE_BASE)
+        st["url_custom"] = netutil.mask_url_secret(self.settings.get("upgrade_url") or "")   # 비밀값 가림(27회차)
+        st["check_secs"] = int(self.settings.get("upgrade_check_secs", 60) or 60)
+        st["token_set"] = bool(self.settings.get("upgrade_token"))   # 값 비노출, 설정 여부만
+        st["watch_dir"] = self.settings.get("upgrade_watch_dir", "")
+        st["scan_busy"] = busy
+        # 자동설치가 왜 안 되는지(소스 off/자동 off/스캔 중) 한 줄 설명 — 엣지·포탈 공통 판단.
+        st["auto_blocked"], st["auto_reason"] = upgrademod.auto_status_reason(
+            source_mode=st["source_mode"], auto=st["auto"],
+            available=bool(st.get("available")), busy=busy,
+            installing=bool(st.get("installing")), watch_dir=st["watch_dir"])
+        # source·download_url·오류·로그에 설정 URL 의 비밀값(쿼리 토큰·사용자 정보)이 그대로 있었다(28회차 점검)
+        # 주소 모양이 아닌 오류·로그 문구 속 비밀(user:pw@host 조각·토큰)까지 저장된 값으로 찾아 가린다(32회차 점검)
+        return netutil.redact_values(netutil.redact_urls({"ok": True, **st}),
+                                     netutil.secret_values(self.settings.get("upgrade_url"),
+                                                           self.settings.get("upgrade_token")))
+
+    def upgrade_check(self) -> dict:
+        info = upgrademod.check_remote(self.settings.get("upgrade_url") or "", __version__,
+                                       token=self.settings.get("upgrade_token") or None)
+        self._upg_set_check(info)
+        if info.get("error"):
+            self._upg_log("확인 실패: %s" % info["error"])
+        else:
+            self._upg_log("확인 — 현재 %s · 최신 %s%s" % (
+                __version__, info.get("latest"),
+                " · 업데이트 가능" if info.get("available") else " · 최신"))
+        return {"ok": bool(info.get("ok")), **self.upgrade_status()}
+
+    def upgrade_install(self) -> dict:
+        with self._lock:
+            if self._upg_state.get("installing"):
+                return {"ok": False, "error": "이미 설치 중입니다."}
+            self._upg_state["installing"] = True
+        try:
+            code_dir = upgrademod.code_dir_of(__file__)
+            dest = os.path.join(self.data_dir, "upgrades")
+            self._upg_log("수동 업그레이드 시작…")
+            res = upgrademod.upgrade_from_remote(
+                self.settings.get("upgrade_url") or "", code_dir, __version__, dest,
+                token=self.settings.get("upgrade_token") or None)
+        finally:
+            with self._lock:
+                self._upg_state["installing"] = False
+        if res.get("ok"):
+            self._upg_log("설치 완료 %s → %s — 곧 재시작" % (res.get("from"), res.get("version")))
+            auditmod.record(self.data_dir, action="self_upgrade_manual", ok=True,
+                            detail="-> %s" % res.get("version"))
+            threading.Thread(target=lambda: (time.sleep(1.2), self._restart_for_upgrade()),
+                             daemon=True).start()
+            return {"ok": True, "version": res.get("version"), "restarting": True}
+        self._upg_log("설치 실패: %s" % res.get("reason"))
+        return {"ok": False, "error": res.get("reason"),
+                "up_to_date": bool(res.get("up_to_date"))}
+
+    def _write_info_md(self, password: str) -> Optional[str]:
+        """사용자가 정한 비밀번호를 실행한 디렉터리의 info.MD 로 저장(권한 600). 반환: 경로 또는 None."""
+        return write_info_md(self._launch_cwd, self.data_dir, password)
+
+    # ----- 작업 비밀번호: 디스크 동기화·저장·임시 비밀번호 -----
+    def _op_password_now(self):
+        """AuthGuard 가 쓰는 현재 비밀번호 — 서버 명령(reset-password)이 바꾼 settings.json 을 반영."""
+        self._sync_op_from_disk()
+        return self.settings.get("op_password")
+
+    def _sync_op_from_disk(self) -> None:
+        """settings.json 이 바뀌었고 비밀번호가 다르면(다른 프로세스가 초기화) 비밀번호 상태만 받아들인다.
+        바뀐 비밀번호로는 기존 로그인 세션이 무의미하므로 모두 폐기한다. 비용: 평소 stat 1회."""
+        try:
+            mt = os.stat(setmod.settings_path(self.data_dir)).st_mtime_ns
+        except OSError:
+            return
+        with self._op_sync_lock:
+            if mt == self._settings_mtime:
+                return
+            self._settings_mtime = mt
+            try:
+                disk = setmod.load(self.data_dir)
+            except Exception:  # noqa: BLE001
+                return
+            if disk.get("op_password") == self.settings.get("op_password"):
+                return
+            merged = dict(self.settings)
+            for k in OP_RUNTIME_KEYS:
+                merged[k] = disk.get(k)
+            self.settings = merged
+        self._auth.revoke_all()
+        self._log("작업 비밀번호가 서버 명령으로 바뀜(%s) — 로그인 세션 모두 만료"
+                  % (disk.get("op_info_path") or "info.MD"))
+
+    def _save_settings(self, merged: dict, *, op_owned: bool = False) -> None:
+        """설정 저장의 단일 경로. op_owned=False(비밀번호를 건드리지 않는 저장)면 비밀번호 상태는 '현재 값'
+        (디스크 동기화 후)으로 덮어 — 그 사이 서버 명령이 초기화한 비밀번호를 옛 값으로 되돌리지 않는다."""
+        self._sync_op_from_disk()
+        merged = dict(merged)
+        if not op_owned:
+            for k in OP_RUNTIME_KEYS:
+                merged[k] = self.settings.get(k)
+        self.settings = setmod.save(self.data_dir, merged)
+        try:
+            self._settings_mtime = os.stat(setmod.settings_path(self.data_dir)).st_mtime_ns
+        except OSError:
+            pass
+
+    def ensure_op_password(self) -> Optional[dict]:
+        """비밀번호가 없으면 임시 비밀번호를 만들어 실행 디렉터리 info.MD 에 기록(서버 기동 시 호출).
+
+        이후 비밀번호를 비우는 저장(보호 해제·포탈 해제 푸시)도 다시 임시 비밀번호로 초기화한다 —
+        '설정'은 항상 비밀번호로 보호된다. 반환: 새로 만들었으면 {info_path, password}, 아니면 None.
+        """
+        self._op_auto = True
+        self._sync_op_from_disk()
+        if self.settings.get("op_password"):
+            return None
+        res = reset_op_password(self.data_dir, self._launch_cwd)
+        if res is None:
+            self._log("임시 비밀번호를 만들지 못함(info.MD 쓰기 실패) — 설정 첫 진입 때 비밀번호를 만들게 됩니다")
+            return None
+        self.settings = res["settings"]
+        try:
+            self._settings_mtime = os.stat(setmod.settings_path(self.data_dir)).st_mtime_ns
+        except OSError:
+            pass
+        self._auth.revoke_all()
+        self._log("임시 작업 비밀번호 생성 → %s" % res["info_path"])
+        return {"info_path": res["info_path"], "password": res["password"]}
+
+    def op_temp_info(self) -> dict:
+        """화면 안내용 — 임시 비밀번호 사용 중이면 info.MD 경로(비밀번호 자체는 내보내지 않는다)."""
+        self._sync_op_from_disk()
+        temp = bool(self.settings.get("op_password_temp")) and bool(self.settings.get("op_password"))
+        return {"op_temp": temp, "op_info_path": (self.settings.get("op_info_path") or "") if temp else ""}
+
+    def _apply_user_password(self, merged: dict, pw: str) -> None:
+        """사용자가 정한(또는 비운) 비밀번호를 merged 에 반영 — 임시 상태 해제, info.MD 갱신/정리."""
+        enc = bool(merged.get("op_password_encrypted"))
+        old_info = self.settings.get("op_info_path") or ""
+        was_temp = bool(self.settings.get("op_password_temp"))
+        merged["op_password"] = authmod.store_password(pw, encrypt=enc)
+        merged["op_password_temp"] = False
+        merged["op_info_path"] = ""
+        if pw and not enc:                 # 평문 저장 → 복구용 info.MD 를 새 비밀번호로
+            merged["op_info_path"] = self._write_info_md(pw) or ""
+        elif was_temp and old_info:        # 암호화/해제 → 남은 임시 비밀번호 파일은 무의미하니 지운다
+            try:
+                os.remove(old_info)
+            except OSError:
+                pass
+
+    def update_settings(self, new: dict, *, merge_runtime: bool = True) -> dict:
+        """설정을 저장하고 갱신된 설정을 반환한다(잠겨 있으면 거부).
+
+        merge_runtime=True(화면 저장)면 예약의 런타임 필드(last_run 등)를 서버의 현재 값으로 덮는다 — 화면이
+        들고 있던 옛 값으로 되돌리지 않게. 서버가 스스로 런타임 필드를 바꾸는 저장(예약 시차 배치)은 False."""
+        if self.lock_settings:
+            return {"ok": False, "reason": "설정이 잠겨 있습니다(--lock-settings)."}
+        if not isinstance(new, dict):
+            return {"ok": False, "reason": "설정은 JSON 객체({...})로 보내야 합니다.", "_status": 400}
+        new = dict(new or {})
+        if isinstance(new.get("storage_arrays"), list):
+            new["storage_arrays"] = [dict(a) if isinstance(a, dict) else a for a in new["storage_arrays"]]
+        _lb = new.pop("_list_base", None)
+        if isinstance(_lb, dict):
+            _conf = _list_conflict(_lb, self.settings, new)
+            if _conf:
+                return {"ok": False, "_status": 409, "conflict": True,
+                        "reason": "%s 가 이 화면을 연 뒤 다른 곳에서 바뀌었습니다 — 새로고침해 최신 내용을 본 뒤 다시 저장하세요"
+                                  "(다른 사람이 추가한 항목이 지워지지 않게)." % _conf}
+        _merr = _unmask_settings(new, self.settings)
+        if _merr:
+            return {"ok": False, "_status": 400, "reason": _merr}
+        # 작업 보호 비밀번호: op_lock(체크) + op_password(새 비번)
+        #  - op_lock 거짓 → 보호 해제(비밀번호 제거)
+        #  - op_lock 참 + 새 비번 있음 → 설정/변경(+info.MD 기록)
+        #  - op_lock 참 + 빈칸 → 기존 유지
+        op_changed = None
+        if "op_lock" in new or "op_password" in new:
+            want_lock = _truthy(new.get("op_lock", True))
+            newpw = str(new.get("op_password") or "")
+            if not want_lock:
+                if self.settings.get("op_password"):
+                    op_changed = ""   # 해제
+            elif newpw.strip():
+                if len(newpw.strip()) < 4:   # 최초 설정(op-setup)과 같은 규칙 — 예전엔 여기선 1자도 허용됐다
+                    return {"ok": False, "_status": 400, "reason": "비밀번호는 4자 이상이어야 합니다."}
+                op_changed = newpw    # 설정/변경
+            new.pop("op_lock", None)
+            new.pop("op_password", None)
+        # 비밀번호/토큰은 문자열이어야 한다(숫자면 .strip() 에서 500 이 났다 — 2026-11 리뷰)
+        for _k in ("smtp_password", "api_token", "isilon_password", "powerstore_password"):
+            if new.get(_k) is not None and not isinstance(new.get(_k), str):
+                return {"ok": False, "_status": 400, "reason": "%s 는 문자열이어야 합니다" % _k}
+        # 비밀번호/토큰은 화면에 노출하지 않으므로(마스킹), 빈 값으로 오면 기존 값 유지
+        if not (new.get("smtp_password") or "").strip():
+            new.pop("smtp_password", None)
+        if _truthy(new.pop("api_token_clear", False)):
+            new["api_token"] = ""          # 명시적 지우기(빈칸은 '유지'라 화면에서 지울 방법이 없었다 — 2026-11 리뷰)
+        elif not (new.get("api_token") or "").strip():
+            new.pop("api_token", None)
+        # 단, 접속 주소(URL)가 바뀌었으면 옛 비밀번호를 새 주소로 넘기지 않는다 — 예전엔 주소만 바꾸고 비밀번호를
+        # 비워 두면 옛 장비의 비밀번호가 새(다른) 호스트로 전송됐다(2026-11 리뷰). 주소를 바꾸면 비밀번호도 다시 입력.
+        def _same_url(a, b):
+            return str(a or "").strip().rstrip("/") == str(b or "").strip().rstrip("/")
+        for _pw, _url in (("isilon_password", "isilon_url"), ("powerstore_password", "powerstore_url")):
+            if not (new.get(_pw) or "").strip():
+                if _url in new and not _same_url(new.get(_url), self.settings.get(_url)):
+                    new[_pw] = ""
+                else:
+                    new.pop(_pw, None)
+        # LLM 키·업그레이드 토큰도 같은 규칙 — 주소의 호스트가 바뀌었는데 새 키를 안 주면 옛 키를 지운다. 예전엔 남아,
+        # 다음 질의응답·업그레이드 확인이 옛 키를 새(다른) 호스트로 보냈다(29회차 점검)
+        for _pw, _url, _dflt in (("ask_llm_key", "ask_llm_endpoint", ""),
+                                 ("upgrade_token", "upgrade_url", upgrademod.DEFAULT_UPGRADE_BASE)):
+            if (not str(new.get(_pw) or "").strip() and _url in new and self.settings.get(_pw)
+                    and not netutil.same_origin(str(new.get(_url) or "").strip() or _dflt,
+                                                str(self.settings.get(_url) or "").strip() or _dflt)):
+                new[_pw] = ""
+        # 어레이 목록: 빈 비밀번호는 기존 값(같은 id·같은 주소) 유지
+        if isinstance(new.get("storage_arrays"), list):
+            olds = [a for a in (self.settings.get("storage_arrays") or []) if isinstance(a, dict)]
+            for a in new["storage_arrays"]:   # 문자열이 아닌 비밀번호·주소는 거부(예전엔 .strip() 에서 500, 22회차 점검)
+                if isinstance(a, dict) and any(k in a and a[k] is not None and not isinstance(a[k], str)
+                                               for k in ("password", "url", "user", "name", "id", "type")):
+                    return {"ok": False, "reason": "스토리지 어레이의 password·url·user·name 은 문자열이어야 합니다."}
+            for a in new["storage_arrays"]:
+                if isinstance(a, dict) and not (a.get("password") or "").strip():
+                    # 같은 주소인 옛 항목 중에서 id → 이름 → 주소 순으로 — 예전엔 같은 id/이름의 '첫' 항목만 보고 주소가
+                    # 다르면 포기해, 이름이 같은 어레이 하나를 지우면 다른 어레이의 비밀번호가 지워졌다(29회차 점검)
+                    same = [o for o in olds if a.get("url") and _same_url(o.get("url"), a.get("url"))]
+                    old = (next((o for o in same if a.get("id") and o.get("id") == a.get("id")), None)
+                           or next((o for o in same if a.get("name") and o.get("name") == a.get("name")), None)
+                           or (same[0] if same else None))
+                    if old and _same_url(old.get("url"), a.get("url")):
+                        a["password"] = old.get("password", "")
+        self._sync_op_from_disk()
+        merged = dict(self.settings)
+        if merge_runtime and isinstance(new.get("schedules"), list):
+            new["schedules"] = self._merge_sched_runtime(new["schedules"])
+        merged.update({k: v for k, v in new.items() if k in setmod.EDITABLE_KEYS})
+        enc_fix = False
+        if op_changed is not None:        # 작업 비밀번호 설정/변경/해제(평문 저장일 때만 info.MD 기록)
+            self._apply_user_password(merged, op_changed)
+        else:
+            # '암호화 저장' 체크만 바꾼 경우: 플래그가 실제 저장 형식과 어긋나지 않게 한다(2026-11 리뷰).
+            #  - 평문 저장 중 암호화 켬 → 지금 값을 해시로 바꿔 저장(평문이 남지 않게)
+            #  - 해시 저장 중 암호화 끔 → 해시는 평문으로 되돌릴 수 없으니 '암호화됨' 그대로 둔다
+            cur = str(self.settings.get("op_password") or "")
+            if cur:
+                hashed = authmod.is_hashed(cur)
+                if merged.get("op_password_encrypted") and not hashed:
+                    merged["op_password"] = authmod.store_password(cur, encrypt=True)
+                    enc_fix = True
+                elif hashed:
+                    merged["op_password_encrypted"] = True
+        self._save_settings(merged, op_owned=op_changed is not None or enc_fix)
+        if op_changed == "" and self._op_auto:   # 보호 해제 → 비밀번호 없는 상태로 두지 않고 임시로 초기화
+            self.ensure_op_password()
+        out = {"ok": True, "settings": _public_settings(self.settings)}
+        if op_changed is not None:
+            # 비밀번호가 바뀌면 옛 비밀번호로 받은 세션을 모두 만료 — 바꾼 본인에게만 새 토큰을 준다.
+            self._auth.revoke_all()
+            tok = self._auth.issue_token()
+            if tok:
+                out["token"] = tok
+                out["ttl"] = self._auth.ttl
+        return out
+
+    def setup_op_password(self, password: str) -> dict:
+        """최초 비밀번호 설정(아직 비밀번호가 없을 때만) → 성공하면 바로 로그인 토큰 발급.
+
+        '설정'·되돌릴 수 없는 작업은 비밀번호가 있어야 쓸 수 있어, 처음 들어갈 때 여기서 만든다.
+        이미 비밀번호가 있으면 거부(덮어쓰기 금지 — 변경은 로그인 후 설정에서).
+        """
+        pw = str(password or "")
+        if len(pw.strip()) < 4:
+            return {"ok": False, "reason": "비밀번호는 4자 이상이어야 합니다."}
+        with self._op_setup_lock:          # 동시 최초 설정 요청 중 하나만(나중 것이 덮어쓰지 않게)
+            if self.op_required():
+                return {"ok": False, "reason": "이미 비밀번호가 설정돼 있습니다 — 로그인하세요.",
+                        "op_required": True}
+            res = self.set_op_password(pw)
+            if not res.get("ok"):
+                return res
+            tok = self._auth.issue_token()     # 만든 본인은 검증이 끝났으니 바로 토큰(잠금 카운터와 무관)
+        return {"ok": True, "token": tok, "op_required": True, "ttl": self._auth.ttl}
+
+    def set_op_password(self, password: str, *, clear: bool = False) -> dict:
+        """작업 보호 비밀번호를 설정/변경/해제한다(포탈이 api_token 으로 푸시).
+
+        update_settings 의 op_password 처리와 같은 저장 규칙(암호화 여부·info.MD)을 따른다.
+        clear=True 면 보호 해제(비밀번호 제거).
+        """
+        if self.lock_settings:
+            return {"ok": False, "reason": "설정이 잠겨 있습니다(--lock-settings)."}
+        pw = "" if clear else str(password or "")
+        if not clear and not pw.strip():
+            return {"ok": False, "reason": "빈 비밀번호는 설정할 수 없습니다."}
+        if not clear and len(pw.strip()) < 4:   # 화면 설정·최초 설정과 같은 규칙(32회차 점검: 포탈 푸시는 3자도 받았다)
+            return {"ok": False, "reason": "비밀번호는 4자 이상이어야 합니다."}
+        self._sync_op_from_disk()
+        merged = dict(self.settings)
+        self._apply_user_password(merged, pw)
+        self._save_settings(merged, op_owned=True)
+        self._auth.revoke_all()            # 옛 비밀번호로 받은 로그인 세션은 모두 만료
+        if not pw and self._op_auto:       # 해제 푸시 → 임시 비밀번호로 초기화(설정은 항상 보호)
+            self.ensure_op_password()
+        return {"ok": True, "cleared": not pw, "reset_to_temp": bool(not pw and self.op_required()),
+                "op_required": self.op_required()}
+
+    def _log(self, msg: str) -> None:
+        """log_path 가 설정돼 있으면 한 줄 추가한다(베스트 에포트)."""
+        p = self.settings.get("log_path")
+        if not p:
+            return
+        try:
+            with open(p, "a", encoding="utf-8") as fh:
+                fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
+        except Exception:
+            pass
 
     # ----- 경로 허용 검사 -----
-    def path_allowed(self, path: str):
-        path = os.path.abspath(path)
-        if not os.path.isdir(path):
-            return False, "디렉터리가 아니거나 접근할 수 없습니다."
-        if self.mount_bases:
-            for base in self.mount_bases:
+    @staticmethod
+    def _path_views(path: str) -> list:
+        """경로가 실제로 가리킬 수 있는 위치들(검사는 모두가 허용 범위 안이어야 통과).
+
+        - realpath(path): 커널이 해석하는 위치(심볼릭 링크 → '..' 순서로 해소)
+        - realpath(abspath(path)): 어휘적으로 '..' 를 먼저 접은 뒤의 위치 — 호출 측이 abspath 로
+          정규화해 쓰는 경우. 둘이 다를 수 있어('링크/../..') 하나만 보면 경계를 우회할 수 있다
+          (2026-11 리뷰)."""
+        raw = path or "/"
+        out = [os.path.realpath(raw)]
+        lex = os.path.realpath(os.path.abspath(raw))
+        if lex != out[0]:
+            out.append(lex)
+        return out
+
+    def _under_bases(self, path: str) -> bool:
+        bases = []
+        for base in self.mount_bases:
+            try:
+                bases.append(os.path.realpath(base))
+            except (OSError, ValueError):
+                continue
+        for view in self._path_views(path):
+            ok = False
+            for rb in bases:
                 try:
-                    if os.path.commonpath([path, base]) == base:
-                        return True, None
+                    if os.path.commonpath([view, rb]) == rb:
+                        ok = True
+                        break
                 except ValueError:
                     continue
+            if not ok:
+                return False
+        return True
+
+    def path_allowed(self, path: str):
+        # realpath 로 심볼릭 링크를 해소해 비교한다(어휘적 commonpath 만 쓰면 허용 마운트
+        # 안의 심볼릭 링크로 경계를 벗어날 수 있다 — 보안 감사 지적, 2026-06-27).
+        if not all(os.path.isdir(v) for v in self._path_views(path)):
+            return False, "디렉터리가 아니거나 접근할 수 없습니다."
+        if self.mount_bases and not self._under_bases(path):
             return False, ("허용된 마운트 경로 밖입니다. 허용: "
                            + ", ".join(self.mount_bases))
         return True, None
 
-    # ----- 시작 -----
-    def start_scan(self, path: str, *, backend="native", size_mode="disk",
-                   one_file_system=False) -> dict:
-        path = os.path.abspath(path)
-        ok, reason = self.path_allowed(path)
+    def browse_allowed(self, path: str) -> bool:
+        """폴더 나열(browse)을 허용할 경로인지 검사한다.
+
+        mount_bases 가 설정돼 있으면 그 하위(또는 동일) 경로만 허용해, 허용
+        경로 밖의 디렉터리 구조가 노출되지 않게 한다. mount_bases 가 비어
+        있으면 기존 동작대로 어떤 경로든 허용한다(스캔 허용과 같은 정책).
+        """
+        if not self.mount_bases:
+            return True
+        return self._under_bases(path or "/")   # 심볼릭 링크 해소(path_allowed 와 같은 정책)
+
+    def scan_path_check(self, path: str, confirm_outside: bool = False):
+        """스캔/측정 대상 경로를 검사한다.
+
+        - 디렉터리가 아니거나 접근 불가 → 하드 거부(되돌릴 수 없음).
+        - mount_bases(지정 경로)가 설정돼 있고 그 '밖'이며 confirm_outside 가
+          아니면 → reason="outside_base"(사용자 컨펌으로 진행 가능한 '소프트' 신호).
+          지정 경로는 기본값/가드일 뿐, 사용자가 컨펌하면 다른 경로도 허용한다.
+        반환: (ok, err_dict_or_None). err_dict 는 그대로 응답으로 보낼 수 있다.
+        """
+        ap = os.path.abspath(path)
+        if not os.path.isdir(ap):
+            return False, {"ok": False,
+                           "reason": "디렉터리가 아니거나 접근할 수 없습니다."}
+        if self.mount_bases and not self.browse_allowed(ap) and not confirm_outside:
+            return False, {"ok": False, "reason": "outside_base",
+                           "path": ap, "allowed": self.mount_bases}
+        return True, None
+
+    # ----- 실측 워커 보정(시범 탐색) -----
+    def benchmark_workers(self, *, path=None, candidates=None, budget=5.0) -> dict:
+        """대상 경로에서 후보 스레드 수로 짧게 시범 탐색해 처리량을 비교한다."""
+        from . import tuning as tunmod
+        if not path:
+            path = self.mount_bases[0] if self.mount_bases else None
+        if not path:
+            return {"ok": False, "error": "측정할 경로를 지정하세요(허용 경로 없음)."}
+        ok, why = self.path_allowed(path)
         if not ok:
-            return {"ok": False, "reason": reason}
+            return {"ok": False, "error": why}
+        if isinstance(candidates, str):
+            candidates = [c for c in candidates.split(",") if c.strip()]
+        try:
+            budget = float(budget)
+        except (TypeError, ValueError, OverflowError):
+            budget = 5.0
+        return tunmod.benchmark_workers(path, candidates=candidates, budget_sec=budget)
+
+    def benchmark_start(self, *, path=None, candidates=None, budget=5.0,
+                        mem_factor=2.0) -> dict:
+        """백그라운드로 시범 탐색을 시작한다. 각 단계가 끝날 때마다 부분 결과를
+        쌓아 두고, benchmark_status() 로 폴링해 단계별로 보여줄 수 있게 한다."""
+        from . import tuning as tunmod
+        if not path:
+            path = self.mount_bases[0] if self.mount_bases else None
+        if not path:
+            return {"ok": False, "error": "측정할 경로를 지정하세요(허용 경로 없음)."}
+        ok, why = self.path_allowed(path)
+        if not ok:
+            return {"ok": False, "error": why}
+        with self._bench_lock:
+            if self._bench and self._bench.get("running"):
+                return {"ok": False, "error": "이미 측정이 진행 중입니다."}
+            self._bench = {"running": True, "done": False, "results": [],
+                           "sample_path": os.path.abspath(path), "error": None,
+                           "recommended": None, "note": "", "started_at": time.time()}
+        if isinstance(candidates, str):
+            candidates = [c for c in candidates.split(",") if c.strip()]
+        try:
+            budget = float(budget)
+        except (TypeError, ValueError, OverflowError):
+            budget = 5.0
+
+        def _on_result(r):
+            with self._bench_lock:
+                if self._bench is not None:
+                    self._bench["results"].append(r)
+
+        def _run():
+            try:
+                res = tunmod.benchmark_workers(
+                    path, candidates=candidates, budget_sec=budget,
+                    mem_factor=mem_factor, on_result=_on_result)
+            except Exception as exc:  # noqa: BLE001
+                res = {"ok": False, "error": "측정 오류: %s" % exc}
+            with self._bench_lock:
+                if self._bench is not None:
+                    self._bench["running"] = False
+                    self._bench["done"] = True
+                    self._bench["recommended"] = res.get("recommended")
+                    self._bench["note"] = res.get("note", "")
+                    self._bench["mem_factor"] = res.get("mem_factor")
+                    self._bench["base_rss_bytes"] = res.get("base_rss_bytes")
+                    if not res.get("ok"):
+                        self._bench["error"] = res.get("error")
+
+        threading.Thread(target=_run, daemon=True).start()
+        return {"ok": True, "started": True}
+
+    def benchmark_status(self) -> dict:
+        """진행 중/완료된 시범 탐색의 현재 스냅샷(단계별 결과 포함)."""
+        with self._bench_lock:
+            if self._bench is None:
+                return {"ok": True, "running": False, "done": False, "results": []}
+            return {"ok": True, **{k: v for k, v in self._bench.items()}}
+
+    # ----- 오토튜닝(최적 프로세스×스레드 자동 측정 → 본 스캔 자동 시작) -----
+    def autotune_start(self, *, path=None, secs=None, then_scan=True,
+                       confirm_outside=False, one_file_system=None) -> dict:
+        """실제 엔진(pscan)을 짧게 측정해 최적 procs×threads 를 고르고, then_scan 이면
+        그 설정으로 본 스캔을 자동 시작한다. 진행은 autotune_status 로 폴링한다."""
+        if not path:
+            return {"ok": False, "error": "측정할 경로를 지정하세요."}
+        ok, err = self.scan_path_check(path, confirm_outside)
+        if not ok:
+            # 지정 경로 밖이면 컨펌 신호(outside_base)를 그대로 전달해 클라가 묻게 한다.
+            if err.get("reason") == "outside_base":
+                return err
+            return {"ok": False, "error": err.get("reason")}
+        path = os.path.abspath(path)
+        try:
+            secs = float(secs) if secs else float(self.settings.get("autotune_secs", 8) or 8)
+        except (TypeError, ValueError, OverflowError):
+            secs = 8.0
+        secs = min(60.0, max(2.0, secs))
+        with self._autotune_lock:
+            if self._autotune and self._autotune.get("running"):
+                return {"ok": False, "error": "이미 오토튜닝이 진행 중입니다."}
+            self._autotune_stop = threading.Event()
+            self._autotune = {"running": True, "done": False, "error": None,
+                              "path": path, "results": [], "best": None,
+                              "phase": "measuring", "current": None, "scan_id": None,
+                              "then_scan": bool(then_scan), "secs": secs,
+                              "started_at": time.time()}
+        stop_event = self._autotune_stop
+        size_mode = self.settings.get("default_size_mode", "disk")
+
+        def _prog(p):
+            with self._autotune_lock:
+                if self._autotune is None:
+                    return
+                self._autotune["phase"] = p.get("phase", "measuring")
+                self._autotune["results"] = p.get("results", self._autotune["results"])
+                if p.get("phase") == "measuring":
+                    self._autotune["current"] = {
+                        "procs": p.get("procs"), "threads": p.get("threads"),
+                        "label": p.get("label"), "index": p.get("index"),
+                        "total": p.get("total")}
+                if p.get("best"):
+                    self._autotune["best"] = p.get("best")
+
+        def _run():
+            scan_id = None
+            try:
+                from . import autotune as atmod
+                # 측정 단계는 고정 사다리(단일·8p·8p×8t·16p·16p×8t·32p)를 쓴다.
+                r = atmod.autotune(path, secs=secs, size_mode=size_mode,
+                                   candidates=atmod.DEFAULT_LADDER,
+                                   stop_event=stop_event, on_progress=_prog)
+            except Exception as exc:  # noqa: BLE001
+                r = {"ok": False, "error": "오토튜닝 오류: %s" % exc}
+            best = r.get("best") if r.get("ok") else None
+            if r.get("ok") and then_scan and best and not stop_event.is_set():
+                pn = int(best.get("procs", 1) or 1)
+                tn = int(best.get("threads", 1) or 1)
+                try:
+                    if pn > 1:        # 병렬이 빠름 → pscan(빠른 용량, 1단계 드릴다운)
+                        sr = self.start_scan(path, size_mode=size_mode, engine="pscan",
+                                             processes=pn, threads=tn,
+                                             one_file_system=one_file_system)
+                    else:             # 단일이 빠름(빠른 저장소) → threads(상세 트리)
+                        sr = self.start_scan(path, size_mode=size_mode, engine="threads",
+                                             one_file_system=one_file_system)
+                    scan_id = sr.get("scan_id")
+                except Exception:  # noqa: BLE001
+                    scan_id = None
+            with self._autotune_lock:
+                if self._autotune is not None:
+                    self._autotune["running"] = False
+                    self._autotune["done"] = True
+                    self._autotune["phase"] = "done"
+                    self._autotune["results"] = r.get("results", [])
+                    self._autotune["best"] = best
+                    self._autotune["note"] = r.get("note", "")
+                    self._autotune["scan_id"] = scan_id
+                    if not r.get("ok"):
+                        self._autotune["error"] = r.get("error")
+
+        threading.Thread(target=_run, name="autotune", daemon=True).start()
+        return {"ok": True, "started": True}
+
+    def autotune_status(self) -> dict:
+        """진행 중/완료된 오토튜닝의 현재 스냅샷(단계별 결과 + best + 시작된 스캔)."""
+        with self._autotune_lock:
+            if self._autotune is None:
+                return {"ok": True, "running": False, "done": False, "results": []}
+            return {"ok": True, **{k: v for k, v in self._autotune.items()}}
+
+    def autotune_stop(self) -> dict:
+        with self._autotune_lock:
+            if self._autotune_stop is not None:
+                self._autotune_stop.set()
+        return {"ok": True}
+
+    # ----- 대상 분석(디렉터리 깊이 구조 측정) -----
+    def analyze_start(self, *, path=None, max_depth=0, dir_limit=0,
+                      time_budget=0.0, workers=8) -> dict:
+        """백그라운드로 깊이 구조 분석을 시작한다(파일 stat·DB 없이, 빠름).
+
+        analyze_status() 로 폴링해 진행/결과를 보여준다.
+        """
+        from . import analyzer as anamod
+        if not path:
+            path = self.mount_bases[0] if self.mount_bases else None
+        if not path:
+            return {"ok": False, "error": "분석할 경로를 지정하세요(허용 경로 없음)."}
+        ok, why = self.path_allowed(path)
+        if not ok:
+            return {"ok": False, "error": why}
+        try:
+            max_depth = max(0, int(max_depth or 0))
+            dir_limit = max(0, int(dir_limit or 0))
+            time_budget = max(0.0, float(time_budget or 0.0))
+            workers = max(1, min(64, int(workers or 8)))   # 상한(tuning.HARD_CAP) — 10억이면 스레드 폭주
+        except (TypeError, ValueError, OverflowError):
+            max_depth, dir_limit, time_budget, workers = 0, 0, 0.0, 8
+        with self._analyze_lock:
+            if self._analyze and self._analyze.get("running"):
+                return {"ok": False, "error": "이미 분석이 진행 중입니다."}
+            self._analyze_stop = threading.Event()
+            self._analyze = {"running": True, "done": False, "error": None,
+                             "root": os.path.abspath(path), "started_at": time.time(),
+                             "total_dirs": 0, "total_files": 0, "max_depth": 0,
+                             "error_dirs": 0, "elapsed": 0.0, "result": None}
+        stop_event = self._analyze_stop
+
+        def _on_progress(p):
+            with self._analyze_lock:
+                if self._analyze is not None and self._analyze.get("running"):
+                    self._analyze.update(
+                        total_dirs=p.get("total", 0), total_files=p.get("files", 0),
+                        max_depth=p.get("max_depth", 0), error_dirs=p.get("errors", 0),
+                        elapsed=p.get("elapsed", 0.0))
+
+        def _run():
+            try:
+                res = anamod.analyze_depth(
+                    path, max_depth=max_depth, dir_limit=dir_limit,
+                    time_budget=time_budget, workers=workers,
+                    stop_event=stop_event, on_progress=_on_progress)
+            except Exception as exc:  # noqa: BLE001
+                res = {"ok": False, "error": "분석 오류: %s" % exc}
+            with self._analyze_lock:
+                if self._analyze is not None:
+                    self._analyze["running"] = False
+                    self._analyze["done"] = True
+                    if res.get("ok"):
+                        self._analyze["result"] = res
+                        self._analyze.update(
+                            total_dirs=res.get("total_dirs", 0),
+                            total_files=res.get("total_files", 0),
+                            max_depth=res.get("max_depth", 0),
+                            error_dirs=res.get("error_dirs", 0),
+                            elapsed=res.get("elapsed", 0.0))
+                    else:
+                        self._analyze["error"] = res.get("error")
+
+        threading.Thread(target=_run, name="analyze", daemon=True).start()
+        return {"ok": True, "started": True}
+
+    def analyze_status(self) -> dict:
+        """진행 중/완료된 대상 분석의 현재 스냅샷(완료 시 result 포함)."""
+        with self._analyze_lock:
+            if self._analyze is None:
+                return {"ok": True, "running": False, "done": False, "result": None}
+            return {"ok": True, **{k: v for k, v in self._analyze.items()}}
+
+    def analyze_stop(self) -> dict:
+        with self._analyze_lock:
+            if self._analyze_stop is not None:
+                self._analyze_stop.set()
+        return {"ok": True}
+
+    # ----- 튜닝 점검(OS 커널/마운트 설정 분석) -----
+    def systune_check(self, *, scan_root=None) -> dict:
+        """OS 커널/NFS 마운트 설정을 분석해 스캔 가속 튜닝 포인트를 점검한다."""
+        from . import systune as sysmod
+        if not scan_root:
+            scan_root = self.mount_bases[0] if self.mount_bases else None
+        try:
+            return sysmod.check(scan_root=scan_root, data_dir=self.data_dir)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": "점검 오류: %s" % exc}
+
+    # ----- 트러블슈팅(실행 중 스캔 병목 진단) -----
+    def troubleshoot(self, *, sample_sec: float = 1.2) -> dict:
+        """실행 중인 스캔의 '어느 구간이 느린지'를 진단한다(워커 구간·처리량·프론티어).
+
+        OK 가 아닌 결과는 자동으로 진단 이력(History)에 저장한다.
+        """
+        from . import troubleshoot as troubmod
+        try:
+            res = troubmod.diagnose(self, sample_sec=sample_sec)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": "진단 오류: %s" % exc}
+        try:
+            with self._ts_hist_lock:
+                troubmod.record_if_problem(self.data_dir, res)
+        except Exception:  # noqa: BLE001
+            pass
+        return res
+
+    def troubleshoot_history(self, limit: int = 200) -> dict:
+        from . import troubleshoot as troubmod
+        with self._ts_hist_lock:
+            return {"ok": True, "events": troubmod.load_history(self.data_dir, limit=limit)}
+
+    def troubleshoot_history_clear(self) -> dict:
+        from . import troubleshoot as troubmod
+        with self._ts_hist_lock:
+            return troubmod.clear_history(self.data_dir)
+
+    # ----- 처리량 표본 24시간 저장(전용 metrics.db) -----
+    def _rate_sampler_loop(self) -> None:
+        """10초마다 진행값 델타로 처리량(초당 디렉터리/파일)을 계산해 metrics.db 에
+        기록한다(대시보드가 닫혀 있어도 24시간치가 쌓인다)."""
+        from . import troubleshoot as troubmod
+        n = 0
+        while not self._rate_stop.wait(10):
+            try:
+                prog = troubmod.latest_progress(self.data_dir)
+                now = time.time()
+                if prog and prog["status"] in ("discovering", "sizing", "running"):
+                    prev = self._rate_prev
+                    # 집계(sizing) 단계엔 discovered 가 멈춘다 — 집계 완료 수의
+                    # 델타를 디렉터리/초로 기록해 24시간 차트가 끊기지 않게 한다.
+                    dirs_now = (prog.get("processed") or 0) \
+                        if prog.get("phase") == "sizing" else prog["discovered"]
+                    if prev and prev[0] == prog["scan_id"]:
+                        dt = now - prev[1]
+                        if dt >= 1:
+                            rd = max(0, dirs_now - prev[2]) / dt
+                            rf = max(0, prog["files"] - prev[3]) / dt
+                            rb = max(0, prog["bytes"] - prev[4]) / dt   # 처리 용량(B/s)
+                            with self._rate_lock:
+                                troubmod.append_rate_sample(
+                                    self.data_dir, now, rd, rf, rb, prog["scan_id"])
+                    self._rate_prev = (prog["scan_id"], now, dirs_now,
+                                       prog["files"], prog["bytes"])
+                else:
+                    self._rate_prev = None
+                n += 1
+                if n % 30 == 0:            # 약 5분마다 24시간 초과분 정리
+                    with self._rate_lock:
+                        troubmod.trim_rate_samples(self.data_dir, keep_seconds=86400)
+            except Exception:             # noqa: BLE001 — 샘플러가 죽으면 안 됨
+                pass
+
+    def rate_samples(self, *, seconds: int = 86400, max_points: int = 600) -> dict:
+        from . import troubleshoot as troubmod
+        with self._rate_lock:
+            return {"ok": True, "seconds": seconds,
+                    "samples": troubmod.load_rate_samples(
+                        self.data_dir, seconds=seconds, max_points=max_points)}
+
+    def throughput(self, *, bucket_sec: int = 60, max_buckets: int = 60) -> dict:
+        """버킷별(1분/5분/10분/1시간) 처리량(용량·파일·디렉터리)."""
+        from . import troubleshoot as troubmod
+        with self._rate_lock:
+            buckets = troubmod.throughput_buckets(
+                self.data_dir, bucket_sec=bucket_sec, max_buckets=max_buckets)
+        tb = sum(b["bytes"] for b in buckets)
+        tf = sum(b["files"] for b in buckets)
+        td = sum(b["dirs"] for b in buckets)
+        return {"ok": True, "bucket_sec": bucket_sec, "buckets": buckets,
+                "total_bytes": tb, "total_files": tf, "total_dirs": td}
+
+    # ----- 테스트 데이터 생성 -----
+    def _gentest_path_ok(self, path):
+        """테스트 데이터 대상도 허용 마운트 경로 안이어야 한다(스캔·분석과 같은 규칙) — 예전엔 /tmp·/etc/x·
+        <마운트>/../밖 에도 만들 수 있었다(2026-11 점검). 아직 없는 경로라 실제 경로(realpath)로 판정."""
+        if self.mount_bases and not self._under_bases(os.path.abspath(str(path or ""))):
+            return "허용된 마운트 경로 밖입니다. 허용: " + ", ".join(self.mount_bases)
+        return None
+
+    def gentest_validate(self, *, path, n_dirs, n_subdirs, n_files, file_size) -> dict:
+        from . import gentest as genmod
+        ok, why, plan = genmod.validate(path, n_dirs, n_subdirs, n_files, file_size)
+        bad = self._gentest_path_ok(path)
+        if bad:
+            ok, why = False, bad
+        return {"ok": ok, "error": why, "plan": plan}
+
+    def gentest_start(self, *, path, n_dirs, n_subdirs, n_files, file_size) -> dict:
+        """백그라운드로 샘플 디렉터리/파일을 생성한다(진행 폴링용)."""
+        from . import gentest as genmod
+        ok, why, plan = genmod.validate(path, n_dirs, n_subdirs, n_files, file_size)
+        bad = self._gentest_path_ok(path)
+        if bad:
+            ok, why = False, bad
+        if not ok:
+            return {"ok": False, "error": why, "plan": plan}
+        with self._gen_lock:
+            if self._gen and self._gen.get("running"):
+                return {"ok": False, "error": "이미 생성이 진행 중입니다."}
+            self._gen_stop = threading.Event()
+            self._gen = {"running": True, "done": False, "error": None,
+                         "base": plan["base"], "plan": plan,
+                         "created_dirs": 0, "created_files": 0, "written_bytes": 0,
+                         "started_at": time.time()}
+        stop = self._gen_stop
+
+        def _progress(st):
+            with self._gen_lock:
+                if self._gen is not None:
+                    self._gen.update(st)
+
+        def _run():
+            try:
+                res = genmod.generate(
+                    plan["base"], plan["n_dirs"], plan["n_subdirs"],
+                    plan["n_files"], plan["file_size"],
+                    progress_cb=_progress, stop_event=stop)
+            except Exception as exc:  # noqa: BLE001
+                res = {"ok": False, "error": "생성 오류: %s" % exc}
+            with self._gen_lock:
+                if self._gen is not None:
+                    self._gen.update({k: res[k] for k in
+                                      ("created_dirs", "created_files", "written_bytes")
+                                      if k in res})
+                    self._gen["running"] = False
+                    self._gen["done"] = True
+                    self._gen["stopped"] = bool(res.get("stopped"))
+                    if not res.get("ok"):
+                        self._gen["error"] = res.get("error")
+
+        threading.Thread(target=_run, name="gentest", daemon=True).start()
+        return {"ok": True, "started": True, "plan": plan}
+
+    def gentest_status(self) -> dict:
+        with self._gen_lock:
+            if self._gen is None:
+                return {"ok": True, "running": False, "done": False}
+            return {"ok": True, **{k: v for k, v in self._gen.items()}}
+
+    def gentest_stop(self) -> dict:
+        with self._gen_lock:
+            if self._gen_stop is not None:
+                self._gen_stop.set()
+        return {"ok": True}
+
+    # ----- 시작 -----
+    # 매니저 하트비트(updated_at)가 이보다 오래된 '진행 중' 스캔은 죽은 것으로 본다(다른 프로세스 판정용).
+    _DUP_STALE_SECS = 900
+
+    def _empty_root_with_history(self, path: str):
+        """path 가 지금 텅 비었는데 같은 루트의 이전 완료 스캔에 데이터가 있으면 (scan_id, bytes), 아니면 None."""
+        try:
+            with os.scandir(path) as it:
+                if next(it, None) is not None:
+                    return None
+        except OSError:
+            return None
+        try:
+            mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+            try:
+                r = mc.execute("SELECT id, scanned_bytes FROM scans WHERE root_path=? AND status='done' "
+                               "AND scanned_bytes > 0 ORDER BY id DESC LIMIT 1", (dbmod.db_text(path),)).fetchone()
+            finally:
+                mc.close()
+        except Exception:  # noqa: BLE001 — 관리 DB 가 아직 없음
+            return None
+        return (int(r["id"]), int(r["scanned_bytes"])) if r else None
+
+    def _active_scan_on(self, path: str, exclude=None):
+        """루트 path 를 이미 스캔 중인 scan_id 를 돌려준다(없으면 None).
+
+        같은 트리를 두 스캔이 동시에 걸으면 처리량이 반토막 나고, 업그레이드 재개 때마다 둘 다
+        되살아나 끝나지 않는다(현장: #3/#4·#9/#10·#12/#13 이 같은 초에 쌍으로 시작). 이 프로세스가
+        돌리는 스캔(_scans)은 확정으로, 다른 프로세스의 스캔은 매니저 DB 의 진행 상태 + 최근
+        하트비트로 판정한다(죽은 스캔의 잔여 상태로 영원히 막히지 않도록 오래된 건 무시).
+        """
+        path = os.path.abspath(path)
+        # 심볼릭 링크로 가리킨 같은 트리도 같은 루트로 본다(실제 경로 비교) — 예전엔 링크 경로로 같은 데이터를
+        # 동시에 두 번 스캔할 수 있었다(2026-11 리뷰). 경로 문자열이 같으면 당연히 같다.
+        def _same(a):
+            a = os.path.abspath(a or "")
+            if a == path:
+                return True
+            try:
+                return os.path.realpath(a) == os.path.realpath(path)
+            except (OSError, ValueError):
+                return False
+        with self._lock:
+            for sid, rec in self._scans.items():
+                if sid != exclude and _same(rec.get("path")):
+                    return sid
+            mine = set(self._scans.keys())
+        try:
+            mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+            try:
+                rows = [r for r in mc.execute(
+                    "SELECT id, updated_at, root_path FROM scans "
+                    "WHERE status IN ('discovering','sizing')").fetchall()
+                        if _same(dbmod.fs_text(r["root_path"]))]
+            finally:
+                mc.close()
+        except Exception:  # noqa: BLE001 — 매니저 DB 가 없으면(첫 실행) 중복도 없다
+            return None
+        now = time.time()
+        for r in rows:
+            sid = int(r["id"])
+            if sid == exclude or sid in mine:
+                continue
+            if now - float(r["updated_at"] or 0) < self._DUP_STALE_SECS:
+                return sid
+        return None
+
+    def start_scan(self, path: str, **kw) -> dict:
+        """새 스캔을 시작한다. '중복 검사 → 등록 → 실행' 을 한 임계 구역에서 처리해, 동시 요청이
+        같은 루트를 두 번 등록하지 못하게 한다(같은 루트가 이미 스캔 중이면 거부)."""
+        with self._start_lock:
+            return self._start_scan_locked(path, **kw)
+
+    def _start_scan_locked(self, path: str, *, backend=None, size_mode=None,
+                           one_file_system=None, engine=None,
+                           processes=None, threads=None, confirm_outside=False,
+                           auto_restart=False, fold_depth=None, allow_empty=False) -> dict:
+        path = os.path.abspath(path)
+        ok, err = self.scan_path_check(path, confirm_outside)
+        if not ok:
+            return err
+        dup = self._active_scan_on(path)
+        if dup is not None:
+            self._log("scan start 거부: %s 는 이미 스캔 #%s 가 진행 중(중복 방지)" % (path, dup))
+            return {"ok": False, "duplicate": True, "scan_id": dup,
+                    "reason": "이미 같은 경로를 스캔 중입니다(#%s). 끝나거나 중지한 뒤 다시 시작하세요." % dup}
+        empty = self._empty_root_with_history(path)
+        if empty and not allow_empty:
+            # NAS 마운트가 빠져 빈 마운트 지점만 남은 경로를 새로 스캔하면 '0바이트 완료'가 그 루트의 최신 결과가
+            # 된다. 이전에 데이터가 있던 경로가 지금 텅 비었으면 시작하지 않는다(정말 비었다면 allow_empty).
+            self._log("scan start 거부: %s 가 비어 있음(이전 완료 스캔 #%s = %s) — 마운트 확인 필요"
+                      % (path, empty[0], _human_bytes(empty[1])))
+            return {"ok": False, "empty_root": True,
+                    "reason": ("대상 경로가 비어 있습니다(이전 완료 스캔 #%s 는 %s). NAS 마운트가 빠졌는지 확인하세요. "
+                               "정말 비었다면 allow_empty 로 다시 시작하세요." % (empty[0], _human_bytes(empty[1])))}
+        # fold_depth: None 이면 설정 기본값(fold_depth)을 쓰고, 주면 이번 스캔만 그 값으로 오버라이드
+        if fold_depth is not None:
+            try:
+                fold_depth = max(0, min(100000, int(fold_depth)))
+            except (TypeError, ValueError, OverflowError):
+                fold_depth = None
+        # 지정하지 않은 옵션은 설정의 기본값을 사용
+        if backend is None:
+            backend = self.settings.get("default_backend", "native")
+        if size_mode is None:
+            size_mode = self.settings.get("default_size_mode", "disk")
+        if one_file_system is None:
+            one_file_system = bool(self.settings.get("default_one_file_system", False))
         if backend not in ("native", "du"):
             backend = "native"
         if size_mode not in ("disk", "apparent"):
             size_mode = "disk"
+        if engine is None:
+            engine = self.settings.get("default_engine") or "threads"
+        if engine not in ("threads", "pscan"):
+            engine = "threads"
 
         mgrmod.init_manager(self.data_dir)
         db_path = mgrmod.make_run_db_path(self.data_dir, path)
         scan_id = mgrmod.register_scan(
             self.data_dir, root_path=path, db_path=db_path,
-            backend=backend, size_mode=size_mode,
+            backend=("pscan" if engine == "pscan" else backend), size_mode=size_mode,
         )
+        readonly = _path_readonly(path) if self.settings.get("check_readonly", True) else None
+        if auto_restart:                    # 완료(done) 시 같은 설정으로 자동 재시작(반복)
+            with self._lock:
+                self._auto_restart[scan_id] = {
+                    "path": path, "backend": backend, "size_mode": size_mode,
+                    "one_file_system": one_file_system, "engine": engine,
+                    "processes": processes, "threads": threads,
+                }
+            self._save_auto_restart()       # 재시작·업그레이드 후에도 반복이 살아남도록 디스크에 기록
+        self._log("scan #%d start: %s (engine=%s, backend=%s, size=%s, x=%s, ro=%s, loop=%s)" % (
+            scan_id, path, engine, backend, size_mode, one_file_system, readonly, auto_restart))
+        # 이번 시작에 사용한 파라미터 + 적용된 변수를 기억한다(다음 시작 폼 복원·참고용).
+        try:
+            merged = dict(self.settings)
+            merged["last_scan"] = {
+                "path": path, "backend": backend, "size_mode": size_mode,
+                "one_file_system": bool(one_file_system), "engine": engine,
+                "auto_restart": bool(auto_restart),
+                "workers": int(getattr(self, "workers", None) or self.settings.get("scan_workers", 8) or 8),
+                "fold_depth": int(fold_depth if fold_depth is not None else (self.settings.get("fold_depth", 4) or 0)),
+                "max_depth": int(self.settings.get("scan_max_depth", 0) or 0),
+                "db_max_gb": int(self.settings.get("db_max_gb", 0) or 0),
+                "min_free_gb": int(self.settings.get("min_free_gb", 0) or 0),
+                "hardlink_dedup": bool(self.settings.get("hardlink_dedup", True)),
+                "check_readonly": bool(self.settings.get("check_readonly", True)),
+                "ts": time.time(),
+            }
+            self._save_settings(merged)
+        except Exception:  # noqa: BLE001 — 기억 실패가 스캔을 막지 않는다
+            pass
+        if engine == "pscan":
+            self._launch_pscan(scan_id, db_path, path, size_mode,
+                               processes=processes, threads=threads,
+                               one_file_system=one_file_system)
+        else:
+            self._launch(scan_id, db_path, path, backend, size_mode,
+                         one_file_system, resume=False, fold_depth=fold_depth)
+        return {"ok": True, "scan_id": scan_id, "db_path": db_path,
+                "root_path": path, "backend": backend, "size_mode": size_mode,
+                "engine": engine, "processes": processes, "threads": threads,
+                "mount_readonly": readonly}
+
+    def _launch(self, scan_id, db_path, path, backend, size_mode,
+                one_file_system, *, resume: bool, fold_depth=None, max_depth=None) -> None:
+        """워커 스레드에서 스캔을 실행하고, 끝나면 알림/보존 정리를 수행한다.
+
+        fold_depth/max_depth: None 이면 설정값을, 값이 주어지면 이번 스캔만 그 값으로 오버라이드.
+        새 스캔은 실제 적용한 값을 관리 DB(opt_*)에 기록해 재개 때 같은 값으로 이어 간다.
+        """
         stop = threading.Event()
+        eff_fold = int(self.settings.get("fold_depth", 4) or 0) if fold_depth is None else int(fold_depth)
+        eff_max = int(self.settings.get("scan_max_depth", 0) or 0) if max_depth is None else int(max_depth)
+        if not resume:
+            try:
+                mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+                mgrmod.update_scan(mc, scan_id, opt_one_fs=1 if one_file_system else 0,
+                                   opt_fold_depth=eff_fold, opt_max_depth=eff_max)
+                mc.commit(); mc.close()
+            except Exception:  # noqa: BLE001 — 기록 실패가 스캔을 막지 않는다(재개 땐 설정값으로 폴백)
+                pass
 
         def worker():
             try:
@@ -316,11 +2594,18 @@ class ScanController:
                     db_path, path,
                     backend=backend, size_mode=size_mode,
                     one_file_system=one_file_system,
-                    batch_size=self.batch_size,
-                    sample_interval=self.sample_interval,
+                    batch_size=self.batch_size, workers=self.workers,
+                    check_readonly=bool(self.settings.get("check_readonly", True)),
+                    max_depth=eff_max,
+                    fold_depth=eff_fold,
+                    db_max_bytes=int(self.settings.get("db_max_gb", 0) or 0) * (1024 ** 3),
+                    hardlink_dedup=bool(self.settings.get("hardlink_dedup", True)),
+                    min_free_bytes=int(self.settings.get("min_free_gb", 0) or 0) * (1024 ** 3),
+                    resume=resume, sample_interval=self.sample_interval,
                     stop_event=stop, with_monitor=True,
                     manager_db=mgrmod.manager_db_path(self.data_dir),
                     manager_scan_id=scan_id,
+                    on_scanner=_reg_scanner,
                 )
             except Exception as exc:
                 try:
@@ -334,13 +2619,660 @@ class ScanController:
             finally:
                 with self._lock:
                     self._scans.pop(scan_id, None)
+                self._on_scan_finished(scan_id)
+
+        def _reg_scanner(sc):
+            with self._lock:
+                rec = self._scans.get(scan_id)
+                if rec is not None:
+                    rec["scanner"] = sc
 
         t = threading.Thread(target=worker, name=f"scan-{scan_id}", daemon=True)
         with self._lock:
-            self._scans[scan_id] = {"stop": stop, "thread": t}
+            self._scans[scan_id] = {"stop": stop, "thread": t, "path": path, "engine": "threads"}
         t.start()
-        return {"ok": True, "scan_id": scan_id, "db_path": db_path,
-                "root_path": path, "backend": backend, "size_mode": size_mode}
+
+    def live_scanner(self, scan_id=None):
+        """실행 중인 threads 스캔의 Scanner 인스턴스(진단 스냅샷용). 없으면 None."""
+        with self._lock:
+            if scan_id is not None:
+                rec = self._scans.get(scan_id)
+                return rec.get("scanner") if rec else None
+            for rec in self._scans.values():
+                if rec.get("scanner") is not None:
+                    return rec["scanner"]
+        return None
+
+    def scan_engine(self, scan_id=None):
+        """실행 중인 스캔의 엔진('threads'/'pscan') — 진단이 자식 프로세스 부하를 볼지 결정."""
+        with self._lock:
+            if scan_id is not None:
+                rec = self._scans.get(scan_id)
+                return rec.get("engine") if rec else None
+            for rec in self._scans.values():
+                return rec.get("engine")
+        return None
+
+    def _launch_pscan(self, scan_id, db_path, path, size_mode,
+                      processes=None, threads=None, one_file_system=False) -> None:
+        """멀티프로세스(pscan) 엔진으로 '빠른 용량' 스캔을 실행한다.
+
+        GIL 우회로 스레드 대비 처리량이 크게 오른다(측정 4워커 5.48배). 깊은 트리는
+        만들지 않으므로 용량 개요 + 1단계 드릴다운까지만 표시된다(중지는 즉시 반영 안 됨).
+        processes/threads 를 주면(오토튜닝 결과) 설정 대신 그 값으로 돈다.
+        """
+        from . import pscan as pscanmod
+        stop = threading.Event()
+        try:   # 시작 옵션 기록(재개=재스캔 때도 같은 -x 로)
+            mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+            mgrmod.update_scan(mc, scan_id, opt_one_fs=1 if one_file_system else 0)
+            mc.commit(); mc.close()
+        except Exception:  # noqa: BLE001
+            pass
+        hl_dedup = bool(self.settings.get("hardlink_dedup", True))
+        procs = max(1, int(processes or self.settings.get("scan_workers", 4) or 4))
+        # 프로세스당 stat 스레드(고지연 NAS 왕복 은닉). 오토튜닝 값이 있으면 그것, 없으면 설정.
+        tpp = max(1, int(threads or self.settings.get("pscan_threads", 1) or 1))
+        mdb = mgrmod.manager_db_path(self.data_dir)
+
+        def worker():
+            started = time.time()
+            mon_stop = None
+            run_id = None
+            try:
+                mc = dbmod.connect(mdb)
+                mgrmod.update_scan(mc, scan_id, status="sizing", phase="sizing")
+                mc.commit(); mc.close()
+                # per-run DB 에 run 을 미리 만들고(sizing) 자원 모니터를 붙인다 →
+                # pscan 중에도 /api/status 가 run 을 찾아 자원 패널·진행이 보인다(끝나면 갱신).
+                import socket as _sock
+                dbmod.init_db(db_path)
+                pc0 = dbmod.connect(db_path)
+                pc0.execute(
+                    "INSERT INTO scan_runs (root_path,status,phase,backend,size_mode,"
+                    "started_at,updated_at,scanner_pid,hostname,app_version) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (dbmod.db_text(os.path.abspath(path)), "sizing", "sizing", "pscan", size_mode,   # 비 UTF-8 경로(33회차)
+                     started, started, os.getpid(), _sock.gethostname(), __version__))
+                run_id = pc0.execute(
+                    "SELECT id FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()[0]
+                pc0.commit(); pc0.close()
+                mon_stop = threading.Event()
+                monmod.ResourceMonitor(db_path, run_id, os.getpid(),
+                                       interval=self.sample_interval,
+                                       stop_event=mon_stop).start()
+
+                def _prog(p):
+                    # parallel_scan 이 ≥1초 간격으로 호출(워커 보고를 모아서) — 작업 단위 완료 때만이
+                    # 아니라 큰 디렉터리 안에서도 파일 수/바이트/현재 경로가 올라온다.
+                    wl = p.get("workers") or []
+                    wdirs = [dbmod.db_text(w.get("dir") or "") for w in wl]   # 비 UTF-8 경로도 저장
+                    try:
+                        c = dbmod.connect(mdb)
+                        mgrmod.update_scan(c, scan_id, processed_dirs=int(p.get("done", 0)),
+                                           total_dirs=int(p.get("units", 0)),
+                                           discovered_dirs=int(p.get("units", 0)),
+                                           total_files=int(p.get("files", 0) or 0),
+                                           scanned_bytes=int(p.get("bytes", 0) or 0),
+                                           current_dir=(wdirs[0] if wdirs else None))
+                        c.commit(); c.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    try:
+                        pc = dbmod.connect(db_path)
+                        dbmod.update_run(pc, run_id, total_files=int(p.get("files", 0) or 0),
+                                         scanned_bytes=int(p.get("bytes", 0) or 0),
+                                         processed_dirs=int(p.get("done", 0)),
+                                         total_dirs=int(p.get("units", 0)),
+                                         active_workers=len(wl),
+                                         worker_dirs=json.dumps(wdirs, ensure_ascii=False),
+                                         current_dir=(wdirs[0] if wdirs else None))
+                        pc.commit(); pc.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                # -x·하드링크 중복 제거를 native 와 같은 정책으로(예전엔 둘 다 무시 — 하위 마운트·스냅샷 과대 계상)
+                res = pscanmod.parallel_scan(path, processes=procs, threads_per_proc=tpp,
+                                             size_mode=size_mode, on_progress=_prog,
+                                             one_file_system=bool(one_file_system),
+                                             hardlink_dedup=hl_dedup)
+                if not res.get("ok"):
+                    raise RuntimeError(res.get("error") or "pscan 실패")
+                pscanmod.write_run_db(db_path, path, res, size_mode=size_mode,
+                                      started=started, run_id=run_id)
+                fs_total = fs_used = fs_free = 0
+                try:
+                    v = os.statvfs(path)
+                    fs_total = v.f_blocks * v.f_frsize
+                    fs_free = v.f_bavail * v.f_frsize
+                    fs_used = fs_total - (v.f_bfree * v.f_frsize)
+                except OSError:
+                    pass
+                # 워커 실패(예외)가 있으면 부분 집계 → 'error' 로 끝낸다(0바이트 성공으로 합치지 않음)
+                failed = list(res.get("failed_units") or [])
+                fin_status = "error" if failed else "done"
+                fin_err = (("워커 실패 %d개(부분 집계): " % len(failed)) + "; ".join(
+                    "%s: %s" % (f.get("path"), f.get("error")) for f in failed[:3])) if failed else None
+                try:   # 마운트 출처(포탈이 같은 파일시스템을 식별 — 크기만 같은 다른 볼륨을 합치지 않게)
+                    from .scanner import mount_info as _mount_info
+                    _mi = _mount_info(path)
+                    fs_source = _mi[2] or _mi[0]
+                except Exception:  # noqa: BLE001
+                    fs_source = None
+                c = dbmod.connect(mdb)
+                if fs_source:
+                    mgrmod.update_scan(c, scan_id, fs_source=fs_source)
+                mgrmod.update_scan(c, scan_id, status=fin_status, phase=fin_status, error=fin_err,
+                                   scanned_bytes=int(res["total_bytes"]),
+                                   total_files=int(res["total_files"]),
+                                   total_dirs=int(res["total_dirs"]),
+                                   processed_dirs=int(res["total_dirs"]),   # 끝났으면 전부 처리(작업 단위 수 아님)
+                                   current_dir=None,
+                                   discovered_dirs=int(res["total_dirs"]),
+                                   error_dirs=int(res.get("error_count", 0)),
+                                   fs_total_bytes=fs_total, fs_used_bytes=fs_used,
+                                   fs_free_bytes=fs_free, finished_at=time.time())
+                c.commit(); c.close()
+                try:   # 진행 화면은 per-run 기록을 읽는다 — 디스크 사용량도 같은 값으로(예전엔 '사용 0 B')
+                    pc = dbmod.connect(db_path)
+                    dbmod.update_run(pc, run_id, fs_total_bytes=fs_total, fs_used_bytes=fs_used,
+                                     fs_free_bytes=fs_free)
+                    pc.commit(); pc.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._log("pscan #%d done: %s (%d procs, %.0f files/s)" % (
+                    scan_id, path, res.get("processes", 0), res.get("files_per_sec", 0)))
+            except Exception as exc:  # noqa: BLE001
+                try:
+                    c = dbmod.connect(mdb)
+                    mgrmod.update_scan(c, scan_id, status="error", phase="error",
+                                       error=str(exc), finished_at=time.time())
+                    c.commit(); c.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                if run_id is not None:   # 미리 만든 per-run run 도 error 로(‘sizing’ 잔류 → 부분 집계·상세가 실행 중으로 오판)
+                    try:
+                        pc = dbmod.connect(db_path)
+                        dbmod.update_run(pc, run_id, status="error", phase="error",
+                                         finished_at=time.time())
+                        pc.commit(); pc.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+            finally:
+                if mon_stop:
+                    mon_stop.set()
+                with self._lock:
+                    self._scans.pop(scan_id, None)
+                self._on_scan_finished(scan_id)
+
+        t = threading.Thread(target=worker, name="pscan-%d" % scan_id, daemon=True)
+        with self._lock:
+            self._scans[scan_id] = {"stop": stop, "thread": t, "path": path,
+                                    "engine": "pscan"}
+        t.start()
+
+    @property
+    def workers(self) -> int:
+        return int(self.settings.get("scan_workers", 1))
+
+    def _on_scan_finished(self, scan_id: int) -> None:
+        """스캔 종료 후: 웹훅 알림 + 보존(retention) 자동 정리."""
+        try:   # 진행 중 스냅샷은 끝나면 필요 없다(완료값·멈춘 자료 집계가 원본에 있다)
+            from . import livesnap
+            livesnap.remove(self.live_snapshot_path(scan_id))
+            with self._lock:
+                self._live_snaps.pop(int(scan_id), None)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+            try:
+                row = mgrmod.get_scan(mconn, scan_id)
+            finally:
+                mconn.close()
+            if row is None:
+                return
+            if row["status"] == "done":
+                try:   # 완전 집계가 끝났으면 관리 DB 의 '부분 집계 값' 표시도 지운다
+                    mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+                    mgrmod.update_scan(mc, scan_id, partial_agg_at=None)
+                    mc.commit(); mc.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            human = _human_bytes(row["scanned_bytes"])
+            self._log("scan #%d %s: %s (dirs=%s files=%s, %s)" % (
+                scan_id, row["status"], row["root_path"],
+                row["total_dirs"], row["total_files"], human))
+            # 완료 후 자동 재시작(반복): 사용자가 켰고 'done'(정상 완료)이면 같은 설정으로 새 스캔.
+            # 중지(paused)·오류(error)면 반복을 멈춘다(꺼내기만). 경로가 사라졌으면 재시작이 실패해 자연히 멈춘다.
+            with self._lock:
+                ar_cfg = self._auto_restart.pop(scan_id, None)
+            if ar_cfg is not None:
+                self._save_auto_restart()   # 이 scan_id 의 반복 항목 제거를 디스크에 반영
+            if ar_cfg and row["status"] == "done":
+                self._log("scan #%d done → 자동 재시작(반복): %s" % (scan_id, ar_cfg["path"]))
+                self.start_scan(ar_cfg["path"], backend=ar_cfg["backend"],
+                                size_mode=ar_cfg["size_mode"],
+                                one_file_system=ar_cfg["one_file_system"],
+                                engine=ar_cfg["engine"], processes=ar_cfg["processes"],
+                                threads=ar_cfg["threads"], confirm_outside=True,
+                                auto_restart=True)
+            from . import notify as notifymod
+            webhook = self.settings.get("notify_webhook", "")
+            if webhook:
+                notifymod.send(webhook, {
+                    "event": "scan_finished",
+                    "scan_id": scan_id,
+                    "root_path": row["root_path"],
+                    "status": row["status"],
+                    "total_dirs": row["total_dirs"],
+                    "total_files": row["total_files"],
+                    "scanned_bytes": row["scanned_bytes"],
+                    "scanned_human": human,
+                    "hostname": row["hostname"],
+                })
+            # 메일 알림 — 이벤트(완료/장애/중단)별로 켜진 조건만 발송
+            status = row["status"]
+            label = {"done": "스캔 완료", "error": "스캔 오류(장애)",
+                     "paused": "스캔 중단"}.get(status, "스캔 종료(%s)" % status)
+            gate = {"done": ("notify_on_done", True), "error": ("notify_on_error", True),
+                    "paused": ("notify_on_stopped", False)}.get(status)
+            if gate and self.settings.get(gate[0], gate[1]):
+                self._email_scan(scan_id, row, label)
+            # 중단(paused) 후 N분간 재시작/재개가 없으면 별도 알림 — 감시 등록
+            if status == "paused" and self.settings.get("notify_on_stalled", False):
+                mins = max(1, int(self.settings.get("notify_stall_minutes", 10) or 10))
+                with self._lock:
+                    self._pause_watch[scan_id] = {"due": time.time() + mins * 60,
+                                                  "root": row["root_path"]}
+            keep = int(self.settings.get("retention_per_root", 0))
+            if keep > 0 and row["status"] in ("done", "error"):
+                mgrmod.prune_scans(self.data_dir, keep_per_root=keep,
+                                   running_ids=self._busy_ids())
+        except Exception:
+            pass
+
+    def _email_scan(self, scan_id, row, label: str) -> None:
+        """스캔 한 건에 대한 알림 메일을 보낸다(받는 메일+SMTP 설정 있을 때만)."""
+        if not (self.settings.get("notify_email") and self.settings.get("smtp_host")):
+            return
+        human = _human_bytes(row["scanned_bytes"])
+        subject = "[isilon_usage] %s: %s" % (label, row["root_path"])
+        bodytxt = (
+            "%s\n\n스캔 #%d\n"
+            "경로     : %s\n호스트   : %s\n상태     : %s\n"
+            "디렉터리 : %s\n파일 수  : %s\n조사 용량: %s\n"
+        ) % (label, scan_id, row["root_path"], row["hostname"], row["status"],
+             row["total_dirs"], row["total_files"], human)
+        from . import notify as notifymod
+        notifymod.send_email(self.settings, subject, bodytxt)
+
+    def _check_pause_watch(self, now: float) -> None:
+        """중단(paused)된 스캔이 N분간 재시작/재개되지 않으면 알림 메일을 보낸다.
+
+        같은 스캔이 재개되었거나(running_ids), 같은 루트로 새 스캔이 돌면(running_paths)
+        '재시작됨'으로 보고 감시를 해제한다.
+        """
+        if not self._pause_watch:
+            return
+        running = set(self.running_ids())
+        rpaths = self.running_paths()
+        with self._lock:
+            items = list(self._pause_watch.items())
+        for sid, info in items:
+            if sid in running or info.get("root") in rpaths:
+                self._pause_watch.pop(sid, None)        # 재시작/재개됨 → 알림 안 함
+                continue
+            if now < info.get("due", 0):
+                continue
+            self._pause_watch.pop(sid, None)
+            if self._scan_status(sid) != "paused":      # 그새 상태가 바뀌었으면 보류
+                continue
+            try:
+                mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+                row = mgrmod.get_scan(mc, sid)
+                mc.close()
+            except Exception:
+                row = None
+            if row is not None:
+                mins = max(1, int(self.settings.get("notify_stall_minutes", 10) or 10))
+                self._email_scan(sid, row, "스캔 중단 후 %d분간 재시작 없음" % mins)
+
+    # ----- 재개 -----
+    def resume_scan(self, scan_id: int) -> dict:
+        # 시작과 같은 임계 구역 — 재개도 같은 루트 중복 실행을 만들 수 있다(업그레이드 후 자동 재개가
+        # 같은 루트의 두 스캔을 둘 다 살려 쌍이 영구화되던 문제). 먼저 재개된 쪽만 계속된다.
+        self._wait_stopping(scan_id)   # 멈추는 중이면 끝날 때까지 — 잠금 밖에서(곧바로 '재개'를 눌러도 거절되지 않게)
+        with self._start_lock:
+            return self._resume_scan_locked(scan_id)
+
+    def _resume_scan_locked(self, scan_id: int) -> dict:
+        if scan_id in self.running_ids():
+            return {"ok": False, "reason": "이미 실행 중입니다."}
+        if scan_id in self.partial_running_ids():
+            return {"ok": False, "reason": "부분 집계가 진행 중입니다 — 끝난 뒤(또는 중단 후) 재개하세요."}
+        mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+        try:
+            row = mgrmod.get_scan(mconn, scan_id)
+        finally:
+            mconn.close()
+        if row is None:
+            return {"ok": False, "reason": "없는 scan"}
+        # 재개는 멈춘(일시정지/오류) 스캔만 — 완료된 스캔을 '재개'하면 pscan 은 결과 DB 를 지우고 처음부터
+        # 다시 돈다(재개는 로그인 없이 허용되는 작업이라 삭제 보호를 우회하는 셈이었다).
+        # 단 '진행 중' 상태인데 이 서버가 돌리지 않고 하트비트가 끊긴 스캔(서버가 떠 있는 동안 CLI 스캔 프로세스가
+        # 죽은 경우 등)은 멈춘 것과 같다 — 중복 가드와 같은 신선도 기준(_DUP_STALE_SECS)으로 재개를 허용한다.
+        st = row["status"]
+        if st in ("discovering", "sizing"):
+            age = time.time() - float(row["updated_at"] or 0)
+            if age < self._DUP_STALE_SECS:
+                return {"ok": False, "reason": ("다른 곳(CLI 등)에서 실행 중으로 보입니다(마지막 갱신 %d초 전). "
+                                                "%d분 동안 갱신이 없으면 재개할 수 있습니다."
+                                                % (int(age), self._DUP_STALE_SECS // 60))}
+        elif st not in ("paused", "error"):
+            return {"ok": False, "reason": "멈춘(일시정지/오류) 스캔만 재개할 수 있습니다(현재 %s)." % st}
+        dup = self._active_scan_on(dbmod.fs_text(row["root_path"]), exclude=scan_id)
+        if dup is not None:
+            self._log("scan #%s 재개 거부: 같은 경로를 #%s 가 스캔 중(중복 방지)" % (scan_id, dup))
+            return {"ok": False, "duplicate": True, "scan_id": dup,
+                    "reason": "같은 경로를 다른 스캔(#%s)이 진행 중이라 재개하지 않습니다(중복 스캔 방지)." % dup}
+        is_pscan = (row["backend"] == "pscan")
+        # threads(native)는 '부분 재개'라 per-run DB 가 있어야 이어서 한다. pscan 은 부분 재개가
+        # 없어 어차피 처음부터 다시 스캔하므로 per-run DB 가 없어도 재개(재스캔)할 수 있다 —
+        # 업그레이드가 sizing 초기(per-run DB 생성 전)에 끼어든 경우에도 재개되도록 한다.
+        if not is_pscan and not os.path.exists(row["db_path"]):
+            return {"ok": False, "reason": "per-run DB 가 없어 재개할 수 없습니다."}
+        # 멈추기 전에 만든 스냅샷은 재개 뒤 '지금 결과'가 아니다 — 지운다(필요하면 다시 만든다). 재개가 받아들여진
+        # 뒤에만: 예전엔 검사 전에 지워 '이미 실행 중' 등으로 거절된 재개도 진행 중 스캔의 스냅샷을 날렸다(18회차 점검).
+        try:
+            from . import livesnap
+            with self._lock:
+                self._live_snaps.pop(int(scan_id), None)
+            livesnap.remove(self.live_snapshot_path(scan_id))
+        except Exception:  # noqa: BLE001
+            pass
+        # 재개 즉시 매니저 상태를 '진행 중'으로 되돌린다 — 안 그러면 'paused' 로 남아
+        # 화면엔 '일시정지'로 보이고 active_scans(포탈 집계)에서도 빠진다(스캐너가 곧 정확히 갱신).
+        try:
+            mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+            mgrmod.update_scan(mc, scan_id, status="discovering", phase="discovering",
+                               paused_by=None, finished_at=None)
+            mc.commit(); mc.close()
+        except Exception:
+            pass
+        if is_pscan:                            # pscan 은 부분 재개가 없으므로 전체 재스캔
+            try:
+                os.remove(row["db_path"])       # 깨끗한 per-run DB 로 다시 기록(혼선 방지)
+            except OSError:
+                pass
+            self._launch_pscan(scan_id, row["db_path"], dbmod.fs_text(row["root_path"]), row["size_mode"],
+                               one_file_system=bool(dict(row).get("opt_one_fs") or 0))
+        else:
+            # 시작 때 옵션으로 이어 간다(예전엔 one_file_system 이 항상 False → 재개분이 하위 마운트로 넘어가
+            # 과대 계상, fold/max_depth 는 현재 설정값). 옛 스캔(opt_* 없음)은 기존처럼 설정값.
+            _r = dict(row)
+            _ofs = _r.get("opt_one_fs")
+            self._launch(scan_id, _r["db_path"], dbmod.fs_text(_r["root_path"]), _r["backend"],
+                         _r["size_mode"], bool(_ofs) if _ofs is not None else False, resume=True,
+                         fold_depth=_r.get("opt_fold_depth"), max_depth=_r.get("opt_max_depth"))
+        return {"ok": True, "scan_id": scan_id}
+
+    # ----- 삭제 / 정리 -----
+    # ----- 멈춘 자료 집계(부분 집계) — 일시정지/오류 스캔의 현재 행으로 재귀 합계(하한값) -----
+    def _partial_running_nolock(self) -> set:
+        """self._lock 을 이미 쥔 곳에서 쓰는 변형(_lock 은 재진입 불가 — 중첩 획득하면 교착)."""
+        return {sid for sid, j in list(self._partial_jobs.items())
+                if j.get("thread") is not None and j["thread"].is_alive()}
+
+    def partial_running_ids(self) -> set:
+        with self._lock:
+            return self._partial_running_nolock()
+
+    def partial_aggregate_scan(self, scan_id: int) -> dict:
+        """일시정지/오류 스캔의 per-run DB 에 지금까지 행으로 total_bytes/total_files(하한값)를 채운다.
+
+        행 status 는 바꾸지 않아 재개하면 완전 집계가 다시 계산한다. 진행 중엔 재개/삭제/자동 업그레이드를
+        막는다(같은 DB 를 쓰는 중). 비용은 행 수에 비례(레벨별 일괄 UPDATE).
+        """
+        # 멈추는 중이면 끝날 때까지 — 잠금 '밖'에서(스캔 종료 경로의 자동 재시작이 같은 잠금을 쓴다, 12회차 점검)
+        self._wait_stopping(scan_id)
+        # 재개와 같은 임계 구역 — 검사·등록·스레드 시작을 원자적으로(동시 요청 중복 실행·재개와의 경합 방지)
+        with self._start_lock:
+            return self._partial_aggregate_locked(scan_id)
+
+    def _wait_stopping(self, scan_id: int, timeout: float = 5.0) -> None:
+        """중지 요청을 받은(멈추는 중인) 스캔이면 스레드가 끝날 때까지 잠깐 기다린다 — 관리 DB 는 이미 '일시정지'인데
+        스레드가 아직 정리 중이라, 화면에서 멈춘 직후 누른 '멈춘 자료 집계'가 '실행 중'으로 거절되던 경합(2026-11)."""
+        with self._lock:
+            rec = self._scans.get(scan_id)
+        if rec and rec.get("stop") is not None and rec["stop"].is_set() and rec.get("thread") is not None:
+            try:
+                rec["thread"].join(timeout)
+            except RuntimeError:
+                pass
+
+    def _partial_aggregate_locked(self, scan_id: int) -> dict:
+        if scan_id in self.running_ids():
+            return {"ok": False, "reason": "실행 중인 스캔입니다(먼저 중지하세요)."}
+        if scan_id in self.partial_running_ids():
+            return {"ok": False, "reason": "이미 부분 집계가 진행 중입니다."}
+        mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+        try:
+            row = mgrmod.get_scan(mconn, scan_id)
+        finally:
+            mconn.close()
+        if row is None:
+            return {"ok": False, "reason": "없는 scan"}
+        if row["status"] not in ("paused", "error"):
+            return {"ok": False, "reason": "일시정지/오류 상태의 스캔만 부분 집계할 수 있습니다(현재 %s)."
+                    % row["status"]}
+        if not os.path.exists(row["db_path"]):
+            return {"ok": False, "reason": "per-run DB 가 없습니다."}
+        stop = threading.Event()
+        prog = {"depth": None, "rows": 0, "total_rows": 0, "elapsed": 0.0}
+        job = {"stop": stop, "progress": prog, "started": time.time(), "result": None, "thread": None}
+        db_path = row["db_path"]
+
+        def _run():
+            try:
+                res = partial_aggregate(db_path, stop_event=stop, on_progress=prog.update,
+                                        manager_db=mgrmod.manager_db_path(self.data_dir),
+                                        manager_scan_id=scan_id)
+            except Exception as exc:  # noqa: BLE001
+                res = {"ok": False, "reason": "%s: %s" % (type(exc).__name__, exc)}
+            job["result"] = res
+            self._log("partial-agg #%d: %s" % (scan_id, res.get("reason") or (
+                "%s행 %.1fs" % (res.get("rows"), res.get("elapsed") or 0))))
+        t = threading.Thread(target=_run, name="partial-agg-%d" % scan_id, daemon=True)
+        job["thread"] = t
+        with self._lock:
+            self._partial_jobs[scan_id] = job
+        t.start()
+        return {"ok": True, "scan_id": scan_id}
+
+    # ----- 진행 중 스캔의 '지금까지 결과' 스냅샷(스캔을 멈추지 않고 폴더별 하한값 보기) -----
+    def _scan_is_live(self, scan_id) -> bool:
+        """지금 실제로 진행 중인가 — 이 서버가 돌리는 스캔이거나, 다른 프로세스(CLI 등)가 돌리며 하트비트가 살아 있는 스캔.
+        예전엔 이 서버의 목록만 봐서 CLI 스캔의 스냅샷은 매번 끝까지 만든 뒤 버려졌다(17회차 점검)."""
+        try:
+            sid = int(scan_id)
+        except (TypeError, ValueError):
+            return False
+        if sid in self.running_ids():
+            return True
+        try:
+            mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+            try:
+                row = mgrmod.get_scan(mc, sid)
+            finally:
+                mc.close()
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(row is not None and row["status"] in ("discovering", "sizing")
+                    and time.time() - float(row["updated_at"] or 0) < self._DUP_STALE_SECS)
+
+    def _clean_snapshots(self) -> None:
+        """기동 때: 진행 중이 아닌 스캔의 스냅샷만 지운다 — 같은 데이터 폴더를 쓰는 다른 서버가 만드는 중인 것은 둔다."""
+        d = os.path.join(self.data_dir, "snapshots")
+        try:
+            names = os.listdir(d)
+        except OSError:
+            return
+        for nm in names:
+            m = re.match(r"scan_(\d+)_live\.db", nm)
+            if m and self._scan_is_live(int(m.group(1))):
+                continue
+            try:
+                os.remove(os.path.join(d, nm))
+            except OSError:
+                pass
+
+    def live_snapshot_path(self, scan_id: int) -> str:
+        return os.path.join(self.data_dir, "snapshots", "scan_%d_live.db" % int(scan_id))
+
+    def live_snapshot_info(self, scan_id) -> dict:
+        """스냅샷 상태: building(만드는 중)·at(만든 시각)·rows·error·progress."""
+        if scan_id is None:
+            return {"building": False, "at": None}
+        with self._lock:
+            job = dict(self._live_snaps.get(int(scan_id)) or {})
+        p = self.live_snapshot_path(scan_id)
+        th = job.get("thread")
+        return {"building": bool(th and th.is_alive()), "at": job.get("at") if os.path.exists(p) else None,
+                "rows": job.get("rows"), "error": job.get("error"), "progress": dict(job.get("progress") or {})}
+
+    def live_snapshot_start(self, scan_id: int) -> dict:
+        """진행 중 스캔의 스냅샷을 백그라운드로 만든다(스캔은 계속). 이미 만드는 중이면 그대로."""
+        mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+        try:
+            row = mgrmod.get_scan(mconn, scan_id)
+        finally:
+            mconn.close()
+        if row is None:
+            return {"ok": False, "reason": "없는 scan"}
+        row = dict(row)
+        if row["status"] not in ("discovering", "sizing"):
+            return {"ok": False, "reason": "진행 중인 스캔만 스냅샷을 만듭니다(멈춘 스캔은 '멈춘 자료 집계'를 쓰세요)."}
+        if not self._scan_is_live(scan_id):
+            return {"ok": False, "reason": "지금 진행 중이 아닙니다(멈췄거나 소식이 끊긴 스캔) — '멈춘 자료 집계'를 쓰거나 재개하세요."}
+        with self._lock:
+            rec = dict(self._scans.get(int(scan_id)) or {})
+        if rec.get("engine") == "pscan":
+            return {"ok": False, "reason": "빠르게(pscan) 스캔은 끝날 때 한 번에 기록해 진행 중 폴더 결과가 없습니다."}
+        src = row.get("db_path") or ""
+        if not os.path.exists(src):
+            return {"ok": False, "reason": "아직 스캔 DB 가 없습니다 — 잠시 뒤 다시 시도하세요."}
+        try:   # 디스크 여유: 복사본은 원본 정도 크기(+WAL) — 여유가 없으면 만들지 않는다(스캔을 방해하지 않게)
+            need = int(os.path.getsize(src) * 1.3) + 64 * 1024 * 1024
+            st = os.statvfs(self.data_dir)
+            if st.f_bavail * st.f_frsize < need:
+                return {"ok": False, "reason": "디스크 여유가 부족합니다(스냅샷에 약 %s 필요)." % _human_bytes(need)}
+        except OSError:
+            pass
+        with self._lock:
+            job = self._live_snaps.get(int(scan_id))
+            if job and job.get("thread") and job["thread"].is_alive():
+                return {"ok": True, "building": True, "scan_id": scan_id}
+            job = {"thread": None, "at": (job or {}).get("at"), "rows": (job or {}).get("rows"),
+                   "error": None, "progress": {}}
+            self._live_snaps[int(scan_id)] = job
+        dst = self.live_snapshot_path(scan_id)
+
+        def _prog(pg):
+            job["progress"] = dict(pg or {})
+
+        def _run():
+            from . import livesnap
+            try:
+                # 놓기 직전 확인: 아직 진행 중이고, 그 사이 재개 등으로 이 작업이 교체되지 않았을 때만(17회차 점검)
+                res = livesnap.build(src, dst, on_progress=_prog,
+                                     still_running=lambda: (self._live_snaps.get(int(scan_id)) is job
+                                                            and self._scan_is_live(scan_id)))
+                if res.get("ok"):
+                    job.update(at=res["at"], rows=res["rows"], error=None)
+                    self._log("스냅샷 scan #%s: 폴더 %d개 · %.1f초" % (scan_id, res["rows"], res["elapsed"]))
+                else:
+                    job["error"] = res.get("reason")
+            except Exception as exc:  # noqa: BLE001
+                job["error"] = str(exc)
+        t = threading.Thread(target=_run, name="live-snapshot-%s" % scan_id, daemon=True)
+        job["thread"] = t
+        t.start()
+        return {"ok": True, "building": True, "scan_id": scan_id}
+
+    def live_snapshot_db(self, row):
+        """분석 화면용 DB: 스캔이 진행 중이고 스냅샷이 있으면 스냅샷 경로, 아니면 None(원본).
+        끝났거나 멈춘 스캔의 스냅샷은 지운다 — 그때는 원본(완료값·멈춘 자료 집계)이 맞다."""
+        try:
+            sid = int(row["id"])
+        except (TypeError, ValueError, KeyError, IndexError):
+            return None
+        p = self.live_snapshot_path(sid)
+        if not os.path.exists(p):
+            return None
+        if row["status"] in ("discovering", "sizing"):
+            return p
+        from . import livesnap
+        livesnap.remove(p)
+        with self._lock:
+            self._live_snaps.pop(sid, None)
+        return None
+
+    def partial_aggregate_status(self, scan_id) -> dict:
+        with self._lock:
+            job = self._partial_jobs.get(scan_id) if scan_id is not None else None
+        if job is None:
+            return {"ok": True, "scan_id": scan_id, "running": False, "result": None}
+        return {"ok": True, "scan_id": scan_id, "running": bool(job["thread"] and job["thread"].is_alive()),
+                "progress": dict(job["progress"]), "started": job["started"], "result": job["result"]}
+
+    def partial_aggregate_stop(self, scan_id: int) -> dict:
+        with self._lock:
+            job = self._partial_jobs.get(scan_id)
+        if job is None or not (job["thread"] and job["thread"].is_alive()):
+            return {"ok": False, "reason": "진행 중인 부분 집계가 없습니다."}
+        job["stop"].set()
+        return {"ok": True, "scan_id": scan_id}
+
+    def delete_scan(self, scan_id: int) -> dict:
+        if scan_id in self.running_ids():
+            return {"ok": False, "reason": "실행 중인 스캔은 삭제할 수 없습니다(먼저 중지)."}
+        if scan_id in self.partial_running_ids():
+            return {"ok": False, "reason": "부분 집계가 진행 중인 스캔은 삭제할 수 없습니다(먼저 중단)."}
+        from . import livesnap
+        livesnap.remove(self.live_snapshot_path(scan_id))   # 진행 중 스냅샷(있으면)도 함께
+        dbf = None
+        try:
+            mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+            try:
+                row = mgrmod.get_scan(mconn, scan_id)
+            finally:
+                mconn.close()
+            dbf = os.path.basename(row["db_path"] or "") if row is not None else None
+        except Exception:  # noqa: BLE001
+            dbf = None
+        res = mgrmod.delete_scan(self.data_dir, scan_id)
+        if res.get("ok") and dbf:
+            self._record_deleted(dbf)
+        return res
+
+    def _record_deleted(self, db_filename: str) -> None:
+        try:
+            mgrmod.record_deleted(self.data_dir, db_filename)
+        except Exception as exc:  # noqa: BLE001
+            self._log("삭제 표시 기록 실패: %s" % exc)
+
+    def deleted_db_filenames(self) -> list:
+        return mgrmod.deleted_db_filenames(self.data_dir)
+
+    def prune(self, *, keep_per_root=None, older_than_days=None) -> dict:
+        return mgrmod.prune_scans(
+            self.data_dir, keep_per_root=keep_per_root,
+            older_than_days=older_than_days, running_ids=self._busy_ids())
+
+    def _busy_ids(self) -> set:
+        """보존 정리에서 제외할 스캔 — 실행 중 + 부분 집계 중(같은 per-run DB 를 쓰는 중)."""
+        return set(self.running_ids()) | self.partial_running_ids()
 
     # ----- 중지 -----
     def stop_scan(self, scan_id: int) -> dict:
@@ -348,6 +3280,13 @@ class ScanController:
             rec = self._scans.get(scan_id)
         if not rec:
             return {"ok": False, "reason": "실행 중인 스캔이 아닙니다(이미 끝났을 수 있음)."}
+        # pscan(멀티프로세스)은 자식 프로세스가 끝까지 돌고 결과를 마지막에 한 번에
+        # 기록한다 — stop 이벤트를 parallel_scan 이 보지 않으므로 중간 중지가 안 된다.
+        # ok:True 로 거짓 성공을 알리지 말고 사실대로 알려준다(2026-06-15).
+        if rec.get("engine") == "pscan":
+            return {"ok": False, "engine": "pscan", "reason":
+                    "pscan(멀티프로세스)은 시작하면 중간에 멈출 수 없습니다. "
+                    "끝날 때까지 기다리거나, 다음 스캔부터 threads(스레드) 엔진을 쓰세요."}
         rec["stop"].set()
         return {"ok": True, "scan_id": scan_id}
 
@@ -355,14 +3294,261 @@ class ScanController:
         with self._lock:
             return sorted(self._scans.keys())
 
+    def auto_restart_ids(self) -> list:
+        """완료 후 자동 재시작(반복)이 켜진 채 도는 스캔 id 목록."""
+        with self._lock:
+            return sorted(self._auto_restart.keys())
+
+    def running_paths(self) -> set:
+        with self._lock:
+            return {rec.get("path") for rec in self._scans.values()}
+
+    # ----- 예약 스캔 스케줄러 -----
+    def start_scheduler(self) -> None:
+        self._sched_stop = threading.Event()
+        self._sched_thread = threading.Thread(
+            target=self._scheduler_loop, name="scheduler", daemon=True)
+        self._sched_thread.start()
+
+    def _scheduler_loop(self) -> None:
+        while not self._sched_stop.wait(20):
+            try:
+                self._check_schedules()
+            except Exception:
+                pass
+            try:
+                self._check_pause_watch(time.time())
+            except Exception:
+                pass
+
+    def _check_schedules(self) -> None:
+        schedules = self.settings.get("schedules", [])
+        if not schedules:
+            return
+        now = time.time()
+        running = set(self.running_ids())
+        running_paths = self.running_paths()
+        changed = False
+        for sc in schedules:
+            # 예약 하나의 오류(잘못된 값·일시적 I/O)가 같은 틱의 나머지 예약까지 멈추지 않게 항목별로 감싼다.
+            try:
+                # 경로 목록(순차 스캔). 구버전 호환: paths 없으면 [path].
+                paths = sc.get("paths") or ([sc["path"]] if sc.get("path") else [])
+                if not paths:
+                    continue
+                csid = sc.get("chain_scan_id")
+                # (1) 진행 중인 체인: 현재 단계가 끝났으면 다음 경로로 넘어간다(A 끝나면 B…).
+                if csid:
+                    if csid in running:
+                        continue                       # 현재 단계 아직 진행 중 → 대기
+                    if self._scan_status(csid) == "paused":
+                        row = self._scan_row(csid) or {}
+                        # 비정상 종료(kill -9·OOM·정전) 뒤 재기동 정리로 멈춘 것(paused_by='orphan')만 이어서 재개한다
+                        # — 같은 스캔을 이어 가므로 새 스캔이 쌓이지 않는다. 반복 실패(예: 스캔 자체가 OOM)면 3회까지.
+                        # 사용자·디스크 가드로 멈춘 것은 기다린다(1.99.40 은 다음 차례마다 새 주기를 시작해, 가드에
+                        # 다시 걸린 일시정지 스캔과 DB 가 주기마다 쌓였다).
+                        if row.get("paused_by") == "orphan":
+                            tries = int(sc.get("chain_resumes", 0) or 0)
+                            if tries < self._CHAIN_RESUME_MAX:
+                                sc["chain_resumes"] = tries + 1
+                                changed = True
+                                res = self.resume_scan(int(csid))
+                                self._log("예약: 비정상 종료로 멈춘 체인 scan #%s 이어서 재개(%d/%d): %s" % (
+                                    csid, tries + 1, self._CHAIN_RESUME_MAX,
+                                    "재개됨" if res.get("ok") else res.get("reason")))
+                                if res.get("ok"):
+                                    running.add(csid)
+                        continue
+                    nxt = int(sc.get("chain_i", 0) or 0) + 1
+                    # 다음 경로를 시작한다. 시작할 수 없는 경로(비었음·마운트 빠짐·실행 중)는 기록을 남기고 건너뛰어
+                    # 그다음 경로로 — 예전엔 거기서 체인이 끝나 뒤 경로들이 이번 주기 내내 스캔되지 않았고 기록도 없었다.
+                    sc["chain_scan_id"] = None
+                    sc["chain_i"] = 0                   # 시작한 경로가 없으면 체인 완료
+                    for idx in range(nxt, len(paths)):
+                        sid2 = self._chain_start(sc, paths[idx], running, running_paths)
+                        if sid2 is not None:
+                            sc["chain_scan_id"] = sid2
+                            sc["chain_i"] = idx
+                            self._mark_chain_skip(sc, paths[idx], False)
+                            break
+                        self._mark_chain_skip(sc, paths[idx], True)
+                        self._log("예약: 체인 %d/%d 경로를 시작하지 못해 건너뜀(비었음·마운트·실행 중 등): %s"
+                                  % (idx + 1, len(paths), paths[idx]))
+                    sc["chain_resumes"] = 0
+                    changed = True
+                    continue
+                # (2) 진행 중 체인 없음: 활성 + 차례면 첫 경로부터 체인 시작.
+                if not sc.get("enabled", True):
+                    continue
+                if not setmod.schedule_due(sc, now):
+                    continue
+                sid = self._chain_start(sc, paths[0], running, running_paths)
+                if sid is None:
+                    if self._mark_chain_skip(sc, paths[0], True):
+                        changed = True
+                if sid is not None:
+                    self._mark_chain_skip(sc, paths[0], False)
+                    sc["chain_i"] = 0
+                    sc["chain_scan_id"] = sid
+                    sc["chain_resumes"] = 0
+                    sc["last_run"] = now
+                    changed = True
+            except Exception as exc:  # noqa: BLE001
+                self._log("예약 처리 오류(건너뜀) %s: %s" % ((sc.get("paths") or [sc.get("path")])[:1], exc))
+
+        if changed:
+            # last_run / 체인 진행 상태를 settings.json 에 반영.
+            # start_scan 이 틱 도중 self.settings 를 새 dict 로 교체(last_scan 저장)하므로, 위에서 갱신한
+            # sc 는 옛 객체다 — 런타임 필드를 '최신' 설정의 같은 위치 예약에 옮겨 담아 저장한다.
+            merged = dict(self.settings)
+            cur = [dict(x) for x in (merged.get("schedules") or [])]
+            if len(cur) == len(schedules):
+                for dst, src in zip(cur, schedules):
+                    for k in self._SCHED_RUNTIME_KEYS:
+                        dst[k] = src.get(k)
+                merged["schedules"] = cur
+            # (틱 도중 예약 목록 자체가 바뀌었으면(드묾) 사용자 편집을 우선 — 런타임 필드는 버린다)
+            self._save_settings(merged)
+
+    @staticmethod
+    def _mark_chain_skip(sc, path, skipped: bool) -> bool:
+        """예약 경로를 '시작 못 해 건너뜀'으로 표시/해제한다(화면이 보여 줄 수 있게 — 예전엔 로그 설정이 없으면
+        흔적이 전혀 없었다, 2026-11 사용 흐름 점검). 바뀌었으면 True."""
+        cur = sc.get("chain_skipped") if isinstance(sc.get("chain_skipped"), dict) else {}
+        if skipped:
+            if path in cur:
+                return False         # 이미 표시(매 틱 다시 저장하지 않게 처음 시각 유지)
+            cur = dict(cur, **{path: time.time()})
+        else:
+            if path not in cur:
+                return False
+            cur = {k: v for k, v in cur.items() if k != path}
+        sc["chain_skipped"] = cur
+        return True
+
+    def _chain_start(self, sc, path, running, running_paths):
+        """예약 체인의 한 단계를 시작한다. 성공 시 scan_id, 실패 시 None."""
+        if path in running_paths:
+            return None
+        # 예약은 관리자가 미리 지정한 경로라 '지정 경로 밖'이어도 컨펌 없이 진행
+        ok, _ = self.scan_path_check(path, confirm_outside=True)
+        if not ok:
+            return None
+        res = self.start_scan(path, backend=sc.get("backend"),
+                              size_mode=sc.get("size_mode"),
+                              one_file_system=sc.get("one_file_system"),
+                              confirm_outside=True)
+        if not res.get("ok"):
+            return None
+        sid = res.get("scan_id")
+        running_paths.add(path)             # 같은 틱에서 중복 시작 방지
+        if sid is not None:
+            running.add(sid)
+        return sid
+
+    def _merge_sched_runtime(self, incoming: list) -> list:
+        """화면이 보낸 예약 목록에 서버가 관리하는 런타임 필드(마지막 실행·체인 진행)를 현재 값으로 덮는다.
+
+        화면은 불러온 시점의 값을 그대로 돌려보내므로, 그 사이 예약이 돌았으면 옛 last_run/chain_i 로
+        되돌아가 같은 예약이 다시 돌거나 순차 체인이 처음부터 다시 시작됐다(2026-11 리뷰).
+        같은 예약 판별(예약에 id 가 없어 3단계로 짝짓는다 — 29회차 점검: 경로만으로 짝지어, 같은 경로의 다른 예약을
+        지우면 남은 예약이 지운 예약의 마지막 실행을 물려받아 오늘 실행을 건너뛰었고, 경로만 하나 더한 예약은 바로 다시 돌았다):
+          ① 경로+주기 설정이 모두 같은 것 ② 경로가 같은 것(주기만 고친 예약) ③ 주기 설정이 같은 것(경로만 고친 예약 —
+          마지막 실행·기준 시각만 잇고 체인 진행은 처음부터)."""
+        def _paths(sc):
+            ps = sc.get("paths") if isinstance(sc.get("paths"), list) else [sc.get("path")]
+            return tuple(os.path.abspath(str(p)) for p in ps if str(p or "").strip())
+
+        _skip = set(self._SCHED_RUNTIME_KEYS) | {"anchor", "enabled", "paths", "path"}
+
+        def _cfg(sc):
+            return json.dumps({k: v for k, v in sc.items() if k not in _skip}, sort_keys=True, default=str)
+        cur_list = [c for c in (self.settings.get("schedules") or []) if isinstance(c, dict)]
+        used = set()
+        inc = [dict(sc) if isinstance(sc, dict) else sc for sc in incoming]
+        pair: dict = {}
+        for stage in (lambda a, b: _paths(a) == _paths(b) and _cfg(a) == _cfg(b),
+                      lambda a, b: _paths(a) == _paths(b),
+                      lambda a, b: _cfg(a) == _cfg(b)):
+            for n, sc in enumerate(inc):
+                if not isinstance(sc, dict) or n in pair:
+                    continue
+                for m, cur in enumerate(cur_list):
+                    if m not in used and stage(sc, cur):
+                        pair[n] = m
+                        used.add(m)
+                        break
+        out = []
+        for n, sc in enumerate(inc):
+            if isinstance(sc, dict):
+                if n in pair:
+                    cur = cur_list[pair[n]]
+                    same_paths = _paths(sc) == _paths(cur)
+                    for k in self._SCHED_RUNTIME_KEYS:
+                        if k == "last_run" or same_paths:
+                            sc[k] = cur.get(k)
+                        else:
+                            sc.pop(k, None)   # 경로 목록이 바뀌면 체인 진행은 처음부터
+                    if cur.get("anchor"):
+                        sc["anchor"] = cur.get("anchor")
+                else:                      # 새 예약 — 진행 상태는 처음부터
+                    for k in self._SCHED_RUNTIME_KEYS:
+                        sc.pop(k, None)
+            out.append(sc)
+        return out
+
+    # 예약의 런타임 필드(서버가 관리) — 설정 저장·틱 병합에서 같은 목록을 쓴다(단일 소스)
+    _SCHED_RUNTIME_KEYS = ("last_run", "chain_i", "chain_scan_id", "chain_resumes", "chain_skipped")
+    _CHAIN_RESUME_MAX = 3
+
+    def _scan_row(self, scan_id):
+        """매니저 DB 의 스캔 행(dict) — 없거나 읽기 실패면 None."""
+        try:
+            mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+            try:
+                row = mgrmod.get_scan(mc, scan_id)
+            finally:
+                mc.close()
+            return dict(row) if row else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _scan_status(self, scan_id):
+        """매니저 DB 에서 스캔 상태 문자열을 읽는다(없으면 None)."""
+        row = self._scan_row(scan_id)
+        return row.get("status") if row else None
+
     def stop_all(self):
+        sched_stop = getattr(self, "_sched_stop", None)
+        if sched_stop is not None:
+            sched_stop.set()
         with self._lock:
             recs = list(self._scans.values())
         for rec in recs:
             rec["stop"].set()
 
 
+def _security_headers(h) -> None:
+    """모든 응답에 붙이는 보안 헤더(엣지·포탈 공통) — 다른 사이트가 화면을 iframe 에 넣어 버튼을 누르게 하는
+    클릭재킹과, 브라우저가 응답 형식을 추측(MIME 스니핑)하는 것을 막는다(27회차 보안 점검)."""
+    h.send_header("X-Content-Type-Options", "nosniff")
+    h.send_header("X-Frame-Options", "DENY")
+    h.send_header("Content-Security-Policy", "frame-ancestors 'none'")
+    h.send_header("Referrer-Policy", "same-origin")
+
+
 class DashboardHandler(BaseHTTPRequestHandler):
+    # 연결 소켓 시간 제한(초) — 없으면 아무것도 안 보내는 연결 하나가 스레드·fd 를 끝없이 잡았다(20회차 점검: 400개 연결
+    # → 스레드 404개가 65초 넘게 유지). 계산 시간에는 걸리지 않고, 받기/보내기가 이만큼 멈출 때만 연결을 끊는다.
+    timeout = 120
+
+    def setup(self):
+        super().setup()
+        self.wfile = _ChunkedWriter(self.wfile)   # 큰 응답도 조각마다 시간 제한(전체가 아니라)
+
+    def end_headers(self):
+        _security_headers(self)
+        super().end_headers()
     data_dir = ""  # 서버 생성 시 클래스 속성으로 주입(manager.db + scans/ 의 상위 폴더)
     controller = None  # ScanController (웹에서 스캔 시작/중지)
 
@@ -370,14 +3556,65 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # noqa: D401
         pass
 
+    # 느린 요청만 기록 — 어떤 폴링/조회가 스캔(집계)과 DB·GIL 을 다투는지 실측용.
+    # 임계 0.3초: 정상 폴링은 수십 ms, 그 이상은 개선 후보(무거운 쿼리)다.
+    SLOW_REQ_SEC = 0.3
+
+    def _log_slow(self, method: str, t0: float) -> None:
+        elapsed = time.time() - t0
+        if elapsed >= self.SLOW_REQ_SEC:
+            try:
+                # 쿼리의 token=… 값은 가린다 — ?token=<api_token> 으로 부른 느린 요청이 로그에 비밀을 남겼다(21회차 점검)
+                _p = re.sub(r"(?i)([?&](?:token|api_token|key|password)=)[^&]*", r"\1***", self.path or "")
+                sys.stderr.write("[http] 느린 요청 %.0fms %s %s\n"
+                                 % (elapsed * 1000, method, _p))
+                sys.stderr.flush()
+            except Exception:
+                pass
+
+    def do_GET(self) -> None:  # noqa: N802
+        t0 = time.time()
+        try:
+            self._do_GET()
+        finally:
+            self._log_slow("GET", t0)
+
+    def do_POST(self) -> None:  # noqa: N802
+        t0 = time.time()
+        self._audit_pending = None
+        self._audit_target = ""
+        try:
+            self._do_POST()
+        finally:
+            pend, self._audit_pending = self._audit_pending, None
+            if pend:                       # JSON 이 아닌 응답(파일 등)으로 끝난 작업
+                self._audit(pend, True)
+            self._log_slow("POST", t0)
+
     def _send_json(self, payload: dict, status: int = 200) -> None:
-        body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+        pend = getattr(self, "_audit_pending", None)
+        if pend:
+            self._audit_pending = None
+            if not (status == 404 and isinstance(payload, dict)
+                    and payload.get("reason") == "unknown_endpoint"):
+                ok = status < 400 and not (isinstance(payload, dict) and payload.get("ok") is False)
+                why = "" if ok else str((payload or {}).get("reason") or (payload or {}).get("error") or status)
+                tgt = getattr(self, "_audit_target", "") or ""
+                if isinstance(payload, dict) and payload.get("scan_id") is not None and "scan_id=" not in tgt:
+                    tgt = (tgt + " " if tgt else "") + "scan_id=%s" % payload.get("scan_id")
+                self._audit(pend, ok, " · ".join(x for x in (tgt, why) if x))
+        body = _json_bytes(payload)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+        except OSError:
+            # 브라우저가 응답 도중 연결을 끊음(잦은 폴링·새로고침·페이지 이동).
+            # BrokenPipe/ConnectionReset 등은 정상 동작이므로 조용히 무시한다.
+            pass
 
     def _send_html(self, path: str) -> None:
         try:
@@ -386,22 +3623,102 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except OSError:
             self.send_error(404, "dashboard.html not found")
             return
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except OSError:
+            pass  # 클라이언트 연결 끊김 — 무시
+
+    def _send_metrics(self) -> None:
+        """Prometheus 텍스트 포맷(/metrics) — 루트별 최신 스캔 지표 + 서버 정보."""
+        def esc(v):
+            return str(v).replace("\\", r"\\").replace('"', r'\"').replace("\n", r"\n")
+
+        lines = [
+            "# HELP isilon_usage_info 앱 정보(버전 라벨)",
+            "# TYPE isilon_usage_info gauge",
+            'isilon_usage_info{version="%s"} 1' % esc(__version__),
+        ]
+        try:
+            mconn = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+            try:
+                now = time.time()
+                seen = set()
+                metr = {
+                    "scanned_bytes": [], "total_files": [], "running": [],
+                    "heartbeat_age_seconds": [], "fs_total_bytes": [],
+                    "fs_used_bytes": [], "fs_free_bytes": [],
+                }
+                for s in mgrmod.list_scans(mconn):
+                    root = s["root_path"]
+                    if root in seen:    # 루트별 최신 스캔 1개만
+                        continue
+                    seen.add(root)
+                    lbl = '{root="%s"}' % esc(root)
+                    running = 1 if s["status"] in ("discovering", "sizing") else 0
+                    metr["scanned_bytes"].append((lbl, int(s["scanned_bytes"] or 0)))
+                    metr["total_files"].append((lbl, int(s["total_files"] or 0)))
+                    metr["running"].append((lbl, running))
+                    if s.get("updated_at"):
+                        metr["heartbeat_age_seconds"].append(
+                            (lbl, max(0, int(now - s["updated_at"]))))
+                    metr["fs_total_bytes"].append((lbl, int(s["fs_total_bytes"] or 0)))
+                    metr["fs_used_bytes"].append((lbl, int(s["fs_used_bytes"] or 0)))
+                    metr["fs_free_bytes"].append((lbl, int(s["fs_free_bytes"] or 0)))
+                helps = {
+                    "scanned_bytes": "루트별 최신 스캔의 조사 용량(바이트)",
+                    "total_files": "루트별 최신 스캔의 총 파일 수",
+                    "running": "스캔 진행 중 여부(1=진행)",
+                    "heartbeat_age_seconds": "마지막 진행 갱신 경과(초)",
+                    "fs_total_bytes": "대상 FS 전체 크기",
+                    "fs_used_bytes": "대상 FS 사용량",
+                    "fs_free_bytes": "대상 FS 여유",
+                }
+                for name, rows in metr.items():
+                    full = "isilon_usage_root_" + name
+                    lines.append("# HELP %s %s" % (full, helps[name]))
+                    lines.append("# TYPE %s gauge" % full)
+                    for lbl, val in rows:
+                        lines.append("%s%s %d" % (full, lbl, val))
+            finally:
+                mconn.close()
+        except Exception:
+            pass
+        body = ("\n".join(lines) + "\n").encode("utf-8")
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type",
+                             "text/plain; version=0.0.4; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except OSError:
+            pass
+
+    def _query_int_or(self, qs: dict, key: str, default: int):
+        """정수 쿼리 값, 없거나 잘못되면 default. 0 도 유효한 값으로 받는다(`or default` 는 0 을 기본값으로 바꿨다 —
+        coldplan days=0 이 365 로, dups min_size=0 이 4096 으로)."""
+        v = self._query_int(qs, key)
+        return default if v is None else v
 
     def _query_int(self, qs: dict, key: str):
+        # SQLite 정수 범위(±2^63) 밖이면 바인딩에서 OverflowError(→500) — 없는 값으로 취급(2026-11 리뷰)
         if key in qs and qs[key]:
             try:
-                return int(qs[key][0])
-            except ValueError:
+                v = int(qs[key][0])
+            except (ValueError, OverflowError):
                 return None
+            return v if -(2 ** 63) <= v < 2 ** 63 else None
         return None
 
-    def _resolve_scan_db(self, mconn, scan_id):
-        """scan_id(없으면 기본 스캔)에 해당하는 per-run DB 경로와 manager 행을 반환."""
+    def _resolve_scan_db(self, mconn, scan_id, *, analysis: bool = False):
+        """scan_id(없으면 기본 스캔)에 해당하는 per-run DB 경로와 manager 행을 반환.
+
+        analysis=True(폴더 트리·상위 폴더·리포트·검색·오류·내보내기): 진행 중 스캔에 '지금까지 결과' 스냅샷이 있으면
+        그 복사본을 읽는다(스캔은 멈추지 않음, 값은 하한값). 진행 표시(status)는 늘 원본 — 한 곳에서만 고른다."""
         if scan_id is None:
             scan_id = mgrmod.pick_default_scan(mconn)
         if scan_id is None:
@@ -409,15 +3726,128 @@ class DashboardHandler(BaseHTTPRequestHandler):
         row = mgrmod.get_scan(mconn, scan_id)
         if row is None:
             return None, None
+        self._last_scan_row = row        # 'no such table' 판단용(진행 중 스캔만 '초기화 중')
+        if analysis and self.controller is not None:
+            snap = self.controller.live_snapshot_db(row)
+            if snap:
+                row = dict(row, db_path=snap, live_snapshot=True)
         return int(row["id"]), row
 
-    def do_GET(self) -> None:  # noqa: N802
+    def _ask_llm_cfg(self) -> dict:
+        """설정에서 로컬 LLM(선택) 구성을 모은다. enabled=False 면 규칙 기반만."""
+        s = self._current_settings()
+        return {
+            "enabled": bool(s.get("ask_llm_enabled")),
+            "endpoint": (s.get("ask_llm_endpoint") or "").strip(),
+            "model": (s.get("ask_llm_model") or "").strip(),
+            "key": (s.get("ask_llm_key") or "").strip(),
+            "timeout": float(s.get("ask_llm_timeout") or 20),
+        }
+
+    def _gather_ask_data(self, mconn, scan_id) -> dict:
+        """질의응답 엔진에 줄 공통 데이터(overall + 선택 스캔 상세)를 모은다."""
+        overall = mgrmod.overall_capacity(mconn)
+        for r in overall.get("roots", []):
+            host = r.get("hostname")
+            r["label"] = (host + ":" + r["root_path"]) if host else r["root_path"]
+        data = {"scope": "edge", "overall": overall, "detail": None}
+        # 분석 화면과 같은 DB(진행 중 스냅샷 포함) — 예전엔 원본을 읽어 스냅샷이 있는데도 '0 B' 로 답했다(24회차 점검)
+        scan_id, row = self._resolve_scan_db(mconn, scan_id, analysis=True)
+        if row is None or not os.path.exists(row["db_path"]):
+            return data
+        if str(dict(row).get("backend") or "") == "pscan":
+            data["detail_note"] = "pscan"     # 빠른 스캔은 분포·Top 파일을 기록하지 않는다(31회차 점검: '완료되면 채워집니다'로 안내)
+        pconn = dbmod.connect(row["db_path"])
+        try:
+            rid = dbmod.latest_run_id(pconn)
+            if rid is None:
+                return data
+            owners = dbmod.get_scan_stats(pconn, rid, "owner", limit=50)
+            for o in owners:
+                o["name"] = _uid_name(o["key"])
+            topf = dbmod.get_top_files(pconn, rid, limit=30)
+            for f in topf:
+                f["owner"] = _uid_name(f.get("uid"))
+            topdirs = list_top_dirs(pconn, rid, sort="size", order="desc", limit=20).get("rows", [])
+            data["detail"] = {
+                "scan_id": scan_id, "root_path": row["root_path"],
+                "age": dbmod.get_scan_stats(pconn, rid, "age"),
+                "atime_age": dbmod.get_scan_stats(pconn, rid, "atime_age"),
+                "owners": owners,
+                "extensions": dbmod.get_scan_stats(pconn, rid, "ext", limit=50),
+                "sizes": dbmod.get_scan_stats(pconn, rid, "size"),
+                "top_files": topf,
+                "topdirs": [{"path": d.get("path"), "bytes": d.get("total_bytes"),
+                             "files": d.get("total_files")} for d in topdirs],
+                "forecast": forecast_capacity(mconn, row),
+            }
+        except sqlite3.OperationalError:
+            pass        # 초기화 전 레이스 — 상세 없이 공통만
+        finally:
+            pconn.close()
+        return data
+
+    def _current_settings(self) -> dict:
+        if self.controller is not None:
+            return self.controller.settings
+        return setmod.load(self.data_dir)
+
+    def _authorized(self, qs: dict) -> bool:
+        """api_token 이 설정돼 있으면 X-Auth-Token 헤더(또는 ?token=)를 검증한다.
+
+        토큰이 비어 있으면(미설정) 공개로 간주한다(기존 동작 유지).
+        """
+        tok = (self._current_settings().get("api_token") or "").strip()
+        if not tok:
+            return True
+        given = self.headers.get("X-Auth-Token") or (qs.get("token", [""])[0] or "")
+        # 바이트로 상수시간 비교 — 비-ASCII 토큰이 와도 compare_digest 가 TypeError(→500) 나지 않게.
+        return hmac.compare_digest(str(given).encode("utf-8", "ignore"),
+                                   str(tok).encode("utf-8", "ignore"))
+
+    def _do_GET(self) -> None:
+        self._last_scan_row = None
         parsed = urlparse(self.path)
         path = parsed.path
         qs = parse_qs(parsed.query)
+        if _has_nul(qs):                   # 경로 인자의 NUL → os 호출 ValueError(500) 대신 400
+            self._send_json({"ok": False, "reason": "요청에 NUL 문자가 있습니다"}, status=400)
+            return
 
         if path in ("/", "/index.html"):
             self._send_html(DASHBOARD_HTML)
+            return
+
+        if path == "/theme.css":   # 공통 화면 테마(단일 소스, 대시보드·포탈 공유)
+            try:
+                with open(os.path.join(HERE, "theme.css"), "rb") as fh:
+                    body = fh.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/css; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except OSError:
+                self.send_error(404, "theme.css not found")
+            return
+
+        if path == "/i18n.js":     # 영어 토글 런타임+사전(단일 소스, 대시보드·포탈 공유)
+            try:
+                with open(os.path.join(HERE, "i18n_en.js"), "rb") as fh:
+                    body = fh.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/javascript; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except OSError:
+                self.send_error(404, "i18n.js not found")
+            return
+
+        if path == "/metrics":
+            self._send_metrics()
             return
 
         if not path.startswith("/api/"):
@@ -428,15 +3858,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
         try:
             if path == "/api/scans":
                 ctrl = self.controller
+                overall = mgrmod.overall_capacity(mconn)
+                _scans_with_partial(overall["roots"], ctrl, key="scan_id")
                 self._send_json({
                     "ok": True,
                     "version": __version__,
-                    "overall": mgrmod.overall_capacity(mconn),
-                    "scans": mgrmod.list_scans(mconn),
+                    "server_time": time.time(),   # 화면이 서버 시계 기준으로 경과를 계산(브라우저 시계와 다를 때)
+                    "overall": overall,
+                    "scans": _scans_with_partial(mgrmod.list_scans(mconn), ctrl),
                     "running": ctrl.running_ids() if ctrl else [],
+                    "auto_restart": ctrl.auto_restart_ids() if ctrl else [],
                     "mount_bases": ctrl.mount_bases if ctrl else [],
                     "can_scan": ctrl is not None,
                     "have_psutil": monmod.have_psutil(),
+                    "op_required": bool(ctrl and ctrl.op_required()),
+                    **(ctrl.op_temp_info() if ctrl else {"op_temp": False, "op_info_path": ""}),
+                    "show_update_popup": bool(ctrl and ctrl.settings.get("show_update_popup")),
                 })
                 return
 
@@ -448,18 +3885,195 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 })
                 return
 
+            if path == "/api/isilon":
+                if self.controller is None:
+                    self._send_json({"ok": False, "configured": False,
+                                     "reason": "이 서버는 웹 스캔/설정이 비활성입니다."})
+                else:
+                    self._send_json(self.controller.isilon_status(
+                        force=(qs.get("force", ["0"])[0] == "1")))
+                return
+
+            if path == "/api/storage":
+                arrays = (self.controller.storage_status(force=(qs.get("force", ["0"])[0] == "1"))
+                          if self.controller else [])
+                self._send_json({"ok": True, "arrays": arrays})
+                return
+
+            if path == "/api/recommend-workers":
+                # 서버 사양(CPU/메모리)을 보고 권장 동시 스캔 스레드 수를 계산.
+                specs = monmod.system_specs()
+                backend = (self._current_settings() or {}).get("default_backend", "native")
+                rec = monmod.recommend_workers(specs, backend=backend)
+                rec["ok"] = True
+                self._send_json(rec)
+                return
+
+            if path == "/api/benchmark-workers/status":
+                # 진행 중/완료된 시범 탐색의 단계별 결과 스냅샷(폴링용)
+                self._send_json(self.controller.benchmark_status()
+                                if self.controller else
+                                {"ok": True, "running": False, "results": []})
+                return
+
+            if path == "/api/autotune/status":
+                # 진행 중/완료된 오토튜닝 스냅샷(첫 화면 실시간 표시용 폴링)
+                self._send_json(self.controller.autotune_status()
+                                if self.controller else
+                                {"ok": True, "running": False, "results": []})
+                return
+
+            if path == "/api/upgrade/status":
+                # 인터넷 자동 업그레이드 상태(현재/최신 버전·확인시각·로그 — 상세 표시용)
+                self._send_json(self.controller.upgrade_status()
+                                if self.controller else {"ok": False})
+                return
+
+            if path == "/api/gentest/status":
+                self._send_json(self.controller.gentest_status()
+                                if self.controller else
+                                {"ok": True, "running": False, "done": False})
+                return
+
+            if path == "/api/analyze/status":
+                self._send_json(self.controller.analyze_status()
+                                if self.controller else
+                                {"ok": True, "running": False, "done": False, "result": None})
+                return
+
+            if path == "/api/systune":
+                if not self.controller:
+                    self._send_json({"ok": False, "error": "웹 스캔 비활성(점검 불가)."})
+                    return
+                self._send_json(self.controller.systune_check(
+                    scan_root=qs.get("path", [None])[0]))
+                return
+
+            if path == "/api/scan/partial-aggregate/status":
+                self._send_json(self.controller.partial_aggregate_status(self._query_int(qs, "scan"))
+                                if self.controller else {"ok": False, "reason": "웹 스캔 비활성"})
+                return
+
+            if path == "/api/scan/live-snapshot":      # 진행 중 스캔 스냅샷 상태(만드는 중·만든 시각)
+                self._send_json(dict({"ok": True}, **self.controller.live_snapshot_info(self._query_int(qs, "scan")))
+                                if self.controller else {"ok": False, "reason": "웹 스캔 비활성"})
+                return
+
+            if path == "/api/troubleshoot/history":
+                self._send_json(self.controller.troubleshoot_history(
+                    limit=self._query_int(qs, "limit") or 200)   # 잘못된 limit 값에도 500 안 나게 안전 파싱
+                    if self.controller else {"ok": True, "events": []})
+                return
+
+            if path == "/api/troubleshoot/samples":
+                if not self.controller:
+                    self._send_json({"ok": True, "samples": []})
+                    return
+                try:
+                    secs = int(qs.get("seconds", ["86400"])[0])
+                    mx = int(qs.get("max", ["600"])[0])
+                except (TypeError, ValueError, OverflowError):
+                    secs, mx = 86400, 600
+                self._send_json(self.controller.rate_samples(
+                    seconds=max(5, min(86400, secs)), max_points=max(10, min(2000, mx))))
+                return
+
+            if path == "/api/troubleshoot/throughput":
+                if not self.controller:
+                    self._send_json({"ok": True, "buckets": []})
+                    return
+                try:
+                    bk = int(qs.get("bucket", ["60"])[0])
+                    mx = int(qs.get("max", ["60"])[0])
+                except (TypeError, ValueError, OverflowError):
+                    bk, mx = 60, 60
+                self._send_json(self.controller.throughput(
+                    bucket_sec=max(60, min(3600, bk)), max_buckets=max(2, min(200, mx))))
+                return
+
+            if path == "/api/troubleshoot":
+                if not self.controller:
+                    self._send_json({"ok": False, "error": "웹 스캔 비활성(진단 불가)."})
+                    return
+                try:
+                    secs = float(qs.get("sample", ["1.2"])[0])
+                except (TypeError, ValueError, OverflowError):
+                    secs = 1.2
+                self._send_json(self.controller.troubleshoot(
+                    sample_sec=max(0.2, min(5.0, secs))))
+                return
+
+            if path == "/api/settings":
+                self._send_json({
+                    "ok": True,
+                    "settings": _public_settings(self._current_settings()),
+                    "editable": (self.controller is not None
+                                 and not self.controller.lock_settings),
+                    "locked": bool(self.controller and self.controller.lock_settings),
+                    "server": {
+                        "version": __version__,
+                        "schema_version": SCHEMA_VERSION,
+                        "data_dir": os.path.abspath(self.data_dir),
+                        "host": getattr(self, "bound_host", None),
+                        "port": getattr(self, "bound_port", None),
+                        "have_psutil": monmod.have_psutil(),
+                        "can_scan": self.controller is not None,
+                    },
+                })
+                return
+
+            if path == "/api/changelog":
+                text = None
+                for cand in (os.path.join(os.path.dirname(HERE), "CHANGELOG.md"),
+                             os.path.join(safe_cwd(), "CHANGELOG.md")):
+                    try:
+                        with open(cand, "r", encoding="utf-8") as fh:
+                            text = fh.read()
+                        break
+                    except OSError:
+                        continue
+                self._send_json({"ok": True, "version": __version__,
+                                 "schema_version": SCHEMA_VERSION, "changelog": text})
+                return
+
             if path == "/api/browse":
                 qpath = qs.get("path", [""])[0]
-                if not qpath and self.controller and self.controller.mount_bases:
-                    qpath = self.controller.mount_bases[0]
-                self._send_json(browse_dir(qpath))
+                confirm = qs.get("confirm", ["0"])[0] in ("1", "true", "yes", "on")
+                ctrl = self.controller
+                if not qpath and ctrl and ctrl.mount_bases:
+                    qpath = ctrl.mount_bases[0]
+                # confirm=1 로 지정 경로(mount_bases) 밖을 여는 것은 '스캔 outside' 급 권한이다 —
+                # op 비밀번호가 설정돼 있으면 인증을 요구한다(무인증 GET 으로 마운트 밖 전체 FS 열거 방지).
+                if (confirm and ctrl and ctrl.mount_bases
+                        and not ctrl.browse_allowed(qpath or "/")
+                        and ctrl.op_required()
+                        and not ctrl.op_token_valid(self.headers.get("X-Op-Token"))):
+                    self._send_json({"ok": False, "need_op": True,
+                                     "reason": "작업 비밀번호가 필요합니다(지정 경로 밖 탐색)."}, status=401)
+                    return
+                # 지정 경로(mount_bases) 밖이면 하드 차단 대신 '컨펌 가능' 신호를 준다.
+                # 사용자가 컨펌하면 클라이언트가 confirm=1 로 다시 호출 → 자유 탐색 허용.
+                if (ctrl and ctrl.mount_bases and not confirm
+                        and not ctrl.browse_allowed(qpath or "/")):
+                    self._send_json({"ok": False, "reason": "outside_base",
+                                     "path": os.path.abspath(qpath or "/"),
+                                     "allowed": ctrl.mount_bases})
+                    return
+                result = browse_dir(qpath)
+                # 컨펌 전에는 지정 경로 밖으로 '위로' 올라가지 못하게 묶는다(컨펌하면 자유).
+                if (ctrl and ctrl.mount_bases and not confirm and result.get("ok")
+                        and result.get("parent")
+                        and not ctrl.browse_allowed(result["parent"])):
+                    result["parent"] = result["path"]
+                self._send_json(result)
                 return
 
             if path == "/api/status":
                 scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
                 if row is None:
-                    self._send_json({"ok": False, "reason": "no_runs",
-                                     "have_psutil": monmod.have_psutil()})
+                    self._send_json(dict({"ok": False, "reason": "no_runs",
+                                          "have_psutil": monmod.have_psutil()},
+                                         **_idle_resources()))
                     return
                 scan_meta = dict(row)
                 db_path = scan_meta["db_path"]
@@ -469,16 +4083,46 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     return
                 pconn = dbmod.connect(db_path)
                 try:
-                    payload = build_status(pconn, None)
+                    # top=0: 상위 디렉터리 정렬(거대 DB 에서 느림)은 생략한다.
+                    # 대시보드는 /api/topdirs(깊이 필터, 빠름)를 따로 쓰므로 불필요.
+                    _pd, _pf = mgrmod.prev_totals(mconn, scan_meta.get("root_path"), scan_id)
+                    payload = build_status(pconn, None, top=0, prev_total_dirs=_pd, prev_total_files=_pf)
+                except sqlite3.OperationalError:
+                    # per-run DB 파일은 생겼지만 아직 테이블 생성 전(스캔 시작 직후 레이스).
+                    # 500 대신 "초기화 중"으로 응답해 다음 폴링에 정상 표시되게 한다.
+                    self._send_json({"ok": False, "reason": "initializing",
+                                     "scan_id": scan_id, "scan_meta": scan_meta})
+                    return
                 finally:
                     pconn.close()
                 payload["scan_id"] = scan_id
                 payload["scan_meta"] = scan_meta
+                if self.controller is not None:   # 멈춘 자료 집계(부분 집계) 진행/결과 — 있을 때만
+                    _pa = self.controller.partial_aggregate_status(scan_id)
+                    if _pa.get("running") or _pa.get("result") is not None:
+                        payload["partial_agg"] = _pa
+                # DB 디스크 사용량 + 한도 — 'DB 살아있는지' 지표로 요약에 표시
+                payload["db_usage"] = _db_disk_usage(db_path)
+                _st = self._current_settings() or {}
+                payload["db_usage"]["limit_bytes"] = (
+                    int(_st.get("db_max_gb", 0) or 0) * (1024 ** 3))
+                # 로컬 저장 공간 여유: DB(데이터 폴더) + 로그 파일 위치
+                local = {"db": _dir_disk_free(self.data_dir)}
+                log_path = str(_st.get("log_path") or "").strip()
+                if log_path:
+                    log_disk = _dir_disk_free(log_path)
+                    # DB 와 같은 파일시스템이면 중복 표시 안 함
+                    if (log_disk and local["db"]
+                            and log_disk["total_bytes"] == local["db"]["total_bytes"]
+                            and log_disk["free_bytes"] == local["db"]["free_bytes"]):
+                        log_disk = None
+                    local["log"] = log_disk
+                payload["local_disk"] = local
                 self._send_json(payload)
                 return
 
             if path == "/api/children":
-                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"), analysis=True)
                 if row is None:
                     self._send_json({"ok": False, "reason": "no_runs"})
                     return
@@ -498,81 +4142,898 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     pconn.close()
                 return
 
+            if path == "/api/topdirs":
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"), analysis=True)
+                if row is None or not os.path.exists(row["db_path"]):
+                    self._send_json({"ok": True, "rows": []})
+                    return
+                pconn = dbmod.connect(row["db_path"])
+                try:
+                    run_id = dbmod.latest_run_id(pconn)
+                    if run_id is None:
+                        self._send_json({"ok": True, "rows": []})
+                    else:
+                        top_n = int(self._current_settings().get("top_n", 20))
+                        self._send_json(list_top_dirs(
+                            pconn, run_id,
+                            under_id=self._query_int(qs, "under"),
+                            rel_depth=self._query_int(qs, "rel"),
+                            sort=(qs.get("sort", ["size"])[0]),
+                            order=(qs.get("order", ["desc"])[0]),
+                            limit=top_n,
+                        ))
+                except sqlite3.OperationalError:
+                    self._send_json({"ok": True, "rows": []})  # 초기화 전 레이스 — 빈 목록
+                finally:
+                    pconn.close()
+                return
+
+            if path in ("/api/search", "/api/errors"):
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"), analysis=True)
+                if row is None or not os.path.exists(row["db_path"]):
+                    self._send_json({"ok": True, "results": [], "errors": []})
+                    return
+                pconn = dbmod.connect(row["db_path"])
+                try:
+                    run_id = dbmod.latest_run_id(pconn)
+                    if path == "/api/search":
+                        q = (qs.get("q", [""])[0] or "").strip()
+                        self._send_json(search_dirs(pconn, run_id, q) if q
+                                        else {"ok": True, "results": []})
+                    else:
+                        self._send_json(list_errors(pconn, run_id))
+                finally:
+                    pconn.close()
+                return
+
+            if path == "/api/stats":
+                # 파일 나이/소유자/확장자별 집계 리포트
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"), analysis=True)
+                if row is None or not os.path.exists(row["db_path"]):
+                    self._send_json({"ok": True, "age": [], "atime_age": [],
+                                     "owners": [], "extensions": [], "sizes": []})
+                    return
+                pconn = dbmod.connect(row["db_path"])
+                try:
+                    rid = dbmod.latest_run_id(pconn)
+                    age = dbmod.get_scan_stats(pconn, rid, "age")
+                    age.sort(key=lambda r: _AGE_ORDER.index(r["key"])
+                             if r["key"] in _AGE_ORDER else 99)
+                    atime_age = dbmod.get_scan_stats(pconn, rid, "atime_age")
+                    atime_age.sort(key=lambda r: _AGE_ORDER.index(r["key"])
+                                   if r["key"] in _AGE_ORDER else 99)
+                    owners = dbmod.get_scan_stats(pconn, rid, "owner", limit=200)
+                    for o in owners:
+                        o["name"] = _uid_name(o["key"])
+                    exts = dbmod.get_scan_stats(pconn, rid, "ext", limit=200)
+                    sizes = dbmod.get_scan_stats(pconn, rid, "size")
+                    _so = ["0 (빈 파일)", "1B~1KB", "1KB~1MB", "1~10MB", "10~100MB",
+                           "100MB~1GB", "1~10GB", "10GB+"]
+                    sizes.sort(key=lambda r: _so.index(r["key"]) if r["key"] in _so else 99)
+                    topf = dbmod.get_top_files(pconn, rid, limit=200)   # 저장된 Top-N 전부(‘더 보기’용)
+                    for f in topf:
+                        f["owner"] = _uid_name(f.get("uid"))
+                    try:
+                        from . import systune as sysmod
+                        atime_info = sysmod.atime_policy(dbmod.fs_text(row["root_path"]))
+                    except Exception:   # noqa: BLE001
+                        atime_info = {"opt": "unknown", "reliable": None}
+                    self._send_json({"ok": True, "scan_id": scan_id, "age": age,
+                                     "atime_age": atime_age, "atime_info": atime_info,
+                                     "owners": owners, "extensions": exts,
+                                     "sizes": sizes, "top_files": topf})
+                finally:
+                    pconn.close()
+                return
+
+            if path == "/api/ask":
+                # 자연어 질의응답(규칙 기반 + 선택적 로컬 LLM). 읽기 전용.
+                q = (qs.get("q", [""])[0] or "").strip()
+                data = self._gather_ask_data(mconn, self._query_int(qs, "scan"))
+                cfg = self._ask_llm_cfg()
+                # 외부 LLM(저장된 키 사용)은 로그인한 사람만 — 포탈과 같은 규칙. 예전엔 인증 없는 GET 으로 누구나
+                # 저장된 키의 호출량을 쓰고, 스캔 데이터를 외부로 보내게 할 수 있었다(27회차 보안 점검). 규칙 기반 답은 누구나.
+                ctrl = self.controller
+                if ctrl is not None and ctrl.op_required() and not ctrl.op_token_valid(self.headers.get("X-Op-Token")):
+                    cfg["enabled"] = False
+                self._send_json(askmod.respond(q, data, cfg))
+                return
+
+            if path == "/api/atime":
+                # 추가 기능: 특정 폴더+그 안 항목의 마지막 접근시각(atime) 라이브 조회.
+                # 용량 계산과 무관(별도 로직)이고 스캔 락을 안 잡아 스캔과 동시 실행된다.
+                p = (qs.get("path", [""])[0] or "").strip()
+                if not p:
+                    self._send_json({"ok": False, "error": "path(폴더 경로)가 필요합니다."})
+                    return
+                ctrl = self.controller
+                if ctrl is not None:
+                    ok, why = ctrl.path_allowed(p)
+                    if not ok:
+                        self._send_json({"ok": False, "error": why})
+                        return
+                rec = qs.get("recursive", ["0"])[0] in ("1", "true", "on", "yes")
+                res = atimemod.list_access_times(
+                    p, recursive=rec, limit=self._query_int(qs, "limit") or atimemod.DEFAULT_LIMIT)
+                if res.get("ok"):
+                    for e in res["entries"]:
+                        e["owner"] = _uid_name(e.get("uid"))
+                    try:
+                        from . import systune as sysmod
+                        res["atime_info"] = sysmod.atime_policy(p)
+                    except Exception:   # noqa: BLE001
+                        res["atime_info"] = {"opt": "unknown", "reliable": None}
+                self._send_json(res)
+                return
+
+            if path == "/api/dups":
+                # 추가 기능: 특정 폴더의 내용 기반 중복 파일 탐지(조회 전용·무거운 read I/O).
+                # 파일을 변경/삭제하지 않는다. 스캔 락을 안 잡아 스캔과 동시 실행 가능.
+                p = (qs.get("path", [""])[0] or "").strip()
+                if not p:
+                    self._send_json({"ok": False, "error": "path(폴더 경로)가 필요합니다."})
+                    return
+                ctrl = self.controller
+                if ctrl is not None:
+                    ok, why = ctrl.path_allowed(p)
+                    if not ok:
+                        self._send_json({"ok": False, "error": why})
+                        return
+                from . import dups as dupsmod
+                self._send_json(dupsmod.find_duplicates(
+                    p, min_size=self._query_int_or(qs, "min_size", 4096),
+                    max_files=max(1, self._query_int(qs, "max_files") or 2_000_000)))
+                return
+
+            if path == "/api/coldplan":
+                # 추가 기능: 콜드데이터(오래 안 쓴 파일) 이동 '계획·스크립트' 생성(조회 전용).
+                # 도구는 파일을 절대 옮기지/지우지 않는다 — walk·stat 로 측정 후 관리자가 검토·실행할
+                # 셸 스크립트(매니페스트·롤백 포함)를 텍스트로만 만든다. 스캔 락 미사용.
+                p = (qs.get("path", [""])[0] or "").strip()
+                if not p:
+                    self._send_json({"ok": False, "error": "path(폴더 경로)가 필요합니다."})
+                    return
+                tgt = (qs.get("target", [""])[0] or "").strip()
+                ctrl = self.controller
+                if ctrl is not None:
+                    ok, why = ctrl.path_allowed(p)
+                    if not ok:
+                        self._send_json({"ok": False, "error": why})
+                        return
+                    if tgt:
+                        ok2, why2 = ctrl.path_allowed(tgt)
+                        if not ok2:
+                            self._send_json({"ok": False, "error": "타깃: " + why2})
+                            return
+                field = (qs.get("field", ["mtime"])[0] or "mtime")
+                from . import coldtier as coldmod
+                res = coldmod.plan_cold_move(
+                    p, days=self._query_int_or(qs, "days", 365), field=field,
+                    target=tgt, min_size=self._query_int_or(qs, "min_size", 0),
+                    max_files=max(1, self._query_int(qs, "max_files") or 2_000_000))
+                if field == "atime" and res.get("ok"):
+                    # atime 은 noatime 마운트에서 무의미 — /api/atime 과 같은 신뢰도 소스를 공유(단일 소스).
+                    try:
+                        from . import systune as sysmod
+                        res["atime_info"] = sysmod.atime_policy(p)
+                    except Exception:   # noqa: BLE001
+                        res["atime_info"] = {"opt": "unknown", "reliable": None}
+                self._send_json(res)
+                return
+
+            if path == "/api/forecast":
+                # 용량 소진 예측: 같은 루트의 완료 스캔 이력으로 선형 추세 계산
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
+                if row is None:
+                    self._send_json({"ok": False, "reason": "no_runs"})
+                    return
+                self._send_json(forecast_capacity(mconn, row))
+                return
+
+            if path == "/api/growers":
+                # 변화 리포트: 직전 완료 스캔 대비 가장 많이 커진/줄어든/신규/삭제
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"))
+                if row is None:
+                    self._send_json({"ok": False, "reason": "no_runs"})
+                    return
+                # 같은 크기 기준(apparent/disk)의 직전 완료 스캔과 비교(29회차 점검: 기준이 다르면 엉뚱한 증가)
+                prev = mconn.execute(
+                    """SELECT id FROM scans WHERE root_path=? AND id<? AND status='done'
+                       AND COALESCE(size_mode,'')=COALESCE(?,'')
+                       AND COALESCE(opt_max_depth,0)=COALESCE(?,0)
+                       ORDER BY id DESC LIMIT 1""",
+                    (row["root_path"], scan_id, row["size_mode"], dict(row).get("opt_max_depth"))).fetchone()
+                if not prev:
+                    self._send_json({"ok": True, "has_base": False,
+                                     "reason": "비교할 이전 완료 스캔이 없습니다."})
+                    return
+                limit = max(1, min(1000, self._query_int(qs, "limit") or 15))   # 음수면 끝에서 잘렸다(30회차 점검)
+                _md = self._query_int(qs, "max_depth")
+                d = diff_scans(self.data_dir, int(prev["id"]), scan_id,
+                               limit=400, max_depth=(None if (_md or 0) < 0 else _md))   # 음수 깊이(31회차)
+                if not d.get("ok"):
+                    if d.get("not_done"):      # 대상이 진행 중·일시정지 — 변화 리포트를 만들지 않는다(오류 아님)
+                        self._send_json({"ok": True, "has_base": False, "reason": d.get("reason")})
+                        return
+                    self._send_json(d)
+                    return
+                rows = d["rows"]
+                out = {
+                    "ok": True, "has_base": True,
+                    "base_scan": d["base"], "target_scan": d["target"],
+                    "total_delta": d["total_delta"],
+                    "growers": [r for r in rows if r["delta"] > 0][:limit],
+                    "shrinkers": [r for r in rows if r["delta"] < 0][:limit],
+                    "added": [r for r in rows if r["base_bytes"] == 0
+                              and r["target_bytes"] > 0][:limit],
+                    "removed": [r for r in rows if r["target_bytes"] == 0
+                                and r["base_bytes"] > 0][:limit],
+                }
+                self._send_json(out)
+                return
+
+            if path == "/api/diff":
+                base = self._query_int(qs, "base")
+                target = self._query_int(qs, "target")
+                if base is None or target is None:
+                    self._send_json({"ok": False, "reason": "base/target 필요"}, status=400)
+                    return
+                self._send_json(diff_scans(self.data_dir, base, target,
+                                           max_depth=(None if (self._query_int(qs, "max_depth") or 0) < 0
+                                                      else self._query_int(qs, "max_depth"))))
+                return
+
+            if path == "/api/folder-history":
+                # 특정 폴더의 크기·파일수가 완료 스캔들에서 어떻게 변해왔는지(이력)
+                root = (qs.get("root", [""])[0] or "").strip()
+                dpath = (qs.get("path", [""])[0] or "").strip()
+                if len(dpath) > 1:
+                    dpath = dpath.rstrip("/") or "/"   # 끝 '/' 가 붙으면 늘 0건이었다(21회차 점검)
+                if len(root) > 1:
+                    root = root.rstrip("/") or "/"     # root 도 같은 규칙(30회차 점검: root 끝 '/' 면 0건)
+                if not root or not dpath:
+                    self._send_json({"ok": False, "reason": "root/path 필요"}, status=400)
+                    return
+                limit = max(2, min(self._query_int(qs, "limit") or 30, 100))
+                scans = mconn.execute(
+                    "SELECT * FROM scans "
+                    "WHERE root_path=? AND status='done' ORDER BY id DESC LIMIT ?",
+                    (root, limit)).fetchall()
+                try:   # 루트 기준 깊이(루트=0) — 그 스캔이 이 깊이를 행으로 남겼는지 판단용
+                    _rel = os.path.relpath(dpath, root)
+                    _fdepth = 0 if _rel == "." else (_rel.count(os.sep) + 1)
+                except ValueError:
+                    _fdepth = 0
+                points = []
+                for s in scans:
+                    dbp = s["db_path"]
+                    if not dbp or not os.path.exists(dbp):
+                        continue
+                    try:
+                        c = dbmod.connect(dbp)
+                        try:
+                            r = c.execute(
+                                "SELECT total_bytes, total_files FROM directories "
+                                "WHERE run_id=(SELECT MAX(id) FROM scan_runs) AND path=?",
+                                (dpath,)).fetchone()
+                        finally:
+                            c.close()
+                    except Exception:  # noqa: BLE001
+                        continue                     # 읽지 못한 스캔은 건너뜀('없음'과 다름)
+                    if r is not None:
+                        points.append({
+                            "scan_id": int(s["id"]), "started_at": s["started_at"],
+                            "total_bytes": int(r["total_bytes"]),
+                            "total_files": int(r["total_files"])})
+                    else:
+                        # 그 스캔엔 행이 없음 — 그 깊이까지 행을 남긴 스캔(fold/최대 깊이 안)일 때만 '지워짐(0)'.
+                        # 묶은(fold)·깊이 제한 스캔은 폴더가 있어도 행이 없다 — 건너뛴다(22회차 점검: 있는 폴더가 0 B 로).
+                        _sd = dict(s)
+                        _fold = int(_sd.get("opt_fold_depth") or 0)
+                        _maxd = int(_sd.get("opt_max_depth") or 0)
+                        if (_fold and _fdepth > _fold) or (_maxd and _fdepth > _maxd):
+                            continue
+                        points.append({"scan_id": int(s["id"]), "started_at": s["started_at"],
+                                       "total_bytes": 0, "total_files": 0, "absent": True})
+                points.reverse()  # 오래된→최신 순으로
+                # 처음 나타나기 전의 '없음'은 버리고, 그 뒤 사라진 스캔은 0 으로 — 예전엔 지워진 스캔을 건너뛰어
+                # 변화 없음처럼 보였다(21회차 점검: '변화' 화면은 삭제로 보이는데 이력은 그대로)
+                while points and points[0].get("absent"):
+                    points.pop(0)
+                if not any(not p.get("absent") for p in points):
+                    points = []
+                for i, p in enumerate(points):
+                    prev = points[i - 1] if i else None
+                    p["bytes_delta"] = (p["total_bytes"] - prev["total_bytes"]) if prev else 0
+                    p["files_delta"] = (p["total_files"] - prev["total_files"]) if prev else 0
+                self._send_json({"ok": True, "root": root, "path": dpath,
+                                 "found": len(points), "points": points})
+                return
+
+            if path == "/api/export":
+                scan_id, row = self._resolve_scan_db(mconn, self._query_int(qs, "scan"), analysis=True)
+                if row is None or not os.path.exists(row["db_path"]):
+                    self._send_json({"ok": False, "reason": "no_runs"}, status=404)
+                    return
+                _fmt = (qs.get("format", ["csv"])[0] or "csv").lower()
+                if _fmt not in ("csv", "json"):     # 모르는 형식을 말없이 CSV 로 주던 것(30회차 점검)
+                    self._send_json({"ok": False, "reason": "format 은 csv 또는 json 입니다."}, status=400)
+                    return
+                self._export(row, fmt=_fmt)
+                return
+
+            if path == "/api/dbexport":
+                # 글로벌 포탈 복제용: 완료된 per-run DB + 노드 요약(meta.json)을 tar.gz 로.
+                if not self._authorized(qs):
+                    self._send_json({"ok": False, "reason": "unauthorized"}, status=401)
+                    return
+                try:
+                    since = float(qs.get("since", ["0"])[0] or 0)
+                except (TypeError, ValueError, OverflowError):
+                    since = 0.0
+                self._export_dbs(mconn, since=since)
+                return
+
             self._send_json({"ok": False, "reason": "unknown_endpoint"}, status=404)
+        except ConnectionError:
+            pass  # 클라이언트가 응답 도중 연결을 끊음 — 무시
+        except sqlite3.OperationalError as exc:
+            # 스캔 시작 직후 per-run DB 파일은 생겼는데 테이블이 아직 없을 때 — 진행 표시(/api/status)처럼 '초기화 중'으로.
+            # 예전엔 내보내기·하위 폴더·검색·오류·통계가 500 'no such table' 을 냈다(20회차 점검: 부하 중 1/14,000).
+            _lr = getattr(self, "_last_scan_row", None)
+            _st = ""
+            try:
+                _st = (_lr["status"] if _lr is not None else "") or ""
+            except (KeyError, IndexError, TypeError):
+                _st = ""
+            # 진행 중 스캔일 때만 — 끝난 스캔의 테이블이 없으면 손상·옛 스키마다(그때는 진짜 오류를 그대로, 21회차 점검)
+            _young = False
+            try:   # 방금 만든 DB 파일(테이블 생성 전)도 — 2분 안이면
+                _young = _lr is not None and (time.time() - os.path.getmtime(_lr["db_path"])) < 120
+            except (OSError, KeyError, IndexError, TypeError):
+                _young = False
+            if "no such table" in str(exc) and (_st in ("discovering", "sizing") or _young):
+                self._send_json({"ok": False, "reason": "initializing",
+                                 "error": "스캔 DB 를 준비하는 중입니다 — 잠시 뒤 다시 시도하세요."})
+            else:
+                self._send_json({"ok": False, "error": str(exc)}, status=500)
         except Exception as exc:  # API 오류가 서버를 죽이지 않도록
             self._send_json({"ok": False, "error": str(exc)}, status=500)
         finally:
             mconn.close()
 
+    def _export(self, row, *, fmt: str = "csv") -> None:
+        """선택한 스캔의 디렉터리 집계를 CSV/JSON 으로 스트리밍 다운로드.
+
+        커서로 한 행씩 흘려보내 대용량에서도 메모리를 적게 쓴다.
+        """
+        pconn = dbmod.connect(row["db_path"])
+        try:
+            run_id = dbmod.latest_run_id(pconn)
+            cur = pconn.execute(
+                """SELECT path, depth, file_count, subdir_count, own_bytes,
+                          total_bytes, total_files, status
+                   FROM directories WHERE run_id=? ORDER BY total_bytes DESC""",
+                (run_id,),
+            )
+            base = f"scan{row['id']}_{os.path.basename(row['db_filename'])}"
+            if fmt == "json":
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Disposition", f'attachment; filename="{base}.json"')
+                self.end_headers()
+                self.wfile.write(b'{"directories":[')
+                first = True
+                buf = []   # 행마다 쓰지 않고 모아서(약 2천 행) — 행마다 쓰면 큰 내보내기가 9~20% 느렸다(30회차 성능 측정)
+                for r in cur:
+                    buf.append(("" if first else ",") + json.dumps(dict(r), ensure_ascii=False))
+                    first = False
+                    if len(buf) >= 2000:
+                        self.wfile.write("".join(buf).encode("utf-8"))
+                        buf = []
+                if buf:
+                    self.wfile.write("".join(buf).encode("utf-8"))
+                self.wfile.write(b"]}")
+            else:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/csv; charset=utf-8")
+                self.send_header("Content-Disposition", f'attachment; filename="{base}.csv"')
+                self.end_headers()
+                self.wfile.write("﻿".encode("utf-8"))  # 엑셀 한글용 BOM
+                self.wfile.write(b"path,depth,file_count,subdir_count,own_bytes,total_bytes,total_files,status\n")
+                buf = []   # 모아서 쓰기(위와 같은 이유)
+                for r in cur:
+                    p = '"' + str(r["path"]).replace('"', '""') + '"'
+                    buf.append(f'{p},{r["depth"]},{r["file_count"]},{r["subdir_count"]},{r["own_bytes"]},{r["total_bytes"]},{r["total_files"]},{r["status"]}\n')
+                    if len(buf) >= 2000:
+                        self.wfile.write("".join(buf).encode("utf-8"))
+                        buf = []
+                if buf:
+                    self.wfile.write("".join(buf).encode("utf-8"))
+        except OSError:
+            pass  # 다운로드 도중 클라이언트가 연결을 끊음 — 무시
+        finally:
+            pconn.close()
+
+    def _export_dbs(self, mconn, *, since: float = 0.0) -> None:
+        """완료된 per-run DB(불변) + 노드 요약(meta.json)을 tar.gz 로 스트리밍한다.
+
+        글로벌 포탈(HQ)이 이 번들을 받아 복제한다. 진행 중 스캔의 DB 는
+        쓰기 중이라 제외하고, status 가 done/paused/error 인 것만(또는 since
+        이후 완료분만) 보낸다. 완료된 DB 는 불변이라 그대로 복사해도 안전하다.
+        (Python 3.6·구버전 SQLite 호환: backup API/VACUUM INTO 를 쓰지 않는다.)
+        """
+        scans = mgrmod.list_scans(mconn)
+        overall = mgrmod.overall_capacity(mconn)
+        # 반복(완료 후 자동 재시작) 중인 루트를 표시해 포탈도 '반복 동작 중'을 알 수 있게 한다.
+        if self.controller:
+            _ar = set(self.controller.auto_restart_ids())
+            if _ar:
+                for _r in overall.get("roots", []):
+                    if _r.get("scan_id") in _ar:
+                        _r["auto_restart"] = True
+        terminal = ("done", "paused", "error")
+        # DB 파일이 실제로 있는 것만 — 없는 스캔을 meta 에 실으면 포탈이 '복제됨'으로 보고 워터마크를 넘겨
+        # 다시는 받지 않았다(2026-11 리뷰).
+        finished = [s for s in scans
+                    if s.get("status") in terminal
+                    and float(s.get("finished_at") or 0) > since
+                    and s.get("db_path") and os.path.exists(s.get("db_path"))]
+        meta = {
+            "hostname": socket.gethostname(),
+            "version": __version__,
+            "schema_version": SCHEMA_VERSION,
+            "exported_at": time.time(),
+            "since": since,
+            "overall": overall,
+            "isilon": (self.controller.isilon_status() if self.controller else
+                       {"ok": False, "configured": False}),
+            "storage": (self.controller.storage_status() if self.controller else []),
+            "scans": [dict(s, db_filename=os.path.basename(s.get("db_path") or ""))
+                      for s in finished],
+            # 사용자가 지운 스캔(포탈이 복제본에서도 지운다) — 증분 목록만으론 삭제를 알 수 없다
+            "deleted_db_filenames": (self.controller.deleted_db_filenames() if self.controller else []),
+        }
+        self.send_response(200)
+        self.send_header("Content-Type", "application/gzip")
+        self.send_header("Content-Disposition", 'attachment; filename="dbexport.tar.gz"')
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            gz = gzip.GzipFile(fileobj=self.wfile, mode="wb")
+            tar = tarfile.open(fileobj=gz, mode="w")
+            mb = json.dumps(meta, ensure_ascii=False, default=str).encode("utf-8")
+            ti = tarfile.TarInfo("meta.json")
+            ti.size = len(mb)
+            ti.mtime = int(time.time())
+            tar.addfile(ti, io.BytesIO(mb))
+            for s in finished:
+                dbp = s.get("db_path")
+                if not dbp or not os.path.exists(dbp):
+                    continue
+                # 완료 DB 의 WAL 을 본 파일로 합쳐 단일 파일로 복사(안전·일관)
+                try:
+                    c = dbmod.connect(dbp)
+                    c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    c.close()
+                except Exception:
+                    pass
+                try:
+                    tar.add(dbp, arcname="scans/" + os.path.basename(dbp))
+                except OSError:
+                    continue
+            tar.close()
+            gz.close()
+        except OSError:
+            pass  # 전송 중 클라이언트 연결 끊김 — 무시
+
     def _read_json_body(self) -> dict:
+        body, self._body_err = read_json_body(self)
+        return body
+
+    def _audit(self, action: str, ok: bool, detail: str = "") -> None:
+        try:
+            ip = self.client_address[0] if self.client_address else ""
+        except Exception:  # noqa: BLE001
+            ip = ""
+        auditmod.record(self.data_dir, action=action, ok=ok, ip=ip, detail=detail)
+
+    def _handle_upgrade_push(self) -> None:
+        """포탈이 푸시한 새 코드 번들(tar.gz)을 적용한다(api_token 인증, 적용 후 재시작)."""
+        qs = parse_qs(urlparse(self.path).query)
+        tok = (self._current_settings().get("api_token") or "").strip()
+        if not tok:
+            self._send_json({"ok": False,
+                             "reason": "원격 업그레이드는 api_token 설정이 필요합니다."}, status=403)
+            return
+        if not self._authorized(qs):
+            self._send_json({"ok": False, "reason": "unauthorized"}, status=401)
+            return
         try:
             length = int(self.headers.get("Content-Length", 0))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             length = 0
-        if not length:
-            return {}
-        try:
-            raw = self.rfile.read(length)
-            return json.loads(raw.decode("utf-8"))
-        except Exception:
-            return {}
+        if length > MAX_BUNDLE_BODY:
+            self._send_json({"ok": False, "reason": "번들이 너무 큽니다"}, status=413)
+            return
+        data = self.rfile.read(length) if length > 0 else b""
+        if length > 0 and len(data) < length:
+            self._send_json({"ok": False, "reason": "번들이 잘렸습니다"}, status=400)
+            return
+        if not data:
+            self._send_json({"ok": False, "reason": "번들 없음"}, status=400)
+            return
+        res = upgrademod.upgrade_from_bundle_bytes(
+            data, upgrademod.code_dir_of(__file__), __version__)
+        self._audit("upgrade_push", bool(res.get("ok")),
+                    res.get("version") or res.get("reason") or "")
+        self._send_json(res, status=200 if res.get("ok") else 400)
+        if res.get("ok"):
+            def _later():
+                time.sleep(1.0)
+                self.controller._restart_for_upgrade()
+            threading.Thread(target=_later, name="upgrade-restart", daemon=True).start()
 
-    def do_POST(self) -> None:  # noqa: N802
+    def _handle_op_password_push(self) -> None:
+        """포탈이 푸시한 작업 보호 비밀번호 설정/변경/해제(api_token 인증).
+
+        op_password 가 아니라 api_token(X-Auth-Token)으로 인증한다 — 그래야 포탈이
+        엣지 비밀번호를 모르는 상태에서도 설정/변경/해제할 수 있다(/api/upgrade 와 같은 권한 모델).
+        """
+        qs = parse_qs(urlparse(self.path).query)
+        tok = (self._current_settings().get("api_token") or "").strip()
+        if not tok:
+            self._send_json({"ok": False,
+                             "reason": "원격 비밀번호 관리는 api_token 설정이 필요합니다."}, status=403)
+            return
+        if not self._authorized(qs):
+            self._send_json({"ok": False, "reason": "unauthorized"}, status=401)
+            return
+        body = self._read_json_body()
+        if self._body_err:
+            self._send_json({"ok": False, "reason": self._body_err[1]}, status=self._body_err[0])
+            return
+        res = self.controller.set_op_password(
+            str(body.get("password") or ""), clear=bool(body.get("clear")))
+        self._audit("op_password_push", bool(res.get("ok")), res.get("reason") or "")
+        self._send_json(res, status=200 if res.get("ok") else 400)
+
+    def _do_POST(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
+        if cross_site_post(self):
+            self._send_json({"ok": False, "reason": "다른 사이트에서 온 요청은 받지 않습니다."}, status=403)
+            return
         if self.controller is None:
             self._send_json({"ok": False,
                              "reason": "이 서버는 웹 스캔이 비활성화되어 있습니다."},
                             status=403)
             return
+        if path == "/api/upgrade":            # 포탈이 푸시하는 원격 업그레이드(api_token 인증)
+            self._handle_upgrade_push()
+            return
+        if path == "/api/op-password":        # 포탈이 푸시하는 작업 비밀번호 관리(api_token 인증)
+            self._handle_op_password_push()
+            return
         body = self._read_json_body()
+        if self._body_err:
+            self._send_json({"ok": False, "reason": self._body_err[1]}, status=self._body_err[0])
+            return
+        for _k in ("path", "target", "root"):   # 경로 값은 문자열만(배열·숫자면 .strip() 에서 500 이 났다)
+            if _k in body and body[_k] is not None and not isinstance(body[_k], str):
+                self._send_json({"ok": False, "reason": "%s 는 문자열이어야 합니다." % _k}, status=400)
+                return
         try:
+            # 작업 잠금 해제: 비밀번호 → 토큰
+            if path == "/api/unlock":
+                res = self.controller.unlock(body.get("password") or "",
+                                             self.client_address[0] if self.client_address else None)
+                self._audit("login", res.get("ok"),
+                            "" if res.get("ok") else (res.get("reason") or ""))
+                self._send_json(res, status=200 if res.get("ok") else 401)
+                return
+            # 최초 비밀번호 설정(비밀번호가 없을 때만). JSON 본문만 받는다 — 다른 사이트의 폼(CSRF)으로는
+            # Content-Type: application/json 을 보낼 수 없다.
+            if path == "/api/op-setup":
+                if not is_json_ctype(self.headers.get("Content-Type")):
+                    self._send_json({"ok": False, "reason": "JSON 요청만 허용"}, status=415)
+                    return
+                res = self.controller.setup_op_password(body.get("password") or "")
+                self._audit("op_setup", bool(res.get("ok")), res.get("reason") or "")
+                self._send_json(res, status=200 if res.get("ok") else 400)
+                return
+            # 인증은 '설정'과 되돌릴 수 없는 작업(삭제·정리·업그레이드 설치 등)에만 — 스캔 시작·중지·재개 등
+            # 일반 작업은 자유. 비밀번호가 아직 없으면 need_setup 으로 '처음 비밀번호 만들기'를 유도한다.
+            # 토큰은 커스텀 헤더(X-Op-Token)로만 받으므로 다른 사이트(CSRF)가 위조할 수 없다.
+            # 지정 경로(mount_bases) 밖 스캔(confirm_outside)은 지정 경로 밖 탐색(/api/browse?confirm=1)과 같은 등급 —
+            # 로그인을 요구한다. 예전엔 탐색은 막고 스캔 시작은 열려 있어, 로그인 없이 밖을 스캔한 뒤 내보내기·하위
+            # 목록으로 그 트리를 볼 수 있었다(21회차 점검). 지정 경로 안의 스캔은 예전처럼 로그인 없이.
+            if (path in ("/api/scan/start", "/api/autotune/start") and _truthy(body.get("confirm_outside"))
+                    and self.controller.mount_bases and self.controller.op_required()
+                    and not self.controller.op_token_valid(self.headers.get("X-Op-Token"))):
+                _tp = body.get("path")
+                _tp = _tp if isinstance(_tp, str) else ""
+                if not _tp.strip() or not self.controller.browse_allowed(os.path.abspath(_tp.strip())):
+                    self._audit(path, False, "locked")
+                    self._send_json({"ok": False, "reason": "locked", "op_required": True,
+                                     "error": "지정 경로 밖을 스캔하려면 비밀번호로 로그인하세요."}, status=401)
+                    return
+            if path in OP_PROTECTED_POSTS:
+                if not self.controller.op_required():
+                    self._audit(path, False, "need_setup")
+                    self._send_json({"ok": False, "reason": "need_setup", "need_setup": True,
+                                     "error": "설정을 쓰려면 먼저 비밀번호를 만드세요."}, status=401)
+                    return
+                if not self.controller.op_token_valid(self.headers.get("X-Op-Token")):
+                    self._audit(path, False, "locked")
+                    self._send_json({"ok": False, "reason": "locked", "op_required": True,
+                                     "error": "설정을 쓰려면 비밀번호로 로그인하세요."},
+                                    status=401)
+                    return
+
+            if path == "/api/audit":            # 감사 로그 조회(로그인 필요)
+                self._send_json({"ok": True, "events": auditmod.tail(self.data_dir, 300)})
+                return
+            # 변경 작업 기록 — 처리 '결과'(성공/실패·사유)로 남긴다. 예전엔 처리 전에 무조건 ok 로 남겨,
+            # 실패한 작업·없는 경로(404)도 '성공'으로 기록됐다(2026-11 리뷰). _send_json 이 마무리한다.
+            self._audit_pending = path
+            # 무엇에 대해(경로·스캔 번호) — 예전엔 시작/중지 기록에 대상이 없었다(2026-11 원격 조작 점검). 비밀값 제외.
+            self._audit_target = " ".join(
+                "%s=%s" % (k, str(body.get(k))[:200]) for k in ("path", "scan_id", "root", "target")
+                if isinstance(body, dict) and body.get(k) not in (None, "", []))
+
             if path == "/api/scan/start":
-                target = (body.get("path") or "").strip()
+                target = body.get("path") or ""
+                if not isinstance(target, str):     # 배열·숫자 등 → 400(예전엔 500)
+                    self._send_json({"ok": False, "reason": "path 는 문자열이어야 합니다."}, status=400)
+                    return
+                target = target.strip()
                 if not target:
                     self._send_json({"ok": False, "reason": "경로를 입력하세요."},
                                     status=400)
                     return
+                ofs = body.get("one_file_system")
                 result = self.controller.start_scan(
                     target,
-                    backend=body.get("backend", "native"),
-                    size_mode=body.get("size_mode", "disk"),
-                    one_file_system=bool(body.get("one_file_system", False)),
+                    backend=body.get("backend"),       # None 이면 설정 기본값 사용
+                    size_mode=body.get("size_mode"),
+                    one_file_system=None if ofs is None else _truthy(ofs),
+                    engine=body.get("engine"),
+                    confirm_outside=_truthy(body.get("confirm_outside")),
+                    auto_restart=_truthy(body.get("auto_restart")),
+                    fold_depth=body.get("fold_depth"),   # None 이면 노드 설정값 사용
+                    allow_empty=_truthy(body.get("allow_empty")),   # 이전 데이터가 있던 경로가 정말 비었을 때
                 )
                 self._send_json(result, status=200 if result.get("ok") else 400)
                 return
 
-            if path == "/api/scan/stop":
-                scan_id = body.get("scan_id")
-                try:
-                    scan_id = int(scan_id)
-                except (TypeError, ValueError):
+            if path == "/api/benchmark-workers":
+                # 후보 스레드 수로 짧게 시범 탐색(블로킹 ~수십 초, 스레드 서버라 무방)
+                res = self.controller.benchmark_workers(
+                    path=(body.get("path") or "").strip() or None,
+                    candidates=body.get("candidates"),
+                    budget=body.get("budget", 5.0),
+                )
+                self._send_json(res, status=200 if res.get("ok") else 400)
+                return
+
+            if path == "/api/benchmark-workers/start":
+                # 백그라운드 시작 → /api/benchmark-workers/status 로 단계별 폴링
+                res = self.controller.benchmark_start(
+                    path=(body.get("path") or "").strip() or None,
+                    candidates=body.get("candidates"),
+                    budget=body.get("budget", 5.0),
+                    mem_factor=body.get("mem_factor", 2.0),
+                )
+                self._send_json(res, status=200 if res.get("ok") else 400)
+                return
+
+            if path in ("/api/gentest/validate", "/api/gentest/start"):
+                try:   # 숫자가 아니면 400(예전엔 int() 변환 중 500)
+                    kw = dict(
+                        path=(body.get("path") or "").strip(),
+                        n_dirs=int(body.get("n_dirs", 0) or 0), n_subdirs=int(body.get("n_subdirs", 0) or 0),
+                        n_files=int(body.get("n_files", 0) or 0), file_size=int(body.get("file_size", 0) or 0),
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    self._send_json({"ok": False, "reason": "개수·크기는 정수여야 합니다."}, status=400)
+                    return
+                if path == "/api/gentest/validate":
+                    res = self.controller.gentest_validate(**kw)
+                else:
+                    res = self.controller.gentest_start(**kw)
+                self._send_json(res, status=200 if res.get("ok") else 400)
+                return
+
+            if path == "/api/gentest/stop":
+                self._send_json(self.controller.gentest_stop())
+                return
+
+            if path == "/api/autotune/start":
+                # 오토튜닝 측정 시작 → 완료 후 best 로 본 스캔 자동 시작(then_scan)
+                res = self.controller.autotune_start(
+                    path=(body.get("path") or "").strip() or None,
+                    secs=body.get("secs"),
+                    then_scan=_truthy(body.get("then_scan", True)),
+                    confirm_outside=_truthy(body.get("confirm_outside")),
+                    one_file_system=(None if body.get("one_file_system") is None
+                                     else _truthy(body.get("one_file_system"))),
+                )
+                self._send_json(res, status=200 if res.get("ok") else 400)
+                return
+
+            if path == "/api/autotune/stop":
+                self._send_json(self.controller.autotune_stop())
+                return
+
+            if path == "/api/upgrade/check":     # 지금 인터넷에서 최신 버전 확인
+                self._send_json(self.controller.upgrade_check()
+                                if self.controller else {"ok": False})
+                return
+            if path == "/api/upgrade/install":   # 지금 최신 버전 다운로드·설치·재시작
+                self._send_json(self.controller.upgrade_install()
+                                if self.controller else {"ok": False})
+                return
+
+            if path == "/api/analyze/start":
+                res = self.controller.analyze_start(
+                    path=(body.get("path") or "").strip() or None,
+                    max_depth=body.get("max_depth", 0),
+                    dir_limit=body.get("limit", 0),
+                    time_budget=body.get("timeout", 0.0),
+                    workers=body.get("workers", 8),
+                )
+                self._send_json(res, status=200 if res.get("ok") else 400)
+                return
+
+            if path == "/api/analyze/stop":
+                self._send_json(self.controller.analyze_stop())
+                return
+
+            if path == "/api/troubleshoot/history/clear":
+                self._send_json(self.controller.troubleshoot_history_clear())
+                return
+
+            if path == "/api/scan/live-snapshot":      # 진행 중 스캔의 '지금까지 결과' 만들기(스캔은 계속)
+                sid = parse_scan_id(body.get("scan_id"))
+                if sid is None:
                     self._send_json({"ok": False, "reason": "scan_id 필요"}, status=400)
                     return
-                self._send_json(self.controller.stop_scan(scan_id))
+                if not (0 < sid < 2 ** 63):
+                    self._send_json({"ok": False, "reason": "scan_id 범위가 올바르지 않습니다"}, status=400)
+                    return
+                res = self.controller.live_snapshot_start(sid)
+                self._send_json(res, status=200 if res.get("ok") else 400)
+                return
+
+            if path in ("/api/scan/stop", "/api/scan/resume", "/api/scan/delete",
+                        "/api/scan/partial-aggregate"):
+                # 정수(또는 숫자만 든 문자열)만 — true·2.9·'3 ' 을 1·2·3번 스캔으로 받아 엉뚱한 스캔을 지웠다(22회차 점검)
+                scan_id = parse_scan_id(body.get("scan_id"))
+                if scan_id is None:
+                    self._send_json({"ok": False, "reason": "scan_id 필요(정수)"}, status=400)
+                    return
+                if not (0 < scan_id < 2 ** 63):   # SQLite 정수 범위 밖이면 DB 조회에서 500 이 났다(2026-11 퍼징)
+                    self._send_json({"ok": False, "reason": "scan_id 범위가 올바르지 않습니다"}, status=400)
+                    return
+                if path == "/api/scan/stop":
+                    res = self.controller.stop_scan(scan_id)
+                elif path == "/api/scan/resume":
+                    res = self.controller.resume_scan(scan_id)
+                elif path == "/api/scan/partial-aggregate":
+                    res = (self.controller.partial_aggregate_stop(scan_id) if body.get("stop")
+                           else self.controller.partial_aggregate_scan(scan_id))
+                else:
+                    res = self.controller.delete_scan(scan_id)
+                self._send_json(res, status=200 if res.get("ok") else 400)
+                return
+
+            if path == "/api/prune":
+                kpr, otd = body.get("keep_per_root"), body.get("older_than_days")
+                try:      # 숫자(또는 비움)만 — 예전엔 "x"·{} 가 비교 중 500
+                    kpr = None if kpr in (None, "") else int(kpr)
+                    otd = None if otd in (None, "") else float(otd)
+                    if (kpr is not None and kpr < 0) or (otd is not None and not (otd >= 0)):
+                        raise ValueError
+                except (TypeError, ValueError, OverflowError):
+                    self._send_json({"ok": False, "reason": "keep_per_root·older_than_days 는 0 이상의 숫자여야 합니다."},
+                                    status=400)
+                    return
+                res = self.controller.prune(keep_per_root=kpr, older_than_days=otd)
+                self._send_json(res)
+                return
+
+            if path == "/api/settings":
+                result = self.controller.update_settings(body.get("settings") or body)
+                self._send_json(result, status=200 if result.get("ok") else int(result.pop("_status", 403)))
+                return
+
+            if path == "/api/schedules/stagger":
+                cur = list(self.controller.settings.get("schedules", []))
+                staggered = setmod.stagger_schedules(cur)
+                # 시차 배치는 서버가 last_run 을 일부러 바꾸는 저장 — 런타임 병합으로 되돌리지 않는다(1.99.41 회귀)
+                res = self.controller.update_settings({"schedules": staggered}, merge_runtime=False)
+                if res.get("ok"):
+                    # 시차 배치는 간격형(분·시간) 예약만 — 일·주·월 예약까지 세어 '4개 배치함'처럼 부풀었다(29회차 점검)
+                    res["staggered"] = sum(1 for s in staggered if s.get("enabled", True)
+                                           and s.get("unit") in ("minute", "hour"))
+                self._send_json(res, status=200 if res.get("ok") else 403)
                 return
 
             self._send_json({"ok": False, "reason": "unknown_endpoint"}, status=404)
+        except ConnectionError:
+            pass  # 클라이언트가 응답 도중 연결을 끊음 — 무시
         except Exception as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=500)
 
 
+def _warn_if_insecure(host: str, controller: "ScanController") -> None:
+    """비루프백 주소에 '무인증'으로 기동하면 stderr 로 보안 경고를 출력한다.
+
+    --host 0.0.0.0(기본)처럼 외부에 노출되는데 작업 보호 비밀번호도 없으면
+    네트워크에서 접근 가능한 누구나 스캔 시작·설정 변경을 할 수 있어 위험하다.
+    경고만 하고 기동은 막지 않는다(신뢰망 LAN 운영을 방해하지 않기 위해).
+    """
+    if host in ("127.0.0.1", "localhost", "::1", ""):
+        return
+    if (controller.settings.get("op_password") or "").strip():
+        return
+    lines = [
+        "",
+        "  ⚠  보안 경고: 비루프백 주소(%s)에 '작업 보호 비밀번호 없이' 기동합니다." % host,
+        "     임시 비밀번호(info.MD)도 만들지 못해, 설정은 '처음 들어온 사람'이 비밀번호를 정하게 됩니다.",
+        "     실행 폴더 쓰기 권한을 확인하거나, 바로 대시보드 '설정'에서 비밀번호를 만드세요.",
+        "     공개망/비신뢰망이라면 다음을 권장합니다:",
+        "       - --host 127.0.0.1 로 묶고 리버스 프록시(HTTPS/인증)나 SSH 터널 사용",
+        "       - 대시보드 '설정'에서 작업 보호 비밀번호 지정",
+        "       - 설정 편집을 막으려면 --lock-settings",
+        "       - 스캔 허용 경로를 제한하려면 --mount-base <경로>",
+        "",
+    ]
+    sys.stderr.write("\n".join(lines) + "\n")
+    sys.stderr.flush()
+
+
 def serve(data_dir: str, host: str = "0.0.0.0", port: int = 8765, *,
-          mount_bases=None, enable_scan: bool = True,
-          sample_interval: float = 2.0, batch_size: int = 500) -> ThreadingHTTPServer:
+          initial_settings=None, enable_scan: bool = True,
+          lock_settings: bool = False, auto_op_password: bool = False) -> ThreadingHTTPServer:
     """대시보드 HTTP 서버를 만들고 반환한다(호출 측에서 serve_forever).
 
     data_dir 아래의 manager.db(전체 관리)와 scans/ 의 per-run DB(상세)를 읽는다.
-    enable_scan=True 이면 웹에서 스캔을 시작/중지할 수 있고, mount_bases 로
-    스캔 허용 경로를 제한할 수 있다. httpd.controller 로 컨트롤러에 접근한다.
+    enable_scan=True 이면 웹에서 스캔을 시작/중지할 수 있다.
+    initial_settings(CLI 플래그 등)는 settings.json 이 아직 없을 때만 초기값으로
+    저장되며, 이후에는 대시보드에서 편집한 settings.json 이 우선한다.
+    lock_settings=True 이면 웹에서 설정 편집을 막는다.
+    auto_op_password=True(실서버 기동 — CLI serve/run)면 관리 비밀번호가 없을 때 임시 비밀번호를 실행 디렉터리
+    info.MD 에 만든다(결과는 httpd.op_temp_made). 테스트의 serve() 는 기본 False 라 저장소에 파일을 남기지 않는다.
+    httpd.controller 로 컨트롤러에 접근한다.
     """
+    # 정체 시 현장 진단용: kill -USR1 <pid> 로 전체 스레드의 파이썬 스택을
+    # stderr(journalctl)에 덤프한다 — py-spy 없이 "지금 어느 줄에서 도는지" 확인.
+    try:
+        import faulthandler
+        import signal as _signal
+        if hasattr(_signal, "SIGUSR1"):
+            faulthandler.register(_signal.SIGUSR1, all_threads=True)  # novermin
+    except Exception:
+        pass
+
     mgrmod.init_manager(data_dir)
-    controller = (ScanController(data_dir, mount_bases=mount_bases,
-                                 sample_interval=sample_interval,
-                                 batch_size=batch_size)
+    if initial_settings:
+        setmod.seed_if_absent(data_dir, initial_settings)
+    controller = (ScanController(data_dir, lock_settings=lock_settings)
                   if enable_scan else None)
+    op_temp_made = None
+    if controller is not None:
+        controller._clean_snapshots()  # 지난 실행이 남긴(진행 중이 아닌 스캔의) 스냅샷 정리
+        controller.start_scheduler()   # 예약 스캔 스케줄러 시작
+        if auto_op_password:           # 경고보다 먼저 — 임시 비밀번호가 생기면 '비밀번호 없음' 경고는 불필요
+            op_temp_made = controller.ensure_op_password()
+        _warn_if_insecure(host, controller)
     handler = type("BoundHandler", (DashboardHandler,),
-                   {"data_dir": data_dir, "controller": controller})
+                   {"data_dir": data_dir, "controller": controller,
+                    "bound_host": host, "bound_port": port})
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.controller = controller  # run 모드에서 초기 스캔 시작/정리에 사용
+    httpd.op_temp_made = op_temp_made   # 이번 기동에 임시 비밀번호를 만들었으면 {info_path, password}
     return httpd
