@@ -3653,6 +3653,23 @@ def check_ch_round31_flows() -> None:
     print("[JJJ1~JJJ5] OK  포탈 설정 칸 다시 채움·pscan 리포트 안내·희소 파일 크기 분류·디스크 사용률 한 식·설정/단계 배치")
 
 
+def check_ci_round32_regress() -> None:
+    """KKK1 31회차 기간 규칙이 '3개월된'·'30일지난'·'1년안에' 같은 붙여 쓴 표현을 못 읽음(1년 기본으로 답함)
+    KKK2 포탈 설정 탭을 오가면 입력 중(저장 안 한) 중앙 DB 경로·백업 폴더·감시 폴더가 지워짐."""
+    from isilon_usage import ask as AK
+    P = AK.parse_threshold_days
+    good = {"1년된 파일": 365, "3개월된 파일": 90, "7일지난": 7, "30일지난": 30, "1년경과": 365, "7일묵은": 7, "1년미만": 365,
+            "1년안에": 365, "7일뒤": 7, "1년입니다": 365, "30일로": 30, "30일마다": 30, "7일단위": 7, "7일기준": 7,
+            "30일정도": 30, "2주간": 14, "1년도 안 된": 365, "한달넘게": 30, "1년 6개월": 545, "90일(90 days)": 90}
+    bad = ["상위 5 해외 폴더", "세 주소 폴더", "10 해당 경로", "한 주요 폴더", "두 해결 안 된 파일", "열 주변", "2024년 이후", "3 일부 폴더"]
+    wrong = [(k, P(k), v) for k, v in good.items() if P(k) != v] + [(k, P(k)) for k in bad if P(k) is not None]
+    assert not wrong, wrong
+    ph = _read("portal.html")                                                                             # KKK2
+    for fid in ("ugWatchDir", "dbDir", "bkDir"):
+        assert '_fillIdle($("%s")' % fid in ph and 'delete $("%s").dataset.dirty' % fid in ph, fid
+    print("[KKK1~KKK2] OK  붙여 쓴 기간 표현·단위 뒤 낱말 차단·포탈 탭 전환 시 입력 보존")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3688,7 +3705,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bx_round28_regress, check_by_round28_install,
             check_bz_round28_dashboard, check_ca_round29_regress,
             check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress,
-            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows]
+            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress]
 
 
 def main() -> int:
