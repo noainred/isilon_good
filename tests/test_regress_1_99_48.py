@@ -3770,6 +3770,41 @@ def check_cl_round33_regress() -> None:
     print("[NNN1~NNN4] OK  기간의 '개' 제외·비밀 조각 범위·시범 탐색 버튼 복구·특수문자 비밀번호 주소 가림")
 
 
+def check_cm_round33_engine() -> None:
+    """OOO1 바깥 루트가 깊이 제한·미완료인데 안쪽 루트를 합계에서 빼 용량이 사라짐 OOO2 최대 깊이가 다른 스캔 비교·예측
+    OOO3 같은 DB 파일을 쓰는 옛 스캔을 지우면 최신 스캔 DB 까지 삭제 OOO4 비 UTF-8 경로 출력 중 CLI 가 죽어 '탐색 중' 유령 스캔
+    OOO5 pscan 실행 행의 비 UTF-8 경로 OOO6 pscan 실행 행 오류 수 0."""
+    from isilon_usage import manager as M, db as dbmod, server as SV
+    d = tempfile.mkdtemp(prefix="iu_cm_")
+    try:
+        data = os.path.join(d, "data")
+        M.init_manager(data)
+        ids = [M.register_scan(data, root_path=rp, db_path=os.path.join(d, "x%d.db" % i), backend="native",
+                               size_mode="disk") for i, rp in enumerate(("/ifs/data", "/ifs/data/a", "/ifs/x", "/ifs/x/b"))]
+        c = dbmod.connect(M.manager_db_path(data))
+        c.execute("UPDATE scans SET status='error', scanned_bytes=7 WHERE id=?", (ids[0],))           # OOO1 바깥 미완료
+        c.execute("UPDATE scans SET status='done', scanned_bytes=9000000 WHERE id=?", (ids[1],))
+        c.execute("UPDATE scans SET status='done', scanned_bytes=100, opt_max_depth=1 WHERE id=?", (ids[2],))  # 깊이 제한
+        c.execute("UPDATE scans SET status='done', scanned_bytes=5000 WHERE id=?", (ids[3],))
+        c.commit()
+        ov = M.overall_capacity(c)
+        c.close()
+        assert ov["total_capacity_bytes"] == 7 + 9000000 + 100 + 5000, ov["total_capacity_bytes"]
+        same = os.path.join(d, "same.db")                                                              # OOO3
+        open(same, "w").close()
+        s1 = M.register_scan(data, root_path="/r", db_path=same, backend="native", size_mode="disk")
+        M.register_scan(data, root_path="/r", db_path=same, backend="native", size_mode="disk")
+        assert M.delete_scan(data, s1)["ok"] and os.path.exists(same)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    sv = _read("server.py")
+    assert '"depth_mismatch": True' in sv and "COALESCE(opt_max_depth,0)=?" in sv                         # OOO2
+    assert 'errors="backslashreplace"' in _read("cli.py")                                               # OOO4
+    assert "dbmod.db_text(os.path.abspath(path)), \"sizing\"" in sv                                    # OOO5
+    assert 'UPDATE scan_runs SET error_dirs=? WHERE id=?' in _read("pscan.py")                          # OOO6
+    print("[OOO1~OOO6] OK  중첩 루트는 완전한 바깥 스캔만·깊이 다른 비교/예측 거부·공유 DB 보존·CLI 출력·pscan 경로/오류 수")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3805,7 +3840,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bx_round28_regress, check_by_round28_install,
             check_bz_round28_dashboard, check_ca_round29_regress,
             check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress,
-            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress]
+            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine]
 
 
 def main() -> int:

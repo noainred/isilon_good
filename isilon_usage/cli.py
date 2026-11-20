@@ -1270,6 +1270,13 @@ def _emit_json(obj) -> None:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    # 비 UTF-8 경로를 출력하다 UnicodeEncodeError 로 죽어, 이미 등록된 스캔이 '탐색 중'으로 남았다(33회차 점검) —
+    # 표준 출력·오류가 인코딩 못 하는 글자는 \x.. 로 적고 계속한다(3.7+; 3.6 은 그대로)
+    for _st in (sys.stdout, sys.stderr):
+        try:
+            _st.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError, OSError):
+            pass
     parser = build_parser()
     args = parser.parse_args(argv)
     # 숫자 인자 범위 — 예전엔 --workers 99999999999 로 메모리 부족 종료(스캔이 '진행 중'으로 남음), -3·0 이 조용히

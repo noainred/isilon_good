@@ -945,14 +945,15 @@ def forecast_capacity(mconn, scan_row) -> dict:
     root = scan_row["root_path"]
     # 같은 크기 기준(apparent/disk)의 스캔만 — 섞으면 기준 차이가 '줄어듦/늘어남'으로 보여 추세·소진일이 엉터리였다
     # (30회차 점검: 평평한 데이터에 하루 -9 GB). 기준은 이 루트의 마지막 완료 스캔.
-    _sm = mconn.execute("SELECT size_mode FROM scans WHERE root_path=? AND status='done' ORDER BY id DESC LIMIT 1",
-                        (root,)).fetchone()
-    _sm = (_sm["size_mode"] if _sm else None) or ""
+    _last = mconn.execute("SELECT size_mode, opt_max_depth FROM scans WHERE root_path=? AND status='done' "
+                          "ORDER BY id DESC LIMIT 1", (root,)).fetchone()
+    _sm = (_last["size_mode"] if _last else None) or ""
+    _md = int((_last["opt_max_depth"] if _last else 0) or 0)   # 최대 깊이도 같은 스캔만(33회차 점검: 깊이 제한을 켜면 -1.6 TB/일)
     pts = [dict(r) for r in mconn.execute(
         """SELECT id, COALESCE(finished_at, started_at) AS ts, scanned_bytes
            FROM scans WHERE root_path=? AND status='done' AND scanned_bytes>0
-             AND COALESCE(size_mode,'')=?
-           ORDER BY id""", (root, _sm))]
+             AND COALESCE(size_mode,'')=? AND COALESCE(opt_max_depth,0)=?
+           ORDER BY id""", (root, _sm, _md))]
     latest = mconn.execute(
         "SELECT fs_total_bytes, fs_used_bytes, fs_free_bytes FROM scans "
         "WHERE root_path=? ORDER BY id DESC LIMIT 1", (root,)).fetchone()
@@ -1021,6 +1022,13 @@ def diff_scans(data_dir: str, base_id: int, target_id: int, *,
         return {"ok": False, "size_mode_mismatch": True,
                 "reason": "크기 기준이 다른 스캔끼리는 비교할 수 없습니다(기준 #%s=%s · 대상 #%s=%s) — 같은 기준의 스캔을 고르세요."
                           % (base_id, _sm_a, target_id, _sm_b)}
+    # 최대 깊이(잘린 합계)가 다른 스캔끼리도 비교하지 않는다 — 깊이 제한 스캔은 위쪽 폴더 합계부터 적어, 바뀌지 않은 트리가
+    # '줄어듦'으로 보였다(33회차 점검)
+    _md_a, _md_b = int(dict(base).get("opt_max_depth") or 0), int(dict(target).get("opt_max_depth") or 0)
+    if _md_a != _md_b:
+        return {"ok": False, "depth_mismatch": True,
+                "reason": "최대 깊이 설정이 다른 스캔끼리는 비교할 수 없습니다(기준 #%s=%s · 대상 #%s=%s) — 같은 설정의 스캔을 고르세요."
+                          % (base_id, _md_a or "제한 없음", target_id, _md_b or "제한 없음")}
     if not (os.path.exists(base["db_path"]) and os.path.exists(target["db_path"])):
         return {"ok": False, "reason": "per-run DB 가 없습니다."}
 
@@ -2684,7 +2692,7 @@ class ScanController:
                     "INSERT INTO scan_runs (root_path,status,phase,backend,size_mode,"
                     "started_at,updated_at,scanner_pid,hostname,app_version) "
                     "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (os.path.abspath(path), "sizing", "sizing", "pscan", size_mode,
+                    (dbmod.db_text(os.path.abspath(path)), "sizing", "sizing", "pscan", size_mode,   # 비 UTF-8 경로(33회차)
                      started, started, os.getpid(), _sock.gethostname(), __version__))
                 run_id = pc0.execute(
                     "SELECT id FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()[0]
@@ -4332,8 +4340,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 prev = mconn.execute(
                     """SELECT id FROM scans WHERE root_path=? AND id<? AND status='done'
                        AND COALESCE(size_mode,'')=COALESCE(?,'')
+                       AND COALESCE(opt_max_depth,0)=COALESCE(?,0)
                        ORDER BY id DESC LIMIT 1""",
-                    (row["root_path"], scan_id, row["size_mode"])).fetchone()
+                    (row["root_path"], scan_id, row["size_mode"], dict(row).get("opt_max_depth"))).fetchone()
                 if not prev:
                     self._send_json({"ok": True, "has_base": False,
                                      "reason": "비교할 이전 완료 스캔이 없습니다."})

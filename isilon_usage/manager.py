@@ -290,11 +290,15 @@ def delete_scan(data_dir: str, scan_id: int) -> dict:
         if row is None:
             return {"ok": False, "reason": "없는 scan"}
         db_path = row["db_path"]
-        for suffix in ("", "-wal", "-shm"):
-            try:
-                os.remove(db_path + suffix)
-            except OSError:
-                pass
+        # 같은 per-run DB 를 다른 스캔 행도 쓰면(--db 고정 경로로 다시 스캔) 파일은 지우지 않는다 — 예전엔 옛 스캔을 지우거나
+        # 정리하면 최신 스캔의 DB 까지 지워져 결과가 사라졌다(33회차 점검)
+        shared = conn.execute("SELECT 1 FROM scans WHERE db_path=? AND id<>? LIMIT 1", (db_path, scan_id)).fetchone()
+        if not shared:
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.remove(db_path + suffix)
+                except OSError:
+                    pass
         conn.execute("DELETE FROM scans WHERE id=?", (scan_id,))
         conn.commit()
         return {"ok": True, "scan_id": scan_id}
@@ -479,15 +483,20 @@ def active_elapsed(s: dict, now_ts: float) -> float:
     return max(0.0, now_ts - float(s.get("started_at") or now_ts))
 
 
-def _nested_roots(paths) -> Dict[str, str]:
+def _nested_roots(paths, containers=None) -> Dict[str, str]:
     """다른 루트 안에 든 루트 → 그것을 품은 가장 바깥 루트. (/ifs/data 와 /ifs/data/proj 를 둘 다 스캔하면
-    proj 용량이 합계에 두 번 들어갔다 — 2026-11 리뷰.) 경로 구분자 경계로만 판단한다(/ifs/data2 는 별개)."""
+    proj 용량이 합계에 두 번 들어갔다 — 2026-11 리뷰.) 경로 구분자 경계로만 판단한다(/ifs/data2 는 별개).
+
+    containers 가 주어지면 그 루트만 '품는 쪽'이 될 수 있다 — 바깥 루트가 완료 스캔이 없거나 깊이 제한 스캔이면 안쪽 루트를
+    실제로 세지 않았는데도 합계에서 빼 용량이 사라졌다(33회차 점검: 4.9 MB 가 108 KB 로)."""
     norm = {p: (str(p).rstrip("/") or "/") for p in paths}
     out: Dict[str, str] = {}
     for p, n in norm.items():
         best = None
         for q, m in norm.items():
             if q == p or m == n:
+                continue
+            if containers is not None and q not in containers:
                 continue
             pref = "/" if m == "/" else m + "/"
             if n.startswith(pref) and (best is None or len(norm[best]) > len(m)):
@@ -538,7 +547,8 @@ def overall_capacity(conn) -> dict:
     total_scanned = 0
     total_capacity = 0
     now_ts = time.time()
-    nested = _nested_roots(latest_by_root.keys())
+    _full = {rp for rp, d in done_by_root.items() if not int(d.get("opt_max_depth") or 0)}
+    nested = _nested_roots(latest_by_root.keys(), containers=_full)
     for rp, s in latest_by_root.items():
         cap = done_by_root.get(rp) or s
         cap_bytes = int(cap.get("scanned_bytes") or 0)

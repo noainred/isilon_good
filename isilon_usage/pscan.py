@@ -692,6 +692,11 @@ def write_run_db(db_path: str, root: str, result: dict, *,
         root_id = conn.execute(
             "SELECT id FROM directories WHERE run_id=? AND parent_id IS NULL", (run_id,)
         ).fetchone()[0]
+        # 실행 행에도 오류 수 — 매니저 행에만 있어 상태 화면의 '오류 디렉터리'가 0 으로 보였다(33회차 점검, 스레드 엔진과 같게)
+        try:
+            conn.execute("UPDATE scan_runs SET error_dirs=? WHERE id=?", (int(result.get("error_count", 0) or 0), run_id))
+        except Exception:   # noqa: BLE001 — 옛 스키마(칸 없음)는 건너뜀
+            pass
         # 읽기 오류는 1단계 폴더 단위로 이름을 남긴다 — 예전엔 오류 수(error_dirs)만 있고 오류 목록이 비어
         # 어디서 났는지 알 수 없었다(2026-11 점검). 정확한 하위 경로는 일반(스레드) 스캔으로 확인.
         unit_err = 0
