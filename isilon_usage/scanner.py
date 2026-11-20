@@ -224,7 +224,8 @@ def _local_accum(ref: float, l_age: dict, l_atime: dict, l_uid: dict, l_ext: dic
     bump(l_age, _age_bucket(ref, st.st_mtime))
     bump(l_atime, _age_bucket(ref, st.st_atime))
     bump(l_uid, str(st.st_uid))
-    bump(l_size, _size_bucket(eb))     # 키는 원본 크기, 값은 counted
+    # 키는 원본(논리) 크기 — 예전엔 디스크 점유(eb)로 나눠, 블록이 없는 희소 파일(100MB)이 '0 (빈 파일)'로 들어갔다(31회차 점검)
+    bump(l_size, _size_bucket(int(getattr(st, "st_size", eb) or 0)))
     ext = os.path.splitext(name)[1].lower() or "(없음)"
     if len(ext) > 24:
         ext = ext[:24]

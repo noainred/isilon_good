@@ -157,7 +157,9 @@ def _dir_disk_free(path: str) -> Optional[dict]:
         v = os.statvfs(p or "/")
         total = v.f_blocks * v.f_frsize
         free = v.f_bavail * v.f_frsize
-        used = max(0, total - free)
+        # 사용량은 다른 화면(스캔 FS·홈)과 같은 식(전체−빈 블록) — 예전엔 전체−여유(예약 블록까지 '사용')라 같은 디스크가
+        # 스캔 화면 96.8%·홈 12% 로 달랐다(31회차 점검)
+        used = max(0, total - v.f_bfree * v.f_frsize)
         return {"path": path, "total_bytes": total, "free_bytes": free,
                 "used_bytes": used,
                 "used_pct": round(used / total * 100, 1) if total else 0.0}
@@ -3736,6 +3738,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         scan_id, row = self._resolve_scan_db(mconn, scan_id, analysis=True)
         if row is None or not os.path.exists(row["db_path"]):
             return data
+        if str(dict(row).get("backend") or "") == "pscan":
+            data["detail_note"] = "pscan"     # 빠른 스캔은 분포·Top 파일을 기록하지 않는다(31회차 점검: '완료되면 채워집니다'로 안내)
         pconn = dbmod.connect(row["db_path"])
         try:
             rid = dbmod.latest_run_id(pconn)

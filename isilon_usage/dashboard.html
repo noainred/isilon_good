@@ -154,6 +154,8 @@ textarea.setinput{ padding:8px 10px; }
 input[type=checkbox],input[type=radio]{ accent-color:var(--accent); width:16px; height:16px; }
 .setgrid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(200px,1fr)); gap:14px; }
 #settingsCard label{ display:flex; flex-direction:column; gap:6px; font-size:13px; color:var(--muted); }
+/* 체크박스 라벨은 가로(체크박스 옆에 글자) — 위 규칙 때문에 체크박스가 글자 위 가운데로 올라갔다(31회차 점검) */
+#settingsCard label:has(> input[type=checkbox]), #settingsCard label[style*="inline-flex"]{ flex-direction:row; align-items:center; flex-wrap:wrap; }
 #settingsCard .setgrid .setlbl{ display:block; min-height:2.6em; line-height:1.3; }
 #settingsCard input:disabled,#settingsCard select:disabled,#settingsCard textarea:disabled{ opacity:.55; }
 
@@ -287,6 +289,8 @@ canvas{ width:100%; height:90px; display:block; }
 /* ── 새 스캔 단계(1 어디를 · 2 방식 · 3 세부 옵션) ── */
 .scan-step{ display:flex; flex-direction:column; gap:8px; }
 .step-title{ font-weight:600; font-size:15px; color:var(--text); display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+/* 접는 단계(<summary>)는 펼침 표시 때문에 flex 가 아니라 gap 이 없다 — 번호 배지가 제목 글자에 붙었다(31회차 점검) */
+summary.step-title .stepno{ margin:0 8px 0 4px; vertical-align:middle; }
 details.scan-step > summary{ cursor:pointer; list-style:revert; min-height:36px; display:list-item; }
 .stepno{ display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:11px; background:var(--text); color:#fff; font-size:12px; flex:none; }
 .methods{ display:grid; grid-template-columns:repeat(auto-fit, minmax(240px,1fr)); gap:10px; }
@@ -3679,9 +3683,16 @@ function drawTrend(rootPath) {
     : "같은 루트의 완료된 스캔이 없습니다.";
 }
 // ===== 분석 리포트(파일 나이/소유자/확장자) =====
+// 리포트가 빈 이유 — pscan(빠른 스캔)은 분포·Top 파일을 기록하지 않는다(31회차 점검: 끝난 pscan 에도 '완료되면 표시'로 안내)
+function _repEmptyMsg() {
+  const sc = (allScans || []).find(x => x.id === selectedScan);
+  if (sc && sc.backend === "pscan")
+    return '<span class="sub">pscan(빠른 스캔)은 루트·1단계 합계만 기록해 분포·Top 파일이 없습니다 — 일반(threads) 스캔에서 볼 수 있습니다.</span>';
+  return '<span class="sub">데이터 없음(스캔이 진행/완료되면 표시됩니다).</span>';
+}
 function _statBarList(items, labelFn, maxN) {
   if (!items || !items.length)
-    return '<span class="sub">데이터 없음(스캔이 진행/완료되면 표시됩니다).</span>';
+    return _repEmptyMsg();
   const max = Math.max.apply(null, items.map(i => i.bytes).concat([1]));
   return items.slice(0, maxN || 20).map(i => {
     const pct = Math.min(100, i.bytes / max * 100);
@@ -3699,7 +3710,7 @@ function renderRepTopFiles() {
   const el = $("repTopFiles");
   if (!el) return;
   const tf = _repTopFiles || [];
-  if (!tf.length) { el.innerHTML = '<span class="sub">데이터 없음(스캔이 진행/완료되면 표시됩니다).</span>'; return; }
+  if (!tf.length) { el.innerHTML = _repEmptyMsg(); return; }
   const shown = Math.min(repTopShown, tf.length);
   const body = tf.slice(0, shown).map((f, i) =>
     '<tr><td style="padding:2px 8px; text-align:right; color:var(--muted);">' + (i + 1) + '</td>'
@@ -4297,7 +4308,7 @@ function renderOverview(j) {
         <td class="num">${fmtBytes(r.fs_used_bytes)}</td>
         <td class="num">${pct.toFixed(1)}%</td>
         <td class="num" title="${escHtml(scanDurTitle(r, running))}">${el == null ? "—" : fmtDur(el)}</td>
-        <td>${running && (r.status === "paused" || r.status === "done") ? "실행 중" : (statusKo[r.status] || r.status)}${loopBadge}${(!running && r.partial_agg_at && r.status !== "done") ? ' <span class="badge paused" title="지금까지 발견된 행으로 계산한 하한값(재개 전). 재개해 완료하면 정확한 값으로 바뀝니다.">부분 집계 ' + new Date(r.partial_agg_at * 1000).toLocaleString(_LOC) + '</span>' : ''}</td>
+        <td>${running && (r.status === "paused" || r.status === "done") ? "실행 중" : (statusKo[r.status] || r.status)}${loopBadge}${(!running && r.partial_agg_at && r.status !== "done") ? ' <span class="badge paused" title="지금까지 발견된 행으로 계산한 하한값(재개 전). 재개해 완료하면 정확한 값으로 바뀝니다. (짧은 날짜 — 표가 카드 밖으로 넓어지지 않게, 31회차)">부분 집계 ' + new Date(r.partial_agg_at * 1000).toLocaleString(_LOC, {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"}) + '</span>' : ''}</td>
         <td>${act}</td>
       </tr>`;
     }).join("");

@@ -164,6 +164,9 @@ def _detail_unavailable(data):
     if data.get("scope") == "portal":
         return ("이 질문은 디렉터리 상세가 필요합니다 — 포탈은 노드별 합계만 모읍니다. "
                 "각 노드(엣지) 대시보드의 ‘분석 리포트’에서 볼 수 있어요.")
+    if data.get("detail_note") == "pscan":
+        return ("선택된 스캔은 pscan(빠른 멀티프로세스 스캔)이라 루트·1단계 합계만 기록합니다 — 파일 나이·소유자·확장자·Top 파일은 "
+                "일반(threads) 스캔에서 볼 수 있어요.")
     return "선택된 스캔의 상세 집계가 아직 없습니다(스캔이 완료되면 채워집니다)."
 
 

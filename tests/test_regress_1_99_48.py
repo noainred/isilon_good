@@ -3623,6 +3623,36 @@ def check_cg_round31_regress() -> None:
     print("[III1~III7] OK  잔여 진행 상태·기간 낱말 경계·최근 큰 파일·옛 스캔 비교 깊이·주소형 id·받는 사람·growers 깊이")
 
 
+def check_ch_round31_flows() -> None:
+    """JJJ1 포탈 등록 토큰·중앙 DB 경로 칸이 로그인 전 값으로 남음(없는 탭 id) JJJ2 끝난 pscan 스캔에 '완료되면 채워집니다'
+    JJJ3 희소 파일이 '0 (빈 파일)'로 분류 JJJ4 같은 디스크 사용률이 화면마다 다른 식(96.8% vs 12%) JJJ5 설정 체크박스 세로 배치·
+    부분 집계 배지가 표를 넓힘·3단계 번호 배지가 제목에 붙음."""
+    from isilon_usage import scanner as SC, ask as AK, server as SV
+    ph = _read("portal.html")
+    assert 'id==="np-security"' not in ph and 'id==="np-account" || id==="np-monitor"' in ph                  # JJJ1
+    assert "updateLoginUI(); try{ pLoadUpgradeCfg(); }catch(e){}" in ph
+    assert "pscan(빠른 멀티프로세스 스캔)" in AK._detail_unavailable({"scope": "edge", "detail_note": "pscan"})   # JJJ2
+    assert "function _repEmptyMsg()" in _read("dashboard.html")
+    class _St:                                                                                          # JJJ3
+        st_size, st_blocks, st_mtime, st_atime, st_uid = 100 * 1024 ** 2, 0, time.time(), time.time(), 0
+    l_size: dict = {}
+    SC._local_accum(time.time(), {}, {}, {}, {}, l_size, "sparse.img", _St(), 0)
+    assert "0 (빈 파일)" not in l_size and "100MB~1GB" in l_size, l_size
+    d = tempfile.mkdtemp(prefix="iu_ch_")                                                              # JJJ4
+    try:
+        info = SV._dir_disk_free(d)
+        v = os.statvfs(d)
+        if info is not None:
+            assert info["used_bytes"] == v.f_blocks * v.f_frsize - v.f_bfree * v.f_frsize, info
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert "used = max(0, total - v.f_bfree * v.f_frsize)" in _read("server.py")
+    th = _read("theme.css")                                                                             # JJJ5
+    assert '#settingsCard label:has(> input[type=checkbox])' in th and "summary.step-title .stepno" in th
+    assert 'month: "numeric", day: "numeric", hour: "2-digit"' in _read("dashboard.html")
+    print("[JJJ1~JJJ5] OK  포탈 설정 칸 다시 채움·pscan 리포트 안내·희소 파일 크기 분류·디스크 사용률 한 식·설정/단계 배치")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3658,7 +3688,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bx_round28_regress, check_by_round28_install,
             check_bz_round28_dashboard, check_ca_round29_regress,
             check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress,
-            check_cf_round30_features, check_cg_round31_regress]
+            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows]
 
 
 def main() -> int:
