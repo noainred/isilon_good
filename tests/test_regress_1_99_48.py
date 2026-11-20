@@ -3822,6 +3822,54 @@ def check_cn_round34_regress() -> None:
     print("[PPP1~PPP2] OK  경로·쿼리의 '@' 는 계정 아님(호스트 구간 우선)·비 UTF-8 출력의 --json")
 
 
+def check_co_round34_multi() -> None:
+    """QQQ1 깊이 제한 바깥 루트 + 안쪽 전체 스캔이 겹친 몫을 두 번 셈 QQQ2 비교·매트릭스가 깊이 제한 스캔을 '접힘·상위에 합산'으로·
+    잘린 값을 정상처럼 QQQ3 접힌 바깥 스캔보다 오래된 안쪽 스캔으로 넘어가 지운 폴더가 '있음' QQQ4 엣지에서 지운 스캔이 비교에
+    다음 정기 복제까지 남음 QQQ5 사용량 API 에 중첩 루트·덜 센 이유 없음."""
+    from isilon_usage import manager as M, db as dbmod
+    from isilon_usage.scanner import run_scan
+    d = tempfile.mkdtemp(prefix="iu_co_")
+    try:
+        data = os.path.join(d, "data")
+        M.init_manager(data)
+        t = os.path.join(d, "nas2")
+        os.makedirs(os.path.join(t, "a", "b", "c"))
+        for p_, n in ((os.path.join(t, "a"), 3000), (os.path.join(t, "a", "b"), 5000), (os.path.join(t, "a", "b", "c"), 7000)):
+            with open(os.path.join(p_, "f"), "wb") as fh:
+                fh.write(b"x" * n)
+        def _scan(root, name, md):
+            dbp = os.path.join(data, "scans", name)
+            os.makedirs(os.path.dirname(dbp), exist_ok=True)
+            sid = M.register_scan(data, root_path=root, db_path=dbp, backend="native", size_mode="apparent")
+            run_scan(dbp, root, workers=1, size_mode="apparent", with_monitor=False, max_depth=md,
+                     manager_db=M.manager_db_path(data), manager_scan_id=sid)
+            c = dbmod.connect(M.manager_db_path(data))
+            c.execute("UPDATE scans SET opt_max_depth=? WHERE id=?", (md, sid))
+            c.commit()
+            c.close()
+            return sid
+        _scan(t, "outer.db", 1)
+        _scan(os.path.join(t, "a"), "inner.db", 0)
+        full = dbmod.connect(os.path.join(data, "scans", "inner.db"))
+        c = dbmod.connect(M.manager_db_path(data))
+        ov = M.overall_capacity(c)
+        rows = {r["root_path"]: r["capacity_bytes"] for r in ov["roots"]}
+        c.close()
+        full.close()
+        outer_only = rows[t] - M._row_total(os.path.join(data, "scans", "outer.db"), os.path.join(t, "a"))
+        assert ov["total_capacity_bytes"] == outer_only + rows[os.path.join(t, "a")], (ov["total_capacity_bytes"], rows)   # QQQ1
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    src = _read("portal.py")
+    assert 'entry.setdefault("depth_limited", _mdl)' in src and '"depth_limited_nodes": depth_nodes' in src          # QQQ2
+    assert "_stale = fold_rec is not None and _rec < fold_rec" in src and "stale_nodes" in src                    # QQQ3
+    assert "self._rep_force.add(nid)" in src and "if nid in self._rep_force:" in src                                # QQQ4
+    assert '"nested_in": r.get("nested_in"),' in src and '"capacity_caveat": str(t.get("capacity_caveat")' in src  # QQQ5
+    ph = _read("portal.html")
+    assert "깊이 제한으로 미스캔" in ph and "미스캔(깊이)" in ph
+    print("[QQQ1~QQQ5] OK  겹친 몫 보정·깊이 제한 표시·오래된 안쪽 스캔 무시·삭제 즉시 복제·사용량 API 중첩/사유")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3857,7 +3905,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bx_round28_regress, check_by_round28_install,
             check_bz_round28_dashboard, check_ca_round29_regress,
             check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress,
-            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine, check_cn_round34_regress]
+            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine, check_cn_round34_regress, check_co_round34_multi]
 
 
 def main() -> int:

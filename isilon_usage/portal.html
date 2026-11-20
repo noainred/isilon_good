@@ -2574,21 +2574,25 @@ function renderCompare(j){
   const all=(j.rows||[]); const found=all.filter(r=>r.found);
   const maxB = found.reduce((a,r)=>Math.max(a,r.total_bytes),0) || 1;
   $("cmpRows").innerHTML = all.length ? all.map(r=>{
+    if(!r.found && r.depth_limited) return `<tr><td><b>${_he(r.id)}</b></td><td>${_he(r.region||"—")}</td><td class="num sub">—</td><td class="num">—</td><td class="num">—</td><td><span class="badge" title="이 노드는 최대 깊이 ${escAttr(r.depth_limited)} 로 스캔해 이 깊이는 세지 않았습니다 — 상위 폴더 합계에도 들어 있지 않습니다">깊이 제한으로 미스캔</span></td></tr>`;
     if(!r.found && r.folded_at) return `<tr><td><b>${_he(r.id)}</b></td><td>${_he(r.region||"—")}</td><td class="num sub">—</td><td class="num">—</td><td class="num">—</td><td><span class="badge" title="이 노드는 스캔 시 폴더 깊이 접기(fold)로 이 깊이의 행을 따로 저장하지 않았습니다 — 용량은 ${escAttr(r.folded_at)} 합계에 들어 있습니다">접힘 · 상위 폴더에 합산</span></td></tr>`;
     if(!r.found) return `<tr><td><b>${_he(r.id)}</b></td><td>${_he(r.region||"—")}</td><td class="num miss">없음</td><td class="num">—</td><td class="num">—</td><td><span class="badge b-offline">미스캔/누락</span></td></tr>`;
     const pct=r.total_bytes/maxB*100, drift=pct<85;
     return `<tr><td><b>${_he(r.id)}</b></td><td>${_he(r.region||"—")}</td>
       <td class="num">${fmtBytes(r.total_bytes)}</td><td class="num">${fmtNum(r.total_files)}</td>
       <td class="num">${pct.toFixed(0)}%</td>
-      <td>${r.partial?'<span class="badge" title="이 노드의 마지막 스캔이 끝나지 않아(멈춤·오류) 지금까지 센 값(하한값)입니다">부분 값</span> ':''}${drift?'<span class="badge b-offline">드리프트 ⚠</span>':'<span class="badge b-online">정상</span>'}</td></tr>`;
+      <td>${r.partial?'<span class="badge" title="이 노드의 마지막 스캔이 끝나지 않아(멈춤·오류) 지금까지 센 값(하한값)입니다">부분 값</span> ':''}${r.depth_limit?'<span class="badge" title="최대 깊이 '+escAttr(r.depth_limit)+' 로 스캔 — 그 아래 용량이 빠진 하한값입니다">깊이 '+escAttr(r.depth_limit)+'까지만</span> ':''}${r.stale_at?'<span class="badge" title="이 깊이는 최신 스캔에서 접혀, 더 깊이 저장한 옛 스캔의 값입니다 — 그 뒤 바뀌었을 수 있습니다">옛 스캔 값('+new Date(r.stale_at*1000).toLocaleDateString()+')</span> ':''}${drift?'<span class="badge b-offline">드리프트 ⚠</span>':'<span class="badge b-online">정상</span>'}</td></tr>`;
   }).join("") : '<tr><td colspan="6" class="sub">등록된 노드가 없습니다.</td></tr>';
   $("cmpNote").textContent = `${found.length}/${all.length} 노드에서 발견 · ‘최대 대비’ 85% 미만이면 드리프트(복제 지연/누락 의심). 마운트 접두어가 다른 노드는 ‘설정’의 경로 별칭으로 매핑하세요.`;
 }
 function renderMatrix(j){
   const nodes=j.nodes||[], kids=j.children||[];
   $("cmpMHead").innerHTML = "<tr><th>디렉터리</th>"+nodes.map(n=>`<th class="num">${escAttr(n)}</th>`).join("")+"</tr>";
-  const fn=(j.folded_nodes||[]);
-  const foldNote = fn.length ? ` · 접힘(fold)으로 이 깊이 아래 행이 없는 노드: ${fn.map(_he).join(", ")} — 누락이 아니라 상위 폴더 합계에 들어 있습니다` : "";
+  const fn=(j.folded_nodes||[]), dn=(j.depth_limited_nodes||[]);
+  const sn=(j.stale_nodes||[]);
+  const staleNote = sn.length ? ` · 옛 스캔 값(최신 스캔에서 접혀 더 깊이 저장한 옛 스캔으로 표시 — 그 뒤 바뀌었을 수 있음): ${sn.map(_he).join(", ")}` : "";
+  const depthNote = staleNote + (dn.length ? ` · 깊이 제한 스캔 노드(값은 하한·없는 칸은 미스캔): ${dn.map(_he).join(", ")}` : "");
+  const foldNote = (fn.length ? ` · 접힘(fold)으로 이 깊이 아래 행이 없는 노드: ${fn.map(_he).join(", ")} — 누락이 아니라 상위 폴더 합계에 들어 있습니다` : "") + depthNote;
   if(!kids.length){ $("cmpMBody").innerHTML = `<tr><td colspan="${nodes.length+1}" class="sub">하위 디렉터리가 없습니다(집계 완료 복제본 필요)${foldNote}.</td></tr>`; return; }
   $("cmpMBody").innerHTML = kids.map(k=>{
     const present=nodes.map(n=>k.vals[n]).filter(v=>v!==undefined&&v!==null).sort((a,b)=>a-b);
@@ -2596,12 +2600,12 @@ function renderMatrix(j){
     const name = (k.subdir_count>0) ? `<a href="#" class="link cmpdrill" data-name="${escAttr(k.name)}" translate="no">${escAttr(k.name)}</a>` : `<span translate="no">${escAttr(k.name)}</span>`;
     const cells = nodes.map(n=>{
       const v=k.vals[n];
-      if(v===undefined||v===null) return fn.includes(n) ? '<td class="num sub" title="이 노드는 이 깊이부터 접혀(fold) 행이 없습니다 — 상위 폴더 합계에 들어 있음">접힘</td>' : '<td class="num miss">없음</td>';
+      if(v===undefined||v===null) return dn.includes(n) ? '<td class="num sub" title="이 노드는 깊이 제한 스캔이라 이 깊이를 세지 않았습니다(상위 합계에도 없음)">미스캔(깊이)</td>' : fn.includes(n) ? '<td class="num sub" title="이 노드는 이 깊이부터 접혀(fold) 행이 없습니다 — 상위 폴더 합계에 들어 있음">접힘</td>' : '<td class="num miss">없음</td>';
       const off = med>0? Math.abs(v-med)/med : 0;
       return `<td class="num ${off>0.15?'warn':''}">${fmtBytes(v)}</td>`;
     }).join("");
     return `<tr><td class="mono">${name}</td>${cells}</tr>`;
-  }).join("") + (fn.length ? `<tr><td colspan="${nodes.length+1}" class="sub">${foldNote.replace(/^ · /,"")}</td></tr>` : "");
+  }).join("") + ((fn.length || dn.length || sn.length) ? `<tr><td colspan="${nodes.length+1}" class="sub">${foldNote.replace(/^ · /,"")}</td></tr>` : "");
   $("cmpMBody").querySelectorAll("a.cmpdrill").forEach(a=>a.addEventListener("click",e=>{
     e.preventDefault(); loadCompare(cmpCur.replace(/\/+$/,"")+"/"+a.dataset.name); }));
 }

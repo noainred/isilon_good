@@ -799,6 +799,7 @@ class PortalController:
             self._rep_at = {}
         self._bg_jobs_busy = False   # 업그레이드 점검·예약 백업(스케줄러 밖 스레드) 실행 중
         self._rep_fail = {}         # id -> 연속 복제 실패 횟수(재시도 백오프)
+        self._rep_force = set()     # 엣지에서 지운 스캔이 복제본에 남아 있는 노드 — 주기를 기다리지 않고 바로 복제(34회차)
         self._rep_err = {}          # id -> 마지막 복제 오류(다음 복제 성공 전까지 표시)
         self._rep_ok_at = {}        # id -> 마지막 복제 성공 시각(포탈 시계) — 화면 '결과 복제 N전'(24회차 점검)
         self._rep_missing = {}      # id -> 마지막 복제에서 meta 에는 있었으나 DB 가 오지 않은 스캔 수
@@ -2354,6 +2355,8 @@ class PortalController:
         c = self._cache.get(nid) or {}
         if not c.get("online"):
             return False
+        if nid in self._rep_force:
+            return True
         last = float(self._rep_at.get(nid, 0.0))
         if last > now + 60:   # 시계가 뒤로 감 — 미래의 마지막 시도는 믿지 않는다(25회차 점검)
             last = 0.0
@@ -2499,7 +2502,30 @@ class PortalController:
                 cur["last_status"] = "online"
                 cur["last_error"] = ""
         self._record_throughput(nid, _sanitize_overall(meta.get("overall")))   # 처리량 시계열(영구)
+        # 엣지에서 지운 스캔이 아직 복제본에 있으면 바로 복제(삭제 반영) — 예전엔 현황에선 바로 빠지는데 비교·매트릭스엔
+        # 다음 정기 복제(기본 30분)까지 남았다(34회차 점검)
+        dels = meta.get("deleted_db_filenames")
+        if isinstance(dels, list) and dels:
+            try:
+                have = {os.path.basename(str(x.get("db_filename") or "")) for x in self._replica_meta_scans(nid)}
+                if have & {os.path.basename(str(d)) for d in dels[:5000] if isinstance(d, str)}:
+                    with self._lock:
+                        self._rep_force.add(nid)
+            except Exception:  # noqa: BLE001 — 판단 실패는 정기 복제에 맡긴다
+                pass
         return True
+
+    def _replica_meta_scans(self, nid: str) -> list:
+        """노드 복제본 meta.json 의 스캔 목록(없거나 깨지면 빈 목록)."""
+        if not safe_node_id(nid, strict=False):
+            return []
+        try:
+            with open(os.path.join(self.replicas_dir, nid, "meta.json"), encoding="utf-8") as fh:
+                m = json.load(fh)
+        except (OSError, ValueError):
+            return []
+        sc = m.get("scans") if isinstance(m, dict) else None
+        return [x for x in sc if isinstance(x, dict)] if isinstance(sc, list) else []
 
     def _replicate_one(self, nid: str) -> None:
         """DB 복제 1회(느린 네트워크 — 락 밖에서). 성공 시 워터마크(last_sync) 전진·저장."""
@@ -2522,6 +2548,7 @@ class PortalController:
                 return
             cur = self._get(nid) or n
             self._rep_ok_at[nid] = time.time()
+            self._rep_force.discard(nid)
             if self._clock_rewound.pop(nid, None) is not None:
                 cur["last_sync"] = newest       # 미래로 남은 워터마크를 버리고 되돌린 값으로
                 self._rep_err[nid] = ("replicate: 엣지 시계가 포탈 기록보다 뒤로 갔습니다(시계 보정?) — "
@@ -2993,6 +3020,8 @@ class PortalController:
                            else "done"),
                 "latest_scan_id": r.get("scan_id"),
                 "latest_status": r.get("status"),
+                # 다른 루트 안에 든 루트(노드 합계에서 이미 빠짐) — 루트를 그대로 더하면 두 번 센다(34회차 점검)
+                "nested_in": r.get("nested_in"),
             } for r in (n.get("roots") or [])]
             nodes.append({
                 "id": n.get("id"), "region": n.get("region"),
@@ -3016,6 +3045,7 @@ class PortalController:
                 "fs_total_bytes": int(t.get("fs_total_bytes") or 0),
                 "fs_used_bytes": int(t.get("fs_used_bytes") or 0),
                 "active_scans": int(t.get("active_scans") or 0),
+                "capacity_caveat": str(t.get("capacity_caveat") or ""),   # 합계가 덜 센 이유(화면과 같은 문구)
             },
             "regions": [{"region": r.get("region"),
                          "scanned_bytes": int(r.get("used_bytes") or 0),
@@ -3835,7 +3865,7 @@ class PortalController:
         cands.sort(key=lambda t: t[0], reverse=True)
         return [dbp for _k, dbp in cands]
 
-    def _replica_cands(self, node_id: str, path: str) -> list:
+    def _replica_cands(self, node_id: str, path: str, with_meta: bool = False) -> list:
         """비교용 후보 (DB 경로, 루트) — _replica_dbs_for 와 같은 순서에서 '같은 루트의 옛 스캔'은 뺀다.
 
         다음 후보로 넘어가는 건 최신 스캔이 그 경로를 접어(fold) 행이 없을 때뿐이고, 그때도 같은 루트의 옛 스캔은
@@ -3856,14 +3886,14 @@ class PortalController:
             if path == root or path.startswith(root + "/") or (not root and path.startswith("/")):
                 dbp = _replica_scan_db(rep, s)
                 if dbp:
-                    cands.append(((s.get("status") == "done",) + self._scan_recency(s) + (len(root),), dbp, root))
+                    cands.append(((s.get("status") == "done",) + self._scan_recency(s) + (len(root),), dbp, root, s))
         cands.sort(key=lambda t: t[0], reverse=True)
         out, seen = [], set()
-        for _k, dbp, root in cands:
+        for _k, dbp, root, sc in cands:
             if root in seen:
                 continue           # 같은 루트는 가장 좋은(완료·최신) 스캔 하나만
             seen.add(root)
-            out.append((dbp, root))
+            out.append((dbp, root, sc) if with_meta else (dbp, root))
         return out
 
     @staticmethod
@@ -3894,7 +3924,13 @@ class PortalController:
             entry = {"id": n["id"], "region": n.get("region"), "found": False,
                      "total_bytes": 0, "own_bytes": 0, "total_files": 0, "subdir_count": 0}
             local = self._to_local(n, path)   # 논리 경로 → 이 노드의 로컬 경로(별칭)
-            for dbp, _root in self._replica_cands(n["id"], local):
+            # 접힌 바깥 스캔의 최신도 — 더 깊이 저장한 안쪽 루트 스캔이 그보다 오래됐으면 값은 쓰되 '옛 스캔 값'으로 표시한다
+            # (34회차 점검: 지운 폴더가 아무 표시 없이 '있음'. 세부를 보여 주는 Q1 동작은 유지)
+            fold_rec = None
+            for dbp, _root, _sc in self._replica_cands(n["id"], local, with_meta=True):
+                _rec = self._scan_recency(_sc)
+                _stale = fold_rec is not None and _rec < fold_rec
+                _mdl = int(_sc.get("opt_max_depth") or 0)   # 깊이 제한 스캔(그 아래는 세지 않음 — 접힘과 다름)
                 try:
                     c = dbmod.connect(dbp)
                     try:
@@ -3918,10 +3954,20 @@ class PortalController:
                                   "own_bytes": r["own_bytes"], "total_files": r["total_files"],
                                   "subdir_count": r["subdir_count"], "partial": _partial})
                     entry.pop("folded_at", None)
+                    entry.pop("depth_limited", None)
+                    if _mdl:
+                        entry["depth_limit"] = _mdl   # 깊이 제한 스캔의 값 — 그 아래가 빠진 하한(34회차 점검: 정상 값처럼 보임)
+                    if _stale:
+                        entry["stale_at"] = _sc.get("finished_at") or _sc.get("received_at") or 0
                     break
                 if not fa:
                     break              # 이 루트의 최신 스캔에 없고 접힌 것도 아님 = 정말 없다(옛 스캔을 보지 않는다)
-                entry.setdefault("folded_at", fa)   # 접힘 — 더 구체적인 다른 루트 스캔이 있으면 그걸 본다
+                if _mdl:
+                    entry.setdefault("depth_limited", _mdl)   # 깊이 제한으로 미스캔 — '상위 폴더에 합산'이 아니다
+                else:
+                    entry.setdefault("folded_at", fa)   # 접힘 — 더 구체적인 다른 루트 스캔이 있으면 그걸 본다
+                if fold_rec is None:
+                    fold_rec = _rec
             rows.append(entry)
         return {"ok": True, "path": path, "rows": rows}
 
@@ -3929,7 +3975,12 @@ class PortalController:
         """노드의 복제 후보들에서 local 의 직속 자식 행을 찾는다 — (자식 행, 접힘 여부) 또는 None(경로 없음).
         첫 후보에 행이 없거나 그 아래가 접혀 있으면 다음 후보(더 깊이 저장한 다른 스캔)를 본다."""
         folded = False
-        for dbp, _root in self._replica_cands(node_id, local):
+        depth_lim = 0
+        fold_rec = None
+        for dbp, _root, _sc in self._replica_cands(node_id, local, with_meta=True):
+            _rec = self._scan_recency(_sc)
+            _stale = fold_rec is not None and _rec < fold_rec   # 접힌 바깥 스캔보다 오래된 안쪽 스캔 값(34회차 — 표시)
+            _mdl = int(_sc.get("opt_max_depth") or 0)
             try:
                 c = dbmod.connect(dbp)
                 try:
@@ -3939,8 +3990,10 @@ class PortalController:
                     if prow is None:
                         if not self._folded_at(c, rid, local):
                             # 이 루트의 최신 스캔에 없고 접힌 것도 아님 — 정말 없다(옛 스캔으로 넘어가지 않는다)
-                            return ([], True) if folded else None
+                            return ([], True, depth_lim, False) if folded else None
                         folded = True
+                        depth_lim = depth_lim or _mdl
+                        fold_rec = fold_rec if fold_rec is not None else _rec
                         continue
                     # 범위 비교(대소문자 구분·인덱스 사용): LIKE 는 ASCII 대소문자를 무시해 /data/FOO 의 자식이
                     # /data/foo 매트릭스에 섞였다(2026-11 리뷰). prefix ≤ path < prefix 의 '/' 다음 문자('0').
@@ -3954,12 +4007,14 @@ class PortalController:
             except Exception:  # noqa: BLE001
                 continue
             if kids:
-                return [dict(k) for k in kids], False
+                return [dict(k) for k in kids], False, _mdl, _stale   # _mdl>0 이면 값이 깊이 제한 하한
             if int(prow["subdir_count"] or 0) > 0:
                 folded = True           # 이 스캔에선 이 폴더에서 접힘 — 다른 후보가 더 깊이 있으면 그걸 쓴다
+                depth_lim = depth_lim or _mdl
+                fold_rec = fold_rec if fold_rec is not None else _rec
                 continue
-            return [], False            # 정말 하위 폴더가 없다
-        return ([], True) if folded else None
+            return [], False, 0, False  # 정말 하위 폴더가 없다
+        return ([], True, depth_lim, False) if folded else None
 
     def compare_matrix(self, path: str) -> dict:
         """path 직속 자식들의 노드별 용량 매트릭스(누락·드리프트 비교)."""
@@ -3967,24 +4022,31 @@ class PortalController:
         node_ids = [n["id"] for n in self.nodes]
         children = {}
         folded = []   # 이 경로 아래가 접혀(fold) 하위 행이 없는 노드
+        depth_nodes = []   # 깊이 제한 스캔으로 본 노드(34회차)
+        stale_nodes = []
         for n in self.nodes:
             local = self._to_local(n, path)   # 논리 경로 → 이 노드의 로컬 경로(별칭)
             res = self._matrix_kids(n["id"], local)
             if res is None:
                 continue
-            kids, is_folded = res
+            kids, is_folded, dlim, stale = res
+            if stale:
+                stale_nodes.append(n["id"])   # 접힌 최신 스캔보다 오래된 스캔의 값(34회차)
+            if dlim:
+                depth_nodes.append(n["id"])   # 깊이 제한 스캔 — 값은 하한·없는 칸은 '미스캔'(접힘 아님)
             for k in kids:
                 e = children.setdefault(k["name"], {"name": k["name"], "subdir_count": 0, "vals": {}})
                 e["vals"][n["id"]] = int(k["total_bytes"] or k["own_bytes"] or 0)
                 e["subdir_count"] = max(e["subdir_count"], int(k["subdir_count"] or 0))
-            if is_folded:
+            if is_folded and not dlim:
                 folded.append(n["id"])
         out = []
         for e in children.values():
             e["sum"] = sum(e["vals"].values())
             out.append(e)
         out.sort(key=lambda x: -x["sum"])
-        return {"ok": True, "path": path, "nodes": node_ids, "children": out, "folded_nodes": folded}
+        return {"ok": True, "path": path, "nodes": node_ids, "children": out, "folded_nodes": folded,
+                "depth_limited_nodes": depth_nodes, "stale_nodes": stale_nodes}
 
 
 # ------------------------------------------------------------------ HTTP 핸들러

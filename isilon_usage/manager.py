@@ -506,6 +506,25 @@ def _nested_roots(paths, containers=None) -> Dict[str, str]:
     return out
 
 
+def _row_total(db_path, path) -> int:
+    """per-run DB 의 최신 실행에서 path 행의 재귀 합계(없거나 읽기 실패면 0)."""
+    if not db_path or not os.path.exists(db_path):
+        return 0
+    try:
+        c = dbmod.connect(db_path)
+        try:
+            rid = dbmod.latest_run_id(c)
+            if rid is None:
+                return 0
+            r = c.execute("SELECT total_bytes FROM directories WHERE run_id=? AND path=?",
+                          (rid, str(path).rstrip("/") or "/")).fetchone()
+            return int(r[0] or 0) if r else 0
+        finally:
+            c.close()
+    except Exception:  # noqa: BLE001 — 겹침 보정 실패는 보정 없이(예전 동작)
+        return 0
+
+
 def capacity_caveats(roots) -> str:
     """합계가 덜 센 값인 이유를 한 줄로(화면·CLI·질의응답 공통 문구) — 깊이 제한·읽기 오류·완료 스캔 없음.
     예전엔 대시보드 표 한 줄에만 '깊이 N까지만'이 있고 다른 곳은 아무 표시 없이 적게 센 값을 보였다(29회차 점검)."""
@@ -601,6 +620,16 @@ def overall_capacity(conn) -> dict:
             "eta_prev_available": eta_prev_available,
             "nested_in": nested.get(rp),   # 이 루트를 품은 다른 스캔 루트(있으면 합계에서 빠짐)
         })
+    # 바깥 루트가 깊이 제한·미완료라 안쪽 루트를 따로 더할 때, 바깥 스캔이 그 경로에서 이미 센 몫(윗부분)은 빼야 두 번 세지
+    # 않는다(34회차 점검: 깊이 2 바깥 + 안쪽 전체 → 실제 53 KB 가 74 KB). 바깥 스캔 DB 의 그 경로 행 합계만큼 뺀다.
+    _geo = _nested_roots(latest_by_root.keys())
+    for rp, outer in _geo.items():
+        if rp in nested or outer in nested:
+            continue
+        ocap = done_by_root.get(outer) or latest_by_root.get(outer) or {}
+        ov = _row_total(ocap.get("db_path"), rp)
+        if ov > 0:
+            total_capacity -= min(ov, int(ocap.get("scanned_bytes") or 0))
     roots.sort(key=lambda x: x["capacity_bytes"], reverse=True)
 
     active = sum(1 for s in scans if s["status"] in ("discovering", "sizing"))
