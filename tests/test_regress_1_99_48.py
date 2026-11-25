@@ -3870,6 +3870,43 @@ def check_co_round34_multi() -> None:
     print("[QQQ1~QQQ5] OK  겹친 몫 보정·깊이 제한 표시·오래된 안쪽 스캔 무시·삭제 즉시 복제·사용량 API 중첩/사유")
 
 
+def check_cp_round34_edge() -> None:
+    """RRR1 읽지 못한 폴더가 '완료 0 B'로만 보임 RRR2 오류 스캔에 '재개하세요' 안내만 있고 버튼 없음 RRR3 트리 비중 분모가 자식 합(파이와
+    다름) RRR4 일시정지 스캔이 있는 경로를 '지금 스캔'하면 말없이 처음부터 RRR5 자동 추천인데 요약은 threads RRR6 뒤로 가기로 대시보드를 떠남
+    RRR7 예측이 '197656일 후'처럼 표시."""
+    from isilon_usage import server as SV
+    from isilon_usage.scanner import run_scan
+    from isilon_usage import db as dbmod
+    d = tempfile.mkdtemp(prefix="iu_cp_")
+    try:
+        t = os.path.join(d, "nas")
+        os.makedirs(os.path.join(t, "a", "x"))
+        with open(os.path.join(t, "a", "own.bin"), "wb") as fh:
+            fh.write(b"x" * 48000)
+        with open(os.path.join(t, "a", "x", "f.bin"), "wb") as fh:
+            fh.write(b"y" * 36000)
+        dbp = os.path.join(d, "s.db")
+        run_scan(dbp, t, workers=1, size_mode="apparent", with_monitor=False, fold_depth=0)
+        c = dbmod.connect(dbp)
+        rid = dbmod.latest_run_id(c)
+        root = SV.list_children(c, rid, None)["children"][0]
+        a = [x for x in SV.list_children(c, rid, root["id"])["children"] if x["name"] == "a"][0]
+        res = SV.list_children(c, rid, a["id"])                                                    # RRR3
+        c.close()
+        assert res.get("parent_total") == a["total_bytes"], (res.get("parent_total"), a)
+        assert "error" in res["children"][0]                                                        # RRR1
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    dh = _read("dashboard.html")
+    assert "⚠ 읽기 오류" in dh and "(meta && meta.parent_total)" in dh
+    assert 'if (r.status === "paused" || r.status === "error") act += ` <button data-resume' in dh          # RRR2
+    assert "일시정지된 스캔 #" in dh                                                                       # RRR4
+    assert '"자동 선택(오토튜닝)"' in dh                                                                    # RRR5
+    assert "history.pushState(null" in dh and 'addEventListener("popstate"' in dh                          # RRR6
+    assert "10년 넘게" in dh                                                                               # RRR7
+    print("[RRR1~RRR7] OK  읽기 오류 표시·오류 스캔 재개·트리 비중 분모·일시정지 확인·요약·뒤로 가기·예측 상한")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3905,7 +3942,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bx_round28_regress, check_by_round28_install,
             check_bz_round28_dashboard, check_ca_round29_regress,
             check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress,
-            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine, check_cn_round34_regress, check_co_round34_multi]
+            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine, check_cn_round34_regress, check_co_round34_multi, check_cp_round34_edge]
 
 
 def main() -> int:

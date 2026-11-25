@@ -793,7 +793,7 @@ def build_status(conn, run_id: Optional[int], *, samples: int = 150, top: int = 
 def list_children(conn, run_id: int, parent_id: Optional[int], *, limit: int = 200) -> dict:
     # 정렬은 화면에 보이는 크기(집계 전이면 own_bytes)로 — total_bytes 만 보면 집계 전 큰 폴더가 '나머지'로 숨었다
     _sz = "(CASE WHEN total_bytes>0 THEN total_bytes ELSE own_bytes END)"
-    _cols = ("SELECT id, path, name, depth, file_count, subdir_count, own_bytes, total_bytes, total_files, status "
+    _cols = ("SELECT id, path, name, depth, file_count, subdir_count, own_bytes, total_bytes, total_files, status, error "
              "FROM directories WHERE run_id=? AND ")
     if parent_id is None:
         rows = conn.execute(_cols + "parent_id IS NULL ORDER BY " + _sz + " DESC LIMIT ?", (run_id, limit + 1)).fetchall()
@@ -825,6 +825,11 @@ def list_children(conn, run_id: int, parent_id: Optional[int], *, limit: int = 2
             n, ch_b, ch_f = int(agg["n"]), int(agg["b"]), int(agg["f"])
         out.update(truncated=True, total_count=n, rest_count=max(0, n - limit),
                    rest_bytes=max(0, ch_b - shown_b), rest_files=max(0, ch_f - shown_f))
+    if parent_id is not None:
+        # 비중(%)의 분모 = 부모 폴더 합계(이 폴더의 파일 포함) — 파이와 같은 정의(34회차 점검: 트리 7.0% vs 파이 6.3%)
+        _pt = conn.execute("SELECT total_bytes FROM directories WHERE run_id=? AND id=?", (run_id, parent_id)).fetchone()
+        if _pt is not None and int(_pt["total_bytes"] or 0) > 0:
+            out["parent_total"] = int(_pt["total_bytes"])
     return out
 
 
@@ -851,7 +856,7 @@ def list_top_dirs(conn, run_id, *, under_id=None, rel_depth=None,
     sort_expr = _TOP_SORT_COLS.get(str(sort), _TOP_SORT_COLS["size"])
     order_sql = "ASC" if str(order).lower() == "asc" else "DESC"
     _cols = ("id, path, name, depth, file_count, subdir_count, "
-             "own_bytes, total_bytes, total_files, status")
+             "own_bytes, total_bytes, total_files, status, error")   # 읽기 오류 표시(34회차 점검: '완료 0 B'로만 보임)
 
     where = ["run_id=?"]
     params = [run_id]

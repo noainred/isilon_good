@@ -3033,7 +3033,9 @@ function syncScanMethod() {
   const sum = $("scanAdvSum");
   if (sum) {
     const sz = $("optSize") ? ($("optSize").value === "apparent" ? "논리 크기" : "디스크 점유") : "";
-    sum.textContent = "엔진 " + ($("optEngine") ? $("optEngine").value : "?") + " · " + sz
+    // 자동 추천이면 엔진은 측정 뒤 결정 — 요약이 'threads' 라 확인 창(오토튜닝)과 어긋났다(34회차 점검)
+    const _auto = $("optAutotune") && $("optAutotune").checked;
+    sum.textContent = "엔진 " + (_auto ? "자동 선택(오토튜닝)" : ($("optEngine") ? $("optEngine").value : "?")) + " · " + sz
       + ($("optOFS") && $("optOFS").checked ? " · 한 파일시스템만" : "")
       + ($("optAutoRestart") && $("optAutoRestart").checked ? " · 완료 후 반복" : "");
   }
@@ -3123,6 +3125,14 @@ async function startScan() {
 async function _startScanImpl() {
   const path = $("scanPath").value.trim();
   if (!path) { $("startMsg").innerHTML = '<span class="err">경로를 입력/선택하세요.</span>'; return; }
+  // 같은 경로에 일시정지된 스캔이 있으면 새로 시작하기 전에 알린다 — 몇 시간 진행분을 버리고 처음부터 시작할 수 있었다(34회차 점검)
+  const _norm = x => (String(x || "").replace(/\/+$/, "") || "/");
+  const _pz = (_ovRootsLatest || []).find(x => _norm(x.root_path) === _norm(path) && x.status === "paused");
+  if (_pz && !confirm("이 경로에 일시정지된 스캔 #" + _pz.scan_id + " 이(가) 있습니다 — 재개하면 멈춘 곳부터 이어서 셉니다.\n\n"
+                      + "그래도 처음부터 새 스캔을 시작할까요? (취소 후 '저장소별 현황'의 재개를 누르면 이어서 합니다)")) {
+    $("startMsg").textContent = "취소됨 — 일시정지된 #" + _pz.scan_id + " 을(를) 재개할 수 있습니다.";
+    return;
+  }
   const _runId = _scanRunningOn(path);
   if (_runId != null) {          // 같은 경로가 이미 도는 중 — 확인 창을 띄우기 전에 막는다(서버도 거부)
     $("startMsg").innerHTML = '<span class="err">이미 같은 경로를 스캔 중입니다(#' + _runId + '). 끝나거나 중지한 뒤 다시 시작하세요.</span>';
@@ -3577,7 +3587,7 @@ function renderTopDirs(j) {
       <td class="num">${fmtBytes(t.own_bytes)}</td>
       <td class="num">${fmtNum(t.total_files || t.file_count)}</td>
       <td class="num">${fmtNum(t.subdir_count)}</td>
-      <td>${statusKo[t.status] || t.status}</td>
+      <td>${t.error ? `<span style="color:var(--warn)" title="${escHtml(t.error)}">⚠ 읽기 오류</span>` : (statusKo[t.status] || t.status)}</td>
     </tr>`;
   }).join("");
   tb.querySelectorAll("a.topdrill").forEach(a => a.addEventListener("click", (e) => {
@@ -3635,7 +3645,8 @@ function renderTree(rows, meta) {
   if (!rows.length) { tb.innerHTML = '<tr><td colspan="6" class="sub">하위 디렉터리가 없거나 아직 집계 전입니다.</td></tr>'; return; }
   // 서버는 큰 순 상위 200개만 보낸다 — 나머지(rest_*)까지 합한 값을 비율의 분모로(예전엔 보인 것만 합해 100% 가 됐다)
   const _rest = (meta && meta.truncated) ? meta : null;
-  const parentTotal = (rows.reduce((a, r) => a + (r.total_bytes || r.own_bytes || 0), 0) + (_rest ? (_rest.rest_bytes || 0) : 0)) || 1;
+  // 분모 = 부모 폴더 합계(서버 parent_total — 파이와 같은 정의, 34회차). 없으면(루트 목록) 보인 것 + 나머지 합
+  const parentTotal = (meta && meta.parent_total) || (rows.reduce((a, r) => a + (r.total_bytes || r.own_bytes || 0), 0) + (_rest ? (_rest.rest_bytes || 0) : 0)) || 1;
   tb.innerHTML = rows.map(r => {
     const sz = r.total_bytes > 0 ? r.total_bytes : r.own_bytes;
     const pct = (sz / parentTotal * 100);
@@ -3643,7 +3654,8 @@ function renderTree(rows, meta) {
     const name = canDesc
       ? `<a href="#" class="tdesc" data-id="${r.id}" data-name="${escHtml(r.name)}" translate="no">📁 ${escHtml(r.name)}</a>`
       : `<span translate="no">📄 ${escHtml(r.name)}</span>`;
-    return `<tr><td class="mono" style="max-width:520px; overflow:hidden; text-overflow:ellipsis;">${name}</td>
+    const errMark = r.error ? ` <span style="color:var(--warn)" title="${escHtml(r.error)}">⚠ 읽기 오류</span>` : "";   // 34회차
+    return `<tr><td class="mono" style="max-width:520px; overflow:hidden; text-overflow:ellipsis;">${name}${errMark}</td>
       <td class="num">${fmtBytes(sz)}</td>
       <td class="num">${pct.toFixed(1)}%</td>
       <td class="num">${fmtNum(r.total_files || r.file_count)}</td>
@@ -3801,12 +3813,14 @@ async function _loadReportNow() {
         let html = '증가 추세: <b style="color:' + (g > 0 ? "var(--warn)" : "var(--ok)") + '">'
           + (g >= 0 ? "+" : "−") + fmtBytes(Math.abs(g)) + '/일</b>'
           + ' <span class="sub">(' + fc.points + '회 스캔 기준)</span><br>';
+        // 증가가 아주 작으면 '197656일 후(2568년)' 같은 값이 나왔다 — 10년 넘으면 '10년 넘게'로(34회차 점검)
+        const _far = (days) => days > 3650;
+        const _when = (days) => _far(days) ? '<b>10년 넘게</b>'
+          : ('<b>약 ' + Math.round(days) + '일 후</b> (' + new Date(Date.now() + days * 86400000).toLocaleDateString(_LOC) + ')');
         if (g > 0 && fc.days_to_90pct != null) {
-          const d90 = new Date(Date.now() + fc.days_to_90pct * 86400000).toLocaleDateString(_LOC);
-          html += 'FS 90% 도달: <b style="color:var(--warn)">약 ' + Math.round(fc.days_to_90pct) + '일 후</b> (' + d90 + ')<br>';
+          html += 'FS 90% 도달: <span style="color:var(--warn)">' + _when(fc.days_to_90pct) + '</span><br>';
           if (fc.days_to_full != null) {
-            const dF = new Date(Date.now() + fc.days_to_full * 86400000).toLocaleDateString(_LOC);
-            html += 'FS 가득 참: <b style="color:var(--danger)">약 ' + Math.round(fc.days_to_full) + '일 후</b> (' + dF + ')';
+            html += 'FS 가득 참: <span style="color:var(--danger)">' + _when(fc.days_to_full) + '</span>';
           }
         } else {
           html += '<span style="color:var(--ok)">증가 추세 없음 — 당분간 소진 위험 낮음</span>';
@@ -4305,7 +4319,8 @@ function renderOverview(j) {
       else if (canMutate()) {
         if (running) act += ` <button class="stopbtn" data-stop="${r.scan_id}">중지</button>`;
         else {
-          if (r.status === "paused") act += ` <button data-resume="${r.scan_id}" style="padding:2px 8px; font-size:11.5px;">재개</button>`;
+          // 오류로 끝난 스캔도 재개 가능(서버 지원) — 안내문은 '재개하세요'인데 버튼이 없었다(34회차 점검)
+          if (r.status === "paused" || r.status === "error") act += ` <button data-resume="${r.scan_id}" style="padding:2px 8px; font-size:11.5px;">재개</button>`;
           // 멈춘 자료 집계(부분 집계): 일시정지/오류 스캔의 지금까지 행으로 재귀 합계(하한값)를 계산
           if (r.status === "paused" || r.status === "error") act += r.partial_agg_running
             ? ` <span class="sub">⏳ 부분 집계 중…</span>`
@@ -5577,7 +5592,8 @@ function showView(name) {
   const sn = $("subnav");
   if (sn) sn.classList.toggle("hidden", Object.keys(VIEW_GROUP).filter(v => VIEW_GROUP[v] === grp).length < 2);
   window.scrollTo(0, 0);
-  try { history.replaceState(null, "", "#" + name); } catch (e) { location.hash = name; }
+  // 화면마다 기록을 남겨 브라우저 '뒤로'가 이전 화면으로(34회차 점검: 뒤로 누르면 대시보드를 떠났다). 같은 화면이면 남기지 않음.
+  try { if (location.hash !== "#" + name) history.pushState(null, "", "#" + name); } catch (e) { location.hash = name; }
   if (name === "extra" && $("atPath")) setTimeout(() => $("atPath").focus(), 20);
   if (name === "settings" && !_opLoggedIn()) {   // 설정 진입 = 인증(없으면 처음 비밀번호 만들기)
     ensureSettingsAuth().then(ok => {
@@ -5608,6 +5624,10 @@ document.addEventListener("click", (e) => {
 });
 if ($("askInput")) $("askInput").addEventListener("keydown", (e) => { if (e.key === "Escape") { _seqNext("ask"); $("askOut").innerHTML = ""; } });
 window.addEventListener("hashchange", () => {
+  const v = location.hash.slice(1);
+  if (VIEWS.includes(v)) showView(v);
+});
+window.addEventListener("popstate", () => {      // 뒤로/앞으로 — pushState 기록의 화면으로
   const v = location.hash.slice(1);
   if (VIEWS.includes(v)) showView(v);
 });
