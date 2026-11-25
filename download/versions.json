@@ -1,6 +1,15 @@
 {
-  "latest": "1.99.48",
+  "latest": "1.99.49",
   "versions": [
+    {
+      "version": "1.99.49",
+      "python": "Python 3.6+",
+      "tar_gz": "isilon_usage-1.99.49.tar.gz",
+      "zip": "isilon_usage-1.99.49.zip",
+      "size_bytes": 786260,
+      "sha256": "4c8b7a5f9366a67635900ba40758729aa61349e79dba5fcdd409f0eec929c512",
+      "sha256_zip": "46af08442bdff21a103c712079267e66a9ff790f2f9ed44c981d6a96a0213191"
+    },
     {
       "version": "1.99.48",
       "python": "Python 3.6+",
