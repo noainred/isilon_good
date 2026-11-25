@@ -209,7 +209,7 @@ def credential_values(user, password) -> list:
     return out
 
 
-_TEXT_KEYS = ("error", "errors", "message", "msg", "detail", "details", "reason", "warning", "warnings", "note", "hint", "log")
+_TEXT_KEYS = ("error", "message", "msg", "detail", "reason", "warning", "note", "hint", "log", "description", "text", "summary")
 
 
 def redact_text_fields(obj, secrets, keys=_TEXT_KEYS):
@@ -218,7 +218,10 @@ def redact_text_fields(obj, secrets, keys=_TEXT_KEYS):
     if not secrets:
         return obj
     if isinstance(obj, dict):
-        return {k: (redact_values(v, secrets) if str(k).lower() in keys else redact_text_fields(v, secrets, keys))
+        # 키 이름에 낱말이 '들어 있으면'(events_error·last_message·alarms 의 description 등) — 정확히 같은 이름만 보면
+        # 장비 클라이언트가 쓰는 events_error 로 비밀번호가 그대로 나갔다(38회차 점검)
+        return {k: (redact_values(v, secrets) if any(w in str(k).lower() for w in keys)
+                    else redact_text_fields(v, secrets, keys))
                 for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [redact_text_fields(v, secrets, keys) for v in obj]
@@ -241,6 +244,20 @@ def redact_values(obj, secrets):
     return obj
 
 
+def _mask_url_match(m) -> str:
+    """URL 조각 가림 — 끝의 ':'·'.'·'!'·'?' 를 뺀 주소로 가리되, 그것까지 포함해도 주소로 읽히면 함께 가린다
+    ('…?token=Tok!' 의 '!' 가 비밀의 끝 글자로 남던 문제, 38회차 점검). 'http://nas01:8080:' 처럼 붙이면 주소가
+    망가지는 경우만 떼어 낸다."""
+    u = m.group(0)
+    core = u.rstrip(":.!?")
+    tail = u[len(core):]
+    if tail:
+        whole = mask_url_secret(u)
+        if whole != _MASK:
+            return whole
+    return mask_url_secret(core) + tail
+
+
 def redact_urls(obj):
     """응답 안의 모든 문자열에서 URL 의 비밀값(사용자 정보·쿼리)을 가린다(재귀, 새 객체 반환).
 
@@ -251,11 +268,11 @@ def redact_urls(obj):
         import re
         # 스킴은 단어 경계에서 시작·32자 이내(긴 영숫자열에서 느려지지 않게), 끝의 문장부호 ),;] 는 URL 에 넣지 않는다(29회차 점검)
         # 끝의 ':'·'.'·'!'·'?' 도 빼야 'http://nas01:8080: refused' 의 주소가 통째로 '***' 가 되지 않는다(37회차 점검)
-        _URL_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9+.\-]{0,31}://[^\s\"'<>]*[^\s\"'<>),;\]:.!?]")
+        _URL_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9+.\-]{0,31}://[^\s\"'<>]*[^\s\"'<>),;\]]")
     if isinstance(obj, str):
         if "://" not in obj:
             return obj
-        return _URL_RE.sub(lambda m: mask_url_secret(m.group(0)), obj)
+        return _URL_RE.sub(_mask_url_match, obj)
     if isinstance(obj, dict):
         return {k: redact_urls(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):

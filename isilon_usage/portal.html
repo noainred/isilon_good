@@ -1529,7 +1529,7 @@ function showSub(id){
   // 등록 토큰·중앙 DB 경로·백업 현황 칸을 그 탭을 열 때마다 채운다 — 예전엔 없는 탭 id(np-security)를 봐서 로그인 전(가린 값)
   // 한 번만 읽혀, 토큰을 정해도 '아직 없습니다'·경로 '—'로 남았다(31회차 점검)
   if(id==="np-account" || id==="np-monitor" || id==="np-nodes" || id==="np-general"){ try{ pLoadUpgradeCfg(); }catch(e){} }
-  if(id==="np-security"){ try{ loadAskLlm(); }catch(e){} }   // LLM 카드 — 로그인 전에 가려진 값으로 채워져 있을 수 있다(37회차)
+  if(id==="np-monitor"){ try{ loadAskLlm(); }catch(e){} }   // LLM 카드(모니터링·백업 탭) — 로그인 전에 가려진 값일 수 있다(37·38회차)
 }
 document.querySelectorAll("#view-nodes .stab").forEach(b=>b.addEventListener("click",()=>showSub(b.dataset.pane)));
 
@@ -2602,7 +2602,8 @@ function renderCompare(j){
     if(!r.found && r.folded_at) return `<tr><td><b>${_he(r.id)}</b></td><td>${_he(r.region||"—")}</td><td class="num sub">—</td><td class="num">—</td><td class="num">—</td><td><span class="badge" title="이 노드는 스캔 시 폴더 깊이 접기(fold)로 이 깊이의 행을 따로 저장하지 않았습니다 — 용량은 ${escAttr(r.folded_at)} 합계에 들어 있습니다">접힘 · 상위 폴더에 합산</span></td></tr>`;
     if(!r.found) return `<tr><td><b>${_he(r.id)}</b></td><td>${_he(r.region||"—")}</td><td class="num miss">없음</td><td class="num">—</td><td class="num">—</td><td><span class="badge b-offline">미스캔/누락</span></td></tr>`;
     const pct=r.total_bytes/maxB*100, drift=pct<85;
-    return `<tr><td><b>${_he(r.id)}</b></td><td>${_he(r.region||"—")}</td>
+    const dupB = r.duplicate_of ? ` <span class="badge" title="같은 엣지를 다른 이름으로 또 등록한 노드입니다 — 현황·비교 합계에서는 한 번만 셉니다">같은 엣지(${_he(r.duplicate_of)})</span>` : "";
+    return `<tr><td><b>${_he(r.id)}</b>${dupB}</td><td>${_he(r.region||"—")}</td>
       <td class="num">${fmtBytes(r.total_bytes)}</td><td class="num">${fmtNum(r.total_files)}</td>
       <td class="num">${pct.toFixed(0)}%</td>
       <td>${r.partial?'<span class="badge" title="이 노드의 마지막 스캔이 끝나지 않아(멈춤·오류) 지금까지 센 값(하한값)입니다">부분 값</span> ':''}${r.depth_limit?'<span class="badge" title="최대 깊이 '+escAttr(r.depth_limit)+' 로 스캔 — 그 아래 용량이 빠진 하한값입니다">깊이 '+escAttr(r.depth_limit)+'까지만</span> ':''}${r.stale_at?'<span class="badge" title="이 깊이는 최신 스캔에서 접혀, 더 깊이 저장한 옛 스캔의 값입니다 — 그 뒤 바뀌었을 수 있습니다">옛 스캔 값('+new Date(r.stale_at*1000).toLocaleDateString()+')</span> ':''}${drift?'<span class="badge b-offline">드리프트 ⚠</span>':'<span class="badge b-online">정상</span>'}</td></tr>`;
@@ -2611,7 +2612,8 @@ function renderCompare(j){
 }
 function renderMatrix(j){
   const nodes=j.nodes||[], kids=j.children||[];
-  $("cmpMHead").innerHTML = "<tr><th>디렉터리</th>"+nodes.map(n=>`<th class="num">${escAttr(n)}</th>`).join("")+"</tr>";
+  const dupOf=j.duplicate_of||{};
+  $("cmpMHead").innerHTML = "<tr><th>디렉터리</th>"+nodes.map(n=>`<th class="num"${dupOf[n]?` title="같은 엣지(${escAttr(dupOf[n])})를 또 등록한 노드 — 합계에서 한 번만 셉니다"`:""}>${escAttr(n)}${dupOf[n]?" ⧉":""}</th>`).join("")+"</tr>";
   const fn=(j.folded_nodes||[]), dn=(j.depth_limited_nodes||[]);
   const sn=(j.stale_nodes||[]);
   const staleNote = sn.length ? ` · 옛 스캔 값(최신 스캔에서 접혀 더 깊이 저장한 옛 스캔으로 표시 — 그 뒤 바뀌었을 수 있음): ${sn.map(_he).join(", ")}` : "";

@@ -4187,7 +4187,7 @@ def check_cv_round37_flows() -> None:
     XXX5 "clear":"false" 가 참 XXX6 since=nan 이 잘못된 JSON XXX7 쿼리 붙은 노드 주소 허용."""
     from isilon_usage import portal as P, db as DB, manager as M
     html = _read("portal.html")
-    assert "_askLlmLoaded" in html and 'if(id==="np-security"){ try{ loadAskLlm(); }' in html                 # XXX1
+    assert "_askLlmLoaded" in html and 'if(id==="np-monitor"){ try{ loadAskLlm(); }' in html                 # XXX1
     assert html.count("try{ loadAskLlm(); }catch(e){}") >= 3
     src = _read("server.py")
     assert "mgrmod.overall_capacity(mconn)[\"roots\"]" in src and "list_scans(mconn, limit=-1)" in src       # XXX2·XXX4
@@ -4248,6 +4248,46 @@ def check_cv_round37_flows() -> None:
     print("[XXX1~XXX7] OK  LLM 카드 로그인 뒤 다시 채움·metrics 전체 루트·재스캔 중 완료 값·dbexport 전체·clear 문자열·since nan·쿼리 노드 주소 거부")
 
 
+def check_cw_round38_regress() -> None:
+    """YYY1 장비 클라이언트의 events_error·알람 description 으로 비밀번호·Basic 값이 그대로 나감
+    YYY2 같은 엣지 대표가 폴링 순서마다 바뀌어 비교 합계·duplicate_of 가 흔들리고, 복제 전 새 등록이 대표면 합계 0
+    YYY3 '…?token=Tok!' 의 끝 글자가 남음 YYY4 프록시 경로 대소문자를 같은 엣지로 봄 YYY5 LLM 카드 다시 채우기가 없는 탭 id."""
+    import base64
+    from isilon_usage import portal as P, netutil as NU, server as SV
+    d = tempfile.mkdtemp(prefix="iu_cw_")
+    try:
+        ec = SV.ScanController(os.path.join(d, "edge"))                                                   # YYY1
+        ec.settings.update({"isilon_url": "https://nas.example:8080", "isilon_user": "root", "isilon_password": "IsiPw99"})
+        b64 = base64.b64encode(b"root:IsiPw99").decode()
+        ec._storage_status_raw = lambda force=False: [{"type": "isilon", "events_error": "HTTP Error 500: echo pw=IsiPw99 %s" % b64,
+                                                       "alarms": [{"description": "Basic %s" % b64}]}]
+        out = json.dumps(ec.storage_status())
+        assert "IsiPw99" not in out and b64 not in out, out
+        pc = P.PortalController(os.path.join(d, "hq"))                                                    # YYY2
+        pc.upsert_node({"id": "n1", "url": "http://10.0.0.9:8765", "token": "t"})
+        pc.upsert_node({"id": "n2", "url": "http://10.0.0.9:8765/", "token": "t"})
+        for order in (("n1", "n2"), ("n2", "n1")):
+            for i, nid in enumerate(order):
+                pc._cache[nid] = {"online": True, "ts": time.time() + i,
+                                  "overall": {"total_capacity_bytes": 7, "root_count": 1, "roots": []}}
+            assert pc._dup_of_map() == {"n2": "n1"}, (order, pc._dup_of_map())
+        pc._matrix_kids = lambda nid, local: (([{"name": "a", "total_bytes": 36864, "own_bytes": 0, "subdir_count": 0}],
+                                               False, 0, False) if nid == "n2" else None)
+        mx = pc.compare_matrix("/data")
+        assert mx["children"][0]["sum"] == 36864, mx      # 대표(n1)에 복제본이 없어도 같은 엣지 값으로 한 번
+        assert P.PortalController._edge_key("https://h/EdgeA") != P.PortalController._edge_key("https://h/edgea")   # YYY4
+        assert P.PortalController._edge_key("HTTP://NJ:8765/api") == P.PortalController._edge_key("nj:8765")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    r = NU.redact_urls("https://u:pw@h/x?token=Tok!")                                                       # YYY3
+    assert "Tok" not in r and not r.endswith("!"), r
+    assert NU.redact_urls("Failed http://nas01:8080: refused") == "Failed http://nas01:8080: refused"
+    html = _read("portal.html")
+    assert 'if(id==="np-monitor"){ try{ loadAskLlm(); }' in html and '"np-monitor":["cardDbDir","cardBackup","cardAskLlm"]' in html   # YYY5
+    assert "같은 엣지(${_he(r.duplicate_of)})" in html
+    print("[YYY1~YYY5] OK  events_error 비밀번호 가림·같은 엣지 대표 고정·끝 글자 가림·프록시 경로 대소문자·LLM 카드 탭 id")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -4285,7 +4325,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress,
             check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine, check_cn_round34_regress, check_co_round34_multi, check_cp_round34_edge, check_cq_round35_regress, check_cr_round35_portal, check_cs_round36_regress,
             check_ct_round36_security, check_cu_round37_regress,
-            check_cv_round37_flows]
+            check_cv_round37_flows, check_cw_round38_regress]
 
 
 def main() -> int:

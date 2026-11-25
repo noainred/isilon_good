@@ -3537,31 +3537,32 @@ class PortalController:
     @staticmethod
     def _edge_key(url: str) -> str:
         """노드 URL 을 '호스트:포트' 로 정규화(스킴·경로·끝 슬래시·대소문자 무시) — 같은 엣지 중복 등록 판별용."""
-        u = (url or "").strip().lower()
+        u = (url or "").strip()
         if not u:
             return ""
         if "://" not in u:
             u = "http://" + u
         try:
             p = urlparse(u)
-            port = p.port or (443 if p.scheme == "https" else 80)
+            port = p.port or (443 if p.scheme.lower() == "https" else 80)
             # 경로도 넣는다 — 리버스 프록시 뒤 'https://proxy/edgeA'·'/edgeB' 는 서로 다른 엣지인데 중복으로 빠졌다(37회차 점검)
             # 끝의 '/api' 는 같은 엣지를 API 주소로 적은 것으로 본다(기존 규칙 유지)
             _path = re.sub(r"/api$", "", (p.path or "").rstrip("/"))
-            return "%s:%s%s" % (p.hostname or "", port, _path)
+            return "%s:%s%s" % ((p.hostname or "").lower(), port, _path)   # 호스트만 대소문자 무시(프록시 경로는 구분)
         except ValueError:
             return u
 
     def _edge_reps(self, nodes, cache) -> dict:
         """같은 엣지(_edge_key)마다 대표 노드 id — 현황 합계·비교 합계가 같은 규칙을 쓴다(단일 정책, 37회차 점검:
-        비교 매트릭스 합계는 같은 엣지를 두 번 더했다). 대표는 켜져 있고 온라인 → 최근에 받은 값 → 등록 순."""
+        비교 매트릭스 합계는 같은 엣지를 두 번 더했다). 대표는 켜져 있고 온라인 → 받은 값이 있음 → 등록 순.
+        (38회차 점검: '최근에 받은 값'으로 고르면 폴링 순서에 따라 대표가 매번 바뀌어 비교 합계·duplicate_of 가 흔들렸다)"""
         reps: dict = {}
         for i, n in enumerate(nodes):
             k = self._edge_key(n.get("url"))
             if not k:
                 continue
             c = cache.get(n["id"], {}) or {}
-            score = (bool(c.get("online")) and bool(n.get("enabled", True)), float(c.get("ts") or 0), -i)
+            score = (bool(c.get("online")) and bool(n.get("enabled", True)), bool(c.get("overall")), -i)
             if k not in reps or score > reps[k][0]:
                 reps[k] = (score, n["id"])
         return {k: v[1] for k, v in reps.items()}
@@ -4151,7 +4152,15 @@ class PortalController:
         out = []
         dups = self._dup_of_map()   # 같은 엣지 중복 등록은 합계에서 한 번만(현황과 같은 규칙, 37회차 점검)
         for e in children.values():
-            e["sum"] = sum(v for nid, v in e["vals"].items() if nid not in dups)
+            # 엣지마다 한 번 — 대표 값이 있으면 그것, 대표에 이 폴더 복제본이 없으면 같은 엣지의 다른 노드 값(38회차 점검:
+            # 아직 복제 전인 새 등록이 대표가 되면 합계가 0 이 됐다)
+            per_edge: dict = {}
+            for nid in node_ids:
+                if nid in e["vals"]:
+                    rep = dups.get(nid, nid)
+                    if rep not in per_edge or nid == rep:
+                        per_edge[rep] = e["vals"][nid]
+            e["sum"] = sum(per_edge.values())
             out.append(e)
         out.sort(key=lambda x: -x["sum"])
         return {"ok": True, "path": path, "nodes": node_ids, "children": out, "folded_nodes": folded,
