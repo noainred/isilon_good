@@ -252,10 +252,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         return 2
 
     # 같은 루트를 서버·다른 CLI 가 스캔 중이면 거부 — 서버 시작과 같은 규칙(40회차 점검: NAS 부하 두 배)
-    _dup = mgrmod.active_scan_on(os.path.abspath(args.data_dir), path)
-    if _dup is not None:
-        print(f"오류: 같은 경로를 스캔 #{_dup} 가 진행 중입니다(중복 스캔 방지) — 끝난 뒤 다시 하거나 "
-              f"멈춘 스캔은 resume 으로 이어 가세요.", file=sys.stderr)
+    if _refuse_duplicate(os.path.abspath(args.data_dir), path):
         return 2
 
     stop = threading.Event()
@@ -499,6 +496,50 @@ def _scan_writer_alive(db_path: str) -> int:
     return pid
 
 
+def _writer_known_dead(db_path: str) -> bool:
+    """per-run DB 에 기록된 스캐너가 '이 호스트에서 이미 죽었음'이 확실하면 True(kill -9·정전 뒤 남은 진행 상태).
+    pid·호스트가 없거나 다른 호스트면 False(살아 있을 수 있다고 본다 — 보수적으로)."""
+    try:
+        c = dbmod.connect(db_path)
+        try:
+            r = c.execute("SELECT status, scanner_pid, hostname FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()
+        finally:
+            c.close()
+    except Exception:  # noqa: BLE001
+        return False
+    if r is None or r["status"] not in ("discovering", "sizing") or not r["scanner_pid"]:
+        return False
+    try:
+        me = socket.gethostname()
+    except Exception:  # noqa: BLE001
+        return False
+    if r["hostname"] and r["hostname"] != me:
+        return False
+    return not _scan_writer_alive(db_path)
+
+
+def _refuse_duplicate(data_dir: str, path: str, exclude=()) -> bool:
+    """같은 루트를 지금 스캔 중인 스캔이 있으면 안내를 찍고 True — CLI scan·resume 공통(서버와 같은 규칙, 41회차).
+    그 스캔의 프로세스가 이 호스트에서 이미 죽었으면(kill -9 직후) 막지 않는다 — 15분 동안 다시 못 돌렸다."""
+    sid = mgrmod.active_scan_on(data_dir, path, exclude=set(exclude))
+    if sid is None:
+        return False
+    try:
+        mc = dbmod.connect(mgrmod.manager_db_path(data_dir))
+        try:
+            row = mgrmod.get_scan(mc, sid)
+        finally:
+            mc.close()
+    except Exception:  # noqa: BLE001
+        row = None
+    if row is not None and _writer_known_dead(row["db_path"]):
+        return False
+    print(f"오류: 같은 경로를 스캔 #{sid} 가 진행 중입니다(중복 스캔 방지) — 끝난 뒤 다시 하세요. "
+          f"멈춘 스캔은 'python -m isilon_usage resume <번호> --data-dir {data_dir}' 로 이어 갈 수 있습니다.",
+          file=sys.stderr)
+    return True
+
+
 def cmd_resume(args: argparse.Namespace) -> int:
     data_dir = os.path.abspath(args.data_dir)
     if not os.path.exists(mgrmod.manager_db_path(data_dir)):   # 없는 폴더면 traceback 대신 안내(status 와 같게)
@@ -532,6 +573,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
     if _scan_maybe_remote_live(row["db_path"]):   # 다른 호스트·컨테이너에서 도는 중일 수 있음 — partial 과 같은 규칙(20회차 점검)
         print("scan #%d 은 다른 호스트(또는 컨테이너)에서 최근까지 진행된 스캔입니다 — 그쪽에서 중지하거나, "
               "15분 넘게 소식이 없을 때 다시 하세요." % args.scan, file=sys.stderr)
+        return 2
+    # 같은 루트를 다른 스캔이 돌리는 중이면 재개하지 않는다 — 서버 재개와 같은 규칙(41회차 점검)
+    if _refuse_duplicate(data_dir, dbmod.fs_text(row["root_path"]), exclude={args.scan}):
         return 2
     s = setmod.load(data_dir)
     stop = threading.Event()

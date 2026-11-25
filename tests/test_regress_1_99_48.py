@@ -4446,9 +4446,36 @@ def check_da_round40_cli_dup() -> None:
         mc.commit()
         mc.close()
         assert M.active_scan_on(data, root) is None
+        # CCCC2 kill -9 로 죽은 CLI 스캔(이 호스트·pid 없음)의 진행 상태는 다시 scan 을 막지 않는다
+        dead_db = os.path.join(data, "dead.db")
+        DB.init_db(dead_db)
+        c = DB.connect(dead_db)
+        p = subprocess.Popen([sys.executable, "-c", "pass"])
+        p.wait()
+        DB.create_run(c, root, backend="native", size_mode="disk", scanner_pid=p.pid)
+        c.close()
+        mc = DB.connect(M.manager_db_path(data))
+        mc.execute("UPDATE scans SET updated_at=?, db_path=?", (time.time(), dead_db))
+        mc.commit()
+        mc.close()
+        r = subprocess.run([sys.executable, "-m", "isilon_usage", "scan", root, "--data-dir", data],
+                           capture_output=True, text=True, cwd=os.path.dirname(HERE), timeout=120)
+        assert r.returncode == 0, (r.returncode, r.stderr[-400:])
+        # CCCC3 CLI resume 도 같은 루트를 다른 스캔이(살아 있게) 돌리는 중이면 거부
+        mc = DB.connect(M.manager_db_path(data))
+        mc.execute("INSERT INTO scans(db_path, db_filename, root_path, status, phase, started_at, updated_at) "
+                   "VALUES(?,?,?,?,?,?,?)", (os.path.join(data, "live.db"), "live.db", root, "discovering",
+                                            "discovering", time.time(), time.time()))
+        mc.execute("UPDATE scans SET status='paused', phase='paused' WHERE db_path=?", (dead_db,))
+        paused_id = mc.execute("SELECT id FROM scans WHERE db_path=?", (dead_db,)).fetchone()[0]
+        mc.commit()
+        mc.close()
+        r = subprocess.run([sys.executable, "-m", "isilon_usage", "resume", str(paused_id), "--data-dir", data],
+                           capture_output=True, text=True, cwd=os.path.dirname(HERE), timeout=120)
+        assert r.returncode == 2 and "중복" in r.stderr, (r.returncode, r.stderr[-400:])
     finally:
         shutil.rmtree(d, ignore_errors=True)
-    print("[CCCC1] OK  CLI scan 도 서버와 같은 중복 스캔 거부")
+    print("[CCCC1~CCCC3] OK  CLI scan·resume 도 서버와 같은 중복 스캔 거부·죽은 스캔의 잔여 상태는 막지 않음")
 
 
 def _mark_many(x, code):
