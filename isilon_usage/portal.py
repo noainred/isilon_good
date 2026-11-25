@@ -1888,7 +1888,8 @@ class PortalController:
             code_dir = upgrademod.code_dir_of(__file__)
             dest = os.path.join(self.data_dir, "upgrades")
             src = self.settings.get("upgrade_url") or upgrademod.DEFAULT_UPGRADE_BASE
-            self._upg_log("① 최신 코드 내려받는 중… (%s)" % src)
+            # 주소의 계정·토큰은 가려 기록 — 이력 파일·로그인 없는 이력 조회에 그대로 남았다(35회차 보안 점검)
+            self._upg_log("① 최신 코드 내려받는 중… (%s)" % netutil.mask_url_secret(src))
             res = upgrademod.upgrade_from_remote(
                 self.settings.get("upgrade_url") or "", code_dir, __version__, dest,
                 token=self.settings.get("upgrade_token") or None)
@@ -4208,8 +4209,11 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self._send_json(c.upgrade_status())
                 return
             if path == "/api/portal/upgrade/history":   # 업그레이드 기록(자동/수동/푸시 + 세부)
-                self._send_json({"ok": True, "events": c.upgrade_history(100),
-                                 "version": __version__})
+                # 이미 파일에 남은 옛 기록의 비밀도 내보낼 때 가린다(주소 모양·저장된 비밀 조각)
+                self._send_json({"ok": True, "version": __version__,
+                                 "events": netutil.redact_values(
+                                     netutil.redact_urls(c.upgrade_history(100)),
+                                     netutil.secret_values(c.settings.get("upgrade_url"), c.settings.get("upgrade_token")))})
                 return
             if path == "/api/portal/ping-history":
                 qs = parse_qs(urlparse(self.path).query)

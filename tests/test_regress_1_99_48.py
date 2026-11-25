@@ -3970,7 +3970,10 @@ def check_cq_round35_regress() -> None:
         m = NU.mask_url_secret(u)
         assert "1234" not in m and NU.keep_masked(m, u) == u, (u, m)
     assert NU.mask_url_secret("https://서버.kr/x?u=a@b.com") == "https://서버.kr/x?***"
-    print("[SSS1~SSS6] OK  즉시 복제 백오프·가장 가까운 바깥 루트 겹침 보정(바이트·파일)·접힘/깊이 구분·설정 뒤로 가기·숫자 비밀번호·IDN")
+    # SSS7 포탈 업그레이드 이력(로그인 없이 조회)에 업그레이드 주소의 비밀번호·토큰이 그대로(35회차 보안 점검)
+    src = _read("portal.py")
+    assert '% netutil.mask_url_secret(src))' in src and "netutil.redact_urls(c.upgrade_history(100))" in src
+    print("[SSS1~SSS7] OK  즉시 복제 백오프·가장 가까운 바깥 루트 겹침 보정(바이트·파일)·접힘/깊이 구분·설정 뒤로 가기·숫자 비밀번호·IDN")
 
 
 def _mark_many(x, code):
