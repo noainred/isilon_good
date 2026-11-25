@@ -1989,8 +1989,18 @@ class PortalController:
         if not n:
             return {"ok": False, "reason": "id 와 url 은 필수입니다(id 에 '/'·'..' 불가)."}
         token_dropped = False
+        dup_warn = None
         with self._lock:
             cur = self._get(n["id"])
+            # 같은 엣지(호스트:포트)를 다른 이름으로 또 등록하면 알린다(합계는 현황에서 한 번만 센다 — 35회차 점검).
+            # 원격 구성의 '이름 바꿔 다시 등록' 흐름이 있어 막지는 않는다.
+            _ek = self._edge_key(n["url"])
+            dup_warn = None
+            if _ek and (cur is None or self._edge_key(cur.get("url")) != _ek):
+                _other = next((x for x in self.nodes if x.get("id") != n["id"] and self._edge_key(x.get("url")) == _ek), None)
+                if _other is not None:
+                    dup_warn = ("같은 엣지(%s)가 이미 '%s' 로 등록돼 있습니다 — 합계에는 한 번만 셉니다. "
+                                "중복이면 하나를 지우세요." % (_ek, _other["id"]))
             if cur is not None and isinstance(raw, dict) and raw.get("create_only") is True:
                 # 화면의 '새 노드'로 같은 이름을 저장하면 기존 노드의 주소·지역을 말없이 덮어써, 그 노드의 토큰이 다른
                 # 엣지로 가 인증 오류·오프라인이 났다(19회차 점검) — 고치려면 목록에서 그 노드를 골라 수정한다.
@@ -2022,6 +2032,8 @@ class PortalController:
                 self.nodes.append(n)
             self._save()
         out = {"ok": True, "node": _public_node(n, self._cache)}
+        if dup_warn:
+            out["warning"] = dup_warn
         if token_dropped:
             out["token_dropped"] = True
             out["note"] = "주소의 호스트가 바뀌어 저장된 API 토큰을 지웠습니다 — 새 엣지의 토큰을 입력하세요."
@@ -2911,19 +2923,26 @@ class PortalController:
         active = 0
         out_nodes = []
         running_all = []   # 전체 엣지의 진행 중 스캔(노드·경로·진행·끝날 예상 시각) — 포탈 현황 '진행 중인 스캔' 표
+        seen_edges: dict = {}   # 같은 엣지(호스트:포트)를 다른 이름으로 또 등록하면 합계에 두 번 들어갔다(35회차 점검) — 처음 것만 센다
         for n in nodes_snapshot:
             try:
                 c = cache.get(n["id"], {})
                 ov = c.get("overall") or {}
                 used = _ov_capacity(ov)
                 st = int(ov.get("root_count") or 0)
+                _ek = self._edge_key(n.get("url"))
+                dup_of = seen_edges.get(_ek) if _ek else None
+                if _ek and dup_of is None:
+                    seen_edges[_ek] = n["id"]
+                if dup_of is not None:
+                    used = st = 0
                 # 비활성(운영자가 끈) 노드는 폴링하지 않아 캐시가 옛 값으로 남는다 — 온라인·진행 중으로 세지 않는다
                 # (예전엔 끄기 전에 받은 '스캔 중'이 다시 켤 때까지 합계·진행 목록에 남았다, 2026-11 연동 점검)
                 is_on = bool(c.get("online")) and bool(n.get("enabled", True))
                 if is_on:
                     online += 1
                     # 끊긴 노드의 '진행 중'은 끊기기 전 옛 값 — 합계·진행 표·완료 예상에 넣지 않는다(표와 KPI 일치)
-                    active += int(ov.get("active_scans") or 0)
+                    active += 0 if dup_of is not None else int(ov.get("active_scans") or 0)
                 total_used += used
                 storages += st
                 reg = n.get("region") or "(미지정)"
@@ -2934,7 +2953,7 @@ class PortalController:
                 roots_l = [self._edge_to_portal_clock(self._with_eta(rt, c.get("ts"), c.get("edge_now")),
                                                       c.get("ts"), c.get("edge_now"))
                            for rt in (ov.get("roots") or [])]
-                if is_on:
+                if is_on and dup_of is None:
                     for rt in roots_l:
                         if rt.get("status") in ("discovering", "sizing"):
                             running_all.append({
@@ -2950,12 +2969,14 @@ class PortalController:
                 last_scan = max([0] + [max(rt.get("finished_at") or 0, rt.get("updated_at") or 0)
                                        for rt in roots_l])     # 그 DC 가 마지막으로 스캔한 시각
                 fs_total, fs_used, fs_free, fs_pct = self._fs_capacity(roots_l)
-                total_fs_total += fs_total
-                total_fs_used += fs_used
-                r["fs_used_bytes"] += fs_used      # 지역별 디스크 사용량/전체 용량 집계
-                r["fs_total_bytes"] += fs_total
+                if dup_of is None:
+                    total_fs_total += fs_total
+                    total_fs_used += fs_used
+                    r["fs_used_bytes"] += fs_used      # 지역별 디스크 사용량/전체 용량 집계
+                    r["fs_total_bytes"] += fs_total
                 out_nodes.append({
                     "id": n["id"], "region": n.get("region"), "url": n["url"],
+                    "duplicate_of": dup_of,     # 같은 엣지를 먼저 등록한 노드(있으면 합계에서 뺌)
                     "enabled": n.get("enabled"), "online": is_on,
                     "version": c.get("version"), "hostname": c.get("hostname"),
                     "last_poll": n.get("last_poll"), "last_ok": n.get("last_ok"), "last_sync": n.get("last_sync"),
@@ -4221,6 +4242,8 @@ class PortalHandler(BaseHTTPRequestHandler):
                     rng = int(qs.get("range", ["86400"])[0])
                 except (TypeError, ValueError, OverflowError):
                     rng = 86400
+                # 1분 ~ 2년으로 — 아주 큰 값이 SQLite 정수 범위를 넘어 원시 예외 문구를 돌려줬다(35회차 점검)
+                rng = max(60, min(2 * 366 * 86400, rng))
                 self._send_json(c.ping_history(rng))
                 return
             if path == "/api/portal/browse":

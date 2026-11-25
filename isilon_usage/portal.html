@@ -1505,11 +1505,16 @@ function capCell(used,total){
 }
 function show(v){
   if(v==="nodes" && !_opLoggedIn()){   // 설정 진입 = 인증(비밀번호가 없으면 처음 만들기) — 취소하면 그대로
-    ensureSettingsAuth().then(ok=>{ if(ok) show("nodes"); });
+    ensureSettingsAuth().then(ok=>{ if(ok){ show("nodes"); return; }
+      // 취소하면 주소를 지금 화면으로 되돌린다 — '#nodes' 로 남아 뒤로/앞으로가 설정에서 맴돌지 않게(35회차)
+      const cur=["dash","compare","netmon"].find(n=>$("view-"+n) && $("view-"+n).classList.contains("active")) || "dash";
+      try{ history.replaceState(null,"","#"+cur); }catch(e){} });
     return;
   }
   ["dash","compare","nodes","netmon"].forEach(n=>$("view-"+n).classList.toggle("active", n===v));
-  try{ if(location.hash!=="#"+v) history.replaceState(null,"","#"+v); }catch(e){}   // 새로고침해도 같은 화면(32회차)
+  // 화면마다 기록(뒤로/앞으로 — 35회차 점검: 뒤로 누르면 포탈을 떠났다). 새로고침해도 같은 화면(32회차)
+  try{ if(location.hash!=="#"+v){ if(window._pViewReplace) history.replaceState(null,"","#"+v); else history.pushState(null,"","#"+v); } }catch(e){}
+  window._pViewReplace=false;
   if(v==="compare") loadCompare();
   if(v==="netmon") netmonStart(); else netmonStop();
   document.querySelectorAll(".navbtn").forEach(b=>b.classList.toggle("active", b.dataset.view===v));
@@ -1553,7 +1558,16 @@ function applyNavHidden(hidden){
 }
 // 첫 화면: 주소의 #화면 이름(새로고침·즐겨찾기) — 없으면 현황
 (function(){ const h=(location.hash||"").slice(1);
-  if(["dash","compare","netmon","nodes"].includes(h)) setTimeout(()=>{ try{ show(h); }catch(e){} }, 0); })();   // nodes 는 로그인 확인 뒤(33회차)
+  // nodes 는 인증 상태를 먼저 받은 뒤 — 받기 전엔 '비밀번호 없음'으로 보여 로그인 대신 '새 비밀번호 만들기'가 떴다(35회차 점검)
+  if(h==="nodes") loadAuth().then(()=>{ window._pViewReplace=true; try{ show(h); }catch(e){} });
+  else if(["dash","compare","netmon"].includes(h)) setTimeout(()=>{ window._pViewReplace=true; try{ show(h); }catch(e){} }, 0); })();
+// 주소의 #화면 이 바뀌면(주소창 입력·뒤로/앞으로) 그 화면으로 — 예전엔 주소만 바뀌고 화면은 그대로였다(35회차 점검)
+function _pOnHash(){ const h=(location.hash||"").slice(1);
+  if(!["dash","compare","netmon","nodes"].includes(h)) return;
+  const cur=["dash","compare","nodes","netmon"].find(n=>$("view-"+n) && $("view-"+n).classList.contains("active"));
+  if(cur!==h){ window._pViewReplace=true; show(h); } }
+window.addEventListener("hashchange", _pOnHash);
+window.addEventListener("popstate", _pOnHash);
 function renderNavMenu(hidden){
   const box=$("navMenuBox"); if(!box) return;
   const hset=new Set(hidden||[]);
@@ -2442,7 +2456,7 @@ $("addBtn").addEventListener("click", async ()=>{
   const b=$("addBtn"); if(b.disabled) return; b.disabled=true; $("nodeMsg").textContent="저장 중…";
   try{
     const j = await (await fetch("/api/portal/nodes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(pl)})).json();
-    $("nodeMsg").textContent = j.ok ? ("✓ 저장됨" + (j.note ? (" — ⚠ " + j.note) : "")) : ("실패: "+(j.reason||""));
+    $("nodeMsg").textContent = j.ok ? ("✓ 저장됨" + (j.note ? (" — ⚠ " + j.note) : "") + (j.warning ? (" — ⚠ " + j.warning) : "")) : ("실패: "+(j.reason||""));
     if(j.ok){ _selNode=pl.id; loadNodes(); loadOverview(); }
   }catch(e){ $("nodeMsg").textContent="실패: 포탈에 연결할 수 없습니다 ("+e+")"; }
   finally{ b.disabled=false; }
@@ -2467,7 +2481,9 @@ $("ndDelBtn").addEventListener("click", async ()=>{
 });
 $("ndSyncBtn").addEventListener("click", async ()=>{
   const id=_selNode; const b=$("ndSyncBtn"); if(!id || b.disabled) return; b.disabled=true; b.textContent="가져오는 중…";
-  try{ await fetch("/api/portal/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})}); }
+  // 결과를 보여 준다 — 예전엔 응답을 버려, 앞선 연결 테스트 실패 문구가 성공 뒤에도 남았다(35회차 점검)
+  try{ const j=await (await fetch("/api/portal/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})})).json();
+    $("nodeMsg").textContent = (j && j.ok!==false) ? "✓ 가져오기를 시작했습니다(잠시 뒤 목록이 갱신됩니다)" : ("실패: "+((j&&(j.reason||j.error))||"알 수 없는 오류")); }
   catch(e){ $("nodeMsg").textContent="실패: 포탈에 연결할 수 없습니다 ("+e+")"; }
   setTimeout(()=>{ b.disabled=false; b.textContent="지금 가져오기"; loadNodes(); loadOverview(); },1500);
 });

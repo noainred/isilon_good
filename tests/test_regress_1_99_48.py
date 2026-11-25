@@ -3976,6 +3976,33 @@ def check_cq_round35_regress() -> None:
     print("[SSS1~SSS7] OK  즉시 복제 백오프·가장 가까운 바깥 루트 겹침 보정(바이트·파일)·접힘/깊이 구분·설정 뒤로 가기·숫자 비밀번호·IDN")
 
 
+def check_cr_round35_portal() -> None:
+    """TTT1 같은 엣지를 다른 이름으로 또 등록하면 포탈 합계·저장소·FS 가 두 배 TTT2 로그아웃 상태로 #nodes 를 열면 '새 비밀번호 만들기'
+    TTT3 주소의 #화면 을 바꿔도 화면 그대로·뒤로 가면 포탈을 떠남 TTT4 '지금 가져오기' 결과 표시 없음 TTT5 핑 범위 거대값 원시 예외."""
+    from isilon_usage import portal as P
+    d = tempfile.mkdtemp(prefix="iu_cr_")
+    try:
+        pc = P.PortalController(os.path.join(d, "hq"))
+        assert pc.upsert_node({"id": "dc-a", "url": "http://10.0.0.9:8765", "token": "t"})["ok"]
+        r = pc.upsert_node({"id": "dc-a2", "url": "http://10.0.0.9:8765/", "token": "t"})
+        assert r["ok"] and "같은 엣지" in r.get("warning", ""), r                                          # TTT1
+        ov_edge = {"total_capacity_bytes": 1000, "root_count": 2, "roots": [], "active_scans": 0}
+        for nid in ("dc-a", "dc-a2"):
+            pc._cache[nid] = {"online": True, "overall": ov_edge}
+        ov = pc.overview()
+        assert ov["totals"]["used_bytes"] == 1000 and ov["totals"]["storages"] == 2, ov["totals"]
+        dup = [n for n in ov["nodes"] if n["id"] == "dc-a2"][0]
+        assert dup.get("duplicate_of") == "dc-a", dup
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    ph = _read("portal.html")
+    assert 'if(h==="nodes") loadAuth().then(' in ph                                                       # TTT2
+    assert 'window.addEventListener("hashchange", _pOnHash);' in ph and "history.pushState(null" in ph     # TTT3
+    assert "가져오기를 시작했습니다" in ph                                                                     # TTT4
+    assert "rng = max(60, min(2 * 366 * 86400, rng))" in _read("portal.py")                                # TTT5
+    print("[TTT1~TTT5] OK  같은 엣지 중복 합계 제외·경고·#nodes 로그인·주소 화면 이동/뒤로·가져오기 결과·핑 범위")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -4011,7 +4038,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bx_round28_regress, check_by_round28_install,
             check_bz_round28_dashboard, check_ca_round29_regress,
             check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress,
-            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine, check_cn_round34_regress, check_co_round34_multi, check_cp_round34_edge, check_cq_round35_regress]
+            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine, check_cn_round34_regress, check_co_round34_multi, check_cp_round34_edge, check_cq_round35_regress, check_cr_round35_portal]
 
 
 def main() -> int:
