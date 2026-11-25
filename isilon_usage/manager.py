@@ -255,6 +255,41 @@ def get_scan(conn, scan_id: int):
     return conn.execute("SELECT * FROM scans WHERE id=?", (scan_id,)).fetchone()
 
 
+def active_scan_on(data_dir: str, path: str, *, exclude=(), stale_secs: float = 900) -> Optional[int]:
+    """매니저 DB 에서 루트 path 를 지금 스캔 중인(진행 상태 + 최근 하트비트) 스캔 id — 서버 시작·CLI scan 이 같은
+    규칙을 쓴다(단일 정책, 40회차 점검: CLI 는 서버가 돌리는 루트를 또 스캔해 NAS 부하가 두 배였다).
+    심볼릭 링크로 가리킨 같은 트리도 같은 루트로 본다. 오래된(죽은) 진행 상태는 무시한다."""
+    path = os.path.abspath(path)
+
+    def _same(a):
+        a = os.path.abspath(a or "")
+        if a == path:
+            return True
+        try:
+            return os.path.realpath(a) == os.path.realpath(path)
+        except (OSError, ValueError):
+            return False
+    try:
+        mc = dbmod.connect(manager_db_path(data_dir))
+        try:
+            rows = [r for r in mc.execute(
+                "SELECT id, updated_at, root_path FROM scans "
+                "WHERE status IN ('discovering','sizing')").fetchall()
+                    if _same(dbmod.fs_text(r["root_path"]))]
+        finally:
+            mc.close()
+    except Exception:  # noqa: BLE001 — 매니저 DB 가 없으면(첫 실행) 중복도 없다
+        return None
+    now = time.time()
+    for r in rows:
+        sid = int(r["id"])
+        if sid in exclude:
+            continue
+        if now - float(r["updated_at"] or 0) < stale_secs:
+            return sid
+    return None
+
+
 def list_scans(conn, limit: int = 200) -> list:
     rows = conn.execute(
         "SELECT * FROM scans ORDER BY id DESC LIMIT ?", (limit,)

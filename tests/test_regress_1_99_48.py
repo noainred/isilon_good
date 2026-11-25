@@ -4423,6 +4423,34 @@ def check_cz_round40_regress() -> None:
     print("[BBBB1~BBBB3] OK  재개 시 옛 사유 지움·일시적 읽기 실패는 기억 안 함·확인 실패에도 상태 칸 유지")
 
 
+def check_da_round40_cli_dup() -> None:
+    """CCCC1 CLI scan 이 서버(다른 프로세스)가 스캔 중인 같은 루트를 또 스캔해 NAS 부하가 두 배 — 서버와 같은 규칙으로 거부."""
+    from isilon_usage import manager as M, db as DB
+    d = tempfile.mkdtemp(prefix="iu_da_")
+    try:
+        data, root = os.path.join(d, "data"), os.path.join(d, "tree")
+        os.makedirs(os.path.join(root, "a"))
+        M.init_manager(data)
+        mc = DB.connect(M.manager_db_path(data))
+        mc.execute("INSERT INTO scans(db_path, db_filename, root_path, status, phase, started_at, updated_at) "
+                   "VALUES(?,?,?,?,?,?,?)", (os.path.join(data, "x.db"), "x.db", root, "discovering", "discovering",
+                                            time.time(), time.time()))
+        mc.commit()
+        mc.close()
+        assert M.active_scan_on(data, root + "/") is not None
+        r = subprocess.run([sys.executable, "-m", "isilon_usage", "scan", root, "--data-dir", data],
+                           capture_output=True, text=True, cwd=os.path.dirname(HERE), timeout=120)
+        assert r.returncode == 2 and "중복" in r.stderr, (r.returncode, r.stderr[-300:])
+        mc = DB.connect(M.manager_db_path(data))
+        mc.execute("UPDATE scans SET updated_at=?", (time.time() - 3600,))   # 오래된(죽은) 진행 상태는 막지 않는다
+        mc.commit()
+        mc.close()
+        assert M.active_scan_on(data, root) is None
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    print("[CCCC1] OK  CLI scan 도 서버와 같은 중복 스캔 거부")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -4462,7 +4490,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_ct_round36_security, check_cu_round37_regress,
             check_cv_round37_flows, check_cw_round38_regress,
             check_cx_round38_flows, check_cy_round39_upgrade_notify,
-            check_cz_round40_regress]
+            check_cz_round40_regress, check_da_round40_cli_dup]
 
 
 def main() -> int:

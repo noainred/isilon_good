@@ -251,6 +251,13 @@ def cmd_scan(args: argparse.Namespace) -> int:
         print(f"오류: 디렉터리가 아닙니다: {path}", file=sys.stderr)
         return 2
 
+    # 같은 루트를 서버·다른 CLI 가 스캔 중이면 거부 — 서버 시작과 같은 규칙(40회차 점검: NAS 부하 두 배)
+    _dup = mgrmod.active_scan_on(os.path.abspath(args.data_dir), path)
+    if _dup is not None:
+        print(f"오류: 같은 경로를 스캔 #{_dup} 가 진행 중입니다(중복 스캔 방지) — 끝난 뒤 다시 하거나 "
+              f"멈춘 스캔은 resume 으로 이어 가세요.", file=sys.stderr)
+        return 2
+
     stop = threading.Event()
 
     def handle_sigint(signum, frame):

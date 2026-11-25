@@ -2481,25 +2481,9 @@ class ScanController:
                 if sid != exclude and _same(rec.get("path")):
                     return sid
             mine = set(self._scans.keys())
-        try:
-            mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
-            try:
-                rows = [r for r in mc.execute(
-                    "SELECT id, updated_at, root_path FROM scans "
-                    "WHERE status IN ('discovering','sizing')").fetchall()
-                        if _same(dbmod.fs_text(r["root_path"]))]
-            finally:
-                mc.close()
-        except Exception:  # noqa: BLE001 — 매니저 DB 가 없으면(첫 실행) 중복도 없다
-            return None
-        now = time.time()
-        for r in rows:
-            sid = int(r["id"])
-            if sid == exclude or sid in mine:
-                continue
-            if now - float(r["updated_at"] or 0) < self._DUP_STALE_SECS:
-                return sid
-        return None
+        # 다른 프로세스(CLI 등)의 스캔 — CLI scan 과 같은 함수(단일 정책, 40회차)
+        return mgrmod.active_scan_on(self.data_dir, path, exclude=mine | {exclude},
+                                     stale_secs=self._DUP_STALE_SECS)
 
     def start_scan(self, path: str, **kw) -> dict:
         """새 스캔을 시작한다. '중복 검사 → 등록 → 실행' 을 한 임계 구역에서 처리해, 동시 요청이
