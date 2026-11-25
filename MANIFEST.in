@@ -1,0 +1,7 @@
+include isilon_usage/dashboard.html
+include README.md
+include CHANGELOG.md
+include LICENSE
+include SECURITY.md
+include requirements.txt
+recursive-include docs *.md
