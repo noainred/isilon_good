@@ -4396,6 +4396,33 @@ def check_cy_round39_upgrade_notify() -> None:
     print("[AAAA1~AAAA4] OK  versions.json 형식 오류 사유·실패한 확인 표시·알림 사유와 자동 정지 알림·릴리스 화면 실제 서빙 버전")
 
 
+def check_cz_round40_regress() -> None:
+    """BBBB1 자동 정지 뒤 재개한 스캔을 사람이 멈춰도 옛 사유 때문에 '자동 중단(장애)' 알림 BBBB2 권한 문제로 읽지 못한
+    묶음을 손상으로 기억해 고쳐도 계속 건너뜀 BBBB3 실패한 업그레이드 확인이 상태 칸을 '불러올 수 없습니다'로 지움."""
+    from isilon_usage import portal as P
+    src, scn = _read("server.py"), _read("scanner.py")
+    assert "paused_by=None, finished_at=None, error=None)" in src                                          # BBBB1
+    assert 'elif self._status != "error":' in scn and 'elif status != "error":   # 재개해 끝났거나' in scn
+    d = tempfile.mkdtemp(prefix="iu_cz_")                                                                  # BBBB2
+    try:
+        good = os.path.join(os.path.dirname(HERE), "download", "isilon_usage-1.99.48.tar.gz")
+        dst = os.path.join(d, "isilon_usage-1.99.48.tar.gz")
+        shutil.copy(good, dst)
+        import isilon_usage.upgrade as U
+        orig = U.read_package_members
+        U.read_package_members = lambda p: (_ for _ in ()).throw(PermissionError(13, "denied"))
+        try:
+            assert P.newest_release_archive(d) is None
+        finally:
+            U.read_package_members = orig
+        assert P.newest_release_archive(d) == dst        # 고친 뒤 바로(기억된 실패 없음)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert "renderUpgrade(Object.assign({}, j, {ok: true}));" in _read("dashboard.html")                # BBBB3
+    assert "renderNetUpg(Object.assign({}, j, {ok:true}));" in _read("portal.html")
+    print("[BBBB1~BBBB3] OK  재개 시 옛 사유 지움·일시적 읽기 실패는 기억 안 함·확인 실패에도 상태 칸 유지")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -4434,7 +4461,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine, check_cn_round34_regress, check_co_round34_multi, check_cp_round34_edge, check_cq_round35_regress, check_cr_round35_portal, check_cs_round36_regress,
             check_ct_round36_security, check_cu_round37_regress,
             check_cv_round37_flows, check_cw_round38_regress,
-            check_cx_round38_flows, check_cy_round39_upgrade_notify]
+            check_cx_round38_flows, check_cy_round39_upgrade_notify,
+            check_cz_round40_regress]
 
 
 def main() -> int:

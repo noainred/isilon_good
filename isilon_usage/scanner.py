@@ -739,10 +739,12 @@ class Scanner:
             fields["active_elapsed"] = self._elapsed_accum   # 남은 시간 추정용 활성 시간(일시정지 갭 제외)
             if getattr(self, "_sizing_from", None) is not None:
                 fields["sizing_from_active"], fields["sizing_from_processed"] = self._sizing_from
-            if self._status == "done":
-                fields["error"] = None           # 오류로 멈췄다 재개해 끝난 스캔에 옛 오류 문구가 남지 않게(20회차 점검)
-            elif getattr(self, "_stop_reason", None):
+            if getattr(self, "_stop_reason", None):
                 fields["error"] = self._stop_reason   # 정지 사유(디스크 부족 등)를 관리 DB 에도 — CLI·화면이 보게(26회차 점검)
+            elif self._status != "error":
+                # 완료·진행·사람이 멈춘 경우엔 지난 사유를 지운다(20회차: 완료에 옛 오류 · 40회차: 재개 뒤 사람이 멈춘 것이
+                # 옛 사유 때문에 '자동 중단(장애)' 알림으로 나갔다)
+                fields["error"] = None
             if finished:
                 fields["finished_at"] = time.time()
             elif self._clear_finished:
@@ -1208,7 +1210,7 @@ class Scanner:
         )
         if self._stop_reason:   # 디스크 부족 등으로 자동 정지된 경우 사유 기록
             fields["error"] = self._stop_reason
-        elif status == "done":   # 재개해 끝났으면 지난 정지 사유(DB 크기 초과 등)를 지운다(23회차 점검: 완료인데 옛 사유가 남음)
+        elif status != "error":   # 재개해 끝났거나 사람이 멈췄으면 지난 정지 사유를 지운다(23·40회차 점검)
             fields["error"] = None
         dbmod.update_run(conn, self.run_id, **fields)
         conn.commit()

@@ -3034,8 +3034,9 @@ class ScanController:
         # 화면엔 '일시정지'로 보이고 active_scans(포탈 집계)에서도 빠진다(스캐너가 곧 정확히 갱신).
         try:
             mc = dbmod.connect(mgrmod.manager_db_path(self.data_dir))
+            # 지난 정지·오류 사유도 지운다 — 남으면 재개 뒤 사람이 멈춘 것까지 '자동 중단(장애)' 알림이 갔다(40회차 점검)
             mgrmod.update_scan(mc, scan_id, status="discovering", phase="discovering",
-                               paused_by=None, finished_at=None)
+                               paused_by=None, finished_at=None, error=None)
             mc.commit(); mc.close()
         except Exception:
             pass

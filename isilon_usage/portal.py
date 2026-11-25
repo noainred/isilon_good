@@ -563,18 +563,23 @@ def newest_release_archive(release_dir: str, verify: bool = True):
     for p in cands:
         try:
             st = os.stat(p)
-            key = (p, st.st_size, st.st_mtime_ns)
+            key = (p, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
         except OSError:
             continue
         ok = _REL_VERIFIED.get(key)
         if ok is None:   # (경로·크기·수정 시각) 같으면 다시 풀지 않는다 — 엣지 여럿이 받을 때마다 매번 풀었다(39회차)
+            transient = False
             try:
                 ok = bool(_upg.members_version(_upg.read_package_members(p)))
+            except OSError as _e:    # 권한·일시적 I/O — 고친 뒤 바로 다시 보도록 기억하지 않는다(40회차 점검)
+                import gzip as _gz       # (깨진 gzip 머리 BadGzipFile 도 OSError 지만 내용 손상이라 기억한다)
+                ok, transient = False, not isinstance(_e, _gz.BadGzipFile)
             except Exception:  # noqa: BLE001 — 손상·잘림·형식 오류는 건너뛴다
                 ok = False
-            if len(_REL_VERIFIED) > 256:
-                _REL_VERIFIED.clear()
-            _REL_VERIFIED[key] = ok
+            if not transient:
+                if len(_REL_VERIFIED) > 256:
+                    _REL_VERIFIED.clear()
+                _REL_VERIFIED[key] = ok
         if ok:
             return p
     return None

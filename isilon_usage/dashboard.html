@@ -5678,7 +5678,7 @@ $("upgCheckBtn").addEventListener("click", async () => {
   try {
     const j = await (await fetch("/api/upgrade/check", {method: "POST",
       headers: {"Content-Type": "application/json"}, body: "{}"})).json();
-    renderUpgrade(j);
+    renderUpgrade(Object.assign({}, j, {ok: true}));   // 확인 실패여도 상태 칸은 그린다(실패는 아래 문구, 40회차)
     if (!j.ok) { $("upgMsg").innerHTML = '<span class="err">확인 실패: ' + escHtml(String(j.error || j.check_error || j.reason || "알 수 없음")) + '</span>'; return; }
     $("upgMsg").textContent = j.available ? "새 버전이 있습니다." : "최신입니다.";
   } catch (e) { $("upgMsg").innerHTML = '<span class="err">확인 오류: ' + escHtml(String(e)) + '</span>'; }
