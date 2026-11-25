@@ -462,10 +462,13 @@ def _public_node(n: dict, cache: dict, rep_err: Optional[dict] = None) -> dict:
     out = dict(n)
     out["token"] = ""
     out["token_set"] = bool(n.get("token"))
+    # 노드 주소 속 비밀(계정·쿼리 토큰)도 가린다 — 로그인 없이 보이는 노드 목록·현황에 그대로 나갔다(36회차 보안 점검).
+    # 가린 주소를 그대로 저장하면 upsert_node 가 원래 주소로 되돌린다.
+    out["url"] = netutil.mask_url_secret(n.get("url") or "")
     out["online"] = bool(c.get("online")) and bool(n.get("enabled", True))   # 비활성 노드의 캐시는 옛 값
     out["version"] = c.get("version")
     out["hostname"] = c.get("hostname")
-    out["error"] = n.get("last_error") or c.get("error") or (rep_err or {}).get(n["id"], "")
+    out["error"] = netutil.redact_urls(n.get("last_error") or c.get("error") or (rep_err or {}).get(n["id"], ""))
     out["active_scans"] = int(ov.get("active_scans") or 0) if out["online"] else 0   # 지금 스캔 중인 개수(끊긴 노드는 옛 값이라 0)
     out["scanning"] = out["active_scans"] > 0
     out["used_bytes"] = _ov_capacity(ov)
@@ -791,6 +794,7 @@ class PortalController:
             self._op_password_now,          # 서버 명령(reset-password --portal)이 바꾼 비밀번호도 바로 반영
             ttl=lambda: float(self.settings.get("op_ttl_minutes", 30) or 30) * 60)
         self._enroll_limit = authmod.FailLimiter(max_fails=5, lockout=60.0)   # enroll_token 추측 방지(IP별)
+        self._export_limit = authmod.FailLimiter(max_fails=10, lockout=60.0)  # export_token 추측 방지(IP별, 36회차)
         self._last_upgrade_check = 0.0
         self._init_ping_db()
         self._init_throughput_db()
@@ -1807,7 +1811,14 @@ class PortalController:
         return out[:max(1, int(limit or 100))]
 
     # --- 인터넷 자동 업그레이드 상태/조작(엣지와 동일 + 엣지 전파) ---
+    def _upg_redact(self, text):
+        """업그레이드 로그·오류의 설정 URL·토큰 비밀값을 저장할 때 가린다(36회차 보안 점검)."""
+        s = self.settings or {}
+        return netutil.redact_values(netutil.redact_urls(text),
+                                     netutil.secret_values(s.get("upgrade_url"), s.get("upgrade_token")))
+
     def _upg_log(self, msg: str) -> None:
+        msg = self._upg_redact(msg)
         with self._lock:
             self._upg_state.setdefault("log", []).append({"t": time.time(), "msg": msg})
             self._upg_state["log"] = self._upg_state["log"][-60:]
@@ -1817,7 +1828,7 @@ class PortalController:
             self._upg_state.update({
                 "last_check": info.get("checked_at"), "latest": info.get("latest"),
                 "available": bool(info.get("available")), "source": info.get("source"),
-                "size_bytes": info.get("size_bytes"), "check_error": info.get("error")})
+                "size_bytes": info.get("size_bytes"), "check_error": self._upg_redact(info.get("error"))})
 
     def upgrade_status(self) -> dict:
         with self._lock:
@@ -1982,6 +1993,12 @@ class PortalController:
                 base = {k: v for k, v in cur0.items() if k != "token"}   # 토큰 승계 규칙은 아래에서
                 base.update({k: v for k, v in raw.items() if v not in (None, "")})
                 raw = base
+        if isinstance(raw, dict) and isinstance(raw.get("url"), str):
+            _c0 = self._get(str(raw.get("id") or "").strip())
+            if _c0 is not None:      # 화면이 받은 가린 주소를 그대로 보내면 원래 주소로(36회차)
+                raw = dict(raw, url=netutil.keep_masked(raw["url"], _c0.get("url")))
+                if netutil.is_masked_leftover(raw["url"], _c0.get("url")):
+                    return {"ok": False, "reason": "가려진(***) 주소의 일부만 바꿀 수 없습니다 — 주소 전체를 다시 입력하세요."}
         bad = node_input_error(raw, self._get(str(raw.get("id") or "").strip()) if isinstance(raw, dict) else None)
         if bad:
             return {"ok": False, "reason": bad}
@@ -2986,7 +3003,7 @@ class PortalController:
                     r["fs_used_bytes"] += fs_used      # 지역별 디스크 사용량/전체 용량 집계
                     r["fs_total_bytes"] += fs_total
                 out_nodes.append({
-                    "id": n["id"], "region": n.get("region"), "url": n["url"],
+                    "id": n["id"], "region": n.get("region"), "url": netutil.mask_url_secret(n["url"]),
                     "duplicate_of": dup_of,     # 같은 엣지를 먼저 등록한 노드(있으면 합계에서 뺌)
                     "enabled": n.get("enabled"), "online": is_on,
                     "version": c.get("version"), "hostname": c.get("hostname"),
@@ -3006,7 +3023,7 @@ class PortalController:
                     "storage": netutil.redact_urls(c.get("storage") or []),
                 })
             except Exception as exc:  # noqa: BLE001 — 노드 하나의 이상 값이 전체 화면을 멈추지 않게
-                out_nodes.append({"id": n.get("id"), "region": n.get("region"), "url": n.get("url"),
+                out_nodes.append({"id": n.get("id"), "region": n.get("region"), "url": netutil.mask_url_secret(n.get("url") or ""),
                                   "enabled": n.get("enabled"), "online": False, "roots": [],
                                   "storage": [], "isilon": {"configured": False},
                                   "last_error": "집계 오류: %s" % exc})
@@ -3129,12 +3146,21 @@ class PortalController:
                 "show_update_popup": self.settings.get("show_update_popup"),
                 "log_popup_pos": self.settings.get("log_popup_pos", "center")}
 
-    def export_token_ok(self, given) -> bool:
-        """export_token 이 설정돼 있으면 일치해야 True(미설정이면 공개=True)."""
+    def export_token_ok(self, given, client=None) -> bool:
+        """export_token 이 설정돼 있으면 일치해야 True(미설정이면 공개=True).
+        접속 IP별 연속 실패 잠금 — 횟수 제한 없이 추측할 수 있었다(36회차 보안 점검)."""
         tok = (self.settings.get("export_token") or "").strip()
         if not tok:
             return True
-        return authmod.secret_equal(given or "", tok)
+        key = str(client or "")
+        if self._export_limit.blocked(key):
+            return False
+        ok = authmod.secret_equal(given or "", tok)
+        if ok:
+            self._export_limit.succeeded(key)
+        elif given:
+            self._export_limit.failed(key)
+        return ok
 
     # --- 노드 응답시간(핑) ---
     def ping_nodes(self) -> dict:
@@ -3150,7 +3176,7 @@ class PortalController:
             nodes_snapshot = list(self.nodes)
 
         def _one(n):
-            entry = {"id": n["id"], "region": n.get("region"), "url": n["url"],
+            entry = {"id": n["id"], "region": n.get("region"), "url": netutil.mask_url_secret(n["url"]),
                      "online": False, "latency_ms": None, "error": ""}
             if not n.get("enabled"):
                 entry["error"] = "비활성"
@@ -4212,7 +4238,7 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/portal/usage":      # 외부 서버용 집계 사용량 API(읽기 전용 · export_token)
                 given = self.headers.get("X-Auth-Token") or (parse_qs(urlparse(self.path).query).get("token", [""])[0])
-                if not c.export_token_ok(given):
+                if not c.export_token_ok(given, self.client_address[0] if self.client_address else None):
                     self._send_json({"ok": False, "reason": "unauthorized"}, status=401)
                     return
                 self._send_json(c.usage_export())

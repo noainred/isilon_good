@@ -4032,6 +4032,78 @@ def check_cs_round36_regress() -> None:
     print("[UUU1~UUU3] OK  중복 엣지 대표 노드(켜짐·온라인·최근)·처음 주소 뒤로 가기·점 없는 호스트 숫자 비밀번호")
 
 
+def check_ct_round36_security() -> None:
+    """VVV1 쿼리·경로의 '@' 와 '#' 든 비밀번호가 주소 판정을 속여 비밀이 보임 VVV2 포탈 노드 주소(user:pw@)가 목록·현황에 그대로
+    VVV3 장비가 요청을 되돌려 보내면 저장소 상태 오류에 비밀번호·Basic 값 노출 VVV4 업그레이드 로그는 읽을 때만 가려
+    주소를 바꾸면 옛 비밀이 보임 VVV5 api_token·export_token 을 횟수 제한 없이 추측."""
+    import base64
+    from isilon_usage import portal as P, netutil as NU, server as SV
+    m = NU.mask_url_secret("https://svc:pa#ss@nas/?q=a@b.com&token=TOKVAL")                             # VVV1
+    assert "pa" not in m and "TOKVAL" not in m, m
+    m = NU.mask_url_secret("http://nas:8080/api/v1?q=a@b.com&token=TOKVAL")
+    assert m.startswith("http://nas:8080/api/v1") and "TOKVAL" not in m, m
+    for u in ("https://admin:pw12@nas01:8443/x", "http://nas:8080/p?token=TOKVAL"):
+        assert NU.keep_masked(NU.mask_url_secret(u), u) == u, u
+    d = tempfile.mkdtemp(prefix="iu_ct_")
+    try:
+        pc = P.PortalController(os.path.join(d, "hq"))                                                    # VVV2
+        pc.upsert_node({"id": "n1", "url": "http://svc:Secr3t@10.0.0.9:8765", "token": "t"})
+        shown = [n for n in pc.list_nodes()["nodes"] if n["id"] == "n1"][0]
+        ov = json.dumps(pc.overview())
+        assert "Secr3t" not in ov, ov[:300]
+        if shown is not None:
+            assert "Secr3t" not in json.dumps(shown), shown
+        masked = NU.mask_url_secret("http://svc:Secr3t@10.0.0.9:8765")
+        r = pc.upsert_node({"id": "n1", "url": masked, "token": "t"})
+        assert r.get("ok") is not False and pc._get("n1")["url"] == "http://svc:Secr3t@10.0.0.9:8765", (r, pc._get("n1"))
+        r = pc.upsert_node({"id": "n1", "url": masked.replace("10.0.0.9", "10.0.0.8"), "token": "t"})
+        assert r.get("ok") is False and pc._get("n1")["url"] == "http://svc:Secr3t@10.0.0.9:8765", r
+        # VVV5 export_token — 연속 실패하면 그 IP 만 잠기고 맞는 토큰도 잠시 거절
+        pc.settings["export_token"] = "rightTOKEN"
+        for _ in range(10):
+            assert not pc.export_token_ok("guess", "1.2.3.4")
+        assert not pc.export_token_ok("rightTOKEN", "1.2.3.4")
+        assert pc.export_token_ok("rightTOKEN", "5.6.7.8")
+        assert not pc.export_token_ok("", "9.9.9.9") and pc.export_token_ok("rightTOKEN", "9.9.9.9")
+        ec = SV.ScanController(os.path.join(d, "edge"))                                                   # VVV3
+        ec.settings.update({"isilon_user": "root", "isilon_password": "IsiPw99",
+                            "storage_arrays": [{"url": "https://a1", "user": "adm", "password": "ArrPw77"}]})
+        b64 = base64.b64encode(b"root:IsiPw99").decode()
+        ec._storage_status_raw = lambda force=False: [{"type": "isilon", "error": "echo: Authorization: Basic %s pw=IsiPw99 ArrPw77" % b64}]
+        out = json.dumps(ec.storage_status())
+        assert "IsiPw99" not in out and b64 not in out and "ArrPw77" not in out, out
+        ec.settings["upgrade_url"] = "https://dl:UpgPw55@mirror.example/rel?token=UPTOKEN1"               # VVV4
+        ec._upg_log("fetch failed https://dl:UpgPw55@mirror.example/rel?token=UPTOKEN1 (UPTOKEN1)")
+        ec._upg_set_check({"error": "401 for token UPTOKEN1"})
+        ec.settings["upgrade_url"] = ""
+        st = json.dumps(ec.upgrade_status())
+        assert "UpgPw55" not in st and "UPTOKEN1" not in st, st
+        pc.settings["upgrade_url"] = "https://dl:UpgPw55@mirror.example/rel?token=UPTOKEN1"
+        pc._upg_log("fetch failed (UPTOKEN1)")
+        pc._upg_set_check({"error": "401 for token UPTOKEN1"})
+        pc.settings["upgrade_url"] = ""
+        assert "UPTOKEN1" not in json.dumps(pc._upg_state), pc._upg_state
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    # VVV5 엣지 api_token — 핸들러 메서드를 직접 부른다
+    SV._TOKEN_LIMIT._fails.clear(); SV._TOKEN_LIMIT._locked.clear()
+
+    class _H:
+        client_address = ("7.7.7.7", 1)
+
+        def __init__(self, tok, given):
+            self.headers = {"X-Auth-Token": given}
+            self._current_settings = lambda: {"api_token": tok}
+    auth = SV.DashboardHandler._authorized
+    for _ in range(10):
+        assert not auth(_H("edgeTOK", "nope"), {})
+    assert not auth(_H("edgeTOK", "edgeTOK"), {})
+    h = _H("edgeTOK", "edgeTOK"); h.client_address = ("8.8.8.8", 1)
+    assert auth(h, {})
+    SV._TOKEN_LIMIT._fails.clear(); SV._TOKEN_LIMIT._locked.clear()
+    print("[VVV1~VVV5] OK  '@'·'#' 든 주소 가림·포탈 노드 주소 가림·장비 비밀번호(Basic) 가림·업그레이드 로그 저장 시 가림·토큰 추측 잠금")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -4067,7 +4139,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bx_round28_regress, check_by_round28_install,
             check_bz_round28_dashboard, check_ca_round29_regress,
             check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress,
-            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine, check_cn_round34_regress, check_co_round34_multi, check_cp_round34_edge, check_cq_round35_regress, check_cr_round35_portal, check_cs_round36_regress]
+            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine, check_cn_round34_regress, check_co_round34_multi, check_cp_round34_edge, check_cq_round35_regress, check_cr_round35_portal, check_cs_round36_regress,
+            check_ct_round36_security]
 
 
 def main() -> int:

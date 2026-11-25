@@ -1242,6 +1242,13 @@ class ScanController:
         s = self.settings or {}
         secrets = netutil.secret_values(s.get("isilon_url"), s.get("powerstore_url"),
                                         *[a.get("url") for a in (s.get("storage_arrays") or []) if isinstance(a, dict)])
+        # 장비 비밀번호(와 Basic 인증 값)도 — 요청을 되돌려 보내는 장비·프록시면 오류 문구에 실렸다(36회차 보안 점검)
+        secrets = sorted(set(secrets
+                             + netutil.credential_values(s.get("isilon_user"), s.get("isilon_password"))
+                             + netutil.credential_values(s.get("powerstore_user"), s.get("powerstore_password"))
+                             + [v for a in (s.get("storage_arrays") or []) if isinstance(a, dict)
+                                for v in netutil.credential_values(a.get("user"), a.get("password"))]),
+                         key=len, reverse=True)
         # 주소 모양이 아닌 오류 문구 속 조각(예: "nonnumeric port: 'PW'")까지 저장된 비밀로 찾아 가린다(33회차 보안 점검)
         return netutil.redact_values(netutil.redact_urls(self._storage_status_raw(force)), secrets)
 
@@ -1570,7 +1577,15 @@ class ScanController:
                 self._rate_stop.wait(60)
 
     # ----- 자동 업그레이드 상태/조작(인터넷 소스, 상세 표시용) -----
+    def _upg_redact(self, text):
+        """업그레이드 로그·오류에 실린 설정 URL·토큰의 비밀값을 '저장할 때' 가린다(36회차 보안 점검:
+        읽을 때만 가리면 주소를 바꾼 뒤엔 옛 비밀이 로그에 그대로 남아 보였다)."""
+        s = self.settings or {}
+        return netutil.redact_values(netutil.redact_urls(text),
+                                     netutil.secret_values(s.get("upgrade_url"), s.get("upgrade_token")))
+
     def _upg_log(self, msg: str) -> None:
+        msg = self._upg_redact(msg)
         with self._lock:
             self._upg_state.setdefault("log", []).append({"t": time.time(), "msg": msg})
             self._upg_state["log"] = self._upg_state["log"][-60:]
@@ -1582,7 +1597,7 @@ class ScanController:
                 "last_check": info.get("checked_at"), "latest": info.get("latest"),
                 "available": bool(info.get("available")), "source": info.get("source"),
                 "size_bytes": info.get("size_bytes"), "download_url": info.get("download_url"),
-                "check_error": info.get("error"),
+                "check_error": self._upg_redact(info.get("error")),
             })
 
     def upgrade_status(self) -> dict:
@@ -3542,6 +3557,9 @@ def _security_headers(h) -> None:
     h.send_header("Referrer-Policy", "same-origin")
 
 
+_TOKEN_LIMIT = authmod.FailLimiter(max_fails=10, lockout=60.0)   # api_token 추측 방지(IP별, 36회차)
+
+
 class DashboardHandler(BaseHTTPRequestHandler):
     # 연결 소켓 시간 제한(초) — 없으면 아무것도 안 보내는 연결 하나가 스레드·fd 를 끝없이 잡았다(20회차 점검: 400개 연결
     # → 스레드 404개가 65초 넘게 유지). 계산 시간에는 걸리지 않고, 받기/보내기가 이만큼 멈출 때만 연결을 끊는다.
@@ -3806,9 +3824,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if not tok:
             return True
         given = self.headers.get("X-Auth-Token") or (qs.get("token", [""])[0] or "")
+        # 접속 IP별 연속 실패 잠금 — 횟수 제한 없이 토큰을 추측할 수 있었다(36회차 보안 점검).
+        # 빈 토큰(토큰 없이 연 화면)은 추측이 아니므로 실패로 세지 않는다.
+        ip = self.client_address[0] if self.client_address else ""
+        if _TOKEN_LIMIT.blocked(ip):
+            return False
         # 바이트로 상수시간 비교 — 비-ASCII 토큰이 와도 compare_digest 가 TypeError(→500) 나지 않게.
-        return hmac.compare_digest(str(given).encode("utf-8", "ignore"),
-                                   str(tok).encode("utf-8", "ignore"))
+        ok = hmac.compare_digest(str(given).encode("utf-8", "ignore"),
+                                 str(tok).encode("utf-8", "ignore"))
+        if ok:
+            _TOKEN_LIMIT.succeeded(ip)
+        elif given:
+            _TOKEN_LIMIT.failed(ip)
+        return ok
 
     def _do_GET(self) -> None:
         self._last_scan_row = None

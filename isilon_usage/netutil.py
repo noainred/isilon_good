@@ -79,7 +79,7 @@ MASK = _MASK
 
 
 # 호스트[:포트] — 한글 등 국제화 도메인(IDN)도 받는다(35회차: '서버.kr/x?u=a@b.com' 의 호스트를 계정으로 오인)
-_HOST_RE = re.compile(r"^(\[[0-9A-Za-z:.%]+\]|[^\s@/?#:\[\]]+)(:\d{0,5})?$")
+_HOST_RE = re.compile(r"^(\[[0-9A-Za-z:.%]+\]|[^\s@/?#:\[\]&=;,'\"<>\\|`]+)(:\d{0,5})?$")   # 쿼리 글자(&=;)는 호스트가 아님(36회차)
 
 
 def _split_userinfo(s: str):
@@ -124,8 +124,8 @@ def mask_url_secret(u, hide_path: bool = False) -> str:
         return _MASK if (hide_path or "@" in s or "?" in s) else s
     m = re.match(r"([^/?#]*)(/[^?#]*)?", rest)
     host = m.group(1) if m else ""
-    if not host or re.search(r"\s", host):
-        return _MASK                        # 호스트를 못 읽으면(공백 등) 통째로
+    if not host or not _HOST_RE.match(host):
+        return _MASK                        # 호스트를 못 읽으면(공백·쿼리 글자 등) 통째로 — 토큰이 호스트 자리로 새지 않게(36회차)
     path = (m.group(2) or "") if m else ""
     out = scheme + "://" + (_MASK + "@" if ui is not None else "") + host
     if hide_path and path.strip("/"):
@@ -182,10 +182,29 @@ def secret_values(*urls_or_tokens) -> list:
             if len(pw) >= 4:
                 out.append(ui)
                 out.append(pw)
+                # 라이브러리 오류 문구는 비밀번호를 '/'·'?'·'#' 앞에서 잘라 'nonnumeric port: PW앞부분' 으로 싣는다(36회차 보안 점검)
+                _pre = re.split(r"[/?#]", pw, maxsplit=1)[0]
+                if len(_pre) >= 4 and _pre != pw:
+                    out.append(_pre)
         for _k, val in parse_qsl(p.query, keep_blank_values=False):
             if len(val) >= 4 and re.search(r"(token|key|pass|secret|sig|auth|cred|session|code)", _k, re.I):
                 out.append(val)
     return sorted(set(out), key=len, reverse=True)
+
+
+def credential_values(user, password) -> list:
+    """장비 계정의 비밀 조각 — 비밀번호 그대로와 Basic 인증 머리글 값(base64(user:pw)).
+    장비가 요청을 그대로 되돌려 보내면 오류 문구에 실렸다(36회차 보안 점검)."""
+    import base64
+    pw = str(password or "")
+    if len(pw) < 4:
+        return []
+    out = [pw]
+    try:
+        out.append(base64.b64encode(("%s:%s" % (user or "", pw)).encode("utf-8")).decode("ascii"))
+    except Exception:  # noqa: BLE001
+        pass
+    return out
 
 
 def redact_values(obj, secrets):
