@@ -563,6 +563,8 @@ def _ver_tuple(v):
 def _poll_error_msg(exc) -> str:
     """노드 폴링 예외를 운영자가 바로 고칠 수 있는 안내 문구로 바꾼다(원시 'HTTP Error 401' 대신)."""
     code = getattr(exc, "code", None)
+    if code == 429:
+        return "잠김(429): 토큰 인증 실패가 반복돼 엣지가 이 주소를 잠시 잠갔습니다(약 1분 뒤 풀림) — 토큰을 확인하세요."
     if code == 401:
         return ("토큰 불일치(401): 엣지의 api_token 과 포탈에 저장된 이 노드의 토큰이 다릅니다. "
                 "엣지에서 설치 한 줄에 --hq 를 붙여 재등록하거나, '노드 관리'에서 토큰을 엣지 값과 맞추세요.")
@@ -2254,6 +2256,8 @@ class PortalController:
         nid = str(raw.get("id") or "").strip()
         n = self._get(nid) if nid else None
         url = str(raw.get("url") or "").strip()
+        if n and url:   # 화면의 가려진(***) 주소를 그대로 보내면 저장된 주소로(37회차 점검: '***@host' 로 접속을 시도했다)
+            url = netutil.keep_masked(url, n.get("url"))
         # 저장·폴링과 같은 토큰 규칙(앞뒤 공백·줄바꿈 제거, ASCII) — 붙여 넣은 'tok\n' 이 테스트에서만 실패했다(25회차 점검)
         token = str(raw.get("token") or "").strip() or None
         if token and token_error(token):
@@ -2287,7 +2291,8 @@ class PortalController:
                     "storages": ov.get("root_count") or 0,
                     "used_bytes": _ov_capacity(ov)}
         except urllib.error.HTTPError as e:  # type: ignore[attr-defined]
-            reason = "인증 실패(토큰 확인)" if e.code == 401 else ("HTTP %d" % e.code)
+            reason = ("인증 실패(토큰 확인)" if e.code == 401
+                      else (self._http_err_reason(e) or "잠김(429)") if e.code == 429 else ("HTTP %d" % e.code))
             return {"ok": False, "reason": reason}
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "reason": str(e)}
@@ -2942,16 +2947,7 @@ class PortalController:
         running_all = []   # 전체 엣지의 진행 중 스캔(노드·경로·진행·끝날 예상 시각) — 포탈 현황 '진행 중인 스캔' 표
         # 같은 엣지(호스트:포트)를 다른 이름으로 또 등록하면 합계에 두 번 들어갔다(35회차 점검) — 엣지마다 대표 노드 하나만 센다.
         # 대표는 켜져 있고 온라인 → 최근에 받은 값 → 등록 순(36회차 점검: '처음 것'만 세면 꺼진 옛 노드 때문에 0·옛 값이 됐다)
-        _rep_by_edge: dict = {}
-        for _i, _n in enumerate(nodes_snapshot):
-            _k = self._edge_key(_n.get("url"))
-            if not _k:
-                continue
-            _c = cache.get(_n["id"], {})
-            _score = (bool(_c.get("online")) and bool(_n.get("enabled", True)), float(_c.get("ts") or 0), -_i)
-            if _k not in _rep_by_edge or _score > _rep_by_edge[_k][0]:
-                _rep_by_edge[_k] = (_score, _n["id"])
-        seen_edges = {k: v[1] for k, v in _rep_by_edge.items()}
+        seen_edges = self._edge_reps(nodes_snapshot, cache)
         for n in nodes_snapshot:
             try:
                 c = cache.get(n["id"], {})
@@ -3546,9 +3542,39 @@ class PortalController:
         try:
             p = urlparse(u)
             port = p.port or (443 if p.scheme == "https" else 80)
-            return "%s:%s" % (p.hostname or "", port)
+            # 경로도 넣는다 — 리버스 프록시 뒤 'https://proxy/edgeA'·'/edgeB' 는 서로 다른 엣지인데 중복으로 빠졌다(37회차 점검)
+            # 끝의 '/api' 는 같은 엣지를 API 주소로 적은 것으로 본다(기존 규칙 유지)
+            _path = re.sub(r"/api$", "", (p.path or "").rstrip("/"))
+            return "%s:%s%s" % (p.hostname or "", port, _path)
         except ValueError:
             return u
+
+    def _edge_reps(self, nodes, cache) -> dict:
+        """같은 엣지(_edge_key)마다 대표 노드 id — 현황 합계·비교 합계가 같은 규칙을 쓴다(단일 정책, 37회차 점검:
+        비교 매트릭스 합계는 같은 엣지를 두 번 더했다). 대표는 켜져 있고 온라인 → 최근에 받은 값 → 등록 순."""
+        reps: dict = {}
+        for i, n in enumerate(nodes):
+            k = self._edge_key(n.get("url"))
+            if not k:
+                continue
+            c = cache.get(n["id"], {}) or {}
+            score = (bool(c.get("online")) and bool(n.get("enabled", True)), float(c.get("ts") or 0), -i)
+            if k not in reps or score > reps[k][0]:
+                reps[k] = (score, n["id"])
+        return {k: v[1] for k, v in reps.items()}
+
+    def _dup_of_map(self) -> dict:
+        """{노드 id: 대표 노드 id} — 대표가 아닌(같은 엣지를 또 등록한) 노드만."""
+        with self._lock:
+            nodes = [dict(n) for n in self.nodes]
+            cache = dict(self._cache)
+        reps = self._edge_reps(nodes, cache)
+        out = {}
+        for n in nodes:
+            r = reps.get(self._edge_key(n.get("url")))
+            if r and r != n["id"]:
+                out[n["id"]] = r
+        return out
 
     def node_scan_all(self, *, one_file_system=None, autotune=False,
                       restart_busy=False, engine=None, fold_depth=None) -> dict:
@@ -3993,9 +4019,12 @@ class PortalController:
         """같은 경로의 노드별 용량/파일 수를 모아 비교한다(복제본 기준)."""
         path = os.path.abspath(path)
         rows = []
+        dups = self._dup_of_map()
         for n in self.nodes:
             entry = {"id": n["id"], "region": n.get("region"), "found": False,
                      "total_bytes": 0, "own_bytes": 0, "total_files": 0, "subdir_count": 0}
+            if n["id"] in dups:
+                entry["duplicate_of"] = dups[n["id"]]   # 같은 엣지 중복 등록(현황과 같은 표시, 37회차)
             local = self._to_local(n, path)   # 논리 경로 → 이 노드의 로컬 경로(별칭)
             # 접힌 바깥 스캔의 최신도 — 더 깊이 저장한 안쪽 루트 스캔이 그보다 오래됐으면 값은 쓰되 '옛 스캔 값'으로 표시한다
             # (34회차 점검: 지운 폴더가 아무 표시 없이 '있음'. 세부를 보여 주는 Q1 동작은 유지)
@@ -4117,12 +4146,13 @@ class PortalController:
             if is_folded and not dlim:
                 folded.append(n["id"])
         out = []
+        dups = self._dup_of_map()   # 같은 엣지 중복 등록은 합계에서 한 번만(현황과 같은 규칙, 37회차 점검)
         for e in children.values():
-            e["sum"] = sum(e["vals"].values())
+            e["sum"] = sum(v for nid, v in e["vals"].items() if nid not in dups)
             out.append(e)
         out.sort(key=lambda x: -x["sum"])
         return {"ok": True, "path": path, "nodes": node_ids, "children": out, "folded_nodes": folded,
-                "depth_limited_nodes": depth_nodes, "stale_nodes": stale_nodes}
+                "depth_limited_nodes": depth_nodes, "stale_nodes": stale_nodes, "duplicate_of": dups}
 
 
 # ------------------------------------------------------------------ HTTP 핸들러
@@ -4238,8 +4268,14 @@ class PortalHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/portal/usage":      # 외부 서버용 집계 사용량 API(읽기 전용 · export_token)
                 given = self.headers.get("X-Auth-Token") or (parse_qs(urlparse(self.path).query).get("token", [""])[0])
-                if not c.export_token_ok(given, self.client_address[0] if self.client_address else None):
-                    self._send_json({"ok": False, "reason": "unauthorized"}, status=401)
+                _ip = self.client_address[0] if self.client_address else None
+                if not c.export_token_ok(given, _ip):
+                    _w = c._export_limit.blocked(str(_ip or "")) if (c.settings.get("export_token") or "").strip() else 0
+                    if _w:   # 잠긴 IP 는 맞는 토큰도 거절 — '토큰 확인' 대신 잠김과 남은 초(37회차 점검)
+                        self._send_json({"ok": False, "reason": "토큰 인증 실패가 반복돼 잠시 잠겼습니다(%d초 후 다시 시도)" % _w,
+                                         "locked": True, "retry_after": _w}, status=429)
+                    else:
+                        self._send_json({"ok": False, "reason": "unauthorized"}, status=401)
                     return
                 self._send_json(c.usage_export())
                 return

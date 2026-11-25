@@ -1242,15 +1242,16 @@ class ScanController:
         s = self.settings or {}
         secrets = netutil.secret_values(s.get("isilon_url"), s.get("powerstore_url"),
                                         *[a.get("url") for a in (s.get("storage_arrays") or []) if isinstance(a, dict)])
-        # 장비 비밀번호(와 Basic 인증 값)도 — 요청을 되돌려 보내는 장비·프록시면 오류 문구에 실렸다(36회차 보안 점검)
-        secrets = sorted(set(secrets
-                             + netutil.credential_values(s.get("isilon_user"), s.get("isilon_password"))
-                             + netutil.credential_values(s.get("powerstore_user"), s.get("powerstore_password"))
-                             + [v for a in (s.get("storage_arrays") or []) if isinstance(a, dict)
-                                for v in netutil.credential_values(a.get("user"), a.get("password"))]),
-                         key=len, reverse=True)
+        # 장비 비밀번호(와 Basic 인증 값)도 — 요청을 되돌려 보내는 장비·프록시면 오류 문구에 실렸다(36회차 보안 점검).
+        # 비밀번호 그대로는 흔한 낱말일 수 있어 오류·안내 문구 필드에서만 가린다(37회차: 'isilon' 이면 type 이 지워졌다).
+        creds = sorted(set(netutil.credential_values(s.get("isilon_user"), s.get("isilon_password"))
+                           + netutil.credential_values(s.get("powerstore_user"), s.get("powerstore_password"))
+                           + [v for a in (s.get("storage_arrays") or []) if isinstance(a, dict)
+                              for v in netutil.credential_values(a.get("user"), a.get("password"))]),
+                       key=len, reverse=True)
         # 주소 모양이 아닌 오류 문구 속 조각(예: "nonnumeric port: 'PW'")까지 저장된 비밀로 찾아 가린다(33회차 보안 점검)
-        return netutil.redact_values(netutil.redact_urls(self._storage_status_raw(force)), secrets)
+        return netutil.redact_text_fields(
+            netutil.redact_values(netutil.redact_urls(self._storage_status_raw(force)), secrets), creds)
 
     def _storage_status_raw(self, force: bool = False) -> list:
         """설정된 스토리지 어레이 상태 목록을 캐시(60초)와 함께 반환.
@@ -3827,7 +3828,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # 접속 IP별 연속 실패 잠금 — 횟수 제한 없이 토큰을 추측할 수 있었다(36회차 보안 점검).
         # 빈 토큰(토큰 없이 연 화면)은 추측이 아니므로 실패로 세지 않는다.
         ip = self.client_address[0] if self.client_address else ""
-        if _TOKEN_LIMIT.blocked(ip):
+        self._auth_wait = _TOKEN_LIMIT.blocked(ip)
+        if self._auth_wait:
             return False
         # 바이트로 상수시간 비교 — 비-ASCII 토큰이 와도 compare_digest 가 TypeError(→500) 나지 않게.
         ok = hmac.compare_digest(str(given).encode("utf-8", "ignore"),
@@ -3837,6 +3839,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif given:
             _TOKEN_LIMIT.failed(ip)
         return ok
+
+    def _send_unauthorized(self) -> None:
+        """토큰 인증 실패 응답 — 잠긴 IP 면 맞는 토큰도 거절되므로 401 '토큰 확인' 대신 429 와 남은 초를 알린다(37회차 점검)."""
+        wait = int(getattr(self, "_auth_wait", 0) or 0)
+        if wait:
+            self._send_json({"ok": False, "reason": "토큰 인증 실패가 반복돼 이 주소를 잠시 잠갔습니다(%d초 후 다시 시도)" % wait,
+                             "locked": True, "retry_after": wait}, status=429)
+        else:
+            self._send_json({"ok": False, "reason": "unauthorized"}, status=401)
 
     def _do_GET(self) -> None:
         self._last_scan_row = None
@@ -4498,7 +4509,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if path == "/api/dbexport":
                 # 글로벌 포탈 복제용: 완료된 per-run DB + 노드 요약(meta.json)을 tar.gz 로.
                 if not self._authorized(qs):
-                    self._send_json({"ok": False, "reason": "unauthorized"}, status=401)
+                    self._send_unauthorized()
                     return
                 try:
                     since = float(qs.get("since", ["0"])[0] or 0)
@@ -4680,7 +4691,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                              "reason": "원격 업그레이드는 api_token 설정이 필요합니다."}, status=403)
             return
         if not self._authorized(qs):
-            self._send_json({"ok": False, "reason": "unauthorized"}, status=401)
+            self._send_unauthorized()
             return
         try:
             length = int(self.headers.get("Content-Length", 0))
@@ -4720,7 +4731,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                              "reason": "원격 비밀번호 관리는 api_token 설정이 필요합니다."}, status=403)
             return
         if not self._authorized(qs):
-            self._send_json({"ok": False, "reason": "unauthorized"}, status=401)
+            self._send_unauthorized()
             return
         body = self._read_json_body()
         if self._body_err:

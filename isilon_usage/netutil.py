@@ -184,7 +184,9 @@ def secret_values(*urls_or_tokens) -> list:
                 out.append(pw)
                 # 라이브러리 오류 문구는 비밀번호를 '/'·'?'·'#' 앞에서 잘라 'nonnumeric port: PW앞부분' 으로 싣는다(36회차 보안 점검)
                 _pre = re.split(r"[/?#]", pw, maxsplit=1)[0]
-                if len(_pre) >= 4 and _pre != pw:
+                # 숫자만인 앞부분은 넣지 않는다 — 'localhost:8080/?u=a@b' 처럼 '@' 가 경로에 있는 주소의 포트(8080)가
+                # 비밀로 잡혀 응답의 모든 8080 이 가려졌다(37회차 점검). 숫자는 포트로 읽혀 'nonnumeric port' 문구에도 안 실린다.
+                if len(_pre) >= 4 and _pre != pw and not _pre.isdigit():
                     out.append(_pre)
         for _k, val in parse_qsl(p.query, keep_blank_values=False):
             if len(val) >= 4 and re.search(r"(token|key|pass|secret|sig|auth|cred|session|code)", _k, re.I):
@@ -205,6 +207,22 @@ def credential_values(user, password) -> list:
     except Exception:  # noqa: BLE001
         pass
     return out
+
+
+_TEXT_KEYS = ("error", "errors", "message", "msg", "detail", "details", "reason", "warning", "warnings", "note", "hint", "log")
+
+
+def redact_text_fields(obj, secrets, keys=_TEXT_KEYS):
+    """오류·안내 같은 '문구' 필드에서만 비밀 조각을 가린다 — 비밀번호 그대로는 'isilon'·'1234' 처럼 흔한 낱말일 수 있어
+    응답 전체에 적용하면 type·이름·숫자까지 지워졌다(37회차 점검: 비밀번호가 'isilon' 이면 type 이 '***' → 미설정으로 보임)."""
+    if not secrets:
+        return obj
+    if isinstance(obj, dict):
+        return {k: (redact_values(v, secrets) if str(k).lower() in keys else redact_text_fields(v, secrets, keys))
+                for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [redact_text_fields(v, secrets, keys) for v in obj]
+    return obj
 
 
 def redact_values(obj, secrets):
@@ -232,7 +250,8 @@ def redact_urls(obj):
     if _URL_RE is None:
         import re
         # 스킴은 단어 경계에서 시작·32자 이내(긴 영숫자열에서 느려지지 않게), 끝의 문장부호 ),;] 는 URL 에 넣지 않는다(29회차 점검)
-        _URL_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9+.\-]{0,31}://[^\s\"'<>]*[^\s\"'<>),;\]]")
+        # 끝의 ':'·'.'·'!'·'?' 도 빼야 'http://nas01:8080: refused' 의 주소가 통째로 '***' 가 되지 않는다(37회차 점검)
+        _URL_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9+.\-]{0,31}://[^\s\"'<>]*[^\s\"'<>),;\]:.!?]")
     if isinstance(obj, str):
         if "://" not in obj:
             return obj

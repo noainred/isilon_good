@@ -4104,6 +4104,82 @@ def check_ct_round36_security() -> None:
     print("[VVV1~VVV5] OK  '@'·'#' 든 주소 가림·포탈 노드 주소 가림·장비 비밀번호(Basic) 가림·업그레이드 로그 저장 시 가림·토큰 추측 잠금")
 
 
+def check_cu_round37_regress() -> None:
+    """WWW1 장비 비밀번호가 흔한 낱말('isilon')이면 저장소 상태의 type 까지 '***' → 아이실론 미설정으로 보임
+    WWW2 잠긴 IP 는 맞는 토큰도 401 '토큰 확인' WWW3 프록시 경로만 다른 두 엣지를 중복으로 빼 합계 누락
+    WWW4 비교 매트릭스 합계가 같은 엣지 중복 등록을 두 번 더함 WWW5 오류 문구 속 'http://nas01:8080:' 가 통째로 '***'
+    WWW6 '@' 가 경로에 있는 주소의 포트(8080)가 비밀로 잡힘 WWW7 노드 연결 테스트가 가려진 주소로 접속."""
+    import base64
+    from isilon_usage import portal as P, netutil as NU, server as SV
+    d = tempfile.mkdtemp(prefix="iu_cu_")
+    try:
+        ec = SV.ScanController(os.path.join(d, "edge"))                                                   # WWW1
+        ec.settings.update({"isilon_url": "https://nas.example:8080", "isilon_user": "admin", "isilon_password": "isilon"})
+        b64 = base64.b64encode(b"admin:isilon").decode()
+        ec._storage_status_raw = lambda force=False: [{"type": "isilon", "ok": True, "health": "ok", "label": "Isilon isilon",
+                                                       "error": "echo Basic %s pw=isilon" % b64}]
+        st = ec.storage_status()
+        assert st[0]["type"] == "isilon" and st[0]["label"] == "Isilon isilon", st
+        assert "isilon" not in st[0]["error"] and b64 not in st[0]["error"], st
+        assert ec.isilon_status().get("error") != "미설정", ec.isilon_status()
+        pc = P.PortalController(os.path.join(d, "hq"))                                                    # WWW3
+        pc.upsert_node({"id": "p1", "url": "https://proxy/edgeA", "token": "t"})
+        pc.upsert_node({"id": "p2", "url": "https://proxy/edgeB", "token": "t"})
+        for nid, b in (("p1", 100), ("p2", 200)):
+            pc._cache[nid] = {"online": True, "ts": time.time(),
+                              "overall": {"total_capacity_bytes": b, "root_count": 1, "roots": []}}
+        ov = pc.overview()
+        assert ov["totals"]["used_bytes"] == 300 and not any(n.get("duplicate_of") for n in ov["nodes"]), ov["totals"]
+        pc.upsert_node({"id": "p3", "url": "https://proxy/edgeB/", "token": "t"})                       # WWW4
+        assert pc._dup_of_map() == {"p3": "p2"}, pc._dup_of_map()
+        pc._matrix_kids = lambda nid, local: ([{"name": "k", "total_bytes": 10, "own_bytes": 0, "subdir_count": 0}], False, 0, False)
+        mx = pc.compare_matrix("/data")
+        assert mx["children"][0]["sum"] == 20 and mx["duplicate_of"] == {"p3": "p2"}, mx
+        pc.upsert_node({"id": "t1", "url": "http://svc:Secr3t@127.0.0.1:9", "token": "t"})               # WWW7
+        seen = []
+        _orig = P._probe_meta
+        P._probe_meta = lambda url, *a, **k: seen.append(url) or {}
+        try:
+            pc.test_node({"id": "t1", "url": NU.mask_url_secret("http://svc:Secr3t@127.0.0.1:9"), "token": "t"})
+        finally:
+            P._probe_meta = _orig
+        assert seen == ["http://svc:Secr3t@127.0.0.1:9"], seen
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert NU.redact_urls("Failed http://nas01:8080: refused") == "Failed http://nas01:8080: refused"   # WWW5
+    assert NU.redact_urls("see http://nas01:8080/x.") == "see http://nas01:8080/x."
+    assert "8080" not in NU.secret_values("http://localhost:8080/?u=a@b.com")                         # WWW6
+    assert "1234" not in NU.mask_url_secret("https://admin:1234/x@nas01")
+    # WWW2 엣지 잠김 → 429
+    SV._TOKEN_LIMIT._fails.clear(); SV._TOKEN_LIMIT._locked.clear()
+    sent = []
+
+    class _H:
+        client_address = ("7.7.7.8", 1)
+
+        def __init__(self, given):
+            self.headers = {"X-Auth-Token": given}
+            self._current_settings = lambda: {"api_token": "edgeTOK"}
+
+        def _send_json(self, payload, status=200):
+            sent.append((status, payload))
+    for _ in range(10):
+        h = _H("nope")
+        assert not SV.DashboardHandler._authorized(h, {})
+    h = _H("edgeTOK")
+    assert not SV.DashboardHandler._authorized(h, {})
+    SV.DashboardHandler._send_unauthorized(h)
+    assert sent[-1][0] == 429 and sent[-1][1].get("locked"), sent[-1]
+    h = _H("bad")
+    h.client_address = ("7.7.7.9", 1)
+    SV.DashboardHandler._authorized(h, {})
+    SV.DashboardHandler._send_unauthorized(h)
+    assert sent[-1][0] == 401, sent[-1]
+    SV._TOKEN_LIMIT._fails.clear(); SV._TOKEN_LIMIT._locked.clear()
+    assert "code == 429" in _read("portal.py")
+    print("[WWW1~WWW7] OK  장비 비밀번호는 문구 필드에서만 가림·잠김 429·프록시 경로 엣지 구분·비교 합계 중복 제외·오류 문구 주소 보존·포트 비밀 오인·연결 테스트 주소 복원")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -4140,7 +4216,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bz_round28_dashboard, check_ca_round29_regress,
             check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress,
             check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine, check_cn_round34_regress, check_co_round34_multi, check_cp_round34_edge, check_cq_round35_regress, check_cr_round35_portal, check_cs_round36_regress,
-            check_ct_round36_security]
+            check_ct_round36_security, check_cu_round37_regress]
 
 
 def main() -> int:
