@@ -3676,15 +3676,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "heartbeat_age_seconds": [], "fs_total_bytes": [],
                     "fs_used_bytes": [], "fs_free_bytes": [],
                 }
-                for s in mgrmod.list_scans(mconn):
+                metr["progress_scanned_bytes"] = []
+                metr["progress_files"] = []
+                # 대시보드와 같은 집계(overall_capacity) — 예전엔 최근 200개 스캔만 봐 오래된 루트가 빠졌고, 다시 스캔하는
+                # 동안 진행 값(0 부터)을 내보내 그래프·경보가 0 으로 떨어졌다(37회차 점검). 용량은 마지막 완료 스캔 값.
+                for s in mgrmod.overall_capacity(mconn)["roots"]:
                     root = s["root_path"]
-                    if root in seen:    # 루트별 최신 스캔 1개만
+                    if root in seen:
                         continue
                     seen.add(root)
                     lbl = '{root="%s"}' % esc(root)
                     running = 1 if s["status"] in ("discovering", "sizing") else 0
-                    metr["scanned_bytes"].append((lbl, int(s["scanned_bytes"] or 0)))
-                    metr["total_files"].append((lbl, int(s["total_files"] or 0)))
+                    metr["scanned_bytes"].append((lbl, int(s.get("capacity_bytes") or 0)))
+                    metr["total_files"].append((lbl, int(s.get("capacity_files") or 0)))
+                    metr["progress_scanned_bytes"].append((lbl, int(s.get("scanned_bytes") or 0)))
+                    metr["progress_files"].append((lbl, int(s.get("total_files") or 0)))
                     metr["running"].append((lbl, running))
                     if s.get("updated_at"):
                         metr["heartbeat_age_seconds"].append(
@@ -3693,8 +3699,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     metr["fs_used_bytes"].append((lbl, int(s["fs_used_bytes"] or 0)))
                     metr["fs_free_bytes"].append((lbl, int(s["fs_free_bytes"] or 0)))
                 helps = {
-                    "scanned_bytes": "루트별 최신 스캔의 조사 용량(바이트)",
-                    "total_files": "루트별 최신 스캔의 총 파일 수",
+                    "scanned_bytes": "루트별 용량(바이트, 마지막 완료 스캔 — 대시보드와 같은 값)",
+                    "total_files": "루트별 파일 수(마지막 완료 스캔)",
+                    "progress_scanned_bytes": "루트별 최신 스캔의 진행 중 조사 용량(바이트)",
+                    "progress_files": "루트별 최신 스캔의 진행 중 파일 수",
                     "running": "스캔 진행 중 여부(1=진행)",
                     "heartbeat_age_seconds": "마지막 진행 갱신 경과(초)",
                     "fs_total_bytes": "대상 FS 전체 크기",
@@ -4515,6 +4523,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     since = float(qs.get("since", ["0"])[0] or 0)
                 except (TypeError, ValueError, OverflowError):
                     since = 0.0
+                if since != since or since in (float("inf"), float("-inf")):   # nan·inf → meta.json 에 'NaN'(잘못된 JSON)
+                    since = 0.0
                 self._export_dbs(mconn, since=since)
                 return
 
@@ -4607,7 +4617,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         이후 완료분만) 보낸다. 완료된 DB 는 불변이라 그대로 복사해도 안전하다.
         (Python 3.6·구버전 SQLite 호환: backup API/VACUUM INTO 를 쓰지 않는다.)
         """
-        scans = mgrmod.list_scans(mconn)
+        # 전부(기본 200개 제한이면 동기화 사이에 200개 넘게 끝난 스캔이 복제에서 영영 빠졌다 — 37회차 점검)
+        scans = mgrmod.list_scans(mconn, limit=-1)
         overall = mgrmod.overall_capacity(mconn)
         # 반복(완료 후 자동 재시작) 중인 루트를 표시해 포탈도 '반복 동작 중'을 알 수 있게 한다.
         if self.controller:
@@ -4738,7 +4749,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "reason": self._body_err[1]}, status=self._body_err[0])
             return
         res = self.controller.set_op_password(
-            str(body.get("password") or ""), clear=bool(body.get("clear")))
+            str(body.get("password") or ""), clear=_truthy(body.get("clear")))   # "false" 가 참으로 읽혀 비밀번호가 초기화됐다(37회차)
         self._audit("op_password_push", bool(res.get("ok")), res.get("reason") or "")
         self._send_json(res, status=200 if res.get("ok") else 400)
 

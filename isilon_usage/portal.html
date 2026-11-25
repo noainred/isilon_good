@@ -1396,7 +1396,7 @@ async function doLogin(){
       // 만료 시각도 저장 → 새로고침해도 남은 시간을 알 수 있어 다시 로그인할 필요가 없다.
       try{ sessionStorage.setItem("pOpExpiry",String(_opExpiry)); }catch(e){}
       _opStartTimer();
-      updateLoginUI(); try{ pLoadUpgradeCfg(); }catch(e){}   // 로그인 뒤 가려졌던 설정 값을 다시 채움(31회차)
+      updateLoginUI(); try{ pLoadUpgradeCfg(); }catch(e){} try{ loadAskLlm(); }catch(e){}   // 로그인 뒤 가려졌던 설정 값을 다시 채움(31회차·37회차: LLM 카드)
       return true; }
     // 잠김·서버 사유를 그대로 — 예전엔 어떤 실패든 '비밀번호가 올바르지 않습니다'라 잠긴 동안 맞는 비밀번호도 틀렸다고 했다(26회차 점검)
     window.alert(j.reason || "비밀번호가 올바르지 않습니다."); return false;
@@ -1409,7 +1409,7 @@ function _opAdopt(j){
   if(!j || !j.token) return false;
   try{ sessionStorage.setItem("pOpToken",j.token); }catch(e){}
   _opExpiry=Date.now()+(j.ttl||1800)*1000; try{ sessionStorage.setItem("pOpExpiry",String(_opExpiry)); }catch(e){}
-  _opRequired=true; _opStartTimer(); updateLoginUI(); return true;
+  _opRequired=true; _opStartTimer(); updateLoginUI(); try{ loadAskLlm(); }catch(e){} return true;
 }
 function _opStartTimer(){
   if(_opTimer) clearInterval(_opTimer);
@@ -1529,6 +1529,7 @@ function showSub(id){
   // 등록 토큰·중앙 DB 경로·백업 현황 칸을 그 탭을 열 때마다 채운다 — 예전엔 없는 탭 id(np-security)를 봐서 로그인 전(가린 값)
   // 한 번만 읽혀, 토큰을 정해도 '아직 없습니다'·경로 '—'로 남았다(31회차 점검)
   if(id==="np-account" || id==="np-monitor" || id==="np-nodes" || id==="np-general"){ try{ pLoadUpgradeCfg(); }catch(e){} }
+  if(id==="np-security"){ try{ loadAskLlm(); }catch(e){} }   // LLM 카드 — 로그인 전에 가려진 값으로 채워져 있을 수 있다(37회차)
 }
 document.querySelectorAll("#view-nodes .stab").forEach(b=>b.addEventListener("click",()=>showSub(b.dataset.pane)));
 
@@ -2375,8 +2376,10 @@ if($("askInput")) $("askInput").addEventListener("keydown",(e)=>{ if(e.key==="En
 document.addEventListener("click",(e)=>{ const box=$("askBox"); if(box && !box.contains(e.target) && $("askOut")){ if($("askOut").innerHTML) _askSeq++; $("askOut").innerHTML=""; } });
 
 // 로컬 LLM 설정 로드/저장(설정은 /api/portal/settings)
+let _askLlmLoaded=false;   // 로그인 뒤 실제 값으로 채웠는지 — 가려진(빈) 값으로 저장하면 설정이 지워졌다(37회차 점검)
 function loadAskLlm(){
-  fetch("/api/portal/settings",{cache:"no-store"}).then(r=>r.json()).then(j=>{
+  return fetch("/api/portal/settings",{cache:"no-store"}).then(r=>r.json()).then(j=>{
+    _askLlmLoaded = ("ask_llm_endpoint" in j);
     if($("setAskLlm")) $("setAskLlm").checked=!!j.ask_llm_enabled;
     if($("setAskLlmEp")) $("setAskLlmEp").value=j.ask_llm_endpoint||"";
     if($("setAskLlmModel")) $("setAskLlmModel").value=j.ask_llm_model||"";
@@ -2386,7 +2389,12 @@ function loadAskLlm(){
   }).catch(()=>{});
 }
 if($("setAskLlmBtn")) $("setAskLlmBtn").addEventListener("click",async()=>{
-  const msg=$("setAskLlmMsg"); msg.textContent=" 저장 중…";
+  const msg=$("setAskLlmMsg");
+  if(!_askLlmLoaded){   // 가려진 빈 값으로 덮어쓰지 않게 — 먼저 실제 값을 불러온다
+    msg.textContent=" 설정을 불러오는 중…"; await loadAskLlm().catch(()=>{});
+    msg.textContent=_askLlmLoaded?" 저장된 값을 불러왔습니다 — 확인 후 다시 저장하세요":" 로그인 후 저장할 수 있습니다";
+    return; }
+  msg.textContent=" 저장 중…";
   const body={ ask_llm_enabled:$("setAskLlm").checked,
     ask_llm_endpoint:$("setAskLlmEp").value.trim(),
     ask_llm_model:$("setAskLlmModel").value.trim(),

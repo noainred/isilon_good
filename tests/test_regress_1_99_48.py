@@ -3629,7 +3629,8 @@ def check_ch_round31_flows() -> None:
     부분 집계 배지가 표를 넓힘·3단계 번호 배지가 제목에 붙음."""
     from isilon_usage import scanner as SC, ask as AK, server as SV
     ph = _read("portal.html")
-    assert 'id==="np-security"' not in ph and 'id==="np-account" || id==="np-monitor"' in ph                  # JJJ1
+    # (37회차: np-security 는 LLM 카드 다시 채우기로 따로 쓴다 — 업그레이드 설정 조건에 섞이지 않았는지만 본다)
+    assert 'id==="np-security" ||' not in ph and 'id==="np-account" || id==="np-monitor"' in ph               # JJJ1
     assert "updateLoginUI(); try{ pLoadUpgradeCfg(); }catch(e){}" in ph
     assert "pscan(빠른 멀티프로세스 스캔)" in AK._detail_unavailable({"scope": "edge", "detail_note": "pscan"})   # JJJ2
     assert "function _repEmptyMsg()" in _read("dashboard.html")
@@ -4180,6 +4181,73 @@ def check_cu_round37_regress() -> None:
     print("[WWW1~WWW7] OK  장비 비밀번호는 문구 필드에서만 가림·잠김 429·프록시 경로 엣지 구분·비교 합계 중복 제외·오류 문구 주소 보존·포트 비밀 오인·연결 테스트 주소 복원")
 
 
+def check_cv_round37_flows() -> None:
+    """XXX1 포탈 LLM 카드가 로그인 전 가려진 값으로 채워진 채 저장하면 설정이 지워짐 XXX2 /metrics 가 최근 200개 스캔만 봐
+    오래된 루트가 빠짐 XXX3 다시 스캔하는 동안 /metrics 용량이 0 으로 떨어짐 XXX4 dbexport 메타가 200개 스캔만
+    XXX5 "clear":"false" 가 참 XXX6 since=nan 이 잘못된 JSON XXX7 쿼리 붙은 노드 주소 허용."""
+    from isilon_usage import portal as P, db as DB, manager as M
+    html = _read("portal.html")
+    assert "_askLlmLoaded" in html and 'if(id==="np-security"){ try{ loadAskLlm(); }' in html                 # XXX1
+    assert html.count("try{ loadAskLlm(); }catch(e){}") >= 3
+    src = _read("server.py")
+    assert "mgrmod.overall_capacity(mconn)[\"roots\"]" in src and "list_scans(mconn, limit=-1)" in src       # XXX2·XXX4
+    assert 'clear=_truthy(body.get("clear"))' in src and 'clear=_truthy(body.get("clear"))' in _read("portal.py")   # XXX5
+    assert 'since != since' in src                                                                       # XXX6
+    assert P.node_url_error("http://h:8765/?x=1") and P.node_url_error("http://h:8765/#a")               # XXX7
+    assert P.node_url_error("http://h:8765") is None and P.node_url_error("https://proxy/edgeA") is None
+    # XXX2·XXX3 실제 /metrics — 오래된 루트와 다시 스캔 중인 루트
+    d = tempfile.mkdtemp(prefix="iu_cv_")
+    try:
+        from isilon_usage import server as SV
+        data = os.path.join(d, "edge")
+        os.makedirs(data)
+        M.init_manager(data)
+        ctl = SV.ScanController(data)
+        mc = DB.connect(M.manager_db_path(data))
+        cols = [r[1] for r in mc.execute("PRAGMA table_info(scans)").fetchall()]
+        now = time.time()
+
+        def add(root, status, sb, files):
+            row = {"root_path": root, "status": status, "phase": status, "scanned_bytes": sb, "total_files": files,
+                   "started_at": now, "updated_at": now, "finished_at": now if status == "done" else None,
+                   "db_path": os.path.join(data, "x.db"), "db_filename": "x.db"}
+            row = {k: v for k, v in row.items() if k in cols}
+            mc.execute("INSERT INTO scans(%s) VALUES(%s)" % (",".join(row), ",".join("?" * len(row))), list(row.values()))
+        add("/old", "done", 111, 5)
+        add("/b", "done", 999, 50)
+        for _ in range(205):
+            add("/b", "done", 999, 50)
+        add("/b", "discovering", 0, 0)
+        mc.commit()
+        mc.close()
+
+        class _H:
+            data_dir = data
+
+            def __init__(self):
+                self.buf = io.BytesIO()
+                self.wfile = self.buf
+
+            def send_response(self, *a):
+                pass
+
+            def send_header(self, *a):
+                pass
+
+            def end_headers(self):
+                pass
+        h = _H()
+        SV.DashboardHandler._send_metrics(h)
+        txt = h.buf.getvalue().decode()
+        assert 'isilon_usage_root_scanned_bytes{root="/old"} 111' in txt, txt[:800]
+        assert 'isilon_usage_root_scanned_bytes{root="/b"} 999' in txt, txt[:800]
+        assert 'isilon_usage_root_progress_scanned_bytes{root="/b"} 0' in txt
+        del ctl
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    print("[XXX1~XXX7] OK  LLM 카드 로그인 뒤 다시 채움·metrics 전체 루트·재스캔 중 완료 값·dbexport 전체·clear 문자열·since nan·쿼리 노드 주소 거부")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -4216,7 +4284,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bz_round28_dashboard, check_ca_round29_regress,
             check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress,
             check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine, check_cn_round34_regress, check_co_round34_multi, check_cp_round34_edge, check_cq_round35_regress, check_cr_round35_portal, check_cs_round36_regress,
-            check_ct_round36_security, check_cu_round37_regress]
+            check_ct_round36_security, check_cu_round37_regress,
+            check_cv_round37_flows]
 
 
 def main() -> int:

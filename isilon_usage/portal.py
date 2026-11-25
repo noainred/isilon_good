@@ -243,6 +243,9 @@ def node_url_error(url: str) -> Optional[str]:
         return "호스트(IP/이름)가 올바르지 않습니다."
     if port is not None and not (1 <= port <= 65535):
         return "포트가 올바르지 않습니다(1~65535)."
+    if sp.query or sp.fragment or u.endswith(("?", "#")):
+        # 엣지 API 경로(/api/…)가 쿼리 뒤에 붙어 동기화·비밀번호·업그레이드가 엉뚱한 사유로 실패했다(37회차 점검)
+        return "노드 주소에는 ?·# 뒤 값을 쓸 수 없습니다(엣지 API 경로가 그 뒤에 붙습니다) — http(s)://호스트[:포트][/경로] 로 입력하세요."
     return None
 
 
@@ -4600,7 +4603,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             if path == "/api/portal/node-password":   # 노드 작업 비밀번호 설정/변경/해제(포탈→엣지)
                 self._send_json(c.set_node_password(
                     body.get("ids") or [], str(body.get("password") or ""),
-                    clear=bool(body.get("clear"))))
+                    clear=_truthy(body.get("clear"))))   # "false" 가 참이던 문제(37회차)
                 return
             if path == "/api/portal/provision":
                 self._send_json(c.provision_plan(body))
