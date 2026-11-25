@@ -1924,7 +1924,8 @@ class PortalController:
             self._upg_log("확인 — 현재 %s · 최신 %s%s" % (
                 __version__, info.get("latest"),
                 " · 업데이트 가능" if info.get("available") else " · 최신"))
-        return {"ok": bool(info.get("ok")), **self.upgrade_status()}
+        # 상태의 "ok": True 가 뒤에서 덮어써 실패한 확인도 성공으로 보였다(39회차 점검) — 확인 결과를 마지막에
+        return {**self.upgrade_status(), "ok": bool(info.get("ok")), "error": self._upg_redact(info.get("error"))}
 
     def upgrade_install(self, *, propagate: bool = True) -> dict:
         """[비동기] 최신 코드 적용 → 엣지 전파 → 재시작. 즉시 반환하고 백그라운드로 진행하며,

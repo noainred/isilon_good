@@ -4330,6 +4330,72 @@ def check_cx_round38_flows() -> None:
     print("[ZZZ1~ZZZ3] OK  가린 주소 새 노드 거부·같은 호스트 다른 포트 자기 등록 구분·손상 최신 묶음 건너뜀")
 
 
+def check_cy_round39_upgrade_notify() -> None:
+    """AAAA1 다른 JSON(목록·문자열)·깨진 항목의 versions.json 이 500·자동 점검 정지 AAAA2 실패한 '지금 확인'이 ok:true·
+    '최신입니다' AAAA3 오류·자동 일시정지 알림에 사유가 없고, 디스크 부족 자동 정지는 기본으로 알리지 않음
+    AAAA4 릴리스 화면의 '엣지가 받을 버전'이 손상된 최신 이름 파일 기준."""
+    from isilon_usage import upgrade as U, server as SV, manager as M, db as DB, notify as NT, portal as P
+    orig = U.fetch_remote_versions
+    try:
+        for bad in ([1, 2], "str", {"latest": "1.99.50", "versions": {"a": 1}},
+                    {"latest": "1.99.50", "versions": [{"version": "1.99.50", "tar_gz": 123}]}):           # AAAA1
+            U.fetch_remote_versions = lambda base, _b=bad, **k: (_b, None)
+            r = U.check_remote("http://x", "1.0.0")
+            assert r["ok"] is False and "형식" in r["error"], (bad, r)
+    finally:
+        U.fetch_remote_versions = orig
+    d = tempfile.mkdtemp(prefix="iu_cy_")
+    try:
+        data = os.path.join(d, "edge")
+        os.makedirs(data)
+        M.init_manager(data)
+        ec = SV.ScanController(data)
+        ec.settings["upgrade_url"] = "https://dl.example/rel?token=SECRETTOK9"                              # AAAA2
+        U.fetch_remote_versions = lambda base, **k: (None, "HTTP Error 401: Unauthorized (token=SECRETTOK9)")
+        try:
+            r = ec.upgrade_check()
+        finally:
+            U.fetch_remote_versions = orig
+        assert r["ok"] is False and "401" in r["error"] and "SECRETTOK9" not in json.dumps(r), r
+        for f in ("dashboard.html", "portal.html"):
+            assert "확인 실패" in _read(f), f
+        mc = DB.connect(M.manager_db_path(data))                                                              # AAAA3
+        mc.execute("INSERT INTO scans(db_path, db_filename, root_path, status, phase, started_at, updated_at, error) "
+                   "VALUES(?,?,?,?,?,?,?,?)", (os.path.join(data, "x.db"), "x.db", "/vol", "paused", "paused",
+                                              time.time(), time.time(), "디스크 공간 부족(여유 1 < 기준 2) — 자동 일시정지"))
+        sid = mc.execute("SELECT max(id) FROM scans").fetchone()[0]
+        mc.commit()
+        mc.close()
+        ec.settings.update({"notify_webhook": "http://127.0.0.1:9/hook", "notify_email": "a@x.com",
+                            "smtp_host": "127.0.0.1", "notify_on_stopped": False})
+        hooks, mails = [], []
+        o_send, o_mail = NT.send, NT.send_email
+        NT.send = lambda url, payload, *a, **k: hooks.append(payload) or True
+        NT.send_email = lambda settings, subject, body, *a, **k: mails.append((subject, body)) or True
+        try:
+            ec._on_scan_finished(sid)
+        finally:
+            NT.send, NT.send_email = o_send, o_mail
+        assert hooks and "디스크 공간 부족" in hooks[0].get("error", ""), hooks
+        assert mails and "자동 중단" in mails[0][0] and "사유" in mails[0][1], mails
+        rel = os.path.join(d, "rel")                                                                          # AAAA4
+        os.makedirs(rel)
+        good = os.path.join(os.path.dirname(HERE), "download", "isilon_usage-1.99.48.tar.gz")
+        shutil.copy(good, os.path.join(rel, "isilon_usage-1.99.48.tar.gz"))
+        with open(good, "rb") as fh:
+            head = fh.read(30000)
+        with open(os.path.join(rel, "isilon_usage-1.99.99.tar.gz"), "wb") as fh:
+            fh.write(head)
+        pc = P.PortalController(os.path.join(d, "hq"))
+        pc.settings["release_dir"] = rel
+        info = pc.release_info()
+        assert info["release_file"] == "isilon_usage-1.99.48.tar.gz" and info["release_version"] == "1.99.48", info
+        assert not info["release_version_mismatch"] and "1.99.99" in info["release_reason"], info
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    print("[AAAA1~AAAA4] OK  versions.json 형식 오류 사유·실패한 확인 표시·알림 사유와 자동 정지 알림·릴리스 화면 실제 서빙 버전")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -4368,7 +4434,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine, check_cn_round34_regress, check_co_round34_multi, check_cp_round34_edge, check_cq_round35_regress, check_cr_round35_portal, check_cs_round36_regress,
             check_ct_round36_security, check_cu_round37_regress,
             check_cv_round37_flows, check_cw_round38_regress,
-            check_cx_round38_flows]
+            check_cx_round38_flows, check_cy_round39_upgrade_notify]
 
 
 def main() -> int:

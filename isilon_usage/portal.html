@@ -2896,7 +2896,9 @@ if($("nuSaveBtn")) $("nuSaveBtn").addEventListener("click", async()=>{
 if($("nuCheckBtn")) $("nuCheckBtn").addEventListener("click", async()=>{
   $("nuMsg").textContent="확인 중…";
   try{ const j=await (await fetch("/api/portal/upgrade/check",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})).json();
-    renderNetUpg(j); $("nuMsg").textContent=j.available?"새 버전이 있습니다.":"최신입니다."; }
+    renderNetUpg(j);
+    if(!j.ok){ $("nuMsg").textContent="✗ 확인 실패: "+(j.error||j.check_error||j.reason||"알 수 없음"); return; }   // 실패를 '최신입니다'로(39회차)
+    $("nuMsg").textContent=j.available?"새 버전이 있습니다.":"최신입니다."; }
   catch(e){ $("nuMsg").textContent="✗ "+e; }
 });
 function _upgLine(e){

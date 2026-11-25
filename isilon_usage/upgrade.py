@@ -516,12 +516,23 @@ def check_remote(base_url: str, current_version: str, *, token: Optional[str] = 
     if err:
         out["error"] = err
         return out
+    # 형식 검사 — 다른 JSON(목록·문자열)이나 깨진 항목이면 예외(→500·자동 점검이 말없이 멈춤) 대신 사유(39회차 점검)
+    vers = data.get("versions") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or not isinstance(vers if vers is not None else [], list):
+        out.update({"ok": False, "error": "버전 정보(versions.json) 형식 오류 — 업그레이드 주소가 맞는지 확인하세요"})
+        return out
     latest = str(data.get("latest") or "")
     lt = parse_version(latest)
     out["latest"] = latest
     out["available"] = bool(lt and lt > cur)
-    for v in (data.get("versions") or []):
+    for v in (vers or []):
+        if not isinstance(v, dict):
+            continue
         if str(v.get("version")) == latest:
+            if v.get("tar_gz") is not None and not isinstance(v.get("tar_gz"), str):
+                out.update({"ok": False, "available": False,
+                            "error": "버전 정보(versions.json) 형식 오류 — tar_gz 가 문자열이 아닙니다"})
+                return out
             out["tar_gz"] = v.get("tar_gz")
             out["size_bytes"] = v.get("size_bytes")
             out["sha256"] = v.get("sha256")   # 무결성 검증용(있으면 download 후 대조)

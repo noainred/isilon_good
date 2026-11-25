@@ -334,6 +334,14 @@ MAX_JSON_BODY = 4 * 1024 * 1024         # JSON 본문 상한(메모리·CPU 폭�
 MAX_BUNDLE_BODY = 512 * 1024 * 1024     # 업그레이드 번들 상한
 
 
+def _row_get(row, key):
+    """sqlite3.Row·dict 공통으로 키 값(없으면 None)."""
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return None
+
+
 def _truthy(v) -> bool:
     """JSON 불리언 옵션 해석 — 문자열 "false"/"no"/"0"/"off"/"" 는 거짓(예전엔 bool("false")=참이라
     API 로 auto_restart:"false" 를 보내면 반복 스캔이 켜졌다 — 2026-11 리뷰)."""
@@ -1635,7 +1643,8 @@ class ScanController:
             self._upg_log("확인 — 현재 %s · 최신 %s%s" % (
                 __version__, info.get("latest"),
                 " · 업데이트 가능" if info.get("available") else " · 최신"))
-        return {"ok": bool(info.get("ok")), **self.upgrade_status()}
+        # 상태의 "ok": True 가 뒤에서 덮어써 실패한 확인도 성공으로 보였다(39회차 점검) — 확인 결과를 마지막에
+        return {**self.upgrade_status(), "ok": bool(info.get("ok")), "error": self._upg_redact(info.get("error"))}
 
     def upgrade_install(self) -> dict:
         with self._lock:
@@ -2891,6 +2900,7 @@ class ScanController:
                     "scanned_bytes": row["scanned_bytes"],
                     "scanned_human": human,
                     "hostname": row["hostname"],
+                    "error": _row_get(row, "error") or "",   # 오류·자동 일시정지 사유(39회차: 왜 멈췄는지 없었다)
                 })
             # 메일 알림 — 이벤트(완료/장애/중단)별로 켜진 조건만 발송
             status = row["status"]
@@ -2898,6 +2908,11 @@ class ScanController:
                      "paused": "스캔 중단"}.get(status, "스캔 종료(%s)" % status)
             gate = {"done": ("notify_on_done", True), "error": ("notify_on_error", True),
                     "paused": ("notify_on_stopped", False)}.get(status)
+            if status == "paused" and (_row_get(row, "error") or ""):
+                # 디스크 부족·DB 크기 가드의 자동 일시정지는 '장애' — 사람이 멈춘 것과 달리 기본으로 알린다(39회차 점검:
+                # '중단' 알림은 기본 꺼짐이라 디스크가 차서 멈춰도 아무도 몰랐다)
+                label = "스캔 자동 중단(장애)"
+                gate = ("notify_on_error", True)
             if gate and self.settings.get(gate[0], gate[1]):
                 self._email_scan(scan_id, row, label)
             # 중단(paused) 후 N분간 재시작/재개가 없으면 별도 알림 — 감시 등록
@@ -2925,6 +2940,9 @@ class ScanController:
             "디렉터리 : %s\n파일 수  : %s\n조사 용량: %s\n"
         ) % (label, scan_id, row["root_path"], row["hostname"], row["status"],
              row["total_dirs"], row["total_files"], human)
+        _err = _row_get(row, "error") or ""
+        if _err:
+            bodytxt += "사유     : %s\n" % _err   # 오류·자동 일시정지 사유(39회차 점검)
         from . import notify as notifymod
         notifymod.send_email(self.settings, subject, bodytxt)
 
