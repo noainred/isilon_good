@@ -877,10 +877,20 @@ def main() -> int:
 
         # 12) 릴리스 폴더(엣지 오프라인 업그레이드): 최신 패키지 버전 선택 + 정보 노출
         reld = os.path.join(tmp, "rel"); os.makedirs(reld, exist_ok=True)
-        for fn in ("isilon_usage-1.2.0.tar.gz", "isilon_usage-1.10.0.tar.gz",
-                   "isilon_usage-latest.tar.gz"):
-            with open(os.path.join(reld, fn), "wb") as fh:
-                fh.write(b"x")
+        def _mk_pkg(path, ver):   # 내용까지 확인하므로(38회차) __init__.py 가 든 진짜 묶음으로
+            import io as _io
+            import tarfile as _tf
+            buf = _io.BytesIO()
+            with _tf.open(fileobj=buf, mode="w:gz") as tf:
+                data = ('__version__ = "%s"\n' % ver).encode()
+                ti = _tf.TarInfo("isilon_usage-%s/isilon_usage/__init__.py" % ver)
+                ti.size = len(data)
+                tf.addfile(ti, _io.BytesIO(data))
+            with open(path, "wb") as fh:
+                fh.write(buf.getvalue())
+        for fn, v in (("isilon_usage-1.2.0.tar.gz", "1.2.0"), ("isilon_usage-1.10.0.tar.gz", "1.10.0"),
+                      ("isilon_usage-latest.tar.gz", "1.1.0")):
+            _mk_pkg(os.path.join(reld, fn), v)
         assert os.path.basename(portalmod.newest_release_archive(reld)) == "isilon_usage-1.10.0.tar.gz"
         assert portalmod.newest_release_archive(os.path.join(tmp, "nope")) is None
         ri = pc.set_release_dir(reld)
@@ -890,9 +900,8 @@ def main() -> int:
         # 12-b) 사용자 보고 시나리오: 1.69.4 vs 1.70.1 → 반드시 '최신(1.70.1)' 선택(구버전 금지).
         #       구버전 mtime 을 더 최신으로 만들어도 '버전'이 이겨야 한다.
         reld2 = os.path.join(tmp, "rel2"); os.makedirs(reld2, exist_ok=True)
-        for fn in ("isilon_usage-1.69.4.tar.gz", "isilon_usage-1.70.1.tar.gz"):
-            with open(os.path.join(reld2, fn), "wb") as fh:
-                fh.write(b"x")
+        for fn, v in (("isilon_usage-1.69.4.tar.gz", "1.69.4"), ("isilon_usage-1.70.1.tar.gz", "1.70.1")):
+            _mk_pkg(os.path.join(reld2, fn), v)
         os.utime(os.path.join(reld2, "isilon_usage-1.69.4.tar.gz"), None)   # 구버전을 최신 mtime 으로
         info2 = pc.set_release_dir(reld2)
         assert info2["release_available"] and info2["release_file"] == "isilon_usage-1.70.1.tar.gz", info2

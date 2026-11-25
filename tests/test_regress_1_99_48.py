@@ -4288,6 +4288,44 @@ def check_cw_round38_regress() -> None:
     print("[YYY1~YYY5] OK  events_error 비밀번호 가림·같은 엣지 대표 고정·끝 글자 가림·프록시 경로 대소문자·LLM 카드 탭 id")
 
 
+def check_cx_round38_flows() -> None:
+    """ZZZ1 내보낸 CSV(가린 주소)를 새 id 로 가져오면 '***' 가 주소에 저장 ZZZ2 id 없이 자기 등록하면 같은 호스트의
+    다른 포트 엣지를 덮어씀 ZZZ3 손상된 최신 파일명 묶음을 그대로 내려줌."""
+    from isilon_usage import portal as P, netutil as NU
+    d = tempfile.mkdtemp(prefix="iu_cx_")
+    try:
+        pc = P.PortalController(os.path.join(d, "hq"))
+        r = pc.upsert_node({"id": "P3", "url": "http://***@127.0.0.1:19102", "token": "t"})                 # ZZZ1
+        assert r.get("ok") is False and pc._get("P3") is None, r
+        r = pc.upsert_node({"id": "P4", "url": NU.mask_url_secret("http://h:1/?token=abcdefgh"), "token": "t"})
+        assert r.get("ok") is False, r
+        assert pc.upsert_node({"id": "P5", "url": "http://svc:pw12@127.0.0.1:19102", "token": "t"}).get("ok")
+        pc.settings["enroll_token"] = "enrTOKEN1"                                                          # ZZZ2
+        assert pc.enroll_node({"url": "http://127.0.0.1:19103", "token": "tokE3", "enroll_token": "enrTOKEN1"})["ok"]
+        assert pc.enroll_node({"url": "http://127.0.0.1:19102", "token": "tokE2", "enroll_token": "enrTOKEN1"})["ok"]
+        urls = sorted(n["url"] for n in pc.nodes)
+        assert "http://127.0.0.1:19103" in urls and "http://127.0.0.1:19102" in urls, urls
+        n_before = len(pc.nodes)
+        assert pc.enroll_node({"url": "http://127.0.0.1:19103", "token": "tokE3b", "enroll_token": "enrTOKEN1"})["ok"]
+        assert len(pc.nodes) == n_before and pc._get("127.0.0.1")["token"] == "tokE3b"   # 같은 엣지 재등록은 갱신
+        rel = os.path.join(d, "rel")                                                                         # ZZZ3
+        os.makedirs(rel)
+        good = os.path.join(os.path.dirname(HERE), "download", "isilon_usage-1.99.48.tar.gz")
+        shutil.copy(good, os.path.join(rel, "isilon_usage-1.99.10.tar.gz"))
+        with open(good, "rb") as fh:
+            head = fh.read(5000)
+        with open(os.path.join(rel, "isilon_usage-1.100.0.tar.gz"), "wb") as fh:
+            fh.write(head)
+        assert os.path.basename(P.newest_release_archive(rel)) == "isilon_usage-1.99.10.tar.gz"
+        assert os.path.basename(P.newest_release_archive(rel, verify=False)) == "isilon_usage-1.100.0.tar.gz"
+        pc.settings["release_dir"] = rel
+        info = pc.release_info()
+        assert info["release_serving"] == "isilon_usage-1.99.10.tar.gz" and "온전한" in info["release_reason"], info
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    print("[ZZZ1~ZZZ3] OK  가린 주소 새 노드 거부·같은 호스트 다른 포트 자기 등록 구분·손상 최신 묶음 건너뜀")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -4325,7 +4363,8 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress,
             check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine, check_cn_round34_regress, check_co_round34_multi, check_cp_round34_edge, check_cq_round35_regress, check_cr_round35_portal, check_cs_round36_regress,
             check_ct_round36_security, check_cu_round37_regress,
-            check_cv_round37_flows, check_cw_round38_regress]
+            check_cv_round37_flows, check_cw_round38_regress,
+            check_cx_round38_flows]
 
 
 def main() -> int:

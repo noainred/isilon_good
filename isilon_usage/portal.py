@@ -530,7 +530,7 @@ def agent_bundle_version() -> str:
         return ""
 
 
-def newest_release_archive(release_dir: str):
+def newest_release_archive(release_dir: str, verify: bool = True):
     """release_dir 안의 가장 최신 isilon_usage-*.tar.gz 경로를 반환(없으면 None).
 
     엣지가 포탈에서 코드를 받아 오프라인(인터넷 없이) 업그레이드하도록, 운영자가 그 폴더에
@@ -554,7 +554,19 @@ def newest_release_archive(release_dir: str):
             mt = 0.0
         return (ver, mt)
 
-    return max(cands, key=_key)
+    cands.sort(key=_key, reverse=True)
+    if not verify:
+        return cands[0]
+    # 내용까지 확인해 온전한 것 중 최신을 — 파일명만 보고 고르면 잘린·복사 중인 묶음을 그대로 내려줘 엣지의 한 줄
+    # 업그레이드(curl | tar -xz)가 코드를 반쯤 바꾼 채 멈출 수 있었다(38회차 점검)
+    from . import upgrade as _upg
+    for p in cands:
+        try:
+            if _upg.members_version(_upg.read_package_members(p)):
+                return p
+        except Exception:  # noqa: BLE001 — 손상·잘림·형식 오류는 건너뛴다
+            continue
+    return None
 
 
 def _ver_tuple(v):
@@ -1178,7 +1190,8 @@ class PortalController:
                     n.endswith(".tar.gz") or n.endswith(".tgz") or n.endswith(".zip")))
             except OSError:
                 exists = False
-        arc = newest_release_archive(rel)
+        arc = newest_release_archive(rel, verify=False)   # 화면엔 파일명상 최신(손상이면 아래에 경고)
+        serving = newest_release_archive(rel) if arc else None
         ver = ""
         if arc:
             m = re.search(r"isilon_usage-(\d+\.\d+\.\d+)", os.path.basename(arc))
@@ -1211,12 +1224,15 @@ class PortalController:
                       "패키지로 교체하세요." % (ver, content_ver, content_ver, ver))
         elif not content_ver:
             reason = "내용 버전 확인 실패(손상되었거나 isilon_usage 패키지가 아닐 수 있음)."
+            # 손상된 최신 파일은 내려주지 않는다(38회차) — 엣지가 실제로 받는 파일을 함께 알린다
+            reason += (" 엣지에는 온전한 %s 를 내려줍니다." % os.path.basename(serving)) if serving else " 내려줄 온전한 패키지가 없습니다."
         return {"release_dir": rel, "release_dir_exists": exists, "release_host": host,
+                "release_serving": os.path.basename(serving) if serving else "",
                 "release_seen": seen[:30], "release_count": n_all,
                 "release_file": os.path.basename(arc) if arc else "",
                 "release_version": ver, "release_content_version": content_ver,
                 "release_version_mismatch": mismatch,
-                "release_available": bool(arc), "release_reason": reason}
+                "release_available": bool(serving), "release_reason": reason}   # 엣지가 실제로 받을 수 있는지(38회차)
 
     # --- 백업: 포탈 설정 + 노드 목록(+감사/핑) 을 tar.gz 하나로 ---
     _BACKUP_FILES = ("portal_settings.json", "portal_nodes.json", "audit.log",
@@ -2004,6 +2020,10 @@ class PortalController:
                 raw = dict(raw, url=netutil.keep_masked(raw["url"], _c0.get("url")))
                 if netutil.is_masked_leftover(raw["url"], _c0.get("url")):
                     return {"ok": False, "reason": "가려진(***) 주소의 일부만 바꿀 수 없습니다 — 주소 전체를 다시 입력하세요."}
+            elif netutil.is_masked_leftover(raw["url"], None):
+                # 새 노드엔 되살릴 원래 주소가 없다 — 내보낸 CSV(가린 주소)를 다른 포탈·새 id 로 가져오면 '***' 가
+                # 사용자 이름으로 저장돼 접속이 깨졌다(38회차 점검)
+                return {"ok": False, "reason": "가려진(***) 주소는 새 노드에 쓸 수 없습니다 — 원래 주소 전체를 입력하세요."}
         bad = node_input_error(raw, self._get(str(raw.get("id") or "").strip()) if isinstance(raw, dict) else None)
         if bad:
             return {"ok": False, "reason": bad}
@@ -2121,9 +2141,25 @@ class PortalController:
         url = (raw.get("url") or "").strip()
         if not url:
             return {"ok": False, "reason": "url 필요"}
-        nid = ((raw.get("id") or "").strip()
-               or re.sub(r"[^A-Za-z0-9_.-]+", "-", urlparse(url).hostname or url).strip("-")
-               or "edge")
+        nid = (raw.get("id") or "").strip()
+        if not nid:
+            _h = urlparse(url if "://" in url else "http://" + url)
+            nid = re.sub(r"[^A-Za-z0-9_.-]+", "-", _h.hostname or url).strip("-") or "edge"
+            _prev = self._get(nid)
+            # 같은 호스트의 '다른 포트·경로' 엣지가 이미 그 이름이면 덮어쓰지 않고 '호스트-포트' 이름으로(38회차 점검:
+            # 한 서버의 두 엣지가 번갈아 등록하며 서로를 지웠다). 같은 엣지의 재등록·주소(IP) 변경은 그대로 갱신.
+            if _prev is not None:
+                _ph = urlparse(_prev.get("url") if "://" in (_prev.get("url") or "") else "http://" + (_prev.get("url") or ""))
+                try:
+                    _same_host = (_ph.hostname or "").lower() == (_h.hostname or "").lower()
+                except ValueError:
+                    _same_host = False
+                if _same_host and self._edge_key(_prev.get("url")) != self._edge_key(url):
+                    try:
+                        _port = _h.port or (443 if _h.scheme == "https" else 80)
+                    except ValueError:
+                        _port = 0
+                    nid = re.sub(r"[^A-Za-z0-9_.-]+", "-", "%s-%s%s" % (_h.hostname, _port, _h.path.rstrip("/"))).strip("-")
         path = (raw.get("path") or "").strip()
         rec = {"id": nid, "region": (raw.get("region") or "").strip(),
                "url": url, "token": (raw.get("token") or "").strip(),
