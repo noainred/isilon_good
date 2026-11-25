@@ -252,6 +252,9 @@ def _mask_url_match(m) -> str:
     core = u.rstrip(":.!?")
     tail = u[len(core):]
     if tail:
+        mc = mask_url_secret(core)
+        if mc == core:          # 비밀 없는 주소면 끝 문장부호까지 그대로('…/path?' 가 '?***' 로 바뀌던 것, 39회차)
+            return u
         whole = mask_url_secret(u)
         if whole != _MASK:
             return whole

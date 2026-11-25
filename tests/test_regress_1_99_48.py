@@ -4320,7 +4320,11 @@ def check_cx_round38_flows() -> None:
         assert os.path.basename(P.newest_release_archive(rel, verify=False)) == "isilon_usage-1.100.0.tar.gz"
         pc.settings["release_dir"] = rel
         info = pc.release_info()
-        assert info["release_serving"] == "isilon_usage-1.99.10.tar.gz" and "온전한" in info["release_reason"], info
+        assert info["release_serving"] == "isilon_usage-1.99.10.tar.gz" and "건너뛰고" in info["release_reason"], info
+        # 39회차: '엣지가 받을 버전'은 실제로 내려주는 파일 기준(손상된 최신 이름 파일의 버전이 아니라)
+        assert info["release_file"] == "isilon_usage-1.99.10.tar.gz" and info["release_version"] == "1.99.10", info
+        assert info["release_content_version"] == "1.99.48" and info["release_version_mismatch"], info
+        assert "1.100.0" in info["release_reason"], info
     finally:
         shutil.rmtree(d, ignore_errors=True)
     print("[ZZZ1~ZZZ3] OK  가린 주소 새 노드 거부·같은 호스트 다른 포트 자기 등록 구분·손상 최신 묶음 건너뜀")

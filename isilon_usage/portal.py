@@ -562,11 +562,25 @@ def newest_release_archive(release_dir: str, verify: bool = True):
     from . import upgrade as _upg
     for p in cands:
         try:
-            if _upg.members_version(_upg.read_package_members(p)):
-                return p
-        except Exception:  # noqa: BLE001 — 손상·잘림·형식 오류는 건너뛴다
+            st = os.stat(p)
+            key = (p, st.st_size, st.st_mtime_ns)
+        except OSError:
             continue
+        ok = _REL_VERIFIED.get(key)
+        if ok is None:   # (경로·크기·수정 시각) 같으면 다시 풀지 않는다 — 엣지 여럿이 받을 때마다 매번 풀었다(39회차)
+            try:
+                ok = bool(_upg.members_version(_upg.read_package_members(p)))
+            except Exception:  # noqa: BLE001 — 손상·잘림·형식 오류는 건너뛴다
+                ok = False
+            if len(_REL_VERIFIED) > 256:
+                _REL_VERIFIED.clear()
+            _REL_VERIFIED[key] = ok
+        if ok:
+            return p
     return None
+
+
+_REL_VERIFIED: dict = {}
 
 
 def _ver_tuple(v):
@@ -1190,8 +1204,13 @@ class PortalController:
                     n.endswith(".tar.gz") or n.endswith(".tgz") or n.endswith(".zip")))
             except OSError:
                 exists = False
-        arc = newest_release_archive(rel, verify=False)   # 화면엔 파일명상 최신(손상이면 아래에 경고)
+        arc = newest_release_archive(rel, verify=False)
         serving = newest_release_archive(rel) if arc else None
+        skipped = ""
+        if serving and serving != arc:
+            # 화면의 '엣지가 받을 버전'은 실제로 내려주는 파일 기준 — 손상된 최신 이름 파일의 버전을 초록색으로
+            # 보여 줬다(39회차 점검). 건너뛴 파일은 사유에 알린다.
+            skipped, arc = os.path.basename(arc), serving
         ver = ""
         if arc:
             m = re.search(r"isilon_usage-(\d+\.\d+\.\d+)", os.path.basename(arc))
@@ -1225,7 +1244,11 @@ class PortalController:
         elif not content_ver:
             reason = "내용 버전 확인 실패(손상되었거나 isilon_usage 패키지가 아닐 수 있음)."
             # 손상된 최신 파일은 내려주지 않는다(38회차) — 엣지가 실제로 받는 파일을 함께 알린다
-            reason += (" 엣지에는 온전한 %s 를 내려줍니다." % os.path.basename(serving)) if serving else " 내려줄 온전한 패키지가 없습니다."
+            reason += " 내려줄 온전한 패키지가 없습니다."
+        if skipped:
+            reason = ((reason + " ") if reason else "") + (
+                "⚠ 더 높은 이름의 %s 는 손상(잘림·복사 중)이라 건너뛰고 %s 를 내려줍니다 — 그 파일을 다시 복사하세요."
+                % (skipped, os.path.basename(serving)))
         return {"release_dir": rel, "release_dir_exists": exists, "release_host": host,
                 "release_serving": os.path.basename(serving) if serving else "",
                 "release_seen": seen[:30], "release_count": n_all,
