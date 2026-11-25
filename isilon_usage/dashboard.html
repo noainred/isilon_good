@@ -5593,11 +5593,18 @@ function showView(name) {
   if (sn) sn.classList.toggle("hidden", Object.keys(VIEW_GROUP).filter(v => VIEW_GROUP[v] === grp).length < 2);
   window.scrollTo(0, 0);
   // 화면마다 기록을 남겨 브라우저 '뒤로'가 이전 화면으로(34회차 점검: 뒤로 누르면 대시보드를 떠났다). 같은 화면이면 남기지 않음.
-  try { if (location.hash !== "#" + name) history.pushState(null, "", "#" + name); } catch (e) { location.hash = name; }
+  try {
+    if (location.hash !== "#" + name) {
+      if (window._viewReplace) history.replaceState(null, "", "#" + name);   // 로그인 취소로 되돌아갈 땐 기록을 덮는다(아래)
+      else history.pushState(null, "", "#" + name);
+    }
+  } catch (e) { location.hash = name; }
+  window._viewReplace = false;
   if (name === "extra" && $("atPath")) setTimeout(() => $("atPath").focus(), 20);
   if (name === "settings" && !_opLoggedIn()) {   // 설정 진입 = 인증(없으면 처음 비밀번호 만들기)
     ensureSettingsAuth().then(ok => {
-      if (!ok) { showView("summary"); showToast("🔒 설정은 로그인 후 사용할 수 있습니다", 2500); }
+      // 취소하면 '설정' 기록을 홈으로 덮는다 — 새 기록을 쌓으면 뒤로 갈 때마다 설정→로그인 창이 다시 떠 앞 화면으로 못 갔다(35회차 점검)
+      if (!ok) { window._viewReplace = true; showView("summary"); showToast("🔒 설정은 로그인 후 사용할 수 있습니다", 2500); }
       else { loadSettings(); applyReadOnlyUI(); }
     });
   }

@@ -151,6 +151,16 @@ def _alias_norm(v) -> str:
 META_MAX_BYTES = 16 * 1024 * 1024   # 복제 묶음의 meta.json 상한
 
 
+def _rel_depth(root: str, path: str) -> int:
+    """스캔 루트 기준 path 의 상대 깊이(루트 자신 0)."""
+    r = str(root or "").rstrip("/")
+    p = str(path or "").rstrip("/")
+    if p == r:
+        return 0
+    rest = p[len(r):].strip("/") if p.startswith(r) else p.strip("/")
+    return len(rest.split("/")) if rest else 0
+
+
 def _replica_scan_db(rep: str, sc: dict):
     """복제본 meta 의 스캔 한 건 → 복제본 scans 폴더 안의 DB 경로(없으면 None).
 
@@ -2355,11 +2365,14 @@ class PortalController:
         c = self._cache.get(nid) or {}
         if not c.get("online"):
             return False
-        if nid in self._rep_force:
-            return True
         last = float(self._rep_at.get(nid, 0.0))
         if last > now + 60:   # 시계가 뒤로 감 — 미래의 마지막 시도는 믿지 않는다(25회차 점검)
             last = 0.0
+        if nid in self._rep_force:
+            # 삭제 반영용 즉시 복제도 실패하면 재시도 대기(백오프)를 지킨다 — 예전엔 매 틱 재시도해 8초에 38번(35회차 점검)
+            _f = int(self._rep_fail.get(nid, 0))
+            if _f == 0 or (now - last) >= min(REP_RETRY_MAX, REP_RETRY_SECS * (2 ** min(_f, 10))):
+                return True
         try:
             _due = setmod.schedule_due(dict(n, last_run=last), now)
         except (ValueError, OverflowError, OSError, TypeError):   # 이상한 주기 값이 아래 '새 완료 스캔' 판단까지 막지 않게
@@ -3962,10 +3975,12 @@ class PortalController:
                     break
                 if not fa:
                     break              # 이 루트의 최신 스캔에 없고 접힌 것도 아님 = 정말 없다(옛 스캔을 보지 않는다)
-                if _mdl:
-                    entry.setdefault("depth_limited", _mdl)   # 깊이 제한으로 미스캔 — '상위 폴더에 합산'이 아니다
+                if _mdl and _rel_depth(_root, local) > _mdl:
+                    entry.setdefault("depth_limited", _mdl)   # 최대 깊이보다 깊어 미스캔 — '상위 폴더에 합산'이 아니다
                 else:
-                    entry.setdefault("folded_at", fa)   # 접힘 — 더 구체적인 다른 루트 스캔이 있으면 그걸 본다
+                    # 접힘 — 더 구체적인 다른 루트 스캔이 있으면 그걸 본다. 깊이 제한 스캔이라도 그 깊이 안의 빈 행은 접힘이다
+                    # (35회차 점검: 접기+최대 깊이 스캔의 접힌 경로를 '미스캔'이라 했다)
+                    entry.setdefault("folded_at", fa)
                 if fold_rec is None:
                     fold_rec = _rec
             rows.append(entry)
@@ -3992,7 +4007,7 @@ class PortalController:
                             # 이 루트의 최신 스캔에 없고 접힌 것도 아님 — 정말 없다(옛 스캔으로 넘어가지 않는다)
                             return ([], True, depth_lim, False) if folded else None
                         folded = True
-                        depth_lim = depth_lim or _mdl
+                        depth_lim = depth_lim or (_mdl if (_mdl and _rel_depth(_root, local) > _mdl) else 0)
                         fold_rec = fold_rec if fold_rec is not None else _rec
                         continue
                     # 범위 비교(대소문자 구분·인덱스 사용): LIKE 는 ASCII 대소문자를 무시해 /data/FOO 의 자식이
@@ -4007,10 +4022,11 @@ class PortalController:
             except Exception:  # noqa: BLE001
                 continue
             if kids:
-                return [dict(k) for k in kids], False, _mdl, _stale   # _mdl>0 이면 값이 깊이 제한 하한
+                # 자식 행이 있으면 '미스캔' 표시 대상이 아니다(없는 칸은 정말 없음) — 깊이 제한 하한 표시는 비교 표에서
+                return [dict(k) for k in kids], False, 0, _stale
             if int(prow["subdir_count"] or 0) > 0:
                 folded = True           # 이 스캔에선 이 폴더에서 접힘 — 다른 후보가 더 깊이 있으면 그걸 쓴다
-                depth_lim = depth_lim or _mdl
+                depth_lim = depth_lim or (_mdl if (_mdl and _rel_depth(_root, local) + 1 > _mdl) else 0)
                 fold_rec = fold_rec if fold_rec is not None else _rec
                 continue
             return [], False, 0, False  # 정말 하위 폴더가 없다

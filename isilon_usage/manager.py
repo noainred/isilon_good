@@ -506,23 +506,26 @@ def _nested_roots(paths, containers=None) -> Dict[str, str]:
     return out
 
 
-def _row_total(db_path, path) -> int:
-    """per-run DB 의 최신 실행에서 path 행의 재귀 합계(없거나 읽기 실패면 0)."""
+def _row_total(db_path, path, files: bool = False):
+    """per-run DB 의 최신 실행에서 path 행의 재귀 합계(없거나 읽기 실패면 0). files=True 면 (바이트, 파일 수)."""
+    z = (0, 0) if files else 0
     if not db_path or not os.path.exists(db_path):
-        return 0
+        return z
     try:
         c = dbmod.connect(db_path)
         try:
             rid = dbmod.latest_run_id(c)
             if rid is None:
-                return 0
-            r = c.execute("SELECT total_bytes FROM directories WHERE run_id=? AND path=?",
+                return z
+            r = c.execute("SELECT total_bytes, total_files FROM directories WHERE run_id=? AND path=?",
                           (rid, str(path).rstrip("/") or "/")).fetchone()
-            return int(r[0] or 0) if r else 0
+            if not r:
+                return z
+            return (int(r[0] or 0), int(r[1] or 0)) if files else int(r[0] or 0)
         finally:
             c.close()
     except Exception:  # noqa: BLE001 — 겹침 보정 실패는 보정 없이(예전 동작)
-        return 0
+        return z
 
 
 def capacity_caveats(roots) -> str:
@@ -622,14 +625,24 @@ def overall_capacity(conn) -> dict:
         })
     # 바깥 루트가 깊이 제한·미완료라 안쪽 루트를 따로 더할 때, 바깥 스캔이 그 경로에서 이미 센 몫(윗부분)은 빼야 두 번 세지
     # 않는다(34회차 점검: 깊이 2 바깥 + 안쪽 전체 → 실제 53 KB 가 74 KB). 바깥 스캔 DB 의 그 경로 행 합계만큼 뺀다.
-    _geo = _nested_roots(latest_by_root.keys())
-    for rp, outer in _geo.items():
-        if rp in nested or outer in nested:
+    # 따로 세는 루트마다 '가장 가까운' 따로 세는 바깥 루트의 몫을 뺀다 — 가장 바깥 루트만 보면 3단 중첩(깊이 1 ⊃ 깊이 2 ⊃ 전체)에서
+    # 가운데 스캔이 센 몫이 남아 두 번 셌다(35회차 점검). 파일 수도 같은 규칙(바이트만 빼 파일 수가 어긋났다).
+    _counted = [r for r in latest_by_root if r not in nested]
+    _norm = {r: (str(r).rstrip("/") or "/") for r in _counted}
+    overlap_files = 0
+    for rp in _counted:
+        n_rp = _norm[rp]
+        anc = [q for q in _counted if q != rp and _norm[q] != n_rp
+               and n_rp.startswith("/" if _norm[q] == "/" else _norm[q] + "/")]
+        if not anc:
             continue
-        ocap = done_by_root.get(outer) or latest_by_root.get(outer) or {}
-        ov = _row_total(ocap.get("db_path"), rp)
-        if ov > 0:
-            total_capacity -= min(ov, int(ocap.get("scanned_bytes") or 0))
+        q = max(anc, key=lambda x: len(_norm[x]))
+        ocap = done_by_root.get(q) or latest_by_root.get(q) or {}
+        ov_b, ov_f = _row_total(ocap.get("db_path"), rp, files=True)
+        if ov_b > 0:
+            total_capacity -= min(ov_b, int(ocap.get("scanned_bytes") or 0))
+        if ov_f > 0:
+            overlap_files += ov_f
     roots.sort(key=lambda x: x["capacity_bytes"], reverse=True)
 
     active = sum(1 for s in scans if s["status"] in ("discovering", "sizing"))
@@ -638,8 +651,9 @@ def overall_capacity(conn) -> dict:
         "total_scanned_bytes": total_scanned,
         "total_capacity_bytes": total_capacity,
         # 파일 수 합(다른 루트 안에 든 루트 제외 — 용량 합과 같은 규칙, 24회차 점검: 홈 파일 수가 중첩 루트를 두 번 셈)
-        "total_capacity_files": sum((int(r.get("capacity_files") or 0) if not r.get("capacity_partial")
-                                     else int(r.get("total_files") or 0)) for r in roots if not r.get("nested_in")),
+        "total_capacity_files": max(0, sum((int(r.get("capacity_files") or 0) if not r.get("capacity_partial")
+                                            else int(r.get("total_files") or 0)) for r in roots if not r.get("nested_in"))
+                                    - overlap_files),
         # 파일시스템 사용량(같은 FS 한 번, 가장 최근 값) — 엣지 홈·포탈이 같은 값(24회차 점검: 5.4% vs 5.6%)
         "fs_total_bytes": fs_t,
         "fs_used_bytes": fs_u,

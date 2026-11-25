@@ -3907,6 +3907,72 @@ def check_cp_round34_edge() -> None:
     print("[RRR1~RRR7] OK  읽기 오류 표시·오류 스캔 재개·트리 비중 분모·일시정지 확인·요약·뒤로 가기·예측 상한")
 
 
+def check_cq_round35_regress() -> None:
+    """SSS1 삭제 반영 즉시 복제가 실패해도 매 틱 재시도(백오프 무시) SSS2 3단 중첩(깊이1 ⊃ 깊이2 ⊃ 전체)에서 가운데 스캔 몫을 두 번 셈
+    SSS3 파일 수는 겹침 보정 안 됨 SSS4 접기+최대 깊이 스캔의 접힌 경로를 '깊이 제한으로 미스캔'이라 함 SSS5 설정 로그인 취소 후 뒤로 가기가
+    설정에 갇힘 SSS6 숫자로만 된 비밀번호(admin:12345/x@host) 노출·IDN 호스트 오인."""
+    from isilon_usage import manager as M, db as dbmod, portal as P, netutil as NU
+    from isilon_usage.scanner import run_scan
+    d = tempfile.mkdtemp(prefix="iu_cq_")
+    try:
+        data = os.path.join(d, "data")
+        M.init_manager(data)
+        t = os.path.join(d, "tree")
+        cur = t
+        sizes = {}
+        for i, nm in enumerate(["", "a", "b", "c", "d", "e"]):
+            cur = os.path.join(cur, nm) if nm else cur
+            os.makedirs(cur, exist_ok=True)
+            with open(os.path.join(cur, "f%d" % i), "wb") as fh:
+                fh.write(b"x" * 40000)
+
+        def _scan(root, name, md):
+            dbp = os.path.join(data, "scans", name)
+            os.makedirs(os.path.dirname(dbp), exist_ok=True)
+            sid = M.register_scan(data, root_path=root, db_path=dbp, backend="native", size_mode="apparent")
+            run_scan(dbp, root, workers=1, size_mode="apparent", with_monitor=False, max_depth=md,
+                     manager_db=M.manager_db_path(data), manager_scan_id=sid)
+            c = dbmod.connect(M.manager_db_path(data))
+            c.execute("UPDATE scans SET opt_max_depth=? WHERE id=?", (md, sid))
+            c.commit()
+            c.close()
+        _scan(t, "o.db", 1)
+        _scan(os.path.join(t, "a", "b"), "m.db", 2)
+        _scan(os.path.join(t, "a", "b", "c", "d"), "i.db", 0)
+        truth_b = truth_f = 0
+        for dp, dn, fn in os.walk(t):
+            truth_b += os.lstat(dp).st_size
+            for f in fn:
+                truth_b += os.lstat(os.path.join(dp, f)).st_size
+                truth_f += 1
+        c = dbmod.connect(M.manager_db_path(data))
+        ov = M.overall_capacity(c)
+        c.close()
+        assert ov["total_capacity_bytes"] == truth_b, (ov["total_capacity_bytes"], truth_b)               # SSS2
+        assert ov["total_capacity_files"] == truth_f, (ov["total_capacity_files"], truth_f)               # SSS3
+        pc = P.PortalController(os.path.join(d, "hq"))                                                     # SSS1
+        pc.upsert_node({"id": "n1", "url": "http://10.9.9.9:1", "token": "t"})
+        pc._cache["n1"] = {"online": True}
+        now = time.time()
+        pc._rep_force.add("n1")
+        pc._rep_fail["n1"] = 3
+        pc._rep_at["n1"] = now - 5
+        assert pc._rep_due(pc._get("n1"), now) is False                  # 실패 중엔 백오프를 지킨다
+        pc._rep_fail["n1"] = 0
+        assert pc._rep_due(pc._get("n1"), now) is True
+        assert P._rel_depth("/r", "/r/a/b") == 2 and P._rel_depth("/r", "/r") == 0                          # SSS4
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert "if _mdl and _rel_depth(_root, local) > _mdl:" in _read("portal.py")
+    dh = _read("dashboard.html")
+    assert "window._viewReplace = true; showView(\"summary\")" in dh                                    # SSS5
+    for u in ("https://admin:12345/x@host.example", "https://admin:1234?x@host.example"):                # SSS6
+        m = NU.mask_url_secret(u)
+        assert "1234" not in m and NU.keep_masked(m, u) == u, (u, m)
+    assert NU.mask_url_secret("https://서버.kr/x?u=a@b.com") == "https://서버.kr/x?***"
+    print("[SSS1~SSS6] OK  즉시 복제 백오프·가장 가까운 바깥 루트 겹침 보정(바이트·파일)·접힘/깊이 구분·설정 뒤로 가기·숫자 비밀번호·IDN")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -3942,7 +4008,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bx_round28_regress, check_by_round28_install,
             check_bz_round28_dashboard, check_ca_round29_regress,
             check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress,
-            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine, check_cn_round34_regress, check_co_round34_multi, check_cp_round34_edge]
+            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine, check_cn_round34_regress, check_co_round34_multi, check_cp_round34_edge, check_cq_round35_regress]
 
 
 def main() -> int:

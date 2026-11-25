@@ -78,7 +78,8 @@ _MASK = "***"
 MASK = _MASK
 
 
-_HOST_RE = re.compile(r"^(\[[0-9A-Za-z:.%]+\]|[A-Za-z0-9._~%-]+)(:\d{0,5})?$")
+# 호스트[:포트] — 한글 등 국제화 도메인(IDN)도 받는다(35회차: '서버.kr/x?u=a@b.com' 의 호스트를 계정으로 오인)
+_HOST_RE = re.compile(r"^(\[[0-9A-Za-z:.%]+\]|[^\s@/?#:\[\]]+)(:\d{0,5})?$")
 
 
 def _split_userinfo(s: str):
@@ -97,9 +98,18 @@ def _split_userinfo(s: str):
         return scheme, ui, host + rest[len(auth):]
     # 호스트 구간이 올바른 호스트[:포트]면 뒤의 '@'(경로·쿼리의 a@b.com)는 계정이 아니다(34회차 점검: 정상 주소의 호스트가 사라짐).
     # 호스트로 읽히지 않을 때만(예: 비밀번호에 '/' 가 든 admin:PW/xx@host) 마지막 '@' 까지를 계정으로 본다.
-    if "@" in rest and not _HOST_RE.match(auth):
+    if "@" in rest:
         ui, _, rest2 = rest.rpartition("@")
-        return scheme, ui, rest2
+        if not _HOST_RE.match(auth):
+            return scheme, ui, rest2
+        # 'admin:12345/x@host.example' — 숫자로만 된 비밀번호면 호스트 구간이 'admin:12345'(호스트:포트)처럼 보여 계정을 놓쳤다
+        # (35회차 보안 점검). 호스트 구간에 점·대괄호가 없고(점 없는 이름:숫자) 마지막 '@' 뒤가 점 있는 호스트면 계정으로 본다 —
+        # 'localhost:8080/?u=a@b.com' 같은 주소는 더 가려질 수 있지만(표시만), 비밀이 새는 쪽보다 낫다.
+        _hn = auth.split(":", 1)[0]
+        _after = re.match(r"[^/?#]*", rest2).group(0)
+        if ":" in auth and "." not in _hn and "[" not in auth and "." in _after.split(":", 1)[0] \
+                and _HOST_RE.match(_after):
+            return scheme, ui, rest2
     return scheme, None, rest
 
 
