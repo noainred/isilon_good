@@ -2923,7 +2923,18 @@ class PortalController:
         active = 0
         out_nodes = []
         running_all = []   # 전체 엣지의 진행 중 스캔(노드·경로·진행·끝날 예상 시각) — 포탈 현황 '진행 중인 스캔' 표
-        seen_edges: dict = {}   # 같은 엣지(호스트:포트)를 다른 이름으로 또 등록하면 합계에 두 번 들어갔다(35회차 점검) — 처음 것만 센다
+        # 같은 엣지(호스트:포트)를 다른 이름으로 또 등록하면 합계에 두 번 들어갔다(35회차 점검) — 엣지마다 대표 노드 하나만 센다.
+        # 대표는 켜져 있고 온라인 → 최근에 받은 값 → 등록 순(36회차 점검: '처음 것'만 세면 꺼진 옛 노드 때문에 0·옛 값이 됐다)
+        _rep_by_edge: dict = {}
+        for _i, _n in enumerate(nodes_snapshot):
+            _k = self._edge_key(_n.get("url"))
+            if not _k:
+                continue
+            _c = cache.get(_n["id"], {})
+            _score = (bool(_c.get("online")) and bool(_n.get("enabled", True)), float(_c.get("ts") or 0), -_i)
+            if _k not in _rep_by_edge or _score > _rep_by_edge[_k][0]:
+                _rep_by_edge[_k] = (_score, _n["id"])
+        seen_edges = {k: v[1] for k, v in _rep_by_edge.items()}
         for n in nodes_snapshot:
             try:
                 c = cache.get(n["id"], {})
@@ -2932,8 +2943,8 @@ class PortalController:
                 st = int(ov.get("root_count") or 0)
                 _ek = self._edge_key(n.get("url"))
                 dup_of = seen_edges.get(_ek) if _ek else None
-                if _ek and dup_of is None:
-                    seen_edges[_ek] = n["id"]
+                if dup_of == n["id"]:
+                    dup_of = None              # 이 노드가 대표
                 if dup_of is not None:
                     used = st = 0
                 # 비활성(운영자가 끈) 노드는 폴링하지 않아 캐시가 옛 값으로 남는다 — 온라인·진행 중으로 세지 않는다
@@ -3060,6 +3071,7 @@ class PortalController:
             } for r in (n.get("roots") or [])]
             nodes.append({
                 "id": n.get("id"), "region": n.get("region"),
+                "duplicate_of": n.get("duplicate_of"),   # 같은 엣지를 대표하는 노드(있으면 합계에서 빠짐 — 루트를 더하지 말 것)
                 "hostname": n.get("hostname"), "online": bool(n.get("online")),
                 "scanned_bytes": int(n.get("used_bytes") or 0),
                 "fs_total_bytes": int(n.get("fs_total_bytes") or 0),

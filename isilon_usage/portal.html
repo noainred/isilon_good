@@ -1562,7 +1562,7 @@ function applyNavHidden(hidden){
   if(h==="nodes") loadAuth().then(()=>{ window._pViewReplace=true; try{ show(h); }catch(e){} });
   else if(["dash","compare","netmon"].includes(h)) setTimeout(()=>{ window._pViewReplace=true; try{ show(h); }catch(e){} }, 0); })();
 // 주소의 #화면 이 바뀌면(주소창 입력·뒤로/앞으로) 그 화면으로 — 예전엔 주소만 바뀌고 화면은 그대로였다(35회차 점검)
-function _pOnHash(){ const h=(location.hash||"").slice(1);
+function _pOnHash(){ const h=(location.hash||"").slice(1) || "dash";   // '#' 없는 처음 주소 = 현황(36회차)
   if(!["dash","compare","netmon","nodes"].includes(h)) return;
   const cur=["dash","compare","nodes","netmon"].find(n=>$("view-"+n) && $("view-"+n).classList.contains("active"));
   if(cur!==h){ window._pViewReplace=true; show(h); } }

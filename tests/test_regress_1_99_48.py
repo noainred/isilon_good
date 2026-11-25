@@ -3817,7 +3817,8 @@ def check_cn_round34_regress() -> None:
     for u, want in ok.items():
         assert NU.mask_url_secret(u) == want, (u, NU.mask_url_secret(u))
         assert NU.keep_masked(NU.mask_url_secret(u), u) == u
-    assert NU.secret_values("https://host:8080/@me") == []
+    # 36회차: 'name:숫자/…@' 는 숫자 비밀번호일 수 있어 비밀로 본다(노출보다 과하게 가리는 쪽) — 저장 왕복만 확인
+    assert NU.keep_masked(NU.mask_url_secret("https://host:8080/@me"), "https://host:8080/@me") == "https://host:8080/@me"
     assert 'ensure_ascii=(enc != "utf8")' in _read("cli.py")                                             # PPP2
     print("[PPP1~PPP2] OK  경로·쿼리의 '@' 는 계정 아님(호스트 구간 우선)·비 UTF-8 출력의 --json")
 
@@ -4003,6 +4004,34 @@ def check_cr_round35_portal() -> None:
     print("[TTT1~TTT5] OK  같은 엣지 중복 합계 제외·경고·#nodes 로그인·주소 화면 이동/뒤로·가져오기 결과·핑 범위")
 
 
+def check_cs_round36_regress() -> None:
+    """UUU1 같은 엣지 중복 시 '처음 등록한 노드'만 세어 꺼진·폴링 전 옛 노드 때문에 합계가 0·옛 값 UUU2 '#' 없는 처음 주소로 뒤로 가면
+    화면 그대로 UUU3 점 없는 호스트(nas01)·IPv6 뒤의 숫자 비밀번호 노출."""
+    from isilon_usage import portal as P, netutil as NU
+    d = tempfile.mkdtemp(prefix="iu_cs_")
+    try:
+        pc = P.PortalController(os.path.join(d, "hq"))
+        pc.upsert_node({"id": "old", "url": "http://10.0.0.9:8765", "token": "t"})
+        pc.upsert_node({"id": "new", "url": "http://10.0.0.9:8765", "token": "t"})
+        pc._cache["new"] = {"online": True, "ts": time.time(),
+                            "overall": {"total_capacity_bytes": 5000, "root_count": 1, "roots": []}}
+        t = pc.overview()["totals"]
+        assert t["used_bytes"] == 5000 and t["storages"] == 1, t                                           # UUU1
+        pc._get("old")["enabled"] = False
+        pc._cache["old"] = {"online": True, "ts": time.time() - 999,
+                            "overall": {"total_capacity_bytes": 1000, "root_count": 1, "roots": []}}
+        ov = pc.overview()
+        assert ov["totals"]["used_bytes"] == 5000, ov["totals"]
+        assert [n["duplicate_of"] for n in ov["nodes"] if n["id"] == "old"] == ["new"]
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert '|| "dash";   // \'#\' 없는 처음 주소' in _read("portal.html")                                      # UUU2
+    for u in ("https://admin:1234/x@nas01", "https://admin:1234/x@nas01:8443", "https://admin:1234/x@[::1]:8443"):   # UUU3
+        m = NU.mask_url_secret(u)
+        assert "1234" not in m and NU.keep_masked(m, u) == u, (u, m)
+    print("[UUU1~UUU3] OK  중복 엣지 대표 노드(켜짐·온라인·최근)·처음 주소 뒤로 가기·점 없는 호스트 숫자 비밀번호")
+
+
 def _mark_many(x, code):
     from isilon_usage import settings as SE
     for _ in range(30):
@@ -4038,7 +4067,7 @@ SECTIONS = [check_e1_non_utf8_root, check_e2_stagger_kept, check_e3_pscan_partia
             check_bx_round28_regress, check_by_round28_install,
             check_bz_round28_dashboard, check_ca_round29_regress,
             check_cb_round29_numbers, check_cc_round29_flows, check_cd_running_block, check_ce_round30_regress,
-            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine, check_cn_round34_regress, check_co_round34_multi, check_cp_round34_edge, check_cq_round35_regress, check_cr_round35_portal]
+            check_cf_round30_features, check_cg_round31_regress, check_ch_round31_flows, check_ci_round32_regress, check_cj_round32_portal, check_ck_round32_tools, check_cl_round33_regress, check_cm_round33_engine, check_cn_round34_regress, check_co_round34_multi, check_cp_round34_edge, check_cq_round35_regress, check_cr_round35_portal, check_cs_round36_regress]
 
 
 def main() -> int:
